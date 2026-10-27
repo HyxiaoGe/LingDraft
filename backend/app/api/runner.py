@@ -34,14 +34,12 @@ def jsonable(x: Any) -> Any:
     return x
 
 
-class GraphRunner:
-    def __init__(self, fake: bool | None = None, data_dir: Path | None = None, out_dir: Path | None = None):
-        fake = config.USE_FAKE_PLANNER if fake is None else fake
-        self.out_dir = Path(out_dir or config.OUTPUT_DIR)
-        self.planner = FakePlanner() if fake else ArkPlanner()
-        self.graph = build_graph(self.planner, open_sqlite_checkpointer(Path(data_dir or config.DATA_DIR) / "checkpoints.sqlite"), self.out_dir)
+class BaseRunner:
+    """场景无关的部分：把图的 stream 变成 progress / node / interrupt / state 事件。子类定义状态视图与事件摘要。"""
 
-    # ---- 查询 ----
+    graph: Any
+    out_dir: Path
+    api_prefix = "/api/threads"
 
     def thread_dir(self, thread_id: str) -> Path:
         return self.out_dir / thread_id
@@ -49,7 +47,81 @@ class GraphRunner:
     def file_url(self, thread_id: str, path: str | None) -> str | None:
         if not path:
             return None
-        return f"/api/threads/{thread_id}/files/{Path(path).name}"
+        return f"{self.api_prefix}/{thread_id}/files/{Path(path).name}"
+
+    def pending_interrupt(self, thread_id: str) -> dict | None:
+        for task in self.graph.get_state({"configurable": {"thread_id": thread_id}}).tasks:
+            for it in task.interrupts:
+                return it.value
+        return None
+
+    def state_view(self, thread_id: str) -> dict:
+        raise NotImplementedError
+
+    def _decorate_interrupt(self, thread_id: str, payload: dict | None) -> dict | None:
+        return payload
+
+    def _summarize(self, thread_id: str, node: str, update: dict | None) -> dict:
+        return {"node": node}
+
+    def resume_input(self, thread_id: str, payload: dict) -> Any:
+        return Command(resume=payload)
+
+    # ---- 执行 ----
+
+    def _events(self, thread_id: str, inp: Any):
+        cfg = {"configurable": {"thread_id": thread_id}}
+        with _lock:
+            for mode, chunk in self.graph.stream(inp, cfg, stream_mode=["updates", "custom"], subgraphs=False):
+                if mode == "custom":
+                    yield {"event": "progress", "data": jsonable(chunk)}
+                    continue
+                for node, update in chunk.items():
+                    if node == "__interrupt__":
+                        yield {"event": "interrupt", "data": self._decorate_interrupt(thread_id, update[0].value)}
+                        continue
+                    yield {"event": "node", "data": self._summarize(thread_id, node, update)}
+            yield {"event": "state", "data": self.state_view(thread_id)}
+
+    async def stream(self, thread_id: str, inp: Any) -> AsyncIterator[str]:
+        """把工作线程里的事件转成 SSE 文本行。"""
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+
+        def work():
+            try:
+                for ev in self._events(thread_id, inp):
+                    loop.call_soon_threadsafe(q.put_nowait, ev)
+            except Exception as e:  # noqa: BLE001
+                loop.call_soon_threadsafe(q.put_nowait, {"event": "error", "data": {"message": str(e)}})
+                try:
+                    loop.call_soon_threadsafe(q.put_nowait, {"event": "state", "data": self.state_view(thread_id)})
+                except Exception as e2:  # noqa: BLE001
+                    loop.call_soon_threadsafe(q.put_nowait, {"event": "error", "data": {"message": str(e2)}})
+            finally:
+                loop.call_soon_threadsafe(q.put_nowait, None)
+
+        _executor.submit(work)
+        while True:
+            ev = await q.get()
+            if ev is None:
+                break
+            yield f"event: {ev['event']}\ndata: {json.dumps(ev['data'], ensure_ascii=False)}\n\n"
+
+    def resume(self, thread_id: str, payload: dict):
+        return self.stream(thread_id, self.resume_input(thread_id, payload))
+
+
+class GraphRunner(BaseRunner):
+    """海报场景。"""
+
+    def __init__(self, fake: bool | None = None, data_dir: Path | None = None, out_dir: Path | None = None):
+        fake = config.USE_FAKE_PLANNER if fake is None else fake
+        self.out_dir = Path(out_dir or config.OUTPUT_DIR)
+        self.planner = FakePlanner() if fake else ArkPlanner()
+        self.graph = build_graph(self.planner, open_sqlite_checkpointer(Path(data_dir or config.DATA_DIR) / "checkpoints.sqlite"), self.out_dir)
+
+    # ---- 查询 ----
 
     def state_view(self, thread_id: str) -> dict:
         snap = self.graph.get_state({"configurable": {"thread_id": thread_id}})
@@ -99,22 +171,6 @@ class GraphRunner:
             payload["html_url"] = self.file_url(thread_id, payload.get("html_path"))
         return payload
 
-    # ---- 执行 ----
-
-    def _events(self, thread_id: str, inp: Any):
-        cfg = {"configurable": {"thread_id": thread_id}}
-        with _lock:
-            for mode, chunk in self.graph.stream(inp, cfg, stream_mode=["updates", "custom"]):
-                if mode == "custom":
-                    yield {"event": "progress", "data": jsonable(chunk)}
-                    continue
-                for node, update in chunk.items():
-                    if node == "__interrupt__":
-                        yield {"event": "interrupt", "data": self._decorate_interrupt(thread_id, update[0].value)}
-                        continue
-                    yield {"event": "node", "data": self._summarize(thread_id, node, update)}
-            yield {"event": "state", "data": self.state_view(thread_id)}
-
     def _summarize(self, thread_id: str, node: str, update: dict | None) -> dict:
         out = {"node": node}
         if not update:
@@ -132,29 +188,5 @@ class GraphRunner:
             out["exported"] = self._export_view(thread_id, update.get("exported"))
         return out
 
-    async def stream(self, thread_id: str, inp: Any) -> AsyncIterator[str]:
-        """把工作线程里的事件转成 SSE 文本行。"""
-        loop = asyncio.get_running_loop()
-        q: asyncio.Queue = asyncio.Queue()
-
-        def work():
-            try:
-                for ev in self._events(thread_id, inp):
-                    loop.call_soon_threadsafe(q.put_nowait, ev)
-            except Exception as e:  # noqa: BLE001
-                loop.call_soon_threadsafe(q.put_nowait, {"event": "error", "data": {"message": str(e)}})
-            finally:
-                loop.call_soon_threadsafe(q.put_nowait, None)
-
-        _executor.submit(work)
-        while True:
-            ev = await q.get()
-            if ev is None:
-                break
-            yield f"event: {ev['event']}\ndata: {json.dumps(ev['data'], ensure_ascii=False)}\n\n"
-
     def start(self, thread_id: str, request: str, product_image: str | None):
         return self.stream(thread_id, {"request": request, "product_image": product_image})
-
-    def resume(self, thread_id: str, payload: dict):
-        return self.stream(thread_id, Command(resume=payload))

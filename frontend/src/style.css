@@ -103,3 +103,55 @@ body { background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, 
 .send:disabled { background: #ccc; cursor: default; }
 .footnote { text-align: center; color: var(--muted2); font-size: 12px; margin-top: 8px; }
 .err { color: #c0392b; font-size: 13px; margin: 6px 0; }
+
+/* 场景切换 */
+.scen { display: flex; gap: 4px; border: 1px solid var(--line); border-radius: 999px; padding: 2px; }
+.scen button { font: inherit; font-size: 12px; padding: 3px 12px; border-radius: 999px; border: 0; background: none; cursor: pointer; color: #666; }
+.scen button.sel { background: #1a1a1a; color: #fff; }
+.qcard .qsub { font-weight: 400; font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+/* 调研：大纲 / 论断 / 来源 / 报告 */
+.outline { border: 1px solid var(--line); border-radius: 10px; margin: 8px 0; }
+.onode { padding: 10px 12px; border-top: 1px solid var(--line); }
+.onode:first-child { border-top: 0; }
+.onode .ot { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.onode .ot .num { width: 18px; height: 18px; border-radius: 50%; background: #eee; color: #555; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; font-weight: 400; }
+.onode .ot .cnt { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 400; }
+.onode .oq { color: var(--muted); font-size: 13px; margin: 2px 0 6px 26px; }
+.claim { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0 5px 26px; font-size: 13px; }
+.claim.clickable { cursor: pointer; border-radius: 6px; }
+.claim.clickable:hover { background: var(--hover); }
+.claim.orphan .t { color: var(--muted2); text-decoration: line-through; }
+.claim .t { flex: 1; }
+.claim .src { color: var(--muted2); font-size: 11px; white-space: nowrap; align-self: center; }
+.chip.fact { background: #e8eefc; color: var(--fact); }
+.chip.inference { background: #f3e8fc; color: #7a3fb0; }
+.chip.draft { background: #eee; color: #777; }
+.chip.orphan { background: #fdeaea; color: #c0392b; }
+.chip.adopted { background: #e6f4ec; color: var(--ok); }
+.chip.candidate { background: #eee; color: #777; }
+.chip.excluded { background: #fdeaea; color: #c0392b; }
+.rtabs { display: flex; gap: 6px; align-items: center; margin: 10px 0 6px; }
+.rtabs button { font: inherit; font-size: 12px; padding: 3px 12px; border-radius: 999px; border: 1px solid var(--line); background: #fff; cursor: pointer; color: #555; }
+.rtabs button.sel { border-color: #1a1a1a; color: #1a1a1a; }
+.rtabs .vnote { margin-left: auto; color: var(--muted); font-size: 12px; }
+.report { border: 1px solid var(--line); border-radius: 10px; padding: 6px 18px 10px; max-height: 520px; overflow-y: auto; }
+.report h2 { font-size: 16px; margin: 10px 0 4px; }
+.report h3 { font-size: 14px; margin: 14px 0 4px; }
+.report p { margin: 4px 0; }
+.report p.inf { color: #5b3f80; }
+.report li { margin: 2px 0 2px 18px; color: #555; font-size: 13px; }
+.report .mark { color: var(--fact); font-size: 10px; margin-left: 1px; }
+.report .srcline { color: #555; font-size: 12px; margin: 2px 0; word-break: break-all; }
+.claims { border: 1px solid var(--line); border-radius: 10px; padding: 4px 12px 8px; }
+.claims .ctitle { font-weight: 600; margin: 8px 0 2px; }
+.claims .claim { padding-left: 0; }
+.sources { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.src { display: flex; gap: 10px; align-items: center; padding: 7px 12px; border-top: 1px solid var(--line); font-size: 13px; cursor: pointer; }
+.src:first-child { border-top: 0; }
+.src:hover { background: var(--hover); }
+.src.excluded { color: var(--muted2); cursor: default; }
+.src .sid { color: var(--muted); font-size: 12px; width: 28px; flex: none; }
+.src .st { flex: 1; min-width: 0; }
+.src .url { display: block; color: var(--muted2); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes { color: var(--muted); font-size: 12px; margin-top: 8px; }

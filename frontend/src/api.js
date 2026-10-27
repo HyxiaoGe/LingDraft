@@ -48,3 +48,23 @@ export async function getState(threadId) {
   if (!resp.ok) throw new Error(await resp.text());
   return resp.json();
 }
+
+// ---- 调研场景 ----
+
+export async function createResearchThread(request, onEvent) {
+  const resp = await fetch("/api/research/threads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ request }),
+  });
+  return readSse(resp, onEvent);
+}
+
+export async function resumeResearchThread(threadId, payload, onEvent) {
+  const resp = await fetch(`/api/research/threads/${threadId}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ payload }),
+  });
+  return readSse(resp, onEvent);
+}

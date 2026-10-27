@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { createThread, resumeThread } from "./api.js";
+import { createThread, resumeThread, createResearchThread, resumeResearchThread } from "./api.js";
+import { RESEARCH_DEFAULT, ResearchBody, researchCardFor, routeResearchText } from "./research.jsx";
 
 const KIND = { headline: "标题", subhead: "副标题", offer: "优惠", date: "活动时间", cta: "行动号召", product_image: "产品图" };
 const STATUS = { draft: "草稿", confirmed: "已确认", user_edited: "手工编辑" };
@@ -15,6 +16,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [image, setImage] = useState(null);
+  const [scenario, setScenario] = useState("poster"); // poster | research；开始后锁定
   const chatRef = useRef(null);
   const fileRef = useRef(null);
   const threadRef = useRef(null); // 问题卡的回调在 state 更新前就建好了，thread_id 走 ref
@@ -57,13 +59,15 @@ export default function App() {
     }
   };
 
-  const start = (text) => run((cb) => createThread(text, image, cb), text);
-  const resume = (payload, userText, qa) => run((cb) => resumeThread(threadRef.current, payload, cb), userText, qa);
+  const start = (text) => run((cb) => (scenario === "research" ? createResearchThread(text, cb) : createThread(text, image, cb)), text);
+  const resume = (payload, userText, qa) =>
+    run((cb) => (scenario === "research" ? resumeResearchThread(threadRef.current, payload, cb) : resumeThread(threadRef.current, payload, cb)), userText, qa);
 
   // ---- 把 interrupt 变成问题卡 ----
   const cardFor = (st) => {
     const it = st.interrupt;
     if (!it) return null;
+    if (it.type.startsWith("research.")) return researchCardFor(it, st, resume, setCard);
     if (it.type === "confirm_facts") return factsCard(it, resume);
     if (it.type === "choose_style") return styleCard(it, resume);
     if (it.type === "review") return reviewCard(it, st, resume, setCard);
@@ -72,22 +76,33 @@ export default function App() {
 
   // 底部输入框：没开始 → 新建；review 中 → 自由文本按关键词路由；其他中断 → 禁用
   const interruptType = state?.interrupt?.type;
-  const inputMode = !state || state.exported ? "new" : interruptType === "review" ? "review" : "locked";
+  const inputMode = !state || state.exported ? "new"
+    : interruptType === "review" || interruptType === "research.review" ? "review"
+    : interruptType === "research.ask" ? "ask" : "locked";
   const onSend = (text) => {
     if (inputMode === "new") return start(text);
-    if (inputMode === "review") return routeFreeText(text, state, resume, setCard);
+    if (inputMode === "ask") return resume({ answer: text }, null, [{ q: state.interrupt.title, a: text }]);
+    if (inputMode === "review") return scenario === "research" ? routeResearchText(text, state, resume, setCard) : routeFreeText(text, state, resume, setCard);
   };
+  const title = !state ? (scenario === "research" ? "灵稿 · 产品调研" : "灵稿 · 宣传海报")
+    : scenario === "research" ? (state.scope?.question || "产品调研") : "黑五预热宣传海报";
 
   return (
     <div className="app">
       <div className="topbar">
-        <h1>{state ? "黑五预热宣传海报" : "灵稿 · 宣传海报"}</h1>
+        <h1>{title}</h1>
+        {!state && (
+          <div className="scen">
+            {[["poster", "海报"], ["research", "调研"]].map(([k, l]) => <button key={k} className={scenario === k ? "sel" : ""} onClick={() => setScenario(k)}>{l}</button>)}
+          </div>
+        )}
         <div className="icons"><span title="搜索">⌕</span><span title="分享">⇪</span><span title="预览">▭</span></div>
       </div>
       <div className="chat" ref={chatRef}>
         <div className="chat-inner">
-          {messages.length === 0 && <Welcome onPick={(t) => start(t)} />}
-          {messages.map((m) => (m.role === "user" ? <UserMsg key={m.id} text={m.text} /> : <AiMsg key={m.id} m={m} onPickElement={(e) => setCard(elementCard(e, state, resume, setCard))} />))}
+          {messages.length === 0 && <Welcome scenario={scenario} onPick={(t) => start(t)} />}
+          {messages.map((m) => (m.role === "user" ? <UserMsg key={m.id} text={m.text} />
+            : <AiMsg key={m.id} m={m} onPickElement={(e) => setCard(elementCard(e, state, resume, setCard))} onCard={setCard} resume={resume} />))}
           {error && <div className="err">出错：{error}</div>}
         </div>
       </div>
@@ -95,6 +110,7 @@ export default function App() {
         <div className="bottom-inner">
           {card && !busy && <QuestionCard card={card} onClose={() => setCard(null)} />}
           <InputBox
+            scenario={scenario}
             mode={inputMode}
             busy={busy}
             hasCard={!!card}
@@ -104,7 +120,7 @@ export default function App() {
             onImage={() => fileRef.current?.click()}
           />
           <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => setImage(e.target.files?.[0] || null)} />
-          <div className="footnote">内容由 AI 生成，价格、折扣、日期只来自你确认的事实</div>
+          <div className="footnote">{scenario === "research" ? "内容由 AI 生成，每条论断都可回指来源，事实与推断分开标记" : "内容由 AI 生成，价格、折扣、日期只来自你确认的事实"}</div>
         </div>
       </div>
     </div>
@@ -275,7 +291,18 @@ function routeFreeText(text, st, resume, setCard) {
 
 // ---------------- 组件 ----------------
 
-function Welcome({ onPick }) {
+function Welcome({ scenario, onPick }) {
+  if (scenario === "research") {
+    return (
+      <div className="msg-ai">
+        <div className="head"><span className="avatar">灵</span><span className="name">灵稿</span></div>
+        <div className="body">
+          <p>我可以帮你做产品调研。说一句要研究什么，我会先和你定范围，再按章节搜资料、读原文，中途拿不准的会问你；大纲和证据你确认后我才写报告。报告里每句话都能回指来源，事实和推断分开标；你排除一条来源，靠它的论断会自动退回。</p>
+          <p>试试：<a href="#" onClick={(e) => { e.preventDefault(); onPick(RESEARCH_DEFAULT); }}>{RESEARCH_DEFAULT}</a></p>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="msg-ai">
       <div className="head"><span className="avatar">灵</span><span className="name">灵稿</span></div>
@@ -291,7 +318,7 @@ function UserMsg({ text }) {
   return <div className="msg-user"><div className="bubble">{text}</div></div>;
 }
 
-function AiMsg({ m, onPickElement }) {
+function AiMsg({ m, onPickElement, onCard, resume }) {
   const [open, setOpen] = useState(true);
   const st = m.result;
   const it = st?.interrupt;
@@ -313,9 +340,13 @@ function AiMsg({ m, onPickElement }) {
           </>
         )}
         {m.steps.filter((s) => s.node === "render").map((s) => <div className="done-line" key={s.version}>已渲染第 {s.version} 版 · {s.note}</div>)}
-        {m.steps.filter((s) => s.notes?.length).map((s, i) => <p key={i}>{s.notes.join("；")}</p>)}
+        {m.steps.filter((s) => s.node === "research_section" && s.section).map((s, i) => <div className="done-line" key={i}>调研完「{s.section}」· 累计 {s.sources} 条来源、{s.claims} 条论断</div>)}
+        {m.steps.filter((s) => s.node === "write").map((s) => <div className="done-line" key={s.version}>已生成第 {s.version} 版报告 · {s.note}</div>)}
+        {st?.scenario !== "research" && m.steps.filter((s) => s.notes?.length).map((s, i) => <p key={i}>{s.notes.join("；")}</p>)}
         {m.stage && <div className="status"><span className="dots">{m.stage}</span><span className="sep">|</span><span>你可以随时关掉页面，回来后从这一步继续</span></div>}
-        {st && !m.stage && <ResultBody st={st} it={it} cur={cur} sel={sel} setSel={setSel} elements={elements} onPickElement={onPickElement} />}
+        {st && !m.stage && (st.scenario === "research"
+          ? <ResearchBody st={st} it={it} onCard={onCard} resume={resume} />
+          : <ResultBody st={st} it={it} cur={cur} sel={sel} setSel={setSel} elements={elements} onPickElement={onPickElement} />)}
       </div>
     </div>
   );
@@ -379,7 +410,7 @@ function QuestionCard({ card, onClose }) {
   return (
     <div className="qcard">
       <div className="qhead">
-        <div className="qtitle">{cur.title}</div>
+        <div className="qtitle">{cur.title}{cur.sub && <div className="qsub">{cur.sub}</div>}</div>
         <div className="pager">
           {cur.page && <><button disabled>‹</button><span>{cur.page}</span><button disabled>›</button></>}
           <button className="x" onClick={onClose} title="先收起，稍后可从输入框右侧重新打开">×</button>
@@ -410,9 +441,12 @@ function QuestionCard({ card, onClose }) {
   );
 }
 
-function InputBox({ mode, busy, hasCard, onSend, onReopen, image, onImage }) {
+function InputBox({ scenario, mode, busy, hasCard, onSend, onReopen, image, onImage }) {
   const [text, setText] = useState("");
-  const placeholder = mode === "new" ? "今天帮你做什么海报？说清商品、优惠、时间" : mode === "review" ? "对这一版说点什么，例如：标题更有紧迫感" : "请先回答上方的问题";
+  const research = scenario === "research";
+  const placeholder = mode === "new" ? (research ? "想研究什么？说清主题、时间和信源要求" : "今天帮你做什么海报？说清商品、优惠、时间")
+    : mode === "review" ? (research ? "对这版报告说点什么，例如：第一章更简短" : "对这一版说点什么，例如：标题更有紧迫感")
+    : mode === "ask" ? "直接回答上面的问题…" : "请先回答上方的问题";
   const send = () => { if (text.trim() && !busy && mode !== "locked") { onSend(text.trim()); setText(""); } };
   return (
     <div className="inputbox">
@@ -420,7 +454,8 @@ function InputBox({ mode, busy, hasCard, onSend, onReopen, image, onImage }) {
         onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
       <div className="tools">
         <div className="left">
-          <button className="tbtn" title="上传产品图" onClick={onImage} disabled={mode !== "new"}>＋ {image ? image.name : "产品图"}</button>
+          {!research && <button className="tbtn" title="上传产品图" onClick={onImage} disabled={mode !== "new"}>＋ {image ? image.name : "产品图"}</button>}
+          {research && <span className="tbtn">⌕ agent-tools 搜索</span>}
           <span className="tbtn">◎ 豆包 Seed 2.1</span>
         </div>
         <div className="right">

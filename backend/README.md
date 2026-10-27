@@ -1,9 +1,9 @@
-# LingDraft backend（海报：M1 图 + M2 接口；调研：R3 图 + CLI）
+# LingDraft backend（海报：M1 图 + M2 接口；调研：R3 图 + CLI + R4 接口）
 
 黑五海报单场景的 LangGraph 实现：`intake → confirm_facts(中断) → 风格 → plan_layout → render → check → review(中断) → revise / manual_edit / change_fact / export`。
 设计见 `../docs/黑五海报PoC技术方案.md`。
 
-调研场景（后端 + CLI，前端未接）：`intake → confirm_scope(中断) → plan → research_section × N（内嵌 create_agent，`ask_user` 会中断）→ confirm_outline(中断) → write → check → review(中断：approve / exclude_source / edit_claim / rewrite_section / reopen_outline) → export`。设计见 `../docs/调研场景与多场景架构设计.md`。
+调研场景（图 + CLI + 接口 + 前端）：`intake → confirm_scope(中断) → plan → research_section × N（内嵌 create_agent，`ask_user` 会中断）→ confirm_outline(中断) → write → check → review(中断：approve / exclude_source / edit_claim / rewrite_section / reopen_outline) → export`。设计见 `../docs/调研场景与多场景架构设计.md`。
 
 ## 运行
 
@@ -12,7 +12,7 @@
 ```bash
 uv sync
 uv run playwright install chromium
-uv run pytest -q            # 41 个用例，不联网（FakePlanner / FakeResearchPlanner + MockTransport 网关）
+uv run pytest -q            # 45 个用例，不联网（FakePlanner / FakeResearchPlanner + MockTransport 网关）
 ```
 
 Web 方式（M2）：
@@ -24,7 +24,9 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 
 环境变量：`ARK_API_KEY`、`ARK_MODEL`、`ARK_MODEL_LITE`、`ARK_IMAGE_MODEL`、`LINGDRAFT_BACKGROUND=0` 关闭背景图生成、`LINGDRAFT_FAKE=1` 用假模型；调研场景另需 `AGENT_TOOLS_URL` / `AGENT_TOOLS_API_KEY`（agent-tools 网关）。
 
-接口：`POST /api/threads`（multipart：request，image 可选）和 `POST /api/threads/{id}/resume`（`{"payload": ...}`）都返回 SSE：`node` / `interrupt` / `error` 事件，最后一个 `state` 事件是完整状态；`GET /api/threads/{id}/state`；`GET /api/threads/{id}/files/{name}`；`GET /api/threads/{id}/export` 打包 zip。
+接口：`POST /api/threads`（multipart：request，image 可选）和 `POST /api/threads/{id}/resume`（`{"payload": ...}`）都返回 SSE：`progress` / `node` / `interrupt` / `error` 事件，最后一个 `state` 事件是完整状态；`GET /api/threads/{id}/state`；`GET /api/threads/{id}/files/{name}`；`GET /api/threads/{id}/export` 打包 zip。
+
+调研接口同构，前缀 `/api/research/threads`：`POST`（json `{"request"}`）、`/{id}/resume`、`/{id}/state`、`/{id}/files/report_v{n}.md`、`/{id}/package/{report.md|items.json|sources.json|manifest.json}`、`/{id}/export`。agent 的动态提问在接口上统一成 `{"type":"research.ask", title, options, why}`，回传 `{"answer"}` 或 `{"skip":true}`，由 `ResearchRunner` 转成中间件的 decisions。
 
 CLI 演示（`--fake` 用确定性假模型；去掉 `--fake` 需设置 `ARK_API_KEY`，走豆包）：
 
@@ -62,10 +64,10 @@ uv run python -m app.cli --scenario research state <thread_id>
 - `app/graph/poster/nodes.py` 节点与路由；`graph.py` 建图与检查点
 - `app/llm.py` `Planner` 协议：`ArkPlanner`（豆包，json_schema 结构化输出）/ `FakePlanner`
 - `app/render/` Jinja2 模板 → Playwright 截图；`checks.py` 事实逐字比对 / 违禁词 / 溢出
-- `app/api/` FastAPI；`runner.py` 把图执行放到单工作线程并转成 SSE
+- `app/api/` FastAPI；`runner.py` `BaseRunner`（图执行放到单工作线程并转成 SSE）+ 海报 `GraphRunner`；`research_runner.py` 调研的状态视图 / 中断整形 / 事件摘要
 - `app/graph/research/` 调研场景：`state.py`（范围 / 大纲 / 来源 / 论断 / 逐句正文）、`agent.py`（`create_agent` + HITL / 调用上限中间件、`Findings` 结构化产出、从工具消息里解析候选来源）、`nodes.py` / `graph.py`、`report.py`（确定性拼装报告与六项校验）、`prompts.py`
 - `app/research_llm.py` `ResearchPlanner` 协议：`ArkResearchPlanner`（豆包 + 真实网关）/ `FakeResearchPlanner`（脚本化的假工具模型 + MockTransport 网关）
 - `app/tools/` agent-tools 网关客户端（搜索 / 网页读取）与调研 agent 的工具（`search_web` / `read_page` / `ask_user`）
 - `scripts/` 对真实模型与网关的验证脚本：`probe_create_agent.py`（假搜索）、`probe_gateway_agent.py`（真实搜索 / 读取）、`probe_research_llm.py`（调研场景三种结构化输出），`PYTHONPATH=. uv run python scripts/<name>.py`
-- `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出
+- `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）。海报：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出。调研（`src/research.jsx`，顶栏切换）：范围逐项确认 → agent 提问卡（带“不问会怎样”，可跳过）→ 大纲 + 论断 + 假设 → 报告 / 论断 / 来源三个页签，点论断或来源单独处理 → 终审卡 / 自由文本重写某章 → 导出确认物包
 - `tests/` 海报：T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等；调研：`test_research.py`（全流程可追溯 / 排除来源传播 / 改论断 / 重写章节 / 改大纲只补调研新章 / 跳过提问 / sqlite 跨实例恢复）
