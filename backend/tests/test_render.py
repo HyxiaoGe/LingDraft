@@ -52,3 +52,11 @@ def test_forbidden_words_flagged():
     layout = {"headline": {"text": "全网最低价来了", "overflow": False}}
     results = checks.run_checks(_elements(), _facts(), layout, forbidden=["全网最低"])
     assert {r.name: r.passed for r in results}["forbidden_words"] is False
+
+
+def test_numbers_in_free_copy_flagged():
+    layout = {"headline": {"text": "耳机5折来了", "overflow": False}, "offer": {"text": "5 折", "overflow": False}}
+    results = checks.run_checks(_elements(), _facts(), layout, forbidden=[])
+    by = {r.name: r for r in results}
+    assert by["no_numbers_in_copy"].passed is False and "headline" in by["no_numbers_in_copy"].detail
+    assert any("数字" in c for c in checks.constraints_from(results))

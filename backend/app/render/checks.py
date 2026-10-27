@@ -1,9 +1,10 @@
 """渲染后的确定性校验：事实逐字比对、违禁词、溢出。不调用模型。"""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
-from app.graph.poster.state import CheckResult, Element, Fact
+from app.graph.poster.state import TEXT_KINDS, CheckResult, Element, Fact
 
 _WORDS_FILE = Path(__file__).parent / "forbidden_words.txt"
 
@@ -37,7 +38,15 @@ def run_checks(elements: list[Element], facts: dict[str, Fact], layout: dict, fo
                 hits.append(f"{slot} 含“{w}”")
     results.append(CheckResult(name="forbidden_words", passed=not hits, detail="; ".join(hits)))
 
-    # 3) 溢出：自动缩字到下限后仍放不下
+    # 3) 自由文案里不得出现数字：价格 / 折扣 / 日期只能从事实槽位展示，否则事实改了文案会留下旧数字
+    echoes = []
+    for slot, info in layout.items():
+        e = by_slot.get(slot)
+        if e and e.kind in TEXT_KINDS and not e.bound_fact and re.search(r"\d", info.get("text", "")):
+            echoes.append(f"{e.id}: '{info.get('text')}'")
+    results.append(CheckResult(name="no_numbers_in_copy", passed=not echoes, detail="; ".join(echoes)))
+
+    # 4) 溢出：自动缩字到下限后仍放不下
     overflow = [slot for slot, info in layout.items() if info.get("overflow")]
     results.append(CheckResult(name="overflow", passed=not overflow, detail="溢出槽位: " + ", ".join(overflow) if overflow else ""))
     return results
@@ -53,6 +62,8 @@ def constraints_from(results: list[CheckResult]) -> list[str]:
             out.append(f"文案过长导致溢出（{r.detail}），请明显缩短对应槽位的文案")
         elif r.name == "forbidden_words":
             out.append(f"存在违禁词（{r.detail}），请换用非绝对化表述")
+        elif r.name == "no_numbers_in_copy":
+            out.append(f"文案里出现了数字（{r.detail}），折扣 / 价格 / 日期已有独立槽位，请把数字从这些文案中去掉")
         elif r.name == "fact_match":
             out.append(f"事实文本不一致（{r.detail}）")
     return out

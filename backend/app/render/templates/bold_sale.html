@@ -32,7 +32,7 @@
 {% for e in elements %}
   {% if e.kind == "product_image" %}
     <div class="slot" id="{{ e.slot }}" data-id="{{ e.id }}" data-kind="{{ e.kind }}">
-      {% if e.content %}<img src="{{ e.content }}" alt="product">{% else %}<div class="placeholder"></div>{% endif %}
+      {% if e.content %}<img src="{{ e.content }}" alt="product">{% elif not background_image %}<div class="placeholder"></div>{% endif %}
     </div>
   {% elif e.kind == "background" %}
     <div class="slot" id="{{ e.slot }}" data-id="{{ e.id }}" data-kind="{{ e.kind }}">

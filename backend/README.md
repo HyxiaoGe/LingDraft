@@ -5,10 +5,12 @@
 
 ## 运行
 
+先把 `.env.example` 复制为 `.env` 并填入 `ARK_API_KEY`（不填只能用 `--fake` / `LINGDRAFT_FAKE=1`）。
+
 ```bash
 uv sync
 uv run playwright install chromium
-uv run pytest -q            # 22 个用例，不联网（FakePlanner）
+uv run pytest -q            # 23 个用例，不联网（FakePlanner）
 ```
 
 Web 方式（M2）：
