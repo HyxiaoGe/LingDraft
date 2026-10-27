@@ -1,0 +1,366 @@
+[
+ {
+  "case": 3,
+  "name": "缺用途的模糊题",
+  "request": "帮我调研一下大模型的落地情况",
+  "expect": "问 1 次（行业 / 场景或地域），回答后继续",
+  "elapsed_s": 93.9,
+  "model_calls": 6,
+  "tool_messages": 11,
+  "calls": {
+   "search_web": 9,
+   "read_page": 0,
+   "ask_user": 0,
+   "Answer": 2
+  },
+  "queries": [
+   "2024 2025 大模型 产业落地 应用 现状 报告 中国 信通院",
+   "2025 enterprise generative AI adoption survey McKinsey Gartner IDC large language models",
+   "2025 中国 大模型 行业应用 金融 医疗 政务 制造 案例 报告",
+   "McKinsey The state of AI 2025 organizations rewiring capture value adoption percentage generative AI",
+   "Stanford AI Index 2025 business adoption generative AI enterprise investment report",
+   "Menlo Ventures 2025 state of enterprise AI agents adoption spend report",
+   "Deloitte State of Generative AI in the Enterprise 2025 survey agents ROI",
+   "site:hai.stanford.edu AI Index Report 2025 PDF business adoption 78%",
+   "国务院 关于深入实施 人工智能+ 行动 的意见 2025 重点行动 工业 医疗 金融"
+  ],
+  "asked": [],
+  "answer": {
+   "summary": "总体判断：大模型已从“尝鲜试点”进入“规模化落地早期”，全球企业使用率很高，但真正成熟、重构流程并产生稳定利润贡献的仍是少数；中国落地速度快，智能体、行业知识库/私有化部署、客服/办公/编程/数据分析是当前主线，制造、金融、政务和公共服务最活跃。",
+   "format": "report",
+   "key_facts": [
+    {
+     "statement": "全球企业采用已接近普及：Stanford HAI《AI Index 2025》称，2024年78%的组织报告使用AI，高于2023年的55%；71%的组织在至少一个业务职能中使用生成式AI，高于2023年的33%。",
+     "source_urls": [
+      "https://hai.stanford.edu/ai-index/2025-ai-index-report/economy#1",
+      "https://hai.stanford.edu/ai-index/2025-ai-index-report?categoryid=2826672?categoryid=2826672?categoryid=2826672?categoryid=2826672?categoryid=2826672?categoryid=2826672?categoryid=2826672?categoryid#1"
+     ]
+    },
+    {
+     "statement": "但落地成熟度仍低：麦肯锡2025年《The State of AI》指出，只有1%的公司高管认为其生成式AI推广“成熟”，多数组织尚未看到全公司层面的底线收益；不到三分之一企业落实了多数规模化采用实践，不到五分之一跟踪生成式AI KPI。",
+     "source_urls": [
+      "https://www.mckinsey.com/capabilities/mckinsey-digital/our-insights/the-state-of-ai#1"
+     ]
+    },
+    {
+     "statement": "财务收益开始出现但幅度有限：Stanford汇总显示，服务运营、供应链、软件工程分别有49%、43%、41%的使用企业报告成本下降，但多数降幅低于10%；营销销售、供应链、服务运营分别有71%、63%、57%报告收入增长，常见增幅低于5%。",
+     "source_urls": [
+      "https://hai.stanford.edu/ai-index/2025-ai-index-report/economy#1"
+     ]
+    },
+    {
+     "statement": "中国AI产业规模快速扩大：中国信通院相关观察显示，2024年我国人工智能核心产业规模超过9000亿元、增速24%，预计2025年有望超过1.2万亿元。",
+     "source_urls": [
+      "http://www.jingjiribao.cn/static/detail.jsp?id=626440",
+      "https://www.news.cn/tech/20251216/c8bba82033424143be96efb7724eb6f9/c.html#1"
+     ]
+    },
+    {
+     "statement": "智能体被视为大模型落地的主要形式，但仍处早期：中国信通院指出通用智能体和法律、编程、人力资源等专用智能体正在落地，但任务规划可靠性、业务系统对接复杂性、权责界定仍是突出难题。",
+     "source_urls": [
+      "http://www.jingjiribao.cn/static/detail.jsp?id=626440",
+      "http://www.cww.net.cn/article?id=6C381F24E9984CADB4209EE57129A2AF#1"
+     ]
+    },
+    {
+     "statement": "从中国案例分布看，沙丘智库跟踪504个2025年企业级案例后发现，IT/互联网占15.1%、银行14.3%、制造12.7%、政府与公共服务8.9%；场景上智能客服占20.6%，知识助手8.9%，数据分析7.5%，员工办公助手和软件测试各4.6%。",
+     "source_urls": [
+      "https://www.shaqiu.cn/article/RMxmYNNoYead",
+      "https://www.shaqiu.cn/article/r0d6YQ8mVlwB"
+     ]
+    },
+    {
+     "statement": "制造业正在从外围辅助走向核心环节：中国信通院对数百个工业大模型案例的分析显示，生产制造环节案例占比由上一年的19.9%升至25.9%，但仍受工业数据获取、工艺知识封装和可靠性要求制约。",
+     "source_urls": [
+      "https://h5.cinn.cn/davmu/share/holly/doc/2025/12/01nQ34Zk/index.html?_=1775579624580&_=1792318757552",
+      "http://www.jingjiribao.cn/static/detail.jsp?id=626440"
+     ]
+    },
+    {
+     "statement": "地方政府正在用“场景开放+预算”推动落地：北京市2025年发布12个人工智能应用场景“揭榜挂帅”需求，覆盖制造、教育、医疗、金融、能源、文旅、智慧城市等，总预算1.1亿元；同时发布95个代表性典型案例。",
+     "source_urls": [
+      "https://www.beijing.gov.cn/ywdt/gzdt/202507/t20250704_4141279.html"
+     ]
+    },
+    {
+     "statement": "云厂商和行业方案商的落地路径通常是“通用/开源模型+行业知识库+工作流/智能体+私有化或专有云”。腾讯云称其“混元+开源模型”多模型行业方案已落地金融、医疗、教育、文旅、传媒等30多个行业；案例包括万控智造设计周期从3天压缩至3分钟、上海徐汇大模型智能中枢承载80余个政务系统、上药控股近3万名员工使用AI智能体中心。",
+     "source_urls": [
+      "https://bigdata-expo.cn/news/3/1487914422"
+     ]
+    },
+    {
+     "statement": "企业规模化的主要阻碍不是单一模型能力，而是组织与治理：德勤2025年调查2773名管理者发现，超过三分之二受访者称未来3-6个月只有30%或更少实验能完全规模化；监管合规障碍从28%升至38%，69%认为完整治理战略需要一年以上；但78%仍计划增加AI支出。",
+     "source_urls": [
+      "https://www.deloitte.com/us/en/about/press-room/state-of-generative-ai.html?tpcc=NL_Marketing#1",
+      "https://www.deloitte.com/nz/en/services/consulting/perspectives/generative-ai-in-enterprise-generating-a-new-future.html"
+     ]
+    },
+    {
+     "statement": "“真正自主执行”的Agent在海外企业中仍非主流：Menlo Ventures 2025年企业GenAI调查称，美国企业GenAI支出约370亿美元、同比增长逾三倍，但只有16%的企业部署可规划、执行、观察反馈并调整行为的真正Agent，横向应用86%支出仍流向较简单的Copilot。",
+     "source_urls": [
+      "https://www.zdnet.com/article/anthropic-openai-enterprise-market-share-2025/?utm_source=www.guru99.com&utm_medium=newsletter&_bhlid=01559dd8cf2437c24e88ea05309c3c7a13afa28f#1",
+      "https://www.moneycontrol.com/artificial-intelligence/ai-boom-vs-bubble-37-billion-enterprise-surge-shows-decisive-tilt-says-menlo-ventures-article-13718530.html?utm_source=Newsletter_Subscription_AI&utm_medium=desktop&utm_campaign=AI_Newsletter#1"
+     ]
+    }
+   ],
+   "open_questions": [
+    "不同机构对“AI/GenAI采用率”的样本和口径不同：有的问至少一个职能使用，有的问常态化使用或已部署Agent，因此比例不能直接横向比较。",
+    "公开案例多由供应商、地方政府或案例库披露，实际ROI、续费率、系统可用率和失败项目比例披露不足。",
+    "若要服务投资、创业或企业选型，还需要进一步按具体行业拆解：例如金融风控/投研/客服、医疗病历/辅助诊断/药研、工业设计/质检/排产/控制、政务问答/办事/城市治理等。"
+   ],
+   "confidence": "high"
+  },
+  "final_text": "",
+  "usage": {
+   "input": 165783,
+   "output": 4341
+  },
+  "transcript": [
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "search_web",
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "usage": {
+     "input_tokens": 1220,
+     "output_tokens": 179,
+     "total_tokens": 1399,
+     "input_token_details": {
+      "cache_read": 0
+     },
+     "output_token_details": {
+      "reasoning": 0
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 179, 'prompt_tokens': 1220, 'total_tokens': 1399, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 0, 'rejected_predict",
+     "model_name": "doubao-seed-2-1-pro-260915",
+     "system_fingerprint": "None",
+     "id": "021793120134373c1f73ca4f9be5414660a0db4d2039cedbd950c",
+     "service_tier": "default",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"人工智能正从工具升级为伙伴，全面赋能高质量发展\", \"url\": \"https://h5.cinn.cn/davmu/share/holly/doc/2025/12/01nQ34Zk/index.html?_=1775579624580&_=1792318757552\", \"description\": \"”12月13日，在“2026中国信通院深度观察报告会”上 ... 行业"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"3.2 Risks of NOT Adopting AI\", \"url\": \"https://zenodo.org/records/20328626/files/V1%20Enterprise%20AI%20Adoption%20Strategy%20v1%200%20.pdf?download=1#2#5#2\", \"description\": \"[NOTE] Subseq"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"2025年大模型落地行业和应用场景大盘点！\", \"url\": \"https://www.shaqiu.cn/article/RMxmYNNoYead\", \"description\": \"从行业分布上看，2025年1-12月大模型落地案例中IT/互联网行业占比最高（15.1%），其次为银行（14.3%）、制造（12.7%）、政府与公共服务（8.9%）。\", \"content\""
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "search_web",
+     "search_web",
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "usage": {
+     "input_tokens": 15258,
+     "output_tokens": 218,
+     "total_tokens": 15476,
+     "input_token_details": {
+      "cache_read": 0
+     },
+     "output_token_details": {
+      "reasoning": 0
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 218, 'prompt_tokens': 15258, 'total_tokens': 15476, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 0, 'rejected_predi",
+     "model_name": "doubao-seed-2-1-pro-260915",
+     "system_fingerprint": "None",
+     "id": "021793120138606c1f73ca4f9be5414660a0db4d2039ced98c919",
+     "service_tier": "default",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"The state of AI: How organizations are rewiring to capture value - The state of AI: How organizations are rewiring to capture value\", \"url\": \"https://www.mckinsey.com/capabilities/mckinsey"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"AI Investment: Dollars, Deployments And Downsides - CFO Leadership\", \"url\": \"https://cfoleadership.com/ai-investment-dollars-deployments-and-downsides/\", \"description\": \"Stanford Universit"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"protocolized-publications/ai-capability-maturity-model/_Observations/research/menlo-state-of-genai.md at main · rafaeldavid/protocolized-publications - Skip to content\", \"url\": \"https://gi"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"State of Generative AI Q4 – Press Release - Link opens in a new tab opens in new window\", \"url\": \"https://www.deloitte.com/us/en/about/press-room/state-of-generative-ai.html?tpcc=NL_Market"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "usage": {
+     "input_tokens": 35099,
+     "output_tokens": 66,
+     "total_tokens": 35165,
+     "input_token_details": {
+      "cache_read": 0
+     },
+     "output_token_details": {
+      "reasoning": 0
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 66, 'prompt_tokens': 35099, 'total_tokens': 35165, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 0, 'rejected_predic",
+     "model_name": "doubao-seed-2-1-pro-260915",
+     "system_fingerprint": "None",
+     "id": "021793120146097c1f73ca4f9be5414660a0db4d2039cedfc51a2",
+     "service_tier": "default",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"The 2025 AI Index Report - AI’s influence on society has never been more pronounced.\", \"url\": \"https://hai.stanford.edu/ai-index/2025-ai-index-report?categoryid=2826672?categoryid=2826672?"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "usage": {
+     "input_tokens": 37903,
+     "output_tokens": 71,
+     "total_tokens": 37974,
+     "input_token_details": {
+      "cache_read": 15160
+     },
+     "output_token_details": {
+      "reasoning": 0
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 71, 'prompt_tokens': 37903, 'total_tokens': 37974, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 0, 'rejected_predic",
+     "model_name": "doubao-seed-2-1-pro-260915",
+     "system_fingerprint": "None",
+     "id": "021793120150790c1f73ca4f9be5414660a0db4d2039ced88401d",
+     "service_tier": "default",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "error",
+    "content": "Tool call limit exceeded. Do not call 'search_web' again."
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "Answer"
+    ],
+    "finish": "tool_calls",
+    "usage": {
+     "input_tokens": 38005,
+     "output_tokens": 1842,
+     "total_tokens": 39847,
+     "input_token_details": {
+      "cache_read": 34616
+     },
+     "output_token_details": {
+      "reasoning": 0
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 1842, 'prompt_tokens': 38005, 'total_tokens': 39847, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 0, 'rejected_pred",
+     "model_name": "doubao-seed-2-1-pro-260915",
+     "system_fingerprint": "None",
+     "id": "021793120154869c1f73ca4f9be5414660a0db4d2039ced1a5600",
+     "service_tier": "default",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "Answer",
+    "status": "success",
+    "content": "Error: Failed to parse structured output for tool 'Answer': Failed to parse data to Answer: 2 validation errors for Answer\nkey_facts\n  Field required [type=missing, input_value={'summary': '总体判断...', "
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "Answer"
+    ],
+    "finish": "tool_calls",
+    "usage": {
+     "input_tokens": 38298,
+     "output_tokens": 1965,
+     "total_tokens": 40263,
+     "input_token_details": {
+      "cache_read": 37688
+     },
+     "output_token_details": {
+      "reasoning": 0
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 1965, 'prompt_tokens': 38298, 'total_tokens': 40263, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 0, 'rejected_pred",
+     "model_name": "doubao-seed-2-1-pro-260915",
+     "system_fingerprint": "None",
+     "id": "021793120191047c1f73ca4f9be5414660a0db4d2039cedb2f988",
+     "service_tier": "default",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "Answer",
+    "status": "success",
+    "content": "Returning structured response: summary='总体判断：大模型已从“尝鲜试点”进入“规模化落地早期”，全球企业使用率很高，但真正成熟、重构流程并产生稳定利润贡献的仍是少数；中国落地速度快，智能体、行业知识库/私有化部署、客服/办公/编程/数据分析是当前主线，制造、金融、政务和公共服务最活跃。' format='report' key_facts=[Fact(sta"
+   }
+  ]
+ }
+]

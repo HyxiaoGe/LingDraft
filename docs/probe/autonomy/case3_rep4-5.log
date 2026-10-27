@@ -1,0 +1,29 @@
+
+=== 例 3 缺用途的模糊题：帮我调研一下大模型的落地情况
+    期望：问 1 次（行业 / 场景或地域），回答后继续
+    ask_user: 你希望我重点调研“大模型落地情况”的哪个范围？ ['全球/中国整体市场：行业渗透率、主要厂商、商业化数据', '企业内部落地：典型场景、ROI、技术架构与实施难点', '具体行业应用：如金融、医疗、政务、制造、教育等', '投资/创业视角：赛道格局、案例、趋势与风险'] | 不问会怎样：“大模型落地”范围很宽，不同侧重点对应的数据源、案例和结论结构会明显不同；明确范围可避免报告泛泛而谈。
+Deserializing unregistered type __main__.Answer from checkpoint. This will be blocked in a future version. Set LANGGRAPH_STRICT_MSGPACK=true to block now, or add to allowed_msgpack_modules to allow explicitly: [('__main__', 'Answer')]
+    65.7s · 模型调用 4 · 搜索 6 · 读 0 · 问 1 · token 入 51294 出 2697
+    最后一条：tool  finish=None content="Returning structured response: summary='中国大陆 ToB 企业服务中的大模型已从“模型能力展示/PoC”进入“场景化、工程化交付”阶段：试点渗透率较高，但真正跨部门复制、嵌入核心流程并形成稳定 ROI"
+    检索词：['2024 2025 中国 大模型 企业服务 To B 落地 行业 应用 报告', '中国 大模型 商业化 ToB 企业级市场 2024 报告 IDC 艾瑞 沙利文', '2025 中国企业大模型应用落地 调研 渗透率 场景 ROI', '国务院 深入实施 人工智能+ 行动 意见 2027 2030 企业 落地', '2025 中国 大模型 ToB 典型案例 金融 制造 企业服务 智能体 知识库 客服', 'IDC 中国 MaaS AI大模型解决方案 2024 厂商 份额 百度 阿里 字节 腾讯']
+    format=report confidence=medium 事实 10 条 · 未定 3 条
+    结论：中国大陆 ToB 企业服务中的大模型已从“模型能力展示/PoC”进入“场景化、工程化交付”阶段：试点渗透率较高，但真正跨部门复制、嵌入核心流程并形成稳定 ROI 的仍是少数；短期最成熟的是知识库问答、智能客服、办公/文档、代码与研发辅助、营销内容、智能问数，深水区在金融风控、工业运维、供应链、ERP/HR/财务等核心业务流程。
+    未定：不同机构对“企业级大模型/企业服务垂域大模型/AI大模型解决方案/MaaS”的统计口径不同，市场规模数字不能直接横向比较。
+    未定：大量效率提升、准确率和ROI数据来自厂商或服务商案例，缺少第三方持续审计，实际复现效果可能因数据质量、流程成熟度和管理推动力度而显著不同。
+    未定：尚未看到统一、权威的中国大陆ToB大模型续费率、净收入留存率、项目毛利率等商业化指标，因此对商业模式成熟度只能做趋势判断。
+
+结果写到 /private/tmp/claude-501/-Users-sean-code-LingDraft/b4b71fd3-0f5f-499f-b9a1-65bc1069c61c/scratchpad/probe_case3_4.json
+
+=== 例 3 缺用途的模糊题：帮我调研一下大模型的落地情况
+    期望：问 1 次（行业 / 场景或地域），回答后继续
+Deserializing unregistered type __main__.Answer from checkpoint. This will be blocked in a future version. Set LANGGRAPH_STRICT_MSGPACK=true to block now, or add to allowed_msgpack_modules to allow explicitly: [('__main__', 'Answer')]
+    93.9s · 模型调用 6 · 搜索 9 · 读 0 · 问 0 · token 入 165783 出 4341
+    最后一条：tool  finish=None content="Returning structured response: summary='总体判断：大模型已从“尝鲜试点”进入“规模化落地早期”，全球企业使用率很高，但真正成熟、重构流程并产生稳定利润贡献的仍是少数；中国落地速度快，智能体、行业知识库"
+    检索词：['2024 2025 大模型 产业落地 应用 现状 报告 中国 信通院', '2025 enterprise generative AI adoption survey McKinsey Gartner IDC large language models', '2025 中国 大模型 行业应用 金融 医疗 政务 制造 案例 报告', 'McKinsey The state of AI 2025 organizations rewiring capture value adoption percentage generative AI', 'Stanford AI Index 2025 business adoption generative AI enterprise investment report', 'Menlo Ventures 2025 state of enterprise AI agents adoption spend report', 'Deloitte State of Generative AI in the Enterprise 2025 survey agents ROI', 'site:hai.stanford.edu AI Index Report 2025 PDF business adoption 78%', '国务院 关于深入实施 人工智能+ 行动 的意见 2025 重点行动 工业 医疗 金融']
+    format=report confidence=high 事实 11 条 · 未定 3 条
+    结论：总体判断：大模型已从“尝鲜试点”进入“规模化落地早期”，全球企业使用率很高，但真正成熟、重构流程并产生稳定利润贡献的仍是少数；中国落地速度快，智能体、行业知识库/私有化部署、客服/办公/编程/数据分析是当前主线，制造、金融、政务和公共服务最活跃。
+    未定：不同机构对“AI/GenAI采用率”的样本和口径不同：有的问至少一个职能使用，有的问常态化使用或已部署Agent，因此比例不能直接横向比较。
+    未定：公开案例多由供应商、地方政府或案例库披露，实际ROI、续费率、系统可用率和失败项目比例披露不足。
+    未定：若要服务投资、创业或企业选型，还需要进一步按具体行业拆解：例如金融风控/投研/客服、医疗病历/辅助诊断/药研、工业设计/质检/排产/控制、政务问答/办事/城市治理等。
+
+结果写到 /private/tmp/claude-501/-Users-sean-code-LingDraft/b4b71fd3-0f5f-499f-b9a1-65bc1069c61c/scratchpad/probe_case3_5.json

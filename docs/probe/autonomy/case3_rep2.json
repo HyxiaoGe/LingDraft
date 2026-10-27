@@ -1,0 +1,292 @@
+[
+ {
+  "case": 3,
+  "name": "缺用途的模糊题",
+  "request": "帮我调研一下大模型的落地情况",
+  "expect": "问 1 次（行业 / 场景或地域），回答后继续",
+  "elapsed_s": 74.8,
+  "model_calls": 4,
+  "tool_messages": 12,
+  "calls": {
+   "search_web": 11,
+   "read_page": 0,
+   "ask_user": 0,
+   "Answer": 1
+  },
+  "queries": [
+   "2024 2025 大模型 产业落地 应用 现状 报告 中国",
+   "2025 enterprise generative AI adoption survey McKinsey Gartner IDC large language models",
+   "2025 中国 大模型 行业应用 金融 政务 医疗 制造 落地 案例",
+   "McKinsey The state of AI 2025 organizations regularly using generative AI percentage EBIT",
+   "MIT NANDA State of AI in Business 2025 95 percent pilots fail generative AI",
+   "国务院 关于深入实施 人工智能+ 行动 的意见 2025 重点行动 工业 消费 民生",
+   "中国信通院 大模型 应用落地 2025 智能体 产业 报告 Token 调用量",
+   "2025 大模型 金融 行业 落地 银行 保险 证券 调研 AI 应用 场景",
+   "2025 医疗 大模型 落地 医院 应用 案例 中国 辅助诊疗",
+   "2025 制造 工业 大模型 落地 应用 研发 生产 质检 案例 中国",
+   "2025 政务 大模型 部署 应用 指引 政务服务 中国"
+  ],
+  "asked": [],
+  "answer": {
+   "summary": "总体判断：大模型已从“模型竞赛/试点验证”进入“场景规模化与智能体落地”阶段，但落地并不均衡——客服、知识问答、办公、代码、营销、金融文档/投研等数字化程度高的场景最先放量；制造核心控制、医疗诊疗、政务决策等高风险场景仍以辅助决策、人机协同和局部闭环为主，真正重构流程并带来公司级利润改善的项目仍是少数。",
+   "format": "report",
+   "key_facts": [
+    {
+     "statement": "中国政策层面已把大模型/智能体作为产业融合主线：国务院《关于深入实施“人工智能+”行动的意见》提出到2027年新一代智能终端、智能体等应用普及率超70%，到2030年超90%，并覆盖科技、产业、消费、民生、治理、全球合作六大方向。",
+     "source_urls": [
+      "https://www.gov.cn/gongbao/2025/issue_12266/202509/content_7039598.html#1",
+      "https://www.gov.cn/zhengce/202508/content_7037899.htm?ddtab=true"
+     ]
+    },
+    {
+     "statement": "中国AI产业和调用量增长很快：中国信通院测算，2024年AI核心产业规模突破9000亿元、同比增长24%，2025年有望达1.2万亿元；2025年公有云大模型对客侧Token调用量约2000万亿，呈现从试用向高频使用转变。",
+     "source_urls": [
+      "https://news.21csp.com.cn/c3/202602/11428984.html#1",
+      "http://mp.weixin.qq.com/s?__biz=Mzg3Mjc3ODMwOQ==&mid=2247486963&idx=1&sn=186369f6fe428b7d0ddfb5ae15c75eba"
+     ]
+    },
+    {
+     "statement": "产业落地呈现明显分层：人民网研究院蓝皮书指出，软件、金融、文娱、医疗等数据密集型行业率先规模化落地；能源、建筑、制造等行业仍在探索应用场景；农林牧渔更多处于数据资源建设阶段。",
+     "source_urls": [
+      "http://yjy.people.com.cn/n1/2025/0716/c460662-40523142.html"
+     ]
+    },
+    {
+     "statement": "应用形态正在从“聊天机器人/单点Copilot”转向行业智能体。国家工业信息安全发展研究中心等发布的《大模型2.0产业发展报告》认为，大模型进入以规模化商业应用为标志的2.0阶段，智能体成为应用落地的重要承载，企业应用需要围绕大模型重构。",
+     "source_urls": [
+      "https://www.news.cn/app/20250409/e2f88148ea71472185ce19631574cb39/c.html"
+     ]
+    },
+    {
+     "statement": "全球企业采用率高，但财务回报分化。麦肯锡2025年调研显示，71%的组织已在至少一个业务职能中常态化使用生成式AI，但超过80%的组织尚未看到企业层面的可感知EBIT影响，只有17%称生成式AI贡献了过去12个月5%以上EBIT。",
+     "source_urls": [
+      "https://www.mckinsey.com/capabilities/quantumblack/our-insights/the-state-of-ai-how-organizations-are-rewiring-to-capture-value?_bhlid=3cfa3256533c7874a43853efa7291074c9b64455&gspk=YmF5YXJlYXRpbWVzOTM3Nw&gsxid=X9xV1Ex5C5lpT5&ps_partner_key=YmF5YXJlYXRpbWVzOTM3Nw&ps_xid=X9xV1Ex5C5lpT5&pscd=partnerslink.athyna.com&utm_campaign=founder_letterbayareatimes9377#1"
+     ]
+    },
+    {
+     "statement": "试点到生产仍是全球共性难题。MIT NANDA《State of AI in Business 2025》称，仅约5%的集成式AI试点能产生显著价值、约5%的定制企业AI工具进入生产；主要瓶颈不是模型智商，而是缺少记忆/持续学习、与真实工作流割裂。该结论较激进、样本和口径受到质疑，但与麦肯锡“高采用、低企业级利润影响”的方向一致。",
+     "source_urls": [
+      "https://virtualizationreview.com/articles/2025/08/19/mit-report-finds-most-ai-business-investments-fail-reveals-genai-divide.aspx#1",
+      "https://www.hpcwire.com/bigdatawire/2025/09/04/mit-report-flags-95-genai-failure-rate-but-critics-say-it-oversimplifies/#1#1"
+     ]
+    },
+    {
+     "statement": "从场景看，最容易落地的是低风险、高频、文本密集和知识密集任务。沙丘智库对2025年504个案例的统计显示，智能客服占20.6%，其后是知识助手8.9%、数据分析7.5%、员工办公助手4.6%、软件测试4.6%；行业上IT/互联网、银行、制造、政府与公共服务居前。该数据来自行业智库案例库，适合看趋势，不宜等同全量市场份额。",
+     "source_urls": [
+      "https://www.shaqiu.cn/article/RMxmYNNoYead"
+     ]
+    },
+    {
+     "statement": "金融是中国落地最积极的行业之一，但也仍处早期。公开报道显示，腾讯云已联合银行、交易所、券商、保险等机构将大模型落地超100个金融业务场景，典型收益包括资讯分析效率提升30倍、信贷尽调从10天压缩到1天、研发提效超45%；但艾瑞咨询相关报告称96%的金融智能体实践仍集中在POC、平台部署和试点阶段，仅4%进入敏捷实践期。",
+     "source_urls": [
+      "https://cn.chinadaily.com.cn/a/202601/09/WS6960af38a310942cc499ab6d.html",
+      "https://m.eeo.com.cn/2025/1211/772326.shtml#1"
+     ]
+    },
+    {
+     "statement": "制造业正在从客服、质检等外围辅助走向研发设计、供应链、生产运营和工业控制，但核心生产闭环更谨慎。国务院文件明确要求AI在设计、中试、生产、服务、运营全环节落地；腾讯云与万控智造的“万智云”案例称电气设备设计周期从3天压缩至3分钟、交付日期缩短30%。",
+     "source_urls": [
+      "https://www.gov.cn/gongbao/2025/issue_12266/202509/content_7039598.html#1",
+      "https://bigdata-expo.cn/news/3/1487914422"
+     ]
+    },
+    {
+     "statement": "政务和城市治理进入“场景开放+集约化建设”阶段。北京2025年发布12个人工智能应用场景“揭榜挂帅”需求，覆盖制造、教育、医疗、金融、能源、文旅、智慧城市等，总预算1.1亿元，并发布95个典型案例；上海徐汇基于专有云建设大模型智能中枢，承载80余个政务业务系统。",
+     "source_urls": [
+      "https://www.beijing.gov.cn/ywdt/gzdt/202507/t20250704_4141279.html",
+      "https://bigdata-expo.cn/news/3/1487914422"
+     ]
+    },
+    {
+     "statement": "医疗、教育、文旅等民生场景推进较快，但多以助手和辅助形式落地。国务院文件提出有序推动AI在辅助诊疗、健康管理、医保服务等场景应用，同时推动智能化情景交互学习和文化内容创作；这意味着高风险医疗场景仍强调“有序”和辅助定位。",
+     "source_urls": [
+      "https://www.gov.cn/gongbao/2025/issue_12266/202509/content_7039598.html#1"
+     ]
+    },
+    {
+     "statement": "落地的主要技术架构不是单纯调用通用大模型，而是“通用/开源模型+行业知识库RAG+企业系统连接器+工作流/智能体+安全治理”。腾讯等厂商的行业方案采用“混元+开源模型”、多模型调度、专有云、知识引擎和AI智能体中心，已覆盖金融、医疗、教育、文旅、传媒等30多个行业。",
+     "source_urls": [
+      "https://bigdata-expo.cn/news/3/1487914422"
+     ]
+    },
+    {
+     "statement": "制约规模化落地的关键因素包括数据质量、系统集成、成本与ROI、安全合规、模型可靠性和组织流程重构。人民网蓝皮书特别指出国产芯片软硬件生态、高质量行业数据集、AI安全治理仍是三大短板；金融智能体报告也把多步任务准确率衰减、持续运维成本、数据质量和系统兼容性列为失败原因。",
+     "source_urls": [
+      "http://yjy.people.com.cn/n1/2025/0716/c460662-40523142.html",
+      "https://m.eeo.com.cn/2025/1211/772326.shtml#1"
+     ]
+    }
+   ],
+   "open_questions": [
+    "不同机构对“落地/规模化/生产环境”的定义差异较大：有的把上线试点算作落地，有的要求进入核心流程并产生可审计ROI，因此跨报告比例不能直接横向比较。",
+    "公开案例多由厂商或地方政府披露，倾向展示成功项目；失败、停用、预算缩减的项目缺少系统统计。",
+    "医疗、工业控制、自动驾驶、政务决策等高风险场景的真实责任边界、审计机制和长期稳定性，还需要更多一线访谈或招投标/验收数据验证。",
+    "若要服务具体投资、创业或企业选型，还需进一步按行业拆解供应商格局、私有化部署成本、国产化算力适配、标杆客户复购率和单场景ROI。"
+   ],
+   "confidence": "high"
+  },
+  "final_text": "",
+  "usage": {
+   "input": 81982,
+   "output": 3088
+  },
+  "transcript": [
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "search_web",
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "usage": {
+     "input_tokens": 1220,
+     "output_tokens": 176,
+     "total_tokens": 1396,
+     "input_token_details": {
+      "cache_read": 1220
+     },
+     "output_token_details": {
+      "reasoning": 0
+     }
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"2025智能互联网蓝皮书：大模型突破加速产业落地，智能经济进入新阶段\", \"url\": \"http://yjy.people.com.cn/n1/2025/0716/c460662-40523142.html\", \"description\": \"人民网上海7月18日电 人民网研究院组织编写的智能互联网蓝皮书《中国智能互联网发展报告(2025)》今日在上海正式发布 ... 文"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"3.2 Risks of NOT Adopting AI\", \"url\": \"https://zenodo.org/records/20328626/files/V1%20Enterprise%20AI%20Adoption%20Strategy%20v1%200%20.pdf?download=1#2#5#2\", \"description\": \"[NOTE] Subseq"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"北京市人工智能赋能行业发展典型案例亮相 12个“揭榜挂帅”大模型应用需求发布\", \"url\": \"https://www.beijing.gov.cn/ywdt/gzdt/202507/t20250704_4141279.html\", \"description\": \"2025年北京人工智能应用场景“揭榜挂帅”在会上发布，此次共遴选出12个场景，覆盖制造业、教育、医疗、金融、"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "search_web",
+     "search_web",
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "usage": {
+     "input_tokens": 15176,
+     "output_tokens": 239,
+     "total_tokens": 15415,
+     "input_token_details": {
+      "cache_read": 0
+     },
+     "output_token_details": {
+      "reasoning": 0
+     }
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"The state of AI in 2025: Agents, innovation, and transformation - The state of AI in 2025: Agents, innovation, and transformation\", \"url\": \"https://www.mckinsey.com/industries/technology-m"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"MIT Report Finds Most AI Business Investments Fail, Reveals 'GenAI Divide' -- Virtualization Review\", \"url\": \"https://virtualizationreview.com/articles/2025/08/19/mit-report-finds-most-ai-"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"事关人工智能！国务院发文\", \"url\": \"https://www.gov.cn/zhengce/202508/content_7037899.htm?ddtab=true\", \"description\": \"国务院日前印发《关于深入实施“人工智能+”行动的意见》，要求以科技、产业、消费、民生、治理、全球合作等领域为重点，深入实施“人工智能+”行动 ... 推进工业全要素"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"中国信通院人工智能深度观察：Token调用量增16倍，2025年成为AI产业化关键转折点（附演讲PPT）\", \"url\": \"http://mp.weixin.qq.com/s?__biz=Mzg3Mjc3ODMwOQ==&mid=2247486963&idx=1&sn=186369f6fe428b7d0ddfb5ae15c75eba\", \"description\": \"他"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "search_web",
+     "search_web",
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "usage": {
+     "input_tokens": 30087,
+     "output_tokens": 237,
+     "total_tokens": 30324,
+     "input_token_details": {
+      "cache_read": 15160
+     },
+     "output_token_details": {
+      "reasoning": 0
+     }
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "error",
+    "content": "Tool call limit exceeded. Do not call 'search_web' again."
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "error",
+    "content": "Tool call limit exceeded. Do not call 'search_web' again."
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "error",
+    "content": "Tool call limit exceeded. Do not call 'search_web' again."
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"AI Agent 技术金融应用探索与实践\", \"url\": \"https://hulianhutongshequ.cn/upload/tank/report/2026/202601/1/9c9d9870606b4fcc8a78eb926f892bcd.pdf#1#1#1\", \"description\": \"以银行、证券、保险等领域典型应用场景为切入，针对金融行业海量数据处理"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "Answer"
+    ],
+    "finish": "tool_calls",
+    "usage": {
+     "input_tokens": 35499,
+     "output_tokens": 2436,
+     "total_tokens": 37935,
+     "input_token_details": {
+      "cache_read": 0
+     },
+     "output_token_details": {
+      "reasoning": 0
+     }
+    }
+   },
+   {
+    "role": "tool",
+    "name": "Answer",
+    "status": "success",
+    "content": "Returning structured response: summary='总体判断：大模型已从“模型竞赛/试点验证”进入“场景规模化与智能体落地”阶段，但落地并不均衡——客服、知识问答、办公、代码、营销、金融文档/投研等数字化程度高的场景最先放量；制造核心控制、医疗诊疗、政务决策等高风险场景仍以辅助决策、人机协同和局部闭环为主，真正重构流程并带来公司级利润改善的项目仍是少数。' format"
+   }
+  ]
+ }
+]

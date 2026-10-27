@@ -115,7 +115,8 @@ def run_case(agent, case: dict) -> dict:
             usage["output"] += u.get("output_tokens", 0)
             transcript.append({"role": "ai", "content": (m.content if isinstance(m.content, str) else str(m.content))[:300],
                                "tool_calls": [tc["name"] for tc in m.tool_calls or []], "finish": (m.response_metadata or {}).get("finish_reason"),
-                               "usage": u})
+                               "usage": u, "invalid_tool_calls": [(x.get("name"), str(x.get("error"))[:200]) for x in (m.invalid_tool_calls or [])],
+                               "meta": {k: str(v)[:200] for k, v in (m.response_metadata or {}).items() if k != "model_provider"}})
         elif isinstance(m, ToolMessage):
             transcript.append({"role": "tool", "name": m.name, "status": getattr(m, "status", None), "content": str(m.content)[:200]})
     tool_msgs = sum(1 for m in msgs if isinstance(m, ToolMessage))

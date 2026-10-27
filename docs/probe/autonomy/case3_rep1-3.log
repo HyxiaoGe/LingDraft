@@ -1,0 +1,33 @@
+
+=== 例 3 缺用途的模糊题：帮我调研一下大模型的落地情况
+    期望：问 1 次（行业 / 场景或地域），回答后继续
+    83.3s · 模型调用 6 · 搜索 9 · 读 5 · 问 0 · token 入 179834 出 3120
+    最后一条：ai  finish=tool_calls content=''
+    检索词：['2024 2025 大模型 产业落地 应用 现状 报告 中国 信通院', '2025 enterprise generative AI adoption survey McKinsey GAR State of AI', 'Stanford AI Index 2025 business adoption generative AI enterprise', 'site:caict.ac.cn 大模型 落地 应用 2025 报告 人工智能 产业', '2025 中国 大模型 备案 数量 生成式人工智能 服务 落地 应用', '2025 AI agents enterprise adoption Gartner survey generative AI projects production', 'Menlo Ventures 2025 state of generative AI enterprise adoption agents ROI', 'site:hai.stanford.edu AI Index 2025 report business adoption 78% 71% generative AI', 'McKinsey state of AI 2025 88% organizations use AI scaled agents functions survey 2025 November']
+    文本收尾：
+
+结果写到 /private/tmp/claude-501/-Users-sean-code-LingDraft/b4b71fd3-0f5f-499f-b9a1-65bc1069c61c/scratchpad/probe_case3_1.json
+
+=== 例 3 缺用途的模糊题：帮我调研一下大模型的落地情况
+    期望：问 1 次（行业 / 场景或地域），回答后继续
+Deserializing unregistered type __main__.Answer from checkpoint. This will be blocked in a future version. Set LANGGRAPH_STRICT_MSGPACK=true to block now, or add to allowed_msgpack_modules to allow explicitly: [('__main__', 'Answer')]
+    74.8s · 模型调用 4 · 搜索 11 · 读 0 · 问 0 · token 入 81982 出 3088
+    最后一条：tool  finish=None content="Returning structured response: summary='总体判断：大模型已从“模型竞赛/试点验证”进入“场景规模化与智能体落地”阶段，但落地并不均衡——客服、知识问答、办公、代码、营销、金融文档/投研等数字化程度高的"
+    检索词：['2024 2025 大模型 产业落地 应用 现状 报告 中国', '2025 enterprise generative AI adoption survey McKinsey Gartner IDC large language models', '2025 中国 大模型 行业应用 金融 政务 医疗 制造 落地 案例', 'McKinsey The state of AI 2025 organizations regularly using generative AI percentage EBIT', 'MIT NANDA State of AI in Business 2025 95 percent pilots fail generative AI', '国务院 关于深入实施 人工智能+ 行动 的意见 2025 重点行动 工业 消费 民生', '中国信通院 大模型 应用落地 2025 智能体 产业 报告 Token 调用量', '2025 大模型 金融 行业 落地 银行 保险 证券 调研 AI 应用 场景', '2025 医疗 大模型 落地 医院 应用 案例 中国 辅助诊疗', '2025 制造 工业 大模型 落地 应用 研发 生产 质检 案例 中国', '2025 政务 大模型 部署 应用 指引 政务服务 中国']
+    format=report confidence=high 事实 13 条 · 未定 4 条
+    结论：总体判断：大模型已从“模型竞赛/试点验证”进入“场景规模化与智能体落地”阶段，但落地并不均衡——客服、知识问答、办公、代码、营销、金融文档/投研等数字化程度高的场景最先放量；制造核心控制、医疗诊疗、政务决策等高风险场景仍以辅助决策、人机协同和局部闭环为主，真正重构流程并带来公司级利润改善的项目仍是少数。
+    未定：不同机构对“落地/规模化/生产环境”的定义差异较大：有的把上线试点算作落地，有的要求进入核心流程并产生可审计ROI，因此跨报告比例不能直接横向比较。
+    未定：公开案例多由厂商或地方政府披露，倾向展示成功项目；失败、停用、预算缩减的项目缺少系统统计。
+    未定：医疗、工业控制、自动驾驶、政务决策等高风险场景的真实责任边界、审计机制和长期稳定性，还需要更多一线访谈或招投标/验收数据验证。
+
+结果写到 /private/tmp/claude-501/-Users-sean-code-LingDraft/b4b71fd3-0f5f-499f-b9a1-65bc1069c61c/scratchpad/probe_case3_2.json
+
+=== 例 3 缺用途的模糊题：帮我调研一下大模型的落地情况
+    期望：问 1 次（行业 / 场景或地域），回答后继续
+    ask_user: 你希望我重点调研“大模型落地情况”的哪个范围？ ['中国市场：行业应用、代表厂商与案例', '全球市场：海外企业（如微软、谷歌、OpenAI、AWS等）落地', '垂直行业：金融/医疗/政务/制造/教育等任选', '投资视角：商业化、收入、成本、ROI与趋势'] | 不问会怎样：“大模型落地”范围很广，不同侧重点对应的资料、案例和结论差异较大；确定范围后我可以给出更有针对性的调研和证据。
+    66.5s · 模型调用 5 · 搜索 9 · 读 0 · 问 1 · token 入 93019 出 2976
+    最后一条：ai  finish=tool_calls content=''
+    检索词：['2024 2025 中国 大模型 To B 企业服务 落地 行业 应用 报告', '中国 大模型 企业级应用 落地案例 金融 政务 制造 办公 2025', 'IDC 中国 大模型 企业应用 市场 报告 2024 2025', '2025 中国 企业 大模型 应用 调研 渗透率 私有化部署 RAG Agent', '用友 金蝶 钉钉 飞书 企业微信 大模型 2025 客户 案例 AI 助理', '阿里云 通义 大模型 企业客户 落地 2025 百炼 案例', '钉钉 AI 大模型 企业客户 2025 数据 助理 案例', '飞书 智能伙伴 大模型 企业客户 2025 案例', '百度智能云 千帆 大模型 企业 落地 2025 案例 央国企']
+    文本收尾：
+
+结果写到 /private/tmp/claude-501/-Users-sean-code-LingDraft/b4b71fd3-0f5f-499f-b9a1-65bc1069c61c/scratchpad/probe_case3_3.json
