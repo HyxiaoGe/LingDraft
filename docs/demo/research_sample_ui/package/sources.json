@@ -1,0 +1,145 @@
+[
+  {
+    "id": "s1",
+    "url": "https://www.ifanr.com/1671817#1",
+    "title": "实测完这个国产 AI 生图，我发现了下一个刷屏玩法 - 实测完这个国产 AI 生图，我发现了下一个刷屏玩法",
+    "retrieved_at": "2026-10-27T15:02:04+00:00",
+    "published_at": "2026-07-12T16:00:00+00:00",
+    "excerpt": "# 实测完这个国产 AI 生图，我发现了下一个刷屏玩法\n\nAI 生图最难的地方，早就从「生成一张好看的图」变成了「把那张差一点的图改对」。\n\n一张图看起来快能交了，偏偏一个帽子和主视觉的色号错了，海报小字糊了，人物年龄跑偏了。我们只想修一个角落，模型转身把构图、光线、脸一起重画了。\n\n等待重新生成的过程都在想，明明只是错了 5%的图，修改起来的代价却像错了 100%。\n\n最近，字节跳动旗下 AI 和云服务——火山引擎正式发布新一代多模态图像创作模型的API服务， Seedream 5.0 Pro。\n\n这是一款同时覆盖图像生成与编辑的模型，文生图、参考图生成、多图融合和局部精确修改都在它的能力范围里。\n\n在我们的实际体验中，**除了在效果上完全可以替代 Nano Banana2，Seedream 5.0 Pro 最能被直观感知到的特色，是交互式精准编辑。**现在我们可以用圈选、点位、箭头、坐",
+    "excerpt_kind": "body",
+    "status": "adopted",
+    "note": ""
+  },
+  {
+    "id": "s6",
+    "url": "http://mp.weixin.qq.com/s?__biz=Mzk2NDU2MDY5MA==&mid=2247488771&idx=1&sn=c8dfc41e5519cc698561915c9069420d",
+    "title": "AI 改图只想改几个字？我试了 4 款可拆图层工具",
+    "retrieved_at": "2026-10-27T15:02:04+00:00",
+    "published_at": "2026-06-21T16:00:00+00:00",
+    "excerpt": "这次我试了 4 款支持图片文字编辑或图层识别的工具：可画、稿定设计、星流和 Lovart。\n...\n**二、稿定设计：可以识别改字，但稳定性还有提升空间**\n\n稿定设计可以从首页进入“AI 画布”。\n...\n进入后，本地上传需要修改的设计图片。\n...\n在上方编辑框中，可以看到“改字”相关功能。\n\n使用改字功能\n\n系统会识别出图片中的文案，并支持进一步修改。\n\n文案识别效果\n\n不过在这次测试中，修改完成后的效果不太稳定，出现了文案消失、图片尺寸变化的情况。如果只是做轻量改字，可以作为备选；如果对画面一致性要求比较高，建议修改后重点检查导出尺寸和文字细节。\n...\n• 只想快速替换文案：星流、Lovart、稿定设计都可以作为备选。",
+    "excerpt_kind": "summary",
+    "status": "adopted",
+    "note": ""
+  },
+  {
+    "id": "s17",
+    "url": "https://www.getbrandgen.com/blog/which-ai-image-model-product-shots-posters-ads",
+    "title": "Which AI image model should you use for product shots, posters and text-heavy ads? | BrandGen",
+    "retrieved_at": "2026-10-27T15:02:55+00:00",
+    "published_at": "2026-10-22T16:00:00+00:00",
+    "excerpt": "[![BrandGen Logo - AI Brand Design](/_next/image?url=%2Flogos%2Flogo_centered.jpg&w=256&q=75&dpl=dpl_FNHt7CjE3bRNF38oCg1WNxX545DB)\n\nBrandGen\n\nBrand. AI. Wonder.](/)\n\n[Start free](/login)\n\n# Which AI image model should you use for product shots, posters and text-heavy ads?\n\n![Yash Soni](/_next/image?url=%2Fteam%2Fyash-soni-new.png&w=96&q=75&dpl=dpl_FNHt7CjE3bRNF38oCg1WNxX545DB)\n\nYash SoniFounder of",
+    "excerpt_kind": "body",
+    "status": "adopted",
+    "note": ""
+  },
+  {
+    "id": "s21",
+    "url": "https://quickrouter.ai/tutorials/ai-poster-design#start",
+    "title": "AI 中文海报怎么做：生图底图、准确文字与排版模板 | QuickRouter",
+    "retrieved_at": "2026-10-27T15:02:55+00:00",
+    "published_at": "2026-10-06T16:00:00+00:00",
+    "excerpt": "## 展开本页目录\n\n## 开始前准备什么\n\n- 先确定发布渠道、实际画布尺寸与必须包含的活动信息。\n- 准备准确文案、价格、原始 Logo 文件及已验证的二维码。\n- 选择可用图像模型；先用一张底图核对画面与费用。\n\n1. 整理文案\n2. 生成底图\n3. 固定排版\n4. 检查信息\n5. 导出交付\n\n[下载可编辑 HTML 海报模板](https://quickrouter.ai/downloads/growth-batch4/chinese-poster-layout.html)\n\n使用既有编辑图做排版演示；中文与品牌信息可直接修改，不发模型请求。\n\n[下载商品图、海报与图片编辑提示词](https://quickrouter.ai/downloads/growth-batch4/image-prompts.txt)\n\n填写保留项、修改区域、构图与留白；先验收一张小样再批量执行。\n\n[下",
+    "excerpt_kind": "body",
+    "status": "adopted",
+    "note": ""
+  },
+  {
+    "id": "s22",
+    "url": "https://tech.meituan.com/2026/06/18/AIGC-poster.html#1",
+    "title": "美团海报生成 AIGC 技术创新与实践 - 美团海报生成 AIGC 技术创新与实践",
+    "retrieved_at": "2026-10-27T15:02:55+00:00",
+    "published_at": "2026-06-17T16:00:00+00:00",
+    "excerpt": "# 美团海报生成 AIGC 技术创新与实践\n\n一张商业海报，对设计师来说可能是半天工作；对百万中小商家来说，却可能是一道迈不过去的门槛。外包一张专业海报，少则数百、多则数千元；临时促销要求分钟级交付，传统设计流水线却要1到3天；好不容易批量生产出来，质量又参差不齐——这是美团平台上数百万商家每天都在面对的真实困境。AIGC 给了我们一个新的答案，但「生成一张看起来还行的图」和「生成一张真正可用的商业海报」之间，横亘着精准文字渲染、和谐版式布局、多任务统一支持、质量可量化评估等多项相互交织的技术挑战。过去两年，美团智能创作团队围绕这一问题，构建了覆盖「能生成、能编辑、能评判」的完整技术体系：\n\n- PosterCraft（ICLR 2026）：摒弃模块化流水线，端到端统一优化文字、视觉与版式，在文字渲染准确率上接近Top级别的闭源商业系统；\n- PosterOmni（CVPR 2026）：单",
+    "excerpt_kind": "body",
+    "status": "adopted",
+    "note": ""
+  },
+  {
+    "id": "s35",
+    "url": "https://eu.36kr.com/zh/p/3887236673485574#1#1#1",
+    "title": "字节最强图像模型回归 17个案例深度实测Seedream 5.0 Pro",
+    "retrieved_at": "2026-10-27T15:03:46+00:00",
+    "published_at": "2026-07-08T16:00:00+00:00",
+    "excerpt": "# 刚刚，字节最强图像模型杀回来了，17个案例深度实测Seedream 5.0 Pro\n\n智东西7月9日报道，7月8日晚间，字节跳动Seed团队正式发布**多模态图像创作模型Seedream 5.0 Pro**。这距离今年2月10日Seedream 5.0预览版上线，已经过去近5个月。\n\n相比此前版本，Seedream 5.0 Pro在**图文匹配、结构合理性、文字渲染与画面美感**等基础能力上进行了升级，并重点强化了四项核心能力：**复杂信息可视化、交互式精准编辑、真实影像与人像质感、原生多语种输入与生成**。\n\n价格方面，Seedream 5.0 Pro API按输入图与输出图计费。输出图不超过236万像素时，输入图首张免费，后续输入图0.02元/张，输出图**0.3元/张**；输出图超过236万像素时，输入图首张免费，后续输入图0.02元/张，输出图**0.6元/张**。\n\n目前，S",
+    "excerpt_kind": "body",
+    "status": "adopted",
+    "note": ""
+  },
+  {
+    "id": "s37",
+    "url": "https://ailesson.io/zh/blog/fix-text-in-ai-images",
+    "title": "AI 图片里的文字怎样修正：重生成、局部编辑还是单独排字？ | AI 小课",
+    "retrieved_at": "2026-10-27T15:03:46+00:00",
+    "published_at": "2026-10-13T16:00:00+00:00",
+    "excerpt": "![](/brand/ailesson-favicon.svg)\n![](/brand/ailesson-header-zh-light.svg)\n![](/brand/ailesson-header-zh-dark.svg)\n\n资源\n\n![](/cdn-cgi/image/width=128,fit=scale-down,quality=82,format=auto,metadata=none/playground/logo-v1.png)\n![](/cdn-cgi/image/width=128,fit=scale-down,quality=82,format=auto,metadata=none/agent-skills/logo-v2.png)\n![](/cdn-cgi/image/width=128,fit=scale-down,quality=82,format=auto,me",
+    "excerpt_kind": "body",
+    "status": "adopted",
+    "note": ""
+  },
+  {
+    "id": "s42",
+    "url": "https://aichip001.com/p/595919.html",
+    "title": "公众号插图、秋招物料、潮玩设计，实测商汤SenseNova U1 Pro：生图模型走向真实任务交付",
+    "retrieved_at": "2026-10-27T15:04:49+00:00",
+    "published_at": "2026-09-20T16:00:00+00:00",
+    "excerpt": "![](https://oss.zhidx.com/static/themes/zhidxcom/images/close-icon.png)\n\n扫码关注智东西Pro服务号登录\n\n![](https://oss.zhidx.com/static/themes/zhidxcom/images/qrcode-fail.jpg)\n\n请使用微信扫描二维码\n\n\n![](https://oss.zhidx.com/static/themes/zhidxcom/images/close-icon.png)\n\n绑定手机号\n\n获取验证码\n\n确认绑定\n\n![毕 伟豪](https://oss.zhidx.com/b148f405897b12fb0f2d6629c9bd49b5/6adfe980/uploads/2025/03/67e40f8766e05_67e40f8763182_67e40f876315c_",
+    "excerpt_kind": "body",
+    "status": "adopted",
+    "note": ""
+  },
+  {
+    "id": "s43",
+    "url": "https://news.cocoloop.cn/2026/07/seedream-design-workflow/",
+    "title": "字节图像模型押注设计工作流 - News - Cocoloop",
+    "retrieved_at": "2026-10-27T15:04:49+00:00",
+    "published_at": "2026-07-09T16:00:00+00:00",
+    "excerpt": "字节这次更新图像模型，最值得看的不是又能生成多漂亮的图，而是它把战场往设计流程里挪了一步。\n\n7月8日晚，字节跳动 Seed 团队发布 Seedream 5.0 Pro。按官方说法，这个多模态图像创作模型已经上线火山方舟体验中心，后续还会进入豆包和即梦。智东西随后做了17组实测，结论很克制：商业海报、真实摄影、局部编辑和多语种海报更稳了，但复杂中文、界面细节、人物一致性仍然会露出短板。\n\n这就比单纯的“图像模型升级”更有信息量。**它不是在告诉用户“我会画”，而是在试探能不能进入“设计师反复改稿”的那段工作流。**\n\n“图像不仅是视觉装饰，更是信息本身。”\n\n\n这句官方表述，基本点出了 Seedream 5.0 Pro 的叙事钩子：图像生成赛道已经不缺会出大片的模型，缺的是能在复杂信息、局部修改、跨语种排版里少返工的工具。\n\n## 真问题不是出图，而是改图\n\n过去一年，AI 图像模型最容易",
+    "excerpt_kind": "body",
+    "status": "adopted",
+    "note": ""
+  },
+  {
+    "id": "s47",
+    "url": "https://kdniao.csdn.net/6ac66e07ad85947e68ce5184.html",
+    "title": "AI 电商商品图工具怎么选？先按场景分四类，再看五个取舍点（2026 国内可用清单）",
+    "retrieved_at": "2026-10-27T15:04:49+00:00",
+    "published_at": "2026-10-07T16:00:00+00:00",
+    "excerpt": "# AI 电商商品图工具怎么选？先按场景分四类，再看五个取舍点（2026 国内可用清单）\n\n·\n\n做电商的都懂：图就是转化率。但\"AI 做商品图\"这件事，2026 年已经不是\"有没有工具\"的问题，而是\"选错了工具白花钱\"的问题。这篇按你真正要出的图来分类，再给一份国内可用工具的取舍清单。\n\n### 一、先分清四类需求，别用一把锤子敲所有钉子很多人找工具时说的是\"我要 AI 做商品图\"，但这句话对应的其实是四种完全不同的活：- 白底主图：难度最低。要求就三件事——商品干净、居中、可信。绝大多数工具都能做到及格。- 场景图 / 生活图：难度中等。关键是场景要服务于卖点，而不是画面好看。保温杯配办公桌、母婴用品配柔光家居、户外装备配清晨山谷。- 详情页分块图：难度最高。要求同一件商品在多个画面里形状、颜色、材质完全一致，还要能加上中文卖点文案。- 商品图 → 带货短视频：最容易忽略的一类。主图做",
+    "excerpt_kind": "summary",
+    "status": "adopted",
+    "note": ""
+  },
+  {
+    "id": "s49",
+    "url": "http://mp.weixin.qq.com/s?__biz=MzU4MjE1MzI4Nw==&mid=2247484353&idx=2&sn=067900632e6df2dfa17dd6f87395fcd5",
+    "title": "4款AI海报设计工具横评：Canva、稿定、创客贴、美图AI",
+    "retrieved_at": "2026-10-27T15:04:49+00:00",
+    "published_at": "2026-07-24T16:00:00+00:00",
+    "excerpt": "# 4款AI海报设计工具横评：Canva、稿定、创客贴、美图AI\n...\n但这几年同类工具越来越多，每个都自称\"AI设计神器\"，到底哪个适合你？\n\n我把目前市面上主流的4款AI海报设计工具——Canva可画、稿定设计、创客贴、美图AI——做了一个全面横评。从模板数量、AI生图质量、中文排版、免费素材、团队协作五个维度逐一实测，给每款工具用同一个提示词跑了一遍，结果如下。\n\n## 横评方法论\n\n本次测试统一使用以下提示词生成海报：\n\n科技公司年会海报，蓝紫渐变风格，主题文字\"2026聚势前行\"，副标题\"年度盛典暨颁奖典礼\"，需要现代科技感，画面干净不杂乱。\n\n四款工具均使用各自的AI生成或模板匹配功能，不做二次人工修改。评分采用5分制，各维度独立打分。\n\n## 维度一：模板数量与审美\n\n这个维度直接决定了你做海报的起点有多高。\n\n**Canva可画（4.5分）**\n\nCanva的模板库规模是",
+    "excerpt_kind": "summary",
+    "status": "adopted",
+    "note": ""
+  },
+  {
+    "id": "s50",
+    "url": "https://www.jxxy.net/ai/articles/vibeposter-multi-agent-kg-poster-psd/",
+    "title": "VibePoster：多智能体加知识图谱自动出海报，还能导出分层 PSD 源文件｜觉醒AI知识库",
+    "retrieved_at": "2026-10-27T15:04:49+00:00",
+    "published_at": "2026-10-02T16:00:00+00:00",
+    "excerpt": "![觉醒AI知识库](/ai/logo.png)\n\n### 登录觉醒AI知识库\n\n邮箱验证码登录，新邮箱自动注册\n\n目录\n\n# VibePoster：多智能体加知识图谱自动出海报，还能导出分层 PSD 源文件\n\nVibePoster 用多智能体流水线做可编辑海报：Planner 从知识图谱加 RAG 取品牌上下文，Visual 生成素材，Layout 输出像素级 DSL 排版，Critic 双重审查不合格自动重排，最终交付分层 PSD 源文件——AI 出图不再是一张不能改的位图，而是设计师可接手加工的工程文件。\n\n更新时间：2026-10-02\n\n# VibePoster：多智能体加知识图谱自动出海报，还能导出分层 PSD 源文件\n\n## 一句话结论\n\nVibePoster 把 AI 海报生成做成了四段式多智能体流水线：规划者解析设计意图并从知识图谱加 RAG 品牌知识库里取上下文，视觉者",
+    "excerpt_kind": "body",
+    "status": "adopted",
+    "note": ""
+  },
+  {
+    "id": "s52",
+    "url": "https://watcha.cn/discuss/10998",
+    "title": "CHA CUP 产品营销图片设计系统的《需求说明清单》＋业务流程图｜观猹",
+    "retrieved_at": "2026-10-27T15:04:49+00:00",
+    "published_at": "2026-07-26T16:00:00+00:00",
+    "excerpt": "·1 个月前\n\nCHA CUP 产品营销图片设计系统的《需求说明清单》＋业务流程图\n...\n客户：有图片宣传工作的企业\n\n使用者：市场人员、设计人员、验收运营人员\n\n当前业务问题：（1）纯人工制图，重复工作耗时久 （2）人工审核易漏违禁词、图文错误 （3）人工来回返工，沟通成本高\n\n功能需求：Agent 读取资料生成海报、人工打断控制 agent 重绘、验收审核流转\n\n非功能需求：格式兼容、日志留存\n\n范围内：（1）对接企业素材库、VI 规范系统，Agent 自动读取商品资料、logo、母图文件（2）AI Agent 根据任务信息自动排版、生成符合尺寸的海报 / 商品主图（3）对接人工审核流程，接收验收修改指令并自动迭代重绘图片（4）留存全部出图任务记录、生成物料文件、操作日志（5）提供简单任务列表管理界面，人员可查看历史出图进度\n\n范围外：（1）不做海报生成后，自动投放至抖音、电商店铺等",
+    "excerpt_kind": "summary",
+    "status": "adopted",
+    "note": ""
+  }
+]
