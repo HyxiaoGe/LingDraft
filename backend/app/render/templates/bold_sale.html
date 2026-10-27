@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+  :root {
+    --bg: {{ palette[0] }};
+    --primary: {{ palette[1] }};
+    --accent: {{ palette[2] }};
+    --text: {{ palette[3] }};
+  }
+  html, body { margin: 0; padding: 0; width: 1080px; height: 1440px; overflow: hidden; background: var(--bg);
+    font-family: "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; color: var(--text); }
+  .slot { position: absolute; overflow: hidden; box-sizing: border-box; }
+  #background { left: 0; top: 0; width: 1080px; height: 1440px; background: linear-gradient(160deg, var(--bg) 0%, var(--primary) 100%); }
+  #headline { left: 80px; top: 110px; width: 920px; height: 270px; font-weight: 900; font-size: 128px; line-height: 1.08; letter-spacing: 2px; white-space: nowrap; }
+  #subhead { left: 80px; top: 400px; width: 920px; height: 110px; font-size: 46px; line-height: 1.2; opacity: .92; }
+  #product_image { left: 190px; top: 540px; width: 700px; height: 520px; display: flex; align-items: center; justify-content: center; }
+  #product_image img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  #product_image .placeholder { width: 420px; height: 420px; border-radius: 48px; border: 6px dashed var(--accent); opacity: .5; }
+  #offer { left: 80px; top: 1090px; width: 620px; height: 150px; font-size: 104px; font-weight: 900; color: var(--accent); line-height: 1.1; }
+  #date { left: 80px; top: 1250px; width: 620px; height: 80px; font-size: 42px; line-height: 1.2; }
+  #cta { left: 740px; top: 1150px; width: 260px; height: 110px; background: var(--accent); color: var(--bg); border-radius: 60px;
+    display: flex; align-items: center; justify-content: center; font-size: 42px; font-weight: 700; text-align: center; }
+</style>
+</head>
+<body>
+{% for e in elements %}
+  {% if e.kind == "product_image" %}
+    <div class="slot" id="{{ e.slot }}" data-id="{{ e.id }}" data-kind="{{ e.kind }}">
+      {% if e.content %}<img src="{{ e.content }}" alt="product">{% else %}<div class="placeholder"></div>{% endif %}
+    </div>
+  {% elif e.kind == "background" %}
+    <div class="slot" id="{{ e.slot }}" data-id="{{ e.id }}" data-kind="{{ e.kind }}"></div>
+  {% else %}
+    <div class="slot fit" id="{{ e.slot }}" data-id="{{ e.id }}" data-kind="{{ e.kind }}">{{ texts[e.id] }}</div>
+  {% endif %}
+{% endfor %}
+<script>
+  function overflowing(el) { return el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1; }
+  // 自动缩字的下限：低于这个字号海报就不可读了，宁可报溢出让文案改短
+  var MIN_FS = { headline: 72, subhead: 30, offer: 56, date: 26, cta: 26 };
+  window.__fitAll = function () {
+    document.querySelectorAll('.slot.fit').forEach(function (el) {
+      var fs = parseFloat(getComputedStyle(el).fontSize);
+      var min = MIN_FS[el.id] || 20;
+      while (overflowing(el) && fs > min) { fs -= 2; el.style.fontSize = fs + 'px'; }
+      // 单行放不下时退回换行，再继续缩
+      if (overflowing(el) && getComputedStyle(el).whiteSpace === 'nowrap') {
+        el.style.whiteSpace = 'normal';
+        while (overflowing(el) && fs > min) { fs -= 2; el.style.fontSize = fs + 'px'; }
+      }
+    });
+  };
+  window.__layout = function () {
+    var out = {};
+    document.querySelectorAll('.slot').forEach(function (el) {
+      var r = el.getBoundingClientRect();
+      out[el.id] = { id: el.dataset.id, kind: el.dataset.kind,
+        bbox: [r.left, r.top, r.width, r.height], overflow: overflowing(el), text: (el.innerText || '').trim() };
+    });
+    return out;
+  };
+</script>
+</body>
+</html>
