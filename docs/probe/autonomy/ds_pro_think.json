@@ -1,0 +1,563 @@
+[
+ {
+  "case": 1,
+  "name": "简单事实题",
+  "request": "最近新加坡的天气情况如何？",
+  "expect": "不问；搜 1～2 次就提交；format=short",
+  "elapsed_s": 10.5,
+  "model_calls": 2,
+  "tool_messages": 2,
+  "calls": {
+   "search_web": 2,
+   "read_page": 0,
+   "ask_user": 0,
+   "Answer": 0
+  },
+  "queries": [
+   "新加坡 天气 最近 一周 气温 降雨",
+   "Singapore weather this week forecast temperature rain"
+  ],
+  "asked": [],
+  "answer": null,
+  "final_text": "新加坡最近是典型的赤道雨季天气：热、潮，几乎每天都有阵雨或雷阵雨，气温稳定在 24–31℃ 左右。\n\n**近期天气要点**\n\n- **气温**：白天最高 29–31℃，夜间最低 24–26℃，日温差很小。\n- **降水**：几乎每天都有小雨/阵雨，部分时段有雷阵雨，降雨概率较高（约 60%）。\n- **湿度**：非常高，约 83%，体感比实际气温更热（体感可到 37℃ 上下）。\n- **风**：多为东南风、东北风或西南风，风力不大（<3 级）。\n- **空气与紫外线**：空气质量中等（UAQI 约 53），紫外线中等（UV 4）。\n\n**未来几天预报（以中国天气网/中央气象台数据为例）**\n- 10/28（周三）：中雨 28/24℃\n- 10/29（周四）：小雨 29/24℃\n- 10/30（周五）：小雨转阴 29/24℃\n- 10/31（周六）：阴 30/25℃\n- 11/01（周日）：阴转小雨 30/25℃\n\n需要提醒的是：多家来源对具体日期和降雨时段的表述略有差异，但总体趋势一致——闷热、潮湿、多阵雨。如果你要安排户外活动，建议关注当天短时预报并带伞。\n\n**来源**：\n- 中国天气网 15 天预报：https://www.weather.com.cn/weather15d/104010100.shtml\n- 百度·中国天气网：https://baidu.weather.com.cn/mweather15d/104010100.shtml\n- Yahoo Weather（新加坡）：https://weather.yahoo.com/en-sg/sg/singapore/singapore/",
+  "usage": {
+   "input": 9567,
+   "output": 949
+  },
+  "transcript": [
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 175,
+    "extra_keys": [
+     "reasoning_content",
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 1067,
+     "output_tokens": 158,
+     "total_tokens": 1225,
+     "input_token_details": {
+      "cache_read": 0
+     },
+     "output_token_details": {
+      "reasoning": 34
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 158, 'prompt_tokens': 1067, 'total_tokens': 1225, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 34, 'rejected_predic",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "0f385399-8042-4381-bb7f-252d5406c04f",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"【新加坡天气】新加坡天气预报,天气预报一周,天气预报15天查询\", \"url\": \"https://www.weather.com.cn/weather15d/104010100.shtml\", \"description\": \"周二（3日） 雨转小雨 29℃/24℃ 东南风 <3级 - 周三（4日） 小雨 30℃/25℃ 东风转南风 <3级 - 周四（5日） 小雨 29℃/"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"Weather in Singapore for 10 days — Weather forecast in Singapore, Singapore, for 10 days - — Singapore\", \"url\": \"https://yandex.kz/pogoda/en/singapore/details/auto?via=prsw&disableRestoreP"
+   },
+   {
+    "role": "ai",
+    "content": "新加坡最近是典型的赤道雨季天气：热、潮，几乎每天都有阵雨或雷阵雨，气温稳定在 24–31℃ 左右。\n\n**近期天气要点**\n\n- **气温**：白天最高 29–31℃，夜间最低 24–26℃，日温差很小。\n- **降水**：几乎每天都有小雨/阵雨，部分时段有雷阵雨，降雨概率较高（约 60%）。\n- **湿度**：非常高，约 83%，体感比实际气温更热（体感可到 37℃ 上下）。\n- **风**：多为东南风、东北风或西南风，风力不大（<3 级）。\n- **空气与紫外线**：空气质量中等（UAQI 约 53），紫外线中等（UV 4）。\n\n**未来几天预报（以中国天气网/中央气象台数据为例）**\n-",
+    "tool_calls": [],
+    "finish": "stop",
+    "reasoning_len": 1448,
+    "extra_keys": [
+     "reasoning_content",
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 8500,
+     "output_tokens": 791,
+     "total_tokens": 9291,
+     "input_token_details": {
+      "cache_read": 1152
+     },
+     "output_token_details": {
+      "reasoning": 395
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 791, 'prompt_tokens': 8500, 'total_tokens': 9291, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 395, 'rejected_predi",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "7bec439b-29d0-432f-84c9-423b6dcf715c",
+     "finish_reason": "stop",
+     "logprobs": "None"
+    }
+   }
+  ]
+ },
+ {
+  "case": 2,
+  "name": "清楚的调研题",
+  "request": "AI 海报工具在局部修改和事实准确性上的现状（2026），只看中文信源",
+  "expect": "不问；搜 3 次以上；format=report",
+  "elapsed_s": 56.8,
+  "model_calls": 3,
+  "tool_messages": 6,
+  "calls": {
+   "search_web": 4,
+   "read_page": 2,
+   "ask_user": 0,
+   "Answer": 0
+  },
+  "queries": [
+   "AI海报工具 局部修改 事实准确性 评测 2025",
+   "AI海报生成 文字错误 事实错误 缺陷",
+   "AI海报 局部重绘 局部编辑 精准 2026 评测 豆包 Seedream",
+   "AI生图 事实错误 编造 数据 海报 2026"
+  ],
+  "asked": [],
+  "answer": null,
+  "final_text": "# AI 海报工具的「局部修改」与「事实准确性」现状（2026，中文信源）\n\n**一句话结论**：局部修改在 2026 年已经从\"整张重画\"进步到\"圈选/点选局部编辑\"，头部模型（Seedream 5.0 Pro、GPT Image 2 等）基本能\"指哪打哪\"；但事实准确性仍是明确短板——海报文字仍会乱码错字，涉及具体数据、参数、认证信息时 AI 会\"凭空编造\"，而且文字越逼真，造假风险越大，最终仍要靠人工核验兜底。\n\n## 一、局部修改：已可圈选局部编辑，但稳定性参差\n\n**1. 主流模型已经能做\"圈选指定区域、只改局部、不改其他\"**\n\n字节 Seedream 5.0 Pro（2026-07 发布）主打\"交互式精准编辑\"：智东西实测中，指令\"把红框区域椅子替换为深绿色天鹅绒材质，保持原有透视、阴影和环境光不变、其他区域不要修改\"，模型能准确识别框选区域、满足颜色材质、区域隔离能力较好；站长之家总结为\"圈选或点选局部进行修改，修改时不必整张重绘\"。\n\n- https://36kr.com/p/3887236673485574\n- https://m.chinaz.com/2026/0709/1763741.shtml\n\n**2. 局部编辑的交互方式在细化：点选、框选、画笔、箭头标注**\n\n优设网对 Seedream 5.0 Pro 的实测展示了手绘标注修改：在图上点选元素、框选块面、画笔圈选、箭头指示移动，再配合\"@Region01 加上中古红色背景\"这类指令进行局部替换和上材质。\n\n- https://www.uisdc.com/seedream-5-pro\n\n**3. 字节系自 2026 年 2 月起就把\"笔刷精准编辑\"和\"联网检索生图\"写入产品**\n\n据百度百科词条，Seedream 5（2026-02-10 上线）新增笔刷精准编辑功能，Seedream 5.0 Lite 具备联网实时检索能力。\n\n- https://baike.baidu.com/item/Seedream%205/67391767\n\n**4. 按\"改稿能力\"可以把 2026 年的工具分成四类**\n\n一篇 2026-10 的对比把工具分成：① 区域级编辑引擎（GPT Image 2、Adobe Firefly、Canva Magic Edit、豆包创作画布）——真能\"指哪打哪\"；② UI 原型类（Figma、MasterGo、墨刀）——生成快但细改要手动；③ 模板美化类（稿定设计、创客贴）——电商海报批量出图，局部精准弱；④ 纯出图类（Midjourney、DALL·E）——改细节基本等于整张重画。其中豆包创作画布 2026-10-09 上线，接 Seedream 5.0 Flash，支持标记/涂抹/图层三层选中、双击改文案。\n\n- https://tianqi.csdn.net/6adc062849ed150a32d99ab0.html\n\n**5. 局部编辑仍不稳定，存在\"说改一处结果重画/漏改\"的情况**\n\n人人都是产品经理的横测里，GPT Image 1.5 用画圈、箭头、文字指定修改，实测\"三个不同颜色的圈圈成功了一个\"；同一对比文章里，Midjourney 的 vary region 被描述为\"在框里重画一张，整体感会跑偏\"。\n\n- http://www.woshipm.com/share/6308222.html\n- https://tianqi.csdn.net/6adc062849ed150a32d99ab0.html\n\n## 二、事实准确性：文字仍会出",
+  "usage": {
+   "input": 59803,
+   "output": 6017
+  },
+  "transcript": [
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 250,
+    "extra_keys": [
+     "reasoning_content",
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 1080,
+     "output_tokens": 186,
+     "total_tokens": 1266,
+     "input_token_details": {
+      "cache_read": 1024
+     },
+     "output_token_details": {
+      "reasoning": 55
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 186, 'prompt_tokens': 1080, 'total_tokens': 1266, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 55, 'rejected_predic",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "479f5fcc-91f2-46f6-a6eb-79882315d14d",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"WPS 「AI 设计室」体验测评\", \"url\": \"https://bbs.wps.cn/topic/79716#1#1#1\", \"description\": \"直接提交需求，没有参考图 - 方向二：提供参考图以及详细文案，并且和NanoBanana Pro进行比较 ... 在2025年的年底 ... 通过此次测评我们发现，AI设计室是可以满足我们日常使用的，虽然在一些小"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"AI 评测报告：qwen-image-plus-2026-01-09「瑞士国际主义风格海报设计」 - XSCT Bench\", \"url\": \"https://xsctbench.com/testcase/vg_posterla_006/qwen-image-plus-2026-01-09?diff=basic\", \"description\": \"然而，画面中存在明显的 A"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "search_web",
+     "read_page",
+     "read_page"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 2125,
+    "extra_keys": [
+     "reasoning_content",
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 18526,
+     "output_tokens": 832,
+     "total_tokens": 19358,
+     "input_token_details": {
+      "cache_read": 1152
+     },
+     "output_token_details": {
+      "reasoning": 594
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 832, 'prompt_tokens': 18526, 'total_tokens': 19358, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 594, 'rejected_pre",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "d3b79cdc-f541-4cdc-aaaa-f2d7020e5089",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"字节最强图像模型回归 17个案例深度实测Seedream 5.0 Pro - 刚刚，字节最强图像模型杀回来了，17个案例深度实测Seedream 5.0 Pro\", \"url\": \"https://eu.36kr.com/zh/p/3887236673485574#1\", \"description\": \"智东西围绕其主打能力进行了多轮体验，整体来看，Seedream 5.0"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"界面快评 | GPT-Image 2让“有图无真相”泛滥，伦理失守比技术突破更可怕 - 界面快评 | GPT-Image 2让“有图无真相”泛滥，伦理失守比技术突破更可怕\", \"url\": \"https://www.163.com/dy/article/KR997HFO0534A4SC.html?spss=dy_author&referFrom=#1\", \"descript"
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "success",
+    "content": "{\"ok\": true, \"url\": \"https://tianqi.csdn.net/6adc062849ed150a32d99ab0.html\", \"title\": \"AtomGit AI 社区\", \"content\": \"# AI 设计工具到底哪个能真的改稿？\\n\\n[结构化知识课堂](https://devpress.csdn.net/user/benleiqiang)·\\n\\n **亲"
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "success",
+    "content": "{\"ok\": true, \"url\": \"http://www.woshipm.com/share/6308222.html\", \"title\": \"12大场景一手横测GPT Image 1.5和香蕉2，我找到OpenAI不开发布会的原因了 – 人人都是产品经理\", \"content\": \"## 12大场景一手横测GPT Image 1.5和香蕉2，我找到OpenAI不开发布会的原因了\\n\\nOp"
+   },
+   {
+    "role": "ai",
+    "content": "# AI 海报工具的「局部修改」与「事实准确性」现状（2026，中文信源）\n\n**一句话结论**：局部修改在 2026 年已经从\"整张重画\"进步到\"圈选/点选局部编辑\"，头部模型（Seedream 5.0 Pro、GPT Image 2 等）基本能\"指哪打哪\"；但事实准确性仍是明确短板——海报文字仍会乱码错字，涉及具体数据、参数、认证信息时 AI 会\"凭空编造\"，而且文字越逼真，造假风险越大，最终仍要靠人工核验兜底。\n\n## 一、局部修改：已可圈选局部编辑，但稳定性参差\n\n**1. 主流模型已经能做\"圈选指定区域、只改局部、不改其他\"**\n\n字节 Seedream 5.0 Pro（2026-0",
+    "tool_calls": [],
+    "finish": "stop",
+    "reasoning_len": 6817,
+    "extra_keys": [
+     "reasoning_content",
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 40197,
+     "output_tokens": 4999,
+     "total_tokens": 45196,
+     "input_token_details": {
+      "cache_read": 19328
+     },
+     "output_token_details": {
+      "reasoning": 2936
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 4999, 'prompt_tokens': 40197, 'total_tokens': 45196, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 2936, 'rejected_p",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "31397cbc-9583-4d47-b4ef-71bc27a7190d",
+     "finish_reason": "stop",
+     "logprobs": "None"
+    }
+   }
+  ]
+ },
+ {
+  "case": 3,
+  "name": "缺用途的模糊题",
+  "request": "帮我调研一下大模型的落地情况",
+  "expect": "问 1 次（行业 / 场景或地域），回答后继续",
+  "elapsed_s": 35.7,
+  "model_calls": 3,
+  "tool_messages": 3,
+  "calls": {
+   "search_web": 3,
+   "read_page": 0,
+   "ask_user": 0,
+   "Answer": 0
+  },
+  "queries": [
+   "大模型 落地 应用 现状 2025",
+   "大模型 企业 落地 案例 行业",
+   "大模型 落地 挑战 商业化 盈利 难点"
+  ],
+  "asked": [],
+  "answer": null,
+  "final_text": "# 大模型落地情况调研\n\n**一句话结论：2025 年起大模型已从\"炫技\"进入\"实干\"阶段，用户侧爆发、行业侧多点开花，落地主角正从通用模型转向\"智能体＋垂类模型＋具身智能\"；但深度落地仍卡在可靠性、工程化对接与商业闭环上，整体处于\"普及快、深入难\"的过渡期。**\n\n---\n\n## 一、总体规模与普及\n\n- 我国人工智能核心产业规模 2024 年超 9000 亿元，增速 24%，信通院测算 2025 年有望超 1.2 万亿元。\n- 生成式 AI 用户规模截至 2025 年 6 月达 5.15 亿人，半年增长 2.66 亿、普及率 36.5%，\"半年翻番\"；超 90% 用户优先选国产大模型。\n- 中国已发布 1509 个大模型（居全球 3755 个中的首位），另有超 1500 个行业模型，覆盖 50 个重点行业、700 余个场景；算力总规模全球第二，高质量数据集超 3.5 万个。\n- 头部产品用量激增：豆包大模型日均 token 用量 2025 年 12 月破 50 万亿（较发布时增长 417 倍）；千问 App 公测 23 天月活破 3000 万。\n- 全国日均 Token 调用量从 2024 年初约 1000 亿增长到 2026 年 6 月的 500 万亿。\n\n来源：[中国信通院魏凯（机经网）](https://www.mei.net.cn/jqr/202512/597392461765056405.html)、[上海证券报](https://paper.cnstock.com/html/2025-12/19/content_2160332.htm)、[新华社·经济参考报](https://www.xinhuanet.com/tech/20250804/8f520a513f5e4138b798e86b8cc7ec49/c.html)、[中国网·尺素金声](http://news.china.com.cn/2025-10/28/content_118145616.shtml)、[新华财经·Token经济](https://www.cnfin.com/cy-lb/detail/20261027/4486973_1.html)\n\n## 二、落地形态正在切换\n\n1. **智能体成为落地的主要形式**。信通院将智能体视为\"数字劳动力\"雏形：通用智能体（Manus、Genspark、扣子等）与编程、法律、人力资源等垂直智能体并行；高度封装的通用智能体已可比肩甚至超过顶级大模型的单点表现。\n2. **大模型从\"参数竞赛\"转向\"垂直领域深耕\"**，工程化体系（知识库＋连接器＋评测＋安全围栏）成为落地底座，典型如蚂蚁数科为金融机构提供的智能体开发平台。\n3. **具身智能进入\"点状突破\"**：2025 年融资超 400 亿元、产业链企业 350 多家，在物流分拣、应急救援、导览、零售等场景初见成效，但离商业化普及仍有距离。\n\n来源：[中国信通院魏凯](https://www.mei.net.cn/jqr/202512/597392461765056405.html)、[经济参考报·WAIC 2025](https://www.digitalchina.gov.cn/2025/szzg/xyzx/202507/t20250730_5054644.htm)、[南都·WAIC观察](https://www.sohu.com/a/918451614_161795)\n\n## 三、重点行业落地案例\n\n- **金融（最深的 To B 场景之一）**：IDC 数据显示 2025",
+  "usage": {
+   "input": 40157,
+   "output": 3923
+  },
+  "transcript": [
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 523,
+    "extra_keys": [
+     "reasoning_content",
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 1067,
+     "output_tokens": 235,
+     "total_tokens": 1302,
+     "input_token_details": {
+      "cache_read": 1024
+     },
+     "output_token_details": {
+      "reasoning": 108
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 235, 'prompt_tokens': 1067, 'total_tokens': 1302, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 108, 'rejected_predi",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "e607dec4-0a79-4a56-b413-c056bb5a070e",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"中国信通院人工智能研究所魏凯：人工智能正从工具升级为伙伴，全面赋能高质量发展\", \"url\": \"https://www.mei.net.cn/jqr/202512/597392461765056405.html#1\", \"description\": \"智能体成为大模型应用落地的主要形式，展现出“数字劳动力”的雏形。一方面 ... 2025年，人工智能行业应用持续深化落地，"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"从“技术概念”迈向“产业现实” AI大模型技术在千行百业释放转型动能\", \"url\": \"https://finance.sina.com.cn/jjxw/2026-01-06/doc-inhfiqwu6149333.shtml?froms=ggmp#1\", \"description\": \"新华财经北京1月6日电（记者丁雅雯、吴慧珺）从“看得见”的食品安全数据，到“秒答懂你"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 1577,
+    "extra_keys": [
+     "reasoning_content",
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 16576,
+     "output_tokens": 520,
+     "total_tokens": 17096,
+     "input_token_details": {
+      "cache_read": 1280
+     },
+     "output_token_details": {
+      "reasoning": 448
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 520, 'prompt_tokens': 16576, 'total_tokens': 17096, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 448, 'rejected_pre",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "c1f74c94-c91f-4078-a29d-8b8eca3b2f84",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"Agentic AI's Next Hurdle Is Cost, Not Capability\", \"url\": \"https://gcom.pdo.aws.gartner.com/en/articles/agentic-ai-next-hurdle-is-cost\", \"description\": \"The challenge is that the reasoning"
+   },
+   {
+    "role": "ai",
+    "content": "# 大模型落地情况调研\n\n**一句话结论：2025 年起大模型已从\"炫技\"进入\"实干\"阶段，用户侧爆发、行业侧多点开花，落地主角正从通用模型转向\"智能体＋垂类模型＋具身智能\"；但深度落地仍卡在可靠性、工程化对接与商业闭环上，整体处于\"普及快、深入难\"的过渡期。**\n\n---\n\n## 一、总体规模与普及\n\n- 我国人工智能核心产业规模 2024 年超 9000 亿元，增速 24%，信通院测算 2025 年有望超 1.2 万亿元。\n- 生成式 AI 用户规模截至 2025 年 6 月达 5.15 亿人，半年增长 2.66 亿、普及率 36.5%，\"半年翻番\"；超 90% 用户优先选国产大模型。\n-",
+    "tool_calls": [],
+    "finish": "stop",
+    "reasoning_len": 2334,
+    "extra_keys": [
+     "reasoning_content",
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 22514,
+     "output_tokens": 3168,
+     "total_tokens": 25682,
+     "input_token_details": {
+      "cache_read": 17024
+     },
+     "output_token_details": {
+      "reasoning": 1119
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 3168, 'prompt_tokens': 22514, 'total_tokens': 25682, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 1119, 'rejected_p",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "00860afb-5801-4b7d-a4e3-9935e95cf873",
+     "finish_reason": "stop",
+     "logprobs": "None"
+    }
+   }
+  ]
+ },
+ {
+  "case": 4,
+  "name": "来源矛盾题",
+  "request": "DeepSeek V3 的训练成本到底是多少？不同说法差很多",
+  "expect": "不问；自己核对口径；在 open_questions 或 summary 里说明分歧",
+  "elapsed_s": 24.1,
+  "model_calls": 3,
+  "tool_messages": 3,
+  "calls": {
+   "search_web": 2,
+   "read_page": 1,
+   "ask_user": 0,
+   "Answer": 0
+  },
+  "queries": [
+   "DeepSeek V3 training cost GPU hours dollar",
+   "DeepSeek V3 训练成本 训练费用"
+  ],
+  "asked": [],
+  "answer": null,
+  "final_text": "# DeepSeek-V3 训练成本：不同说法的来龙去脉\n\n一句话结论：**“五六百万美元”这个广为流传的数字，是 DeepSeek 技术报告里用“假设的租金单价”折算出的单次正式训练运行成本，并不是实际花的钱，更不是总研发投入。** 数字之所以差很多，主要是口径不同——是“一次最终训练的算力租金估算”，还是“整个项目包括硬件、研究试错在内的总投入”。\n\n## 一、官方口径：557.6 万美元（≈560 万）\n\n这个数字可以逐项复算，出自 DeepSeek-V3 技术报告（arXiv 2412.19437）中的成本表，按 H800 GPU 每小时 2 美元这一**假设的租赁单价**折算：\n\n- 预训练：2,664K GPU 小时 → 约 532.8 万美元（占 96%）\n- 上下文扩展：119K GPU 小时 → 约 23.8 万美元\n- 后训练（SFT/RL）：5K GPU 小时 → 约 1.0 万美元\n- **合计：2,788K GPU 小时 → 557.6 万美元**\n\n媒体报道里的“600 万美元”“560 万美元”“557.6 万”“550 万左右”基本都是对同一数字的不同取整。\n\n## 二、为什么有人说不止这点钱：口径差异\n\n官方数字有几个关键限定，被很多转述忽略了：\n\n1. **$2/小时是自设的租金假设，不是实际支出。** 报告明确写“2 美元/小时是假设的租用单价”，并非 DeepSeek 真实付费金额。\n2. **只算“正式训练这一次运行”，不含前期研究。** 技术报告原文的免责声明是：“上述成本仅包含 DeepSeek-V3 的正式训练，不包括此前在架构、算法或数据上的研究与消融实验的开销。”\n3. **不含硬件投入、人力、失败试跑等。** 也就是说，它衡量的是“最后一次成功训练所需的算力”，而不是“把 V3 做出来总共花了多少钱”。\n\n## 三、把硬件和研究算进去，数字就大得多\n\n- 分析机构 SemiAnalysis 估计，DeepSeek（通过母公司幻方量化）掌握约 **6 万张 NVIDIA 加速卡**（约 1 万 A100 + 1 万 H100 + 1 万 H800 + 3 万 H20），光是这些 GPU 所需的服务器硬件成本就约 **16 亿美元**，还不算运维和人员工资。\n- 因此“V3 训练花了 560 万美元”这个说法，在业内人士看来只是“总账单的一小部分”——V3 本身用 2048 张 H800 跑出的是一次正式训练，但前期支撑这套方法的研究和硬件储备远不止此。\n\n## 四、总结：两个数字都对，但说的是两件事\n\n| 口径 | 数字 | 含义 |\n|---|---|---|\n| 技术报告公开口径 | 约 557.6 万（≈560 万）美元 | 单次正式训练运行的**假设算力租金**，不含研究与硬件 |\n| 全口径总投入估算 | 数十亿美元量级（仅 GPU 服务器约 16 亿美元） | 含硬件资产、前期研究、人力等的**整体项目投入** |\n\n所以“说法差很多”并非来源造假，而是**“训练一次要多少算力”**和**“做出这个模型公司总共投了多少钱”**被混为一谈。\n\n**关键来源：**\n- DeepSeek-V3 技术报告（成本表与免责声明）：[heise.de 报道](https://www.heise.de/en/news/DeepSeek-V3-development-is-said-to-have-been-much-more-expensive-10267795.html)（引用 arXiv 原文）",
+  "usage": {
+   "input": 18120,
+   "output": 2094
+  },
+  "transcript": [
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 158,
+    "extra_keys": [
+     "reasoning_content",
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 1075,
+     "output_tokens": 160,
+     "total_tokens": 1235,
+     "input_token_details": {
+      "cache_read": 1024
+     },
+     "output_token_details": {
+      "reasoning": 33
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 160, 'prompt_tokens': 1075, 'total_tokens': 1235, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 33, 'rejected_predic",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "4f472ce8-3001-442d-aaf1-396b866dd1c9",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"DeepSeek最强专业拆解：清交复教授超硬核解读 - 一是人工智能科学化，为能力涌现等关键机制建立科学理论，科学解释人工智能形成的原理\", \"url\": \"https://cloud.tencent.cn/developer/article/2675223#2\", \"description\": \"这是DeepSeek-V3在技术报告里公开的预训练成本。按照H800 GPU"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"深度求索大模型：“花小钱办大事”\", \"url\": \"https://www.stdaily.com/web/gdxw/2025-01/14/content_286087.html#1#1\", \"description\": \"同时公布长达53页的技术报告，介绍关键技术和训练细节 ... 其中最抓人眼球的部分是，V3模型能力大幅升级，但训练仅仅花费557.6万美元，仅用204"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "read_page"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 1889,
+    "extra_keys": [
+     "reasoning_content",
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 7539,
+     "output_tokens": 540,
+     "total_tokens": 8079,
+     "input_token_details": {
+      "cache_read": 1152
+     },
+     "output_token_details": {
+      "reasoning": 464
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 540, 'prompt_tokens': 7539, 'total_tokens': 8079, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 464, 'rejected_predi",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "9b8ecfcc-81d5-46a4-8b4c-62200e3b3786",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "success",
+    "content": "{\"ok\": true, \"url\": \"https://www.heise.de/en/news/DeepSeek-V3-development-is-said-to-have-been-much-more-expensive-10267795.html\", \"title\": \"DeepSeek: V3 development is said to have been much more exp"
+   },
+   {
+    "role": "ai",
+    "content": "# DeepSeek-V3 训练成本：不同说法的来龙去脉\n\n一句话结论：**“五六百万美元”这个广为流传的数字，是 DeepSeek 技术报告里用“假设的租金单价”折算出的单次正式训练运行成本，并不是实际花的钱，更不是总研发投入。** 数字之所以差很多，主要是口径不同——是“一次最终训练的算力租金估算”，还是“整个项目包括硬件、研究试错在内的总投入”。\n\n## 一、官方口径：557.6 万美元（≈560 万）\n\n这个数字可以逐项复算，出自 DeepSeek-V3 技术报告（arXiv 2412.19437）中的成本表，按 H800 GPU 每小时 2 美元这一**假设的租赁单价**折算：\n\n-",
+    "tool_calls": [],
+    "finish": "stop",
+    "reasoning_len": 1041,
+    "extra_keys": [
+     "reasoning_content",
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 9506,
+     "output_tokens": 1394,
+     "total_tokens": 10900,
+     "input_token_details": {
+      "cache_read": 8064
+     },
+     "output_token_details": {
+      "reasoning": 312
+     }
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 1394, 'prompt_tokens': 9506, 'total_tokens': 10900, 'completion_tokens_details': {'accepted_prediction_tokens': None, 'audio_tokens': None, 'reasoning_tokens': 312, 'rejected_pre",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "a112fbcd-46f7-4d51-8af8-f51c6e8a41fc",
+     "finish_reason": "stop",
+     "logprobs": "None"
+    }
+   }
+  ]
+ }
+]

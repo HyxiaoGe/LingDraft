@@ -37,3 +37,34 @@ run2 token 用量：1 入 3.5 万 / 出 926；2 入 16.5 万 / 出 2636；3 入 
 2. agent 在干活途中主动调 ask_user 不稳（3/7）。intake 的 4/4 不是干净对照：intake 提示词里直接写了这道题作为例子（`prompts.py` INTAKE_SYSTEM）。只能说明前置独立步骤可用，不能说明它天然更可靠。这道宽泛题也并非必须问，直接给概览未必错。
 3. 收尾失败（3/7）：搜索额度用尽后中间件回"Tool call limit exceeded. Do not call 'search_web' again."，豆包下一步有时返回空消息（finish_reason=tool_calls 但没有可解析的工具调用），循环结束且没有结构化答案。例 2 也遇到过同一报错但接着交了答案。失败那条空消息实际记录了 2237 / 2271 个输出 token，豆包不是什么都没生成；内容是否为 reasoning_content、或是没解析出来的工具调用，没抓到（rep1/rep3 跑在加 additional_kwargs 记录之前）。要用代码兜：额度用尽时换成"基于已有材料提交答案"的提示，结束时没有结构化答案就强制补一次。
 4. 读不读原文不稳（例 2 一次 0 篇一次 6 篇）。要不要强制读原文留到实现时定。
+
+## DeepSeek V4 Pro 对照（2026-10-28，ds_pro_think / ds_pro_nothink / ds_nothink_24）
+
+同一脚本 `--provider deepseek`，模型 deepseek-v4-pro（DeepSeek-V4-Pro-0813）。接入时两处必须处理：思考模式下多轮工具调用要把 `reasoning_content` 原样传回（langchain-openai / langchain-deepseek 都不做，探针里子类补上）；思考模式不接受强制 `tool_choice`，而 ToolStrategy 会设成 any，探针里去掉了，所以思考模式下模型全部用文字收尾、没调 Answer。
+
+| 例子 | 豆包 run2（不思考） | DeepSeek 思考 high | DeepSeek 不思考 |
+|---|---|---|---|
+| 1 天气 | 26 s，搜 3 读 1，答 | 10.5 s，搜 2，文字答 | 6.2 s，搜 1，Answer |
+| 2 海报调研 | 72 s，搜 9 读 6，Answer | 57 s，搜 4 读 2，文字报告，7 个链接 | 29 s，读到上限后 Answer JSON 坏，无答案；重跑一次读 28 次（上限 6）到模型调用 30 次上限，入 123 万 token |
+| 3 大模型落地 | 没问，Answer | 没问，35.7 s，文字报告 | 没问，14.5 s，Answer |
+| 4 DeepSeek 成本 | 不问，Answer，区分口径 | 不问，24 s，文字，区分口径 | 两次都是 Answer JSON 坏，无答案 |
+| token（4 例合计） | 入 42 万 出 0.8 万 | 入 12.8 万 出 1.3 万 | 入 40 万 出 0.5 万（不含重跑） |
+
+三个模型都没对例 3 提问（DeepSeek 两种模式各 1 次，样本少）。
+
+### 无答案结束的根因找到了（模型无关）
+
+DeepSeek 不思考模式三次无答案，`invalid_tool_calls` 里都是 `Answer`：模型调了 Answer，但参数 JSON 里中文句子用了裸的 ASCII 双引号，例如 `是"一次正式训练"的算力成本`，JSON 解析失败（`Expecting ',' delimiter`）。LangChain 把它放进 `invalid_tool_calls`，`create_agent` 看到没有有效工具调用就结束循环，不重试。豆包那两条带 2237 / 2271 个输出 token 的空消息几乎可以肯定是同一回事（豆包思考是关的，不是推理内容）。
+
+代码兜底方向：after_model 中间件检查 `invalid_tool_calls`，把解析错误作为 ToolMessage 回给模型要求重发；提示词里要求引号用「」或“”；结束时没有结构化答案强制补一次。
+
+### DeepSeek 不思考模式另一个问题
+
+read_page 额度用尽后中间件回错误，模型无视"不要再调"连续又调了 22 次，直到模型调用上限，一次花了 123 万输入 token。额度用尽时必须把工具从绑定列表里拿掉，而不是只回错误。思考模式和豆包没出现这个。
+
+### 判断
+
+- 思考模式的 DeepSeek V4 Pro 四例全部交付、最快、最省（输入 12.8 万 vs 豆包 42 万），搜索次数少但答案带链接、口径区分到位。它值得作为主候选。
+- 但它的"交付"是文字，不是结构化 Answer。要么接受文字交付、来源另行从工具消息收集（现在的做法），要么在收尾单独加一步不带工具的结构化整理。
+- 不思考模式更快但不可靠，不建议。
+- 无答案结束是 JSON 引号问题，和模型无关，必须用代码兜。

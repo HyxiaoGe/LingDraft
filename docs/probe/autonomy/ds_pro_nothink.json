@@ -1,0 +1,1004 @@
+[
+ {
+  "case": 1,
+  "name": "简单事实题",
+  "request": "最近新加坡的天气情况如何？",
+  "expect": "不问；搜 1～2 次就提交；format=short",
+  "elapsed_s": 6.2,
+  "model_calls": 2,
+  "tool_messages": 2,
+  "calls": {
+   "search_web": 1,
+   "read_page": 0,
+   "ask_user": 0,
+   "Answer": 1
+  },
+  "queries": [
+   "新加坡 天气 最近 预报"
+  ],
+  "asked": [],
+  "answer": {
+   "summary": "新加坡近期天气以多云、阵雨/雷阵雨为主，气温稳定在 24～31℃ 之间，湿度高，属于典型的热带雨季天气。",
+   "format": "list",
+   "key_facts": [
+    {
+     "statement": "未来一周（约10月28日～11月3日）新加坡以小雨/阵雨为主，气温约 24～31℃，风力微弱（<3级）。",
+     "source_urls": [
+      "https://www.weather.com.cn/weather15d/104010100.shtml",
+      "https://baidu.weather.com.cn/mweather15d/104010100.shtml"
+     ]
+    },
+    {
+     "statement": "当天（10月27日）有雷阵雨，最高约31℃、最低约26℃，降水概率约61%，湿度很高（约83%）。",
+     "source_urls": [
+      "https://weather.yahoo.com/en-sg/sg/singapore/singapore/"
+     ]
+    },
+    {
+     "statement": "空气质量为中等（UAQI 约53），紫外线峰值中等（UV 4），体感温度明显高于实际气温（RealFeel 可达37℃以上）。",
+     "source_urls": [
+      "https://weather.yahoo.com/en-sg/sg/singapore/singapore/"
+     ]
+    },
+    {
+     "statement": "白天体感温度可达 35～42℃，午后闷热，夜间约 27～29℃。",
+     "source_urls": [
+      "https://meteum.ai/weather/en-US/details/auto?bounds=-160.813256%2C2.1894899999999993%3B-15.813255999999996%2C32.18949&via=prsw&mapTypeRoute=meteumai&mapTypeRoute=nowcast#1"
+     ]
+    }
+   ],
+   "open_questions": [
+    "各来源对具体日期的小雨/中雨/阴天描述略有差异，属正常预报波动；如需精确到某一天的出行安排，建议临近时查看短期预报。"
+   ],
+   "confidence": "high"
+  },
+  "final_text": "",
+  "usage": {
+   "input": 4643,
+   "output": 555
+  },
+  "transcript": [
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 995,
+     "output_tokens": 59,
+     "total_tokens": 1054,
+     "input_token_details": {
+      "cache_read": 896
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 59, 'prompt_tokens': 995, 'total_tokens': 1054, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens': 89",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "038ab0e4-8827-4182-9da9-c7eb06863a31",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"【新加坡天气】新加坡天气预报,天气预报一周,天气预报15天查询\", \"url\": \"https://www.weather.com.cn/weather15d/104010100.shtml\", \"description\": \"周二（3日） 雨转小雨 29℃/24℃ 东南风 <3级 - 周三（4日） 小雨 30℃/25℃ 东风转南风 <3级 - 周四（5日） 小雨 29℃/"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "Answer"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 3648,
+     "output_tokens": 496,
+     "total_tokens": 4144,
+     "input_token_details": {
+      "cache_read": 1024
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 496, 'prompt_tokens': 3648, 'total_tokens': 4144, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens': ",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "4bed9475-13bd-45fa-9e95-0a006ba1bc49",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "Answer",
+    "status": "success",
+    "content": "Returning structured response: summary='新加坡近期天气以多云、阵雨/雷阵雨为主，气温稳定在 24～31℃ 之间，湿度高，属于典型的热带雨季天气。' format='list' key_facts=[Fact(statement='未来一周（约10月28日～11月3日）新加坡以小雨/阵雨为主，气温约 24～31℃，风力微弱（<3级）。', source_url"
+   }
+  ]
+ },
+ {
+  "case": 2,
+  "name": "清楚的调研题",
+  "request": "AI 海报工具在局部修改和事实准确性上的现状（2026），只看中文信源",
+  "expect": "不问；搜 3 次以上；format=report",
+  "elapsed_s": 29.1,
+  "model_calls": 8,
+  "tool_messages": 10,
+  "calls": {
+   "search_web": 3,
+   "read_page": 7,
+   "ask_user": 0,
+   "Answer": 0
+  },
+  "queries": [
+   "AI 海报生成工具 局部修改 事实准确性 2026",
+   "AI 海报 文字错误 事实错误 评测 2025",
+   "AI 生图 事实准确性 幻觉 数据错误 海报 中文 2026"
+  ],
+  "asked": [],
+  "answer": null,
+  "final_text": "",
+  "usage": {
+   "input": 236719,
+   "output": 1906
+  },
+  "transcript": [
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 1008,
+     "output_tokens": 126,
+     "total_tokens": 1134,
+     "input_token_details": {
+      "cache_read": 896
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 126, 'prompt_tokens': 1008, 'total_tokens': 1134, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens': ",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "163de00f-c88c-4bf7-87a0-c1754591bf59",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"实测完这个国产 AI 生图，我发现了下一个刷屏玩法\", \"url\": \"https://www.ifanr.com/1671817#1\", \"description\": \"这是一款同时覆盖图像生成与编辑的模型，文生图、参考图生成、多图融合和局部精确修改都在它的能力范围里 ... 当模型开始理解箭头、色号、图层和局部编辑的时候，它理解的是人真正修改图片的方式，而这或许才是 A"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"We tried the new ChatGPT image generator for marketing design - Skip to content\", \"url\": \"https://seranking.com/blog/chatgpt-image-generator-marketing-test/#content#1\", \"description\": \"Cha"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "read_page"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 16929,
+     "output_tokens": 114,
+     "total_tokens": 17043,
+     "input_token_details": {
+      "cache_read": 1024
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 114, 'prompt_tokens': 16929, 'total_tokens': 17043, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens'",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "f0b0f4a5-810f-4114-a096-a375ee5116ee",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"ChatGPT Images 2.0横空出世，谷歌Anthropic都被按在地上摩擦?- DoNews专栏 - ChatGPT Images 2.0横空出世，谷歌Anthropic都被按在地上摩擦\", \"url\": \"https://www.donews.com/article/detail/8234/100553.html#1\", \"description\": \"铑科技 "
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "success",
+    "content": "{\"ok\": true, \"url\": \"http://www.woshipm.com/share/6308222.html\", \"title\": \"12大场景一手横测GPT Image 1.5和香蕉2，我找到OpenAI不开发布会的原因了 – 人人都是产品经理\", \"content\": \"## 12大场景一手横测GPT Image 1.5和香蕉2，我找到OpenAI不开发布会的原因了\\n\\nOp"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "read_page",
+     "read_page"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 28077,
+     "output_tokens": 94,
+     "total_tokens": 28171,
+     "input_token_details": {
+      "cache_read": 17024
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 94, 'prompt_tokens': 28077, 'total_tokens': 28171, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens':",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "0692d563-6932-41a0-a100-216062fbdaf7",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "success",
+    "content": "{\"ok\": true, \"url\": \"https://www.cnblogs.com/xiaoruony/articles/23016566\", \"title\": \"中文海报上的小字，终于不是乱码了：三档生图模型逐字数实测\", \"content\": \"# \\n    \\n    [中文海报上的小字，终于不是乱码了：三档生图模型逐字数实测](https://www.cnblogs.com/xia"
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "success",
+    "content": "{\"ok\": true, \"url\": \"https://www.woshipm.com/ai/6464627.html\", \"title\": \"GPT Image 2.5 对比实测：变化与局限 – 人人都是产品经理\", \"content\": \"## GPT Image 2.5 对比实测：变化与局限\\n\\nGPT Image 2.5 在复杂中文图文任务中表现如何？本文通过十一类任务、72张输出，对"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "read_page"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 33496,
+     "output_tokens": 54,
+     "total_tokens": 33550,
+     "input_token_details": {
+      "cache_read": 28160
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 54, 'prompt_tokens': 33496, 'total_tokens': 33550, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens':",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "4c0ed560-f93b-4cfd-b9a8-c00bd819ec9c",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "success",
+    "content": "{\"ok\": true, \"url\": \"https://www.hunantoday.cn/news/xhn/202604/32502355.html\", \"title\": \"实测GPT-image-2，“有图有真相”的时代彻底结束了吗？\", \"content\": \"# 实测GPT-image-2，“有图有真相”的时代彻底结束了吗？\\n\\n澎湃新闻\\n\\nAI生图的王位轮番坐，这次轮到了GPT-"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "read_page"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 34793,
+     "output_tokens": 55,
+     "total_tokens": 34848,
+     "input_token_details": {
+      "cache_read": 33536
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 55, 'prompt_tokens': 34793, 'total_tokens': 34848, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens':",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "ad5e5bf7-b359-437f-8e26-efba6bd1e845",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "success",
+    "content": "{\"ok\": true, \"url\": \"https://tech.meituan.com/2026/06/18/AIGC-poster.html\", \"title\": \"美团海报生成 AIGC 技术创新与实践\", \"content\": \"# 美团海报生成 AIGC 技术创新与实践\\n\\n一张商业海报，对设计师来说可能是半天工作；对百万中小商家来说，却可能是一道迈不过去的门槛。外包一张专业海报，少"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "read_page"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 38281,
+     "output_tokens": 47,
+     "total_tokens": 38328,
+     "input_token_details": {
+      "cache_read": 34816
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 47, 'prompt_tokens': 38281, 'total_tokens': 38328, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens':",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "3fcf7d16-07c8-4aa1-9daf-446887590721",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "success",
+    "content": "{\"ok\": true, \"url\": \"https://www.ifanr.com/1671817\", \"title\": \"实测完这个国产 AI 生图，我发现了下一个刷屏玩法\", \"content\": \"# 实测完这个国产 AI 生图，我发现了下一个刷屏玩法\\n\\nAI 生图最难的地方，早就从「生成一张好看的图」变成了「把那张差一点的图改对」。\\n\\n一张图看起来快能交了，偏偏一个帽子和主视觉的"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "read_page"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 42028,
+     "output_tokens": 47,
+     "total_tokens": 42075,
+     "input_token_details": {
+      "cache_read": 38272
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 47, 'prompt_tokens': 42028, 'total_tokens': 42075, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens':",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "bfdd4ff4-e456-4b17-92a4-54d177f5a831",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "error",
+    "content": "Tool call limit exceeded. Do not call 'read_page' again."
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 42107,
+     "output_tokens": 1369,
+     "total_tokens": 43476,
+     "input_token_details": {
+      "cache_read": 41984
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [
+     [
+      "Answer",
+      "Function Answer arguments:\n\n{\"summary\": \"截至 2026 年，AI 海报工具在「局部修改」上已从\\\"整图重绘\\\"明显转向\\\"对象级/区域级精准编辑\\\"（圈选、箭头、坐标、色号、图层分离等），但「事实准确性」仍是最大短板：文字渲染（尤其中文小字）已大幅改善，可数字、材质、零件数量、图表比例等\\\"看起来对、实则错\\\"的事实性幻觉依然普遍，且越逼真越危险。\", \""
+     ]
+    ],
+    "meta": {
+     "token_usage": "{'completion_tokens': 1369, 'prompt_tokens': 42107, 'total_tokens': 43476, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "219c16c6-6ef2-45d5-85f9-673d18a9d460",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   }
+  ]
+ },
+ {
+  "case": 3,
+  "name": "缺用途的模糊题",
+  "request": "帮我调研一下大模型的落地情况",
+  "expect": "问 1 次（行业 / 场景或地域），回答后继续",
+  "elapsed_s": 14.5,
+  "model_calls": 3,
+  "tool_messages": 4,
+  "calls": {
+   "search_web": 2,
+   "read_page": 1,
+   "ask_user": 0,
+   "Answer": 1
+  },
+  "queries": [
+   "大模型 落地 应用 现状 2025 行业",
+   "大模型 企业落地 案例 行业应用 报告"
+  ],
+  "asked": [],
+  "answer": {
+   "summary": "大模型已从\"技术概念\"进入\"产业现实\"的规模化落地阶段：2025年用户规模半年翻番、企业采购从\"尝鲜\"转向\"算账\"，智能体成为主要落地形态，金融、制造、互联网、政务是落地最深的行业，智能客服、知识助手、数据分析是最主流场景。",
+   "format": "report",
+   "key_facts": [
+    {
+     "statement": "整体规模：2024年我国AI核心产业规模超9000亿元、增速24%，预计2025年超1.2万亿元；生成式AI用户规模截至2025年6月达5.15亿人，较2024年12月增长2.66亿、半年翻番，普及率36.5%。",
+     "source_urls": [
+      "https://www.mei.net.cn/jqr/202512/597392461765056405.html#1",
+      "https://paper.cnstock.com/html/2025-12/19/content_2160332.htm#1"
+     ]
+    },
+    {
+     "statement": "落地形态：智能体（Agent）成为大模型应用落地的主要形式，通用智能体（Manus、扣子、Genspark等）与编程/法律/人力等垂直智能体并行，但整体仍处发展初期，任务规划可靠性、与业务系统对接、权责界定仍是难题。",
+     "source_urls": [
+      "https://www.mei.net.cn/jqr/202512/597392461765056405.html#1"
+     ]
+    },
+    {
+     "statement": "行业分布：2025年504个落地案例中，IT/互联网占15.1%、银行14.3%、制造12.7%、政府与公共服务8.9%；制造业正从客服/质检等外围向工业设计、工业控制等核心环节渗透。",
+     "source_urls": [
+      "https://www.shaqiu.cn/article/RMxmYNNoYead"
+     ]
+    },
+    {
+     "statement": "场景分布：智能客服占比最高（20.6%），其次为知识助手（8.9%）、数据分析（7.5%）、员工办公助手（4.6%）、软件测试（4.6%）。",
+     "source_urls": [
+      "https://www.shaqiu.cn/article/RMxmYNNoYead"
+     ]
+    },
+    {
+     "statement": "金融是落地最深的行业之一：2025年金融大模型中标项目587个、披露金额15.06亿元，同比项目数激增341%、金额飙升527%；银行业以近半数项目、超七成资金领跑，且下半年应用类项目数量已超越算力类，焦点从'拥有大模型'转向'用好大模型'。",
+     "source_urls": [
+      "https://www.21jingji.com/article/20260115/herald/3f5c9cc54b8c3f9f81b91575e6aa9099.html#1"
+     ]
+    },
+    {
+     "statement": "采购逻辑转变：B端/G端客户采购占比高达89%，个人用户仅11%；2025年超1000万元项目314个、超亿元项目44个，投入产出比成为核心衡量标准，AI从'试点预算'进入'经营预算'。",
+     "source_urls": [
+      "https://dahecube.com/article.html?artid=273405?recid=587"
+     ]
+    },
+    {
+     "statement": "典型落地案例：国家能源集团智能评标年综合效益19亿元；交通银行国产千亿金融大模型服务3000多万客户、单笔业务处理时间缩短40%；宝钢联合科大讯飞上线149个智能工具、累计使用145万次；中国电信已研发110余款行业大模型、350余个行业智能体，服务客户超3.7万家。",
+     "source_urls": [
+      "https://dahecube.com/article.html?artid=273405?recid=587",
+      "https://www.chinatelecom.com.cn/ct/news/gdxw/168302.html"
+     ]
+    },
+    {
+     "statement": "工业落地呈'微笑曲线'：研发设计与营销服务环节更易获AI赋能，但生产制造环节案例占比已从19.9%升至25.9%，AI正向价值创造核心环节渗透。",
+     "source_urls": [
+      "https://www.mei.net.cn/jqr/202512/597392461765056405.html#1"
+     ]
+    },
+    {
+     "statement": "政策驱动：2025年8月国务院《关于深入实施'人工智能+'行动的意见》提出2027年超70%、2030年超90%的普及率目标；2025年10月《政务领域人工智能大模型部署应用指引》推动政务大模型体系化落地。",
+     "source_urls": [
+      "https://www.21jingji.com/article/20260115/herald/3f5c9cc54b8c3f9f81b91575e6aa9099.html#1",
+      "https://www.shaqiu.cn/article/RMxmYNNoYead"
+     ]
+    }
+   ],
+   "open_questions": [
+    "各行业大模型落地的具体ROI/投资回报率仍难精确量化，多数报告只给定性判断或个别案例数字",
+    "智能体在核心业务中的可靠性、权责界定等深水区问题尚无统一解决方案",
+    "不同来源对'落地案例'的统计口径（如沙丘智库504例 vs 金融招投标587项）不一致，绝对数字仅供参考"
+   ],
+   "confidence": "high"
+  },
+  "final_text": "",
+  "usage": {
+   "input": 36899,
+   "output": 1381
+  },
+  "transcript": [
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 995,
+     "output_tokens": 123,
+     "total_tokens": 1118,
+     "input_token_details": {
+      "cache_read": 896
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 123, 'prompt_tokens': 995, 'total_tokens': 1118, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens': 8",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "681ab479-0486-434a-a6ff-57568a8d45e7",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"中国信通院人工智能研究所魏凯：人工智能正从工具升级为伙伴，全面赋能高质量发展\", \"url\": \"https://www.mei.net.cn/jqr/202512/597392461765056405.html#1\", \"description\": \"2025年，人工智能行业应用持续深化落地，同时也暴露出应用深水区的结构性挑战。魏凯表示 ... 市场上涌现出如字节的扣子、"
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"从“技术概念”迈向“产业现实” AI大模型技术在千行百业释放转型动能\", \"url\": \"https://finance.sina.com.cn/jjxw/2026-01-06/doc-inhfiqwu6149333.shtml?froms=ggmp#1\", \"description\": \"吴慧珺）从“看得见”的食品安全数据，到“秒答懂你”的智能客服，再到可被“透视”的钢铁"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "read_page"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 17240,
+     "output_tokens": 51,
+     "total_tokens": 17291,
+     "input_token_details": {
+      "cache_read": 1024
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 51, 'prompt_tokens': 17240, 'total_tokens': 17291, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens':",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "40bddd83-35db-4550-8434-b481457fe2b0",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "success",
+    "content": "{\"ok\": true, \"url\": \"https://www.shaqiu.cn/article/RMxmYNNoYead\", \"title\": \"2025年大模型落地行业和应用场景大盘点！ | 沙丘社区\", \"content\": \"*作者｜沙丘智库研究团队*\\n\\n*来源｜沙丘社区（www.shaqiu.cn）*\\n\\n2025年，大模型技术如同一颗璀璨的新星，在各行各业绽放出耀眼光芒。从互"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "Answer"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 18664,
+     "output_tokens": 1207,
+     "total_tokens": 19871,
+     "input_token_details": {
+      "cache_read": 17280
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 1207, 'prompt_tokens': 18664, 'total_tokens': 19871, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "6d3689cd-72ce-4817-94e5-6ab7cf87db50",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "Answer",
+    "status": "success",
+    "content": "Returning structured response: summary='大模型已从\"技术概念\"进入\"产业现实\"的规模化落地阶段：2025年用户规模半年翻番、企业采购从\"尝鲜\"转向\"算账\"，智能体成为主要落地形态，金融、制造、互联网、政务是落地最深的行业，智能客服、知识助手、数据分析是最主流场景。' format='report' key_facts=[Fact(statement='整体规"
+   }
+  ]
+ },
+ {
+  "case": 4,
+  "name": "来源矛盾题",
+  "request": "DeepSeek V3 的训练成本到底是多少？不同说法差很多",
+  "expect": "不问；自己核对口径；在 open_questions 或 summary 里说明分歧",
+  "elapsed_s": 30.8,
+  "model_calls": 8,
+  "tool_messages": 8,
+  "calls": {
+   "search_web": 5,
+   "read_page": 3,
+   "ask_user": 0,
+   "Answer": 0
+  },
+  "queries": [
+   "DeepSeek V3 训练成本 多少美元",
+   "DeepSeek V3 training cost GPU hours 2.788M",
+   "DeepSeek V3 训练成本 争议 实际成本 更高 算力 采购",
+   "SemiAnalysis DeepSeek true training cost 1.6 billion hardware 50000 GPU",
+   "DeepSeek V3 训练成本 557.6万美元 只算 预训练 不包括 消融实验 前期研究"
+  ],
+  "asked": [],
+  "answer": null,
+  "final_text": "",
+  "usage": {
+   "input": 126543,
+   "output": 1556
+  },
+  "transcript": [
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web",
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 1003,
+     "output_tokens": 123,
+     "total_tokens": 1126,
+     "input_token_details": {
+      "cache_read": 896
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 123, 'prompt_tokens': 1003, 'total_tokens': 1126, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens': ",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "bb90d886-a360-4c5f-9a7e-497d69466475",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"深度求索大模型：“花小钱办大事”\", \"url\": \"https://www.stdaily.com/web/gdxw/2025-01/14/content_286087.html#1#1\", \"description\": \"其中最抓人眼球的部分是，V3模型能力大幅升级，但训练仅仅花费557.6万美元，仅用2048块H800显卡，耗时不到两个月。\", \"content\": "
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"DeepSeek-V3 Technical Report - \\\\reportnumber\", \"url\": \"https://ar5iv.labs.arxiv.org/html/2412.19437#1\", \"description\": \"Post-Training | Total ... Combined with 119K GPU hours for the cont"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 7341,
+     "output_tokens": 72,
+     "total_tokens": 7413,
+     "input_token_details": {
+      "cache_read": 1024
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 72, 'prompt_tokens': 7341, 'total_tokens': 7413, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens': 1",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "e85e5050-79f7-45c8-a14f-6e92c2746d30",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"DeepSeek сеет сомнения относительно многомиллиардных расходов на разработку технологий\", \"url\": \"https://azertag.az/ru/xeber/deepseek_seet_somneniya_otnositelno_mnogomilliardnyh_rashodov_n"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "read_page"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 14143,
+     "output_tokens": 52,
+     "total_tokens": 14195,
+     "input_token_details": {
+      "cache_read": 7296
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 52, 'prompt_tokens': 14143, 'total_tokens': 14195, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens':",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "e9ba2ceb-8c15-4dc8-b805-5b85c19a9a2f",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "success",
+    "content": "{\"ok\": true, \"url\": \"https://ar5iv.labs.arxiv.org/html/2412.19437\", \"title\": \"DeepSeek-V3 Technical Report\", \"content\": \"001\\n\\n# DeepSeek-V3 Technical Report\\n\\n###### Abstract\\n\\nWe present DeepSeek"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 15857,
+     "output_tokens": 71,
+     "total_tokens": 15928,
+     "input_token_details": {
+      "cache_read": 14080
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 71, 'prompt_tokens': 15857, 'total_tokens': 15928, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens':",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "831c0494-f51f-448d-a50c-96205318379e",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"Отвъд мита DeepSeek: Компанията е похарчила 1.6 млрд. долара за техника\", \"url\": \"https://hicomm.bg/kratki-novini/otvd-mita-deepseek-kompaniyata-e-poharchila-16-mlrd-dolara-za-tehnika.html"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "read_page"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 19435,
+     "output_tokens": 56,
+     "total_tokens": 19491,
+     "input_token_details": {
+      "cache_read": 15872
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 56, 'prompt_tokens': 19435, 'total_tokens': 19491, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens':",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "97518f1f-19cf-4e8e-b03c-f38ef3ee6592",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "success",
+    "content": "{\"ok\": true, \"url\": \"https://semianalysis.com/2025/01/31/deepseek-debates/\", \"title\": \"DeepSeek Debates: Chinese Leadership On Cost, True Training Cost, Closed Model Margin Impacts\", \"content\": \"# Dee"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "read_page"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 21032,
+     "output_tokens": 56,
+     "total_tokens": 21088,
+     "input_token_details": {
+      "cache_read": 19456
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 56, 'prompt_tokens': 21032, 'total_tokens': 21088, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens':",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "c115fe35-6be8-4fa3-ab52-f8797ada1795",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "read_page",
+    "status": "success",
+    "content": "{\"ok\": true, \"url\": \"https://semianalysis.com/2025/01/31/deepseek-debates/\", \"title\": \"DeepSeek Debates: Chinese Leadership On Cost, True Training Cost, Closed Model Margin Impacts\", \"content\": \"# Dee"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [
+     "search_web"
+    ],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 22629,
+     "output_tokens": 80,
+     "total_tokens": 22709,
+     "input_token_details": {
+      "cache_read": 20992
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [],
+    "meta": {
+     "token_usage": "{'completion_tokens': 80, 'prompt_tokens': 22629, 'total_tokens': 22709, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens':",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "3df985c2-688a-41ac-8b55-42e3de727db3",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   },
+   {
+    "role": "tool",
+    "name": "search_web",
+    "status": "success",
+    "content": "[{\"title\": \"DeepSeek最强专业拆解：清交复教授超硬核解读 - 一是人工智能科学化，为能力涌现等关键机制建立科学理论，科学解释人工智能形成的原理\", \"url\": \"https://cloud.tencent.cn/developer/article/2675223#2\", \"description\": \"这是DeepSeek-V3在技术报告里公开的预训练成本。按照H800 GPU"
+   },
+   {
+    "role": "ai",
+    "content": "",
+    "tool_calls": [],
+    "finish": "tool_calls",
+    "reasoning_len": 0,
+    "extra_keys": [
+     "refusal"
+    ],
+    "usage": {
+     "input_tokens": 25103,
+     "output_tokens": 1046,
+     "total_tokens": 26149,
+     "input_token_details": {
+      "cache_read": 22656
+     },
+     "output_token_details": {}
+    },
+    "invalid_tool_calls": [
+     [
+      "Answer",
+      "Function Answer arguments:\n\n{\"summary\": \"DeepSeek-V3 的\\\"训练成本\\\"没有单一答案，取决于口径：官方技术报告给出的是一次正式训练（final run）的算力成本约 557.6 万美元，但这只是\\\"边际算力成本\\\"，不含前期研究、消融实验、硬件采购和人力；若把这些算进去，第三方（SemiAnalysis）估算 DeepSeek 的硬件投入高达约 "
+     ]
+    ],
+    "meta": {
+     "token_usage": "{'completion_tokens': 1046, 'prompt_tokens': 25103, 'total_tokens': 26149, 'completion_tokens_details': None, 'prompt_tokens_details': {'audio_tokens': None, 'cache_write_tokens': None, 'cached_tokens",
+     "model_name": "deepseek-v4-pro",
+     "system_fingerprint": "a307abda487cd1b463329ccb945ce396",
+     "id": "d66f9f8d-19a2-46dd-8d19-2e696abef22d",
+     "finish_reason": "tool_calls",
+     "logprobs": "None"
+    }
+   }
+  ]
+ }
+]

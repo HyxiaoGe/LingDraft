@@ -25,8 +25,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 from pydantic import BaseModel, ConfigDict, Field
 
+from app import config
 from app.graph.research.agent import ask_resume, ask_view, is_ask_interrupt
-from app.research_llm import ArkResearchPlanner
+from app.tools.gateway import GatewayClient
+from app.tools.research_tools import make_research_tools
 
 SYSTEM = """你是调研助理。回答用户的问题，并给出证据。
 
@@ -63,6 +65,36 @@ CASES = [
     {"id": 4, "name": "来源矛盾题", "request": "DeepSeek V3 的训练成本到底是多少？不同说法差很多",
      "expect": "不问；自己核对口径；在 open_questions 或 summary 里说明分歧", "reply": None},
 ]
+
+
+def make_model(provider: str, model: str, thinking: bool, effort: str):
+    """按提供方构造 agent 用的聊天模型。DeepSeek 思考模式下多轮工具调用必须把 reasoning_content 原样传回，
+    langchain-openai / langchain-deepseek 都不回传，这里补上。"""
+    if provider == "ark":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(model=model or config.ARK_MODEL, base_url=config.ARK_BASE_URL, api_key=config.ARK_API_KEY,
+                          extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}}, timeout=90, max_retries=2, temperature=0)
+    from langchain_deepseek import ChatDeepSeek
+
+    class ChatDeepSeekRT(ChatDeepSeek):
+        def _get_request_payload(self, input_, *, stop=None, **kwargs):
+            payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+            # 思考模式不接受强制 tool_choice（ToolStrategy 会设成 any/required），去掉，交给模型自己决定何时提交 Answer
+            if thinking and payload.get("tool_choice") not in (None, "auto", "none"):
+                payload.pop("tool_choice")
+            msgs = self._convert_input(input_).to_messages()
+            if len(msgs) == len(payload.get("messages", [])):
+                for m, d in zip(msgs, payload["messages"]):
+                    if isinstance(m, AIMessage) and m.additional_kwargs.get("reasoning_content") is not None:
+                        d["reasoning_content"] = m.additional_kwargs["reasoning_content"]
+            return payload
+
+    if not config.DEEPSEEK_API_KEY:
+        raise RuntimeError("未设置 DEEPSEEK_API_KEY")
+    extra = {"thinking": {"type": "enabled" if thinking else "disabled"}}
+    kw = {"reasoning_effort": effort} if thinking else {"temperature": 0}
+    return ChatDeepSeekRT(model=model or config.DEEPSEEK_MODEL, api_key=config.DEEPSEEK_API_KEY, api_base=config.DEEPSEEK_BASE_URL,
+                          extra_body=extra, timeout=180, max_retries=2, **kw)
 
 
 def build(model, tools, plain: bool):
@@ -115,7 +147,9 @@ def run_case(agent, case: dict) -> dict:
             usage["output"] += u.get("output_tokens", 0)
             transcript.append({"role": "ai", "content": (m.content if isinstance(m.content, str) else str(m.content))[:300],
                                "tool_calls": [tc["name"] for tc in m.tool_calls or []], "finish": (m.response_metadata or {}).get("finish_reason"),
-                               "usage": u, "invalid_tool_calls": [(x.get("name"), str(x.get("error"))[:200]) for x in (m.invalid_tool_calls or [])],
+                               "reasoning_len": len(str(m.additional_kwargs.get("reasoning_content") or "")),
+                               "extra_keys": sorted(m.additional_kwargs.keys()),
+                               "usage": u, "invalid_tool_calls": [(x.get("name"), str(x.get("error"))[:4000]) for x in (m.invalid_tool_calls or [])],
                                "meta": {k: str(v)[:200] for k, v in (m.response_metadata or {}).items() if k != "model_provider"}})
         elif isinstance(m, ToolMessage):
             transcript.append({"role": "tool", "name": m.name, "status": getattr(m, "status", None), "content": str(m.content)[:200]})
@@ -134,12 +168,17 @@ def run_case(agent, case: dict) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--plain", action="store_true")
+    ap.add_argument("--provider", choices=["ark", "deepseek"], default="ark")
+    ap.add_argument("--model", default="")
+    ap.add_argument("--thinking", choices=["on", "off"], default="off")
+    ap.add_argument("--effort", choices=["low", "high", "max"], default="high")
     ap.add_argument("--only", default="")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
     only = {int(x) for x in args.only.split(",") if x}
-    p = ArkResearchPlanner()
-    agent = build(p.agent_model(), p.tools(), args.plain)
+    model = make_model(args.provider, args.model, args.thinking == "on", args.effort)
+    print(f"模型：{args.provider} {getattr(model, 'model_name', '')} 思考={args.thinking} effort={args.effort if args.thinking == 'on' else '-'}", flush=True)
+    agent = build(model, make_research_tools(GatewayClient(config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY, scene="research")), args.plain)
     results = []
     for case in CASES:
         if only and case["id"] not in only:

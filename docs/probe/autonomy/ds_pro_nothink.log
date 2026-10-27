@@ -1,0 +1,38 @@
+模型：deepseek deepseek-v4-pro 思考=off effort=-
+
+=== 例 1 简单事实题：最近新加坡的天气情况如何？
+    期望：不问；搜 1～2 次就提交；format=short
+Deserializing unregistered type __main__.Answer from checkpoint. This will be blocked in a future version. Set LANGGRAPH_STRICT_MSGPACK=true to block now, or add to allowed_msgpack_modules to allow explicitly: [('__main__', 'Answer')]
+    6.2s · 模型调用 2 · 搜索 1 · 读 0 · 问 0 · token 入 4643 出 555
+    最后一条：tool  finish=None content="Returning structured response: summary='新加坡近期天气以多云、阵雨/雷阵雨为主，气温稳定在 24～31℃ 之间，湿度高，属于典型的热带雨季天气。' format='list' key_facts=[F"
+    检索词：['新加坡 天气 最近 预报']
+    format=list confidence=high 事实 4 条 · 未定 1 条
+    结论：新加坡近期天气以多云、阵雨/雷阵雨为主，气温稳定在 24～31℃ 之间，湿度高，属于典型的热带雨季天气。
+    未定：各来源对具体日期的小雨/中雨/阴天描述略有差异，属正常预报波动；如需精确到某一天的出行安排，建议临近时查看短期预报。
+
+=== 例 2 清楚的调研题：AI 海报工具在局部修改和事实准确性上的现状（2026），只看中文信源
+    期望：不问；搜 3 次以上；format=report
+    29.1s · 模型调用 8 · 搜索 3 · 读 7 · 问 0 · token 入 236719 出 1906
+    最后一条：ai  finish=tool_calls content=''
+    检索词：['AI 海报生成工具 局部修改 事实准确性 2026', 'AI 海报 文字错误 事实错误 评测 2025', 'AI 生图 事实准确性 幻觉 数据错误 海报 中文 2026']
+    文本收尾：
+
+=== 例 3 缺用途的模糊题：帮我调研一下大模型的落地情况
+    期望：问 1 次（行业 / 场景或地域），回答后继续
+    14.5s · 模型调用 3 · 搜索 2 · 读 1 · 问 0 · token 入 36899 出 1381
+    最后一条：tool  finish=None content='Returning structured response: summary=\'大模型已从"技术概念"进入"产业现实"的规模化落地阶段：2025年用户规模半年翻番、企业采购从"尝鲜"转向"算账"，智能体成为主要落地形态，金融、制造、互联网、'
+    检索词：['大模型 落地 应用 现状 2025 行业', '大模型 企业落地 案例 行业应用 报告']
+    format=report confidence=high 事实 9 条 · 未定 3 条
+    结论：大模型已从"技术概念"进入"产业现实"的规模化落地阶段：2025年用户规模半年翻番、企业采购从"尝鲜"转向"算账"，智能体成为主要落地形态，金融、制造、互联网、政务是落地最深的行业，智能客服、知识助手、数据分析是最主流场景。
+    未定：各行业大模型落地的具体ROI/投资回报率仍难精确量化，多数报告只给定性判断或个别案例数字
+    未定：智能体在核心业务中的可靠性、权责界定等深水区问题尚无统一解决方案
+    未定：不同来源对'落地案例'的统计口径（如沙丘智库504例 vs 金融招投标587项）不一致，绝对数字仅供参考
+
+=== 例 4 来源矛盾题：DeepSeek V3 的训练成本到底是多少？不同说法差很多
+    期望：不问；自己核对口径；在 open_questions 或 summary 里说明分歧
+    30.8s · 模型调用 8 · 搜索 5 · 读 3 · 问 0 · token 入 126543 出 1556
+    最后一条：ai  finish=tool_calls content=''
+    检索词：['DeepSeek V3 训练成本 多少美元', 'DeepSeek V3 training cost GPU hours 2.788M', 'DeepSeek V3 训练成本 争议 实际成本 更高 算力 采购', 'SemiAnalysis DeepSeek true training cost 1.6 billion hardware 50000 GPU', 'DeepSeek V3 训练成本 557.6万美元 只算 预训练 不包括 消融实验 前期研究']
+    文本收尾：
+
+结果写到 /private/tmp/claude-501/-Users-sean-code-LingDraft/b4b71fd3-0f5f-499f-b9a1-65bc1069c61c/scratchpad/ds_pro_nothink.json
