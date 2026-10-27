@@ -1,0 +1,318 @@
+[
+ {
+  "case": 1,
+  "name": "简单事实题",
+  "request": "最近新加坡的天气情况如何？",
+  "expect": "不问；搜 1～2 次就提交；format=short",
+  "elapsed_s": 29.8,
+  "model_calls": 5,
+  "tool_messages": 5,
+  "calls": {
+   "search_web": 3,
+   "read_page": 1,
+   "ask_user": 0,
+   "Answer": 1
+  },
+  "queries": [
+   "Singapore weather forecast next few days Meteorological Service Singapore current weather",
+   "site:weather.gov.sg Singapore 4 day weather forecast MSS",
+   "site:weather.gov.sg 24 hour forecast Singapore updated 27 Oct thundery showers temperature"
+  ],
+  "asked": [],
+  "answer": {
+   "summary": "新加坡未来几天总体炎热潮湿，10月28–30日午后多雷阵雨，10月31日转多云、最高温可达35℃。",
+   "format": "list",
+   "key_facts": [
+    {
+     "statement": "新加坡气象署4天预报（10月27日17:15更新）：10月28日气温24–33℃，东北东风5–15 km/h，午后有雷阵雨。",
+     "source_urls": [
+      "https://www.weather.gov.sg/weather-forecast-4dayoutlook/"
+     ]
+    },
+    {
+     "statement": "10月29日气温24–32℃，东南东风5–15 km/h，上午晚些时候至下午有雷阵雨。",
+     "source_urls": [
+      "https://www.weather.gov.sg/weather-forecast-4dayoutlook/"
+     ]
+    },
+    {
+     "statement": "10月30日气温25–34℃，南南东风5–15 km/h，午后有雷阵雨。",
+     "source_urls": [
+      "https://www.weather.gov.sg/weather-forecast-4dayoutlook/"
+     ]
+    },
+    {
+     "statement": "10月31日气温26–35℃，南南东风5–15 km/h，局部多云且天气温暖。",
+     "source_urls": [
+      "https://www.weather.gov.sg/weather-forecast-4dayoutlook/"
+     ]
+    },
+    {
+     "statement": "中期趋势：10月下半月多数日子会有局地短时雷阵雨；日最高温多在33–35℃，少数日子可能略超35℃，夜间也可能暖湿。",
+     "source_urls": [
+      "https://www.weather.gov.sg/fwo-localised-short-duration-thundery-showers-on-most-days-in-the-second-fortnight-of-october-2026/"
+     ]
+    }
+   ],
+   "open_questions": [
+    "临近时段的降雨落区和强度会变化，建议出门前查看新加坡气象署或 myENV 的2小时/24小时预报。"
+   ],
+   "confidence": "high"
+  },
+  "final_text": ""
+ },
+ {
+  "case": 2,
+  "name": "清楚的调研题",
+  "request": "AI 海报工具在局部修改和事实准确性上的现状（2026），只看中文信源",
+  "expect": "不问；搜 3 次以上；format=report",
+  "elapsed_s": 58.2,
+  "model_calls": 4,
+  "tool_messages": 12,
+  "calls": {
+   "search_web": 11,
+   "read_page": 0,
+   "ask_user": 0,
+   "Answer": 1
+  },
+  "queries": [
+   "2026 AI 海报 工具 局部修改 事实准确性 中文",
+   "AI 海报设计 局部重绘 文字 事实错误 2025 2026",
+   "AI 设计工具 海报 生成 局部编辑 中文 评测 2025",
+   "2026 国产 AI 图像模型 海报 事实核查 错字 信息图 局部编辑 评测",
+   "site:36kr.com 2026 AI 海报 局部 修改 错字 事实 准确",
+   "site:zhidx.com 2026 生图 海报 局部修改 文字 准确性",
+   "2026 即梦 豆包 海报 局部重绘 文字错误 事实准确性",
+   "2026 稿定 AI 海报 局部修改 事实准确 中文",
+   "2026 美图设计室 AI 海报 局部编辑 文字 准确性",
+   "2026 可画 Canva 中国 AI 海报 局部修改 中文 评测",
+   "2026 AI 海报生成工具 对比 即梦 通义 万相 腾讯 混元 商汤"
+  ],
+  "asked": [],
+  "answer": {
+   "summary": "截至 2026 年中文信源的主流判断：AI 海报工具的“局部修改”已明显进入可用工作流，框选、圈点、箭头、坐标、蒙版和局部文字改动能减少整图重绘；但“事实准确性”仍未闭环，尤其高密度中文信息图、小字号多语种、科学/数据/图表对应关系，仍需人工逐项核查。更稳的生产方式通常是“AI 出视觉初稿/局部改图 + 模板或 PS/Figma 承载文字与事实层”。",
+   "format": "report",
+   "key_facts": [
+    {
+     "statement": "局部修改能力在 2026 年成为国产图像模型的核心升级：Seedream 5.0 Pro 支持圈选、点位、箭头、标注框、坐标、色号等方式指定“改哪里”，以减少自然语言描述位置造成的误差。",
+     "source_urls": [
+      "https://www.ifanr.com/1671817#1",
+      "https://omnitools.ai/article/seedream-5-0-pro"
+     ]
+    },
+    {
+     "statement": "实测显示，Seedream 5.0 Pro 可在框选区域内完成材质、颜色、物体替换，并基本保持透视、阴影、环境光和非编辑区域不变；这意味着它更接近设计师的修图流程，而不是每次重新抽一张相似图。",
+     "source_urls": [
+      "https://zhidx.com/p/574086.html#1",
+      "https://eu.36kr.com/zh/p/3887236673485574#1#1#1",
+      "https://m.it168.com/article_6939774.html"
+     ]
+    },
+    {
+     "statement": "局部编辑仍不是像素级无损：选区边缘、杯子大小、拉花、阴影和周边元素可能轻微变化；复杂或矛盾指令、复杂排版和长文本仍可能出错。",
+     "source_urls": [
+      "https://watcha.cn/discuss/10033",
+      "https://omnitools.ai/article/seedream-5-0-pro"
+     ]
+    },
+    {
+     "statement": "商业海报相对更可用：在提示词明确给出风格、标题、折扣、时间、规则和画面元素时，Seedream 5.0 Pro 的层级、版式和主要中文信息表现较稳定；但高密度信息图比普通促销海报更容易翻车。",
+     "source_urls": [
+      "https://zhidx.com/p/574086.html#1",
+      "https://www.mornai.cn/news/aigc/seedream-5-pro-release-design-level-upgrade-and-real-gaps/#1"
+     ]
+    },
+    {
+     "statement": "事实准确性的短板不是单纯“错字”：中文信源评测指出，信息图中会出现名称错写、英文名拼写异常、物种特征偏差、数据或图文对应错误；模型擅长把信息“设计出来”，不等于能保证信息正确。",
+     "source_urls": [
+      "https://watcha.cn/discuss/10033",
+      "https://zhidx.com/p/574086.html#1"
+     ]
+    },
+    {
+     "statement": "Seedream 5.0 Pro 的复杂中文信息图被多篇实测列为明显短板：例如“伺服电机”等词出现错字，HBM 科普图有文字渲染错误，网格卡片案例中整张图可出现约 5 处文字错误。",
+     "source_urls": [
+      "https://m.it168.com/article_6939774.html",
+      "https://eu.36kr.com/zh/p/3887236673485574#1#1#1",
+      "https://news.cocoloop.cn/2026/07/seedream-design-workflow/"
+     ]
+    },
+    {
+     "statement": "多语种海报的主标题和主要信息通常较稳，但小字号西语、德语等辅助信息可能拼写错误或排版不完整，正式商用仍需设计师检查。",
+     "source_urls": [
+      "https://watcha.cn/discuss/10033",
+      "https://zhidx.com/p/574086.html#1"
+     ]
+    },
+    {
+     "statement": "商汤 SenseNova U1 Pro 的实测显示，换装、删路人、房间改造、海报局部文字调整等任务能把修改集中在指定区域，保持主体结构和风格连续性；但评测仍强调最终信息完整准确需要继续核验。",
+     "source_urls": [
+      "https://zhidx.com/p/595919.html#1",
+      "https://aichip001.com/p/595919.html"
+     ]
+    },
+    {
+     "statement": "Qwen-Image-2.1 已支持圈选、涂抹、独立掩码等多种局部编辑，并可在透明图层中替换文字；但第三方硬测也发现连续多轮编辑可能产生身份漂移，且存在“字对了但图表、结构或任务关系不对”的情况。",
+     "source_urls": [
+      "https://zhidx.com/p/595722.html#1",
+      "https://bbs.monster/forum.php?mod=viewthread&tid=5171#lastpost"
+     ]
+    },
+    {
+     "statement": "模板型工具与生成型工具的可靠性逻辑不同：稿定、Canva 这类模板/文字框路径在文字准确性和交付稳定性上更占优；豆包/即梦等生成型工具视觉自由度高，但复杂排版、二维码位、字体和事实层更依赖人工后处理。",
+     "source_urls": [
+      "http://mp.weixin.qq.com/s?__biz=MzI5MTE2NTMyNw==&mid=2247484423&idx=1&sn=ac7e39adc96b284ec1eddf25275814d6",
+      "http://mp.weixin.qq.com/s?__biz=MzA4ODY3MzIwNg==&mid=2454892114&idx=2&sn=6d1737ac6fd7f4761d734872575ff3a4"
+     ]
+    },
+    {
+     "statement": "中文实操建议普遍倾向于：不要整图重绘；用蒙版或局部重绘避开文字区，关键文案、Logo、价格、时间、规则和事实数据放到 PS、Figma、Canva 或模板工具中叠加并人工验收。",
+     "source_urls": [
+      "http://mp.weixin.qq.com/s?__biz=MzY4MzM3OTcxOA==&mid=2247483773&idx=1&sn=86194d6abafc6f966e4ccfe547f320da",
+      "https://zhuanlan.zhihu.com/p/2070817250039293550?utm_medium=openapi_platform&utm_source=e10c3ad29e50#1",
+      "https://www.zuoshipin.com/article/1106.md"
+     ]
+    }
+   ],
+   "open_questions": [
+    "缺少跨工具、同题库、大样本且公开原始图片的统一基准；不同中文评测的任务、入口平台、分辨率和提示词不同，不能直接比较错字率或事实准确率。",
+    "部分 2026 年网页带有明显转载、自媒体或宣传性质，尤其对“可直接商用”“中文不拉胯”的说法偏乐观；因此本回答更重视多源一致指出的限制，而不采用单一来源的绝对化评价。",
+    "稿定等工具的不同入口/版本在资料中存在“支持局部重绘”和“AI 绘画不支持局部重绘”的口径差异，可能是 AI 海报、AI 绘画、模板编辑器等功能模块不同所致。",
+    "未能基于统一量化数据给出各类海报的事实错误率；现有中文信源多为案例实测，而非可复现实验。"
+   ],
+   "confidence": "medium"
+  },
+  "final_text": ""
+ },
+ {
+  "case": 3,
+  "name": "缺用途的模糊题",
+  "request": "帮我调研一下大模型的落地情况",
+  "expect": "问 1 次（行业 / 场景或地域），回答后继续",
+  "elapsed_s": 85.1,
+  "model_calls": 5,
+  "tool_messages": 12,
+  "calls": {
+   "search_web": 11,
+   "read_page": 0,
+   "ask_user": 1,
+   "Answer": 0
+  },
+  "queries": [
+   "2024 2025 中国 大模型 To B 企业服务 落地 行业 应用 报告",
+   "中国 大模型 企业级应用 商业化 落地 案例 2024 IDC 艾瑞 信通院",
+   "2025 中国企业大模型应用现状 调研 ToB 大模型 市场",
+   "site:idc.com 中国 央国企 大模型 解决方案 市场份额 2024 31.8",
+   "中国 大模型 企业应用 调研 2025 金融 制造 客服 知识库 渗透率",
+   "国务院 关于深入实施 人工智能+ 行动 的意见 2025 企业 场景",
+   "用友 金蝶 钉钉 企业微信 飞书 大模型 企业服务 落地 案例 2024 2025",
+   "site:aliyun.com 通义 大模型 企业 案例 客服 合同 2025",
+   "site:baidu.com 百度 智能云 千帆 大模型 企业 案例 2024 2025",
+   "site:tencent.com 腾讯云 大模型 企业 案例 智能客服 2025",
+   "site:huawei.com 盘古大模型 企业 落地 案例 制造 金融 2024 2025"
+  ],
+  "asked": [
+   {
+    "title": "你希望我重点调研哪一类“大模型落地情况”？",
+    "options": [
+     "中国市场：行业应用、代表企业与商业化进展",
+     "全球市场：海外大厂（OpenAI、Microsoft、Google等）企业落地",
+     "按行业：金融、政务、制造、医疗、教育等场景与案例",
+     "投资/战略视角：市场规模、商业模式、竞争格局与趋势"
+    ],
+    "why": "“大模型落地”范围很广，不同侧重点会影响检索来源、行业口径和报告结构；请选择一个方向，我会据此做带证据链接的调研。",
+    "t": 7.2
+   }
+  ],
+  "answer": null,
+  "final_text": ""
+ },
+ {
+  "case": 4,
+  "name": "来源矛盾题",
+  "request": "DeepSeek V3 的训练成本到底是多少？不同说法差很多",
+  "expect": "不问；自己核对口径；在 open_questions 或 summary 里说明分歧",
+  "elapsed_s": 72.9,
+  "model_calls": 7,
+  "tool_messages": 11,
+  "calls": {
+   "search_web": 7,
+   "read_page": 2,
+   "ask_user": 0,
+   "Answer": 2
+  },
+  "queries": [
+   "DeepSeek V3 training cost $5.576 million official technical report",
+   "DeepSeek V3 training cost different estimates SemiAnalysis",
+   "DeepSeek V3 训练成本 557万美元 说法",
+   "DeepSeek-V3 Technical Report arxiv 2412.19437 training cost 2.788M H800 GPU hours",
+   "SemiAnalysis DeepSeek cost $1.323 billion 50,000 GPUs January 2025",
+   "DeepSeek V3 true training cost estimate hardware depreciation failed experiments",
+   "site:semianalysis.com DeepSeek Debates Chinese Leadership On Cost True Training Cost Closed Model Margin Impacts"
+  ],
+  "asked": [],
+  "answer": {
+   "summary": "结论：DeepSeek 官方可核验的数字是“最终一次正式训练”的算力账单约 557.6 万美元；它不是 DeepSeek 研发 V3 的总投入，更不是公司/集群总投资。媒体说的“十几亿美元”主要是 SemiAnalysis 估算的 DeepSeek 相关服务器资本开支和运营成本，口径完全不同，不能直接当作 V3 单次训练成本。",
+   "format": "report",
+   "key_facts": [
+    {
+     "statement": "官方技术报告给出的 V3 训练消耗为 278.8 万个 H800 GPU 小时：预训练 266.4 万、上下文扩展 11.9 万、后训练 0.5 万；按 H800 租金 2 美元/小时计算，分别为 532.8 万、23.8 万、1 万美元，合计 557.6 万美元。",
+     "source_urls": [
+      "https://ar5iv.labs.arxiv.org/html/2412.19437#1"
+     ]
+    },
+    {
+     "statement": "DeepSeek 在技术报告中明确限定：557.6 万美元只包括 V3 的 official training，不包括此前围绕架构、算法、数据所做的研究和消融实验成本。",
+     "source_urls": [
+      "https://ar5iv.labs.arxiv.org/html/2412.19437#1"
+     ]
+    },
+    {
+     "statement": "557.6 万美元还是按“租赁价 2 美元/H800 GPU 小时”折算的现金等价成本，并不必然等于 DeepSeek 自建集群的会计折旧、电费、机房、网络、人员等实际内部成本。",
+     "source_urls": [
+      "https://ar5iv.labs.arxiv.org/html/2412.19437#1",
+      "https://www.tmtpost.com/7459295.html#2"
+     ]
+    },
+    {
+     "statement": "SemiAnalysis 认为论文中的约 600 万美元只是预训练运行的 GPU 成本，是模型总成本的一小部分；新架架构测试、消融实验、数据采集清洗、员工、硬件 TCO 等均未计入。",
+     "source_urls": [
+      "https://newsletter.semianalysis.com/p/deepseek-debates?trk=article-ssr-frontend-pulse_little-text-block"
+     ]
+    },
+    {
+     "statement": "SemiAnalysis 估算 DeepSeek 可使用约 5 万张 Hopper 系列 GPU，包括约 1 万张 H800、1 万张 H100 以及更多 H20；这些资源由 High-Flyer 与 DeepSeek 共享，并用于交易、推理、训练和研究。",
+     "source_urls": [
+      "https://newsletter.semianalysis.com/p/deepseek-debates?trk=article-ssr-frontend-pulse_little-text-block"
+     ]
+    },
+    {
+     "statement": "SemiAnalysis 估算 DeepSeek 的总服务器 CapEx 约 16 亿美元，并有约 9.44 亿美元相关集群运营成本；这属于公司/基础设施层面的估算，不是 V3 这一次模型训练 run 的账单。",
+     "source_urls": [
+      "https://newsletter.semianalysis.com/p/deepseek-debates?trk=article-ssr-frontend-pulse_little-text-block"
+     ]
+    },
+    {
+     "statement": "部分早期媒体转述为 13 亿美元，后来的 SemiAnalysis 原文口径是约 16 亿美元服务器 CapEx；差异来自报道时间、是否只取部分资本开支以及是否加入运营成本。",
+     "source_urls": [
+      "https://interestingengineering.com/culture/deepseeks-ai-training-cost-billion#1",
+      "https://newsletter.semianalysis.com/p/deepseek-debates?trk=article-ssr-frontend-pulse_little-text-block"
+     ]
+    },
+    {
+     "statement": "中文市场也有券商/分析报告把前期研发、试错、数据和折旧纳入后，给出“实际总成本超 4000 万美元”等中间口径，但这类数字依赖大量未公开假设，证据强度低于官方 GPU 小时数和 SemiAnalysis 的基础设施估算。",
+     "source_urls": [
+      "https://wap.stockstar.com/detail/JC2025021900018058"
+     ]
+    }
+   ],
+   "open_questions": [
+    "DeepSeek 未公开 V3 全部前期实验、失败运行、数据处理、人员薪酬和机房能耗成本，因此无法从外部精确计算“研发一个 V3 的总花费”。",
+    "SemiAnalysis 的 GPU 数量、16 亿美元服务器 CapEx 和 9.44 亿美元运营成本属于研究机构估算，并非 DeepSeek 官方披露，且资源还与 High-Flyer 交易等业务共享，难以全部分摊给 V3。",
+    "若按自购硬件折旧而非 2 美元/小时云租赁价重算，结果会随 GPU 采购价、集群利用率、折旧年限、电费和数据中心成本显著变化。"
+   ],
+   "confidence": "high"
+  },
+  "final_text": ""
+ }
+]

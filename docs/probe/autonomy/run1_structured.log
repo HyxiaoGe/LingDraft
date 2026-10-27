@@ -1,0 +1,38 @@
+
+=== 例 1 简单事实题：最近新加坡的天气情况如何？
+    期望：不问；搜 1～2 次就提交；format=short
+Deserializing unregistered type __main__.Answer from checkpoint. This will be blocked in a future version. Set LANGGRAPH_STRICT_MSGPACK=true to block now, or add to allowed_msgpack_modules to allow explicitly: [('__main__', 'Answer')]
+    29.8s · 模型调用 5 · 搜索 3 · 读 1 · 问 0
+    检索词：['Singapore weather forecast next few days Meteorological Service Singapore current weather', 'site:weather.gov.sg Singapore 4 day weather forecast MSS', 'site:weather.gov.sg 24 hour forecast Singapore updated 27 Oct thundery showers temperature']
+    format=list confidence=high 事实 5 条 · 未定 1 条
+    结论：新加坡未来几天总体炎热潮湿，10月28–30日午后多雷阵雨，10月31日转多云、最高温可达35℃。
+    未定：临近时段的降雨落区和强度会变化，建议出门前查看新加坡气象署或 myENV 的2小时/24小时预报。
+
+=== 例 2 清楚的调研题：AI 海报工具在局部修改和事实准确性上的现状（2026），只看中文信源
+    期望：不问；搜 3 次以上；format=report
+    58.2s · 模型调用 4 · 搜索 11 · 读 0 · 问 0
+    检索词：['2026 AI 海报 工具 局部修改 事实准确性 中文', 'AI 海报设计 局部重绘 文字 事实错误 2025 2026', 'AI 设计工具 海报 生成 局部编辑 中文 评测 2025', '2026 国产 AI 图像模型 海报 事实核查 错字 信息图 局部编辑 评测', 'site:36kr.com 2026 AI 海报 局部 修改 错字 事实 准确', 'site:zhidx.com 2026 生图 海报 局部修改 文字 准确性', '2026 即梦 豆包 海报 局部重绘 文字错误 事实准确性', '2026 稿定 AI 海报 局部修改 事实准确 中文', '2026 美图设计室 AI 海报 局部编辑 文字 准确性', '2026 可画 Canva 中国 AI 海报 局部修改 中文 评测', '2026 AI 海报生成工具 对比 即梦 通义 万相 腾讯 混元 商汤']
+    format=report confidence=medium 事实 11 条 · 未定 4 条
+    结论：截至 2026 年中文信源的主流判断：AI 海报工具的“局部修改”已明显进入可用工作流，框选、圈点、箭头、坐标、蒙版和局部文字改动能减少整图重绘；但“事实准确性”仍未闭环，尤其高密度中文信息图、小字号多语种、科学/数据/图表对应关系，仍需人工逐项核查。更稳的生产方式通常是“AI 出视觉初稿/局部改图 + 模板或 PS/Figma 承载文字与事实层”。
+    未定：缺少跨工具、同题库、大样本且公开原始图片的统一基准；不同中文评测的任务、入口平台、分辨率和提示词不同，不能直接比较错字率或事实准确率。
+    未定：部分 2026 年网页带有明显转载、自媒体或宣传性质，尤其对“可直接商用”“中文不拉胯”的说法偏乐观；因此本回答更重视多源一致指出的限制，而不采用单一来源的绝对化评价。
+    未定：稿定等工具的不同入口/版本在资料中存在“支持局部重绘”和“AI 绘画不支持局部重绘”的口径差异，可能是 AI 海报、AI 绘画、模板编辑器等功能模块不同所致。
+
+=== 例 3 缺用途的模糊题：帮我调研一下大模型的落地情况
+    期望：问 1 次（行业 / 场景或地域），回答后继续
+    ask_user: 你希望我重点调研哪一类“大模型落地情况”？ ['中国市场：行业应用、代表企业与商业化进展', '全球市场：海外大厂（OpenAI、Microsoft、Google等）企业落地', '按行业：金融、政务、制造、医疗、教育等场景与案例', '投资/战略视角：市场规模、商业模式、竞争格局与趋势'] | 不问会怎样：“大模型落地”范围很广，不同侧重点会影响检索来源、行业口径和报告结构；请选择一个方向，我会据此做带证据链接的调研。
+    85.1s · 模型调用 5 · 搜索 11 · 读 0 · 问 1
+    检索词：['2024 2025 中国 大模型 To B 企业服务 落地 行业 应用 报告', '中国 大模型 企业级应用 商业化 落地 案例 2024 IDC 艾瑞 信通院', '2025 中国企业大模型应用现状 调研 ToB 大模型 市场', 'site:idc.com 中国 央国企 大模型 解决方案 市场份额 2024 31.8', '中国 大模型 企业应用 调研 2025 金融 制造 客服 知识库 渗透率', '国务院 关于深入实施 人工智能+ 行动 的意见 2025 企业 场景', '用友 金蝶 钉钉 企业微信 飞书 大模型 企业服务 落地 案例 2024 2025', 'site:aliyun.com 通义 大模型 企业 案例 客服 合同 2025', 'site:baidu.com 百度 智能云 千帆 大模型 企业 案例 2024 2025', 'site:tencent.com 腾讯云 大模型 企业 案例 智能客服 2025', 'site:huawei.com 盘古大模型 企业 落地 案例 制造 金融 2024 2025']
+    文本收尾：
+
+=== 例 4 来源矛盾题：DeepSeek V3 的训练成本到底是多少？不同说法差很多
+    期望：不问；自己核对口径；在 open_questions 或 summary 里说明分歧
+    72.9s · 模型调用 7 · 搜索 7 · 读 2 · 问 0
+    检索词：['DeepSeek V3 training cost $5.576 million official technical report', 'DeepSeek V3 training cost different estimates SemiAnalysis', 'DeepSeek V3 训练成本 557万美元 说法', 'DeepSeek-V3 Technical Report arxiv 2412.19437 training cost 2.788M H800 GPU hours', 'SemiAnalysis DeepSeek cost $1.323 billion 50,000 GPUs January 2025', 'DeepSeek V3 true training cost estimate hardware depreciation failed experiments', 'site:semianalysis.com DeepSeek Debates Chinese Leadership On Cost True Training Cost Closed Model Margin Impacts']
+    format=report confidence=high 事实 8 条 · 未定 3 条
+    结论：结论：DeepSeek 官方可核验的数字是“最终一次正式训练”的算力账单约 557.6 万美元；它不是 DeepSeek 研发 V3 的总投入，更不是公司/集群总投资。媒体说的“十几亿美元”主要是 SemiAnalysis 估算的 DeepSeek 相关服务器资本开支和运营成本，口径完全不同，不能直接当作 V3 单次训练成本。
+    未定：DeepSeek 未公开 V3 全部前期实验、失败运行、数据处理、人员薪酬和机房能耗成本，因此无法从外部精确计算“研发一个 V3 的总花费”。
+    未定：SemiAnalysis 的 GPU 数量、16 亿美元服务器 CapEx 和 9.44 亿美元运营成本属于研究机构估算，并非 DeepSeek 官方披露，且资源还与 High-Flyer 交易等业务共享，难以全部分摊给 V3。
+    未定：若按自购硬件折旧而非 2 美元/小时云租赁价重算，结果会随 GPU 采购价、集群利用率、折旧年限、电费和数据中心成本显著变化。
+
+结果写到 /private/tmp/claude-501/-Users-sean-code-LingDraft/b4b71fd3-0f5f-499f-b9a1-65bc1069c61c/scratchpad/probe_structured.json
