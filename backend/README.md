@@ -3,7 +3,7 @@
 黑五海报单场景的 LangGraph 实现：`intake → confirm_facts(中断) → 风格 → plan_layout → render → check → review(中断) → revise / manual_edit / change_fact / export`。
 设计见 `../docs/黑五海报PoC技术方案.md`。
 
-调研场景（图 + CLI + 接口 + 前端）：`intake → confirm_scope(中断) → plan → research_section × N（内嵌 create_agent，`ask_user` 会中断）→ confirm_outline(中断) → write → check → review(中断：approve / exclude_source / edit_claim / rewrite_section / reopen_outline) → export`。设计见 `../docs/调研场景与多场景架构设计.md`。
+调研场景（图 + CLI + 接口 + 前端）：`intake → confirm_scope(只在需要澄清时中断) → research（全局 create_agent，`ask_user` 会中断；无文字答案时无工具受控收尾）→ consolidate（无工具结构化整理，关键缺口回 research 补一轮）→ write → check → review(中断：approve / exclude_source / edit_claim / rewrite_section) → export`。模型默认 DeepSeek V4 Pro（调研 agent 开思考，结构化步骤不开）。设计见 `../docs/调研场景与多场景架构设计.md` 第 17 节。
 
 ## 运行
 
@@ -22,7 +22,7 @@ LINGDRAFT_FAKE=1 uv run uvicorn app.api.main:app --port 8000   # 去掉 LINGDRAF
 cd ../frontend && npm install && npm run dev                    # http://localhost:5173，/api 代理到 8000
 ```
 
-环境变量：`ARK_API_KEY`、`ARK_MODEL`、`ARK_MODEL_LITE`、`ARK_IMAGE_MODEL`、`LINGDRAFT_BACKGROUND=0` 关闭背景图生成、`LINGDRAFT_FAKE=1` 用假模型；调研场景另需 `AGENT_TOOLS_URL` / `AGENT_TOOLS_API_KEY`（agent-tools 网关）。
+环境变量：`ARK_API_KEY`、`ARK_MODEL`、`ARK_MODEL_LITE`、`ARK_IMAGE_MODEL`、`LINGDRAFT_BACKGROUND=0` 关闭背景图生成、`LINGDRAFT_FAKE=1` 用假模型；调研场景另需 `AGENT_TOOLS_URL` / `AGENT_TOOLS_API_KEY`（agent-tools 网关）与 `DEEPSEEK_API_KEY`；`RESEARCH_PROVIDER`（deepseek / ark）、`RESEARCH_MODEL`、`RESEARCH_THINKING`、`RESEARCH_EFFORT` 可改调研模型。
 
 接口：`POST /api/threads`（multipart：request，image 可选）和 `POST /api/threads/{id}/resume`（`{"payload": ...}`）都返回 SSE：`progress` / `node` / `interrupt` / `error` 事件，最后一个 `state` 事件是完整状态；`GET /api/threads/{id}/state`；`GET /api/threads/{id}/files/{name}`；`GET /api/threads/{id}/export` 打包 zip。
 
@@ -46,9 +46,8 @@ uv run python -m app.cli state <thread_id>
 
 ```bash
 uv run python -m app.cli --scenario research --fake new "AI 海报工具在局部修改上的现状（2026）"
-uv run python -m app.cli --scenario research --fake resume <thread_id> '{"values":{"question":"……","time_range":"2026"}}'   # 范围确认
+uv run python -m app.cli --scenario research --fake resume <thread_id> '{"answers":{"q1":"改文字"}}'                          # 澄清问题（只在 intake 提了问题时出现）
 uv run python -m app.cli --scenario research --fake resume <thread_id> '{"answer":"包含"}'                                   # agent 动态提问；或 {"skip":true}
-uv run python -m app.cli --scenario research --fake resume <thread_id> '{"action":"approve"}'                                 # 大纲确认（或 action=edit + nodes）
 uv run python -m app.cli --scenario research --fake resume <thread_id> '{"action":"exclude_source","target":"s2"}'            # 终审：排除来源，依赖它的论断退回草稿并从报告移除
 uv run python -m app.cli --scenario research --fake resume <thread_id> '{"action":"approve"}'                                 # 导出确认物包
 uv run python -m app.cli --scenario research state <thread_id>

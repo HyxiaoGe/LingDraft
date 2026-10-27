@@ -168,18 +168,24 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             ref_to_id[cd.ref] = claim_id
             claims.append(Claim(id=claim_id, statement=cd.statement, kind=cd.kind, source_ids=sids,
                                 outline_id=sec_of_ref.get(cd.ref, outline[0].id), confidence=cd.confidence))
+        kind_of = {c.id: c.kind for c in claims}
         for i, sd in enumerate(res.sections, start=1):
             cid = f"c{i}"
-            sections[cid] = SectionText(outline_id=cid, sentences=[
-                Sentence(text=s.text, claim_id=ref_to_id.get(s.claim_ref) if s.claim_ref else None) for s in sd.sentences
-            ])
+            sents = []
+            for s in sd.sentences:
+                claim_id = ref_to_id.get(s.claim_ref) if s.claim_ref else None
+                text = s.text.strip()
+                if claim_id and kind_of.get(claim_id) == "inference" and not text.startswith(report.INFERENCE_PREFIX):
+                    text = report.INFERENCE_PREFIX + text  # 推断句的标记由代码保证，不靠模型
+                sents.append(Sentence(text=text, claim_id=claim_id))
+            sections[cid] = SectionText(outline_id=cid, sentences=sents)
         if "c1" not in sections:
             sections["c1"] = SectionText(outline_id="c1", sentences=[])
         used = {sid for c in claims for sid in c.source_ids}
         sources = [s.model_copy(update={"status": "adopted"}) if s.id in used and s.status != "excluded" else s for s in sources]
-        assumptions = list(state.get("assumptions", [])) + [a for a in res.assumptions if a not in state.get("assumptions", [])]
+        assumptions = list(state.get("assumptions", [])) + [a.strip() for a in res.assumptions if a.strip() and a.strip() not in state.get("assumptions", [])]
 
-        gap = (res.gap or "").strip() or None
+        gap = None if res.answered else ((res.gap or "").strip() or None)
         rounds = state.get("gap_rounds", 0)
         if gap and rounds < MAX_GAP_ROUNDS:
             notes.append(f"整理发现证据缺口，回研究环节补一轮：{gap}")
@@ -209,11 +215,15 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
                 notes.append(f"「{node.title}」没有可用论断，正文留空")
                 continue
             sec = planner.write_section(state["scope"], node, usable, instruction)
-            ok_ids = {c.id for c in usable}
-            sections[node.id] = SectionText(outline_id=node.id, sentences=[
-                s if (s.claim_id is None or s.claim_id in ok_ids) else s.model_copy(update={"claim_id": None})
-                for s in sec.sentences
-            ])
+            kind_of = {c.id: c.kind for c in usable}
+            sents = []
+            for s in sec.sentences:
+                claim_id = s.claim_id if s.claim_id in kind_of else None
+                text = s.text.strip()
+                if claim_id and kind_of[claim_id] == "inference" and not text.startswith(report.INFERENCE_PREFIX):
+                    text = report.INFERENCE_PREFIX + text  # 推断标记由代码保证，重写也一样
+                sents.append(Sentence(text=text, claim_id=claim_id))
+            sections[node.id] = SectionText(outline_id=node.id, sentences=sents)
         _stage("拼装报告")
         text = report.assemble(state["scope"], state["outline"], sections, claims, state.get("sources", []),
                                state.get("assumptions", []))

@@ -61,6 +61,7 @@ class ConsolidateResult(BaseModel):
     sections: list[SectionDraft]
     claims: list[ClaimDraft]
     assumptions: list[str] = Field(description="候选答案里没有来源支撑的说法、自行采用的取舍")
+    answered: bool = Field(description="候选答案是否已经回答了研究问题（哪怕不完美）；true 时 gap 必须为 null")
     gap: str | None = Field(description="缺少的关键证据，一句话；没有则 null")
 
 
@@ -157,9 +158,9 @@ class LiveResearchPlanner:
     def __init__(self, gateway: GatewayClient | None = None) -> None:
         provider, model = config.RESEARCH_PROVIDER, config.RESEARCH_MODEL
         self._agent = make_chat_model(provider, model, thinking=config.RESEARCH_THINKING, effort=config.RESEARCH_EFFORT)
-        # 结构化步骤：整理用思考（要判断证据对应关系），intake 与重写不用（快）
-        self._think = make_chat_model(provider, model, thinking=True, effort=config.RESEARCH_EFFORT, timeout=120)
-        self._fast = make_chat_model(provider, model, thinking=False, timeout=90)
+        # 结构化步骤（intake、整理、重写）不开思考：思考模式下整理一次要 100 秒以上，比调研本身还慢；
+        # 结构化输出走 json_schema strict，JSON 合法性由服务端保证，字段与引用再由代码校验
+        self._fast = make_chat_model(provider, model, thinking=False, timeout=120)
         self._gateway = gateway or GatewayClient(config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY, scene="research")
         self._tools = make_research_tools(self._gateway)
 
@@ -176,7 +177,7 @@ class LiveResearchPlanner:
             f"研究问题：{scope.question}\n范围：{scope.model_dump_json(exclude_none=True)}\n\n"
             f"候选答案：\n{answer}\n\n来源列表（id | 网址 | 标题 | 片段类型 | 片段）：\n{_sources_block(sources)}\n"
         )
-        chain = self._structured(self._think, ConsolidateResult)
+        chain = self._structured(self._fast, ConsolidateResult)
         last: Exception | None = None
         for _ in range(CONSOLIDATE_RETRIES):
             try:
@@ -359,7 +360,7 @@ class FakeResearchPlanner:
         assumptions = [ln.strip() for ln in answer.splitlines() if ln.startswith("用户回答：")]
         first = sum(1 for c in self.calls if c[0] == "consolidate") == 1
         gap = "缺价格数据" if ("回补" in scope.question and first) else None
-        return ConsolidateResult(sections=sections, claims=claims, assumptions=assumptions, gap=gap)
+        return ConsolidateResult(sections=sections, claims=claims, assumptions=assumptions, answered=gap is None, gap=gap)
 
     def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None) -> SectionText:
         self.calls.append(("write", node.id, instruction))

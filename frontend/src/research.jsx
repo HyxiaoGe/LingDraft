@@ -185,6 +185,11 @@ export function ResearchBody({ st, it, onCard, resume }) {
   return null;
 }
 
+const CHECK_LABEL = {
+  answer_present: "调研有答案", claims_sourced: "论断有来源", no_excluded_sources: "未引用已排除来源", inference_marked: "推断已标记",
+  sources_complete: "来源信息完整", no_orphaned_claims: "无失去来源的论断", scope_time: "时间在范围内",
+};
+
 function ReviewBody({ st, it, onCard, resume }) {
   const [tab, setTab] = useState("report");
   const [finalText, setFinalText] = useState(null);
@@ -234,8 +239,8 @@ function ReviewBody({ st, it, onCard, resume }) {
           ))}
         </div>
       )}
-      {failed.length > 0 ? <div className="checks bad">自动校验未通过：{failed.map((c) => `${c.name} ${c.detail}`).join("；")}</div>
-        : checks.length > 0 && <div className="checks">✓ 论断有来源 · ✓ 未引用已排除来源 · ✓ 推断已标记 · ✓ 来源信息完整 · ✓ 时间在范围内</div>}
+      {failed.length > 0 ? <div className="checks bad">自动校验未通过：{failed.map((c) => `${CHECK_LABEL[c.name] || c.name} ${c.detail}`).join("；")}</div>
+        : checks.length > 0 && <div className="checks">{checks.map((c) => "✓ " + (CHECK_LABEL[c.name] || c.name) + (c.detail ? `（${c.detail.replace(/；$/, "")}）` : "")).join(" · ")}</div>}
       {notes.length > 0 && <div className="notes">{notes.map((n, i) => <div key={i}>· {n}</div>)}</div>}
       {st.exported && (
         <div className="export-links">

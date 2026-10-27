@@ -458,7 +458,7 @@ function InputBox({ scenario, mode, busy, hasCard, onSend, onReopen, image, onIm
         <div className="left">
           {!research && <button className="tbtn" title="上传产品图" onClick={onImage} disabled={mode !== "new"}>＋ {image ? image.name : "产品图"}</button>}
           {research && <span className="tbtn">⌕ agent-tools 搜索</span>}
-          <span className="tbtn">◎ 豆包 Seed 2.1</span>
+          <span className="tbtn">◎ {research ? "DeepSeek V4 Pro" : "豆包 Seed 2.1"}</span>
         </div>
         <div className="right">
           {mode === "locked" && !hasCard && !busy && <button className="tbtn" onClick={onReopen}>重新打开问题</button>}
