@@ -54,6 +54,9 @@ def run_to_review(graph, tid: str = "t1", answer: dict | None = None) -> dict:
     p = intr(r)
     assert p["type"] == "research.scope"
     assert p["fields"][0]["key"] == "question" and p["fields"][0]["required"]
+    # 只问推断出值的和必填的；空的可选项不问
+    assert [f["key"] for f in p["fields"] if f["ask"]] == [f["key"] for f in p["fields"] if f["value"] or f["required"]]
+    assert any(not f["ask"] for f in p["fields"])
     r = resume(graph, tid, {"values": {"question": p["fields"][0]["value"], "region": "中国"}})
     p = intr(r)
     assert is_ask_interrupt(p)

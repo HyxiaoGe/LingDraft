@@ -85,7 +85,9 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             "title": "先定研究范围",
             "fields": [
                 {"key": k, "label": label, "value": getattr(scope, k), "required": req, "hint": hint,
-                 "source": "inferred" if getattr(scope, k) else "missing"}
+                 "source": "inferred" if getattr(scope, k) else "missing",
+                 # 只有推断出了值（要你确认）或必填的才值得问；其余默认"不限"，确认后可改
+                 "ask": bool(getattr(scope, k)) or req}
                 for k, label, req, hint in SCOPE_FIELDS
             ],
         }

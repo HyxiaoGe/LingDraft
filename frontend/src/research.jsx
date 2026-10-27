@@ -14,13 +14,14 @@ export function researchCardFor(it, st, resume, setCard) {
   return null;
 }
 
-// ---- 范围：逐项确认，一项一页 ----
+// ---- 范围：只问值得问的（推断出了值的、必填的），一项一页；其余默认"不限" ----
 function scopeCard(it, resume, answers = {}, idx = 0, history = []) {
-  const fields = it.fields;
+  const fields = it.fields.filter((f) => f.ask ?? (f.value || f.required));
   if (idx >= fields.length) {
     const values = {};
-    fields.forEach((f) => (values[f.key] = answers[f.key] ?? null));
-    resume({ values }, null, history);
+    it.fields.forEach((f) => (values[f.key] = answers[f.key] ?? null));
+    const rest = it.fields.filter((f) => !fields.includes(f)).map((f) => ({ q: f.label, a: "（不限）" }));
+    resume({ values }, null, [...history, ...rest]);
     return null;
   }
   const f = fields[idx];
@@ -215,7 +216,8 @@ export function routeResearchText(text, st, resume, setCard) {
 export function ResearchBody({ st, it, onCard, resume }) {
   if (it?.type === "research.scope") {
     const n = it.fields.filter((f) => f.value).length;
-    return <p>先定研究范围。我从需求里理解到 {n} 项，逐项确认一下；没说的就不限。</p>;
+    const rest = it.fields.filter((f) => !(f.ask ?? (f.value || f.required))).map((f) => f.label).join("、");
+    return <p>先定研究范围。我从需求里理解到 {n} 项，确认一下{rest ? `；${rest}没提到，先按不限，确认后可以改` : ""}。</p>;
   }
   if (it?.type === "research.ask") {
     return <p>调研到一半有个问题要问你（已完成 {st.progress.researched}/{st.progress.total} 章）。</p>;
