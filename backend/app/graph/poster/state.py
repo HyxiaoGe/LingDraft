@@ -124,7 +124,7 @@ class StyleChoice(BaseModel):
         return self
 
 
-ReviewActionType = Literal["approve", "edit", "manual_edit", "change_fact"]
+ReviewActionType = Literal["approve", "edit", "manual_edit", "change_fact", "change_style"]
 
 
 class ReviewAction(BaseModel):
@@ -154,6 +154,8 @@ class PosterState(TypedDict, total=False):
     style_hint: str | None
     style_options: list[StyleOption]
     style: StyleOption | None
+    style_changed: bool
+    background_image: str | None
     template_id: str
     elements: list[Element]
     versions: list[Version]

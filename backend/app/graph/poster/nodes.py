@@ -126,6 +126,8 @@ def make_nodes(planner: Planner, out_dir: Path):
             "notes": [],
             "last_change": [],
             "exported": None,
+            "background_image": None,
+            "style_changed": False,
             "template_id": DEFAULT_TEMPLATE,
         }
 
@@ -161,7 +163,8 @@ def make_nodes(planner: Planner, out_dir: Path):
         options = state["style_options"]
         payload = {
             "type": "choose_style",
-            "message": "选择一个视觉方向，或用一句话描述你想要的风格。",
+            "message": "选择一个视觉方向，或用一句话描述你想要的风格。"
+            + ("（换风格不会改动任何已有文案）" if state.get("style_changed") else ""),
             "options": [o.model_dump() for o in options],
             "allow_custom": True,
         }
@@ -173,6 +176,19 @@ def make_nodes(planner: Planner, out_dir: Path):
             return {"style": match[0]}
         # 自定义描述：不在 interrupt 节点里调模型，交给 gen_style_options 按 hint 生成
         return {"style_hint": choice.custom, "style": None}
+
+    def gen_background(state: PosterState, config: RunnableConfig) -> dict:
+        """按当前风格生成一张背景图；关闭开关时清空，模板退回渐变。"""
+        update = {"background_image": None, "style_changed": False}
+        if state.get("elements"):
+            update["render_reason"] = f"更换风格：{state['style'].name}"
+        if not cfg.BACKGROUND_ENABLED:
+            return update
+        tdir = _thread_dir(out_dir, config)
+        n = len(state.get("versions") or []) + 1
+        path = planner.background(state["style"], state["facts"], tdir / f"bg_v{n}.png")
+        update["background_image"] = str(path)
+        return update
 
     # ---- 生成 ----
 
@@ -194,7 +210,13 @@ def make_nodes(planner: Planner, out_dir: Path):
         versions = list(state.get("versions", []))
         n = len(versions) + 1
         res = renderer.render(
-            state["elements"], state["facts"], state["style"], state["template_id"], _thread_dir(out_dir, config), n
+            state["elements"],
+            state["facts"],
+            state["style"],
+            state["template_id"],
+            _thread_dir(out_dir, config),
+            n,
+            background_image=state.get("background_image"),
         )
         note = state.get("render_reason") or "重新渲染"
         versions.append(Version(n=n, elements=list(state["elements"]), html_path=res.html_path, png_path=res.png_path, note=note, layout=res.layout))
@@ -219,10 +241,18 @@ def make_nodes(planner: Planner, out_dir: Path):
             "elements": [_element_view(e, state["facts"]) for e in state["elements"]],
             "checks": [c.model_dump() for c in state.get("check_results", [])],
             "notes": state.get("notes", []),
-            "actions": ["approve", "edit", "manual_edit", "change_fact"],
+            "actions": ["approve", "edit", "manual_edit", "change_fact", "change_style"],
+            "style": state["style"].model_dump(),
+            "style_options": [o.model_dump() for o in state.get("style_options", [])],
         }
         action = _validated(interrupt(payload, response_schema=ReviewAction), ReviewAction)
-        return {"pending_action": action.model_dump(), "notes": []}
+        update = {"pending_action": action.model_dump(), "notes": []}
+        if action.action == "change_style":
+            # 全局换风格：元素内容一个不动，只换配色/背景后重渲染
+            update["style"] = None
+            update["style_changed"] = True
+            update["style_hint"] = action.instruction or None
+        return update
 
     def revise(state: PosterState) -> dict:
         action = ReviewAction.model_validate(state["pending_action"])
@@ -282,6 +312,7 @@ def make_nodes(planner: Planner, out_dir: Path):
             "facts": {k: f.model_dump() for k, f in state["facts"].items()},
             "style": state["style"].model_dump(),
             "template_id": state["template_id"],
+            "background_image": state.get("background_image"),
             "elements": [e.model_dump() for e in elements],
             "versions": [{"n": x.n, "note": x.note, "png_path": x.png_path} for x in state["versions"]],
         }
@@ -301,6 +332,7 @@ def make_nodes(planner: Planner, out_dir: Path):
         "review": review,
         "revise": revise,
         "manual_edit": manual_edit,
+        "gen_background": gen_background,
         "export": export,
     }
 
@@ -312,16 +344,21 @@ def route_after_facts(state: PosterState) -> str:
     if state.get("elements"):
         return "render"
     if state.get("style"):
-        return "plan_layout"
+        return "gen_background"
     return "gen_style_options"
 
 
 def route_after_style_gen(state: PosterState) -> str:
-    return "plan_layout" if state.get("style") else "ask_style"
+    return "gen_background" if state.get("style") else "ask_style"
 
 
 def route_after_ask_style(state: PosterState) -> str:
-    return "plan_layout" if state.get("style") else "gen_style_options"
+    return "gen_background" if state.get("style") else "gen_style_options"
+
+
+def route_after_background(state: PosterState) -> str:
+    # 已有元素（换风格路径）直接重渲染，不重新写文案
+    return "render" if state.get("elements") else "plan_layout"
 
 
 def route_after_check(state: PosterState) -> str:
@@ -333,7 +370,13 @@ def route_after_check(state: PosterState) -> str:
 
 def route_after_review(state: PosterState) -> str:
     action = (state.get("pending_action") or {}).get("action")
-    return {"approve": "export", "edit": "revise", "manual_edit": "manual_edit", "change_fact": "confirm_facts"}[action]
+    return {
+        "approve": "export",
+        "edit": "revise",
+        "manual_edit": "manual_edit",
+        "change_fact": "confirm_facts",
+        "change_style": "gen_style_options" if state.get("style_hint") else "ask_style",
+    }[action]
 
 
 def route_after_revise(state: PosterState) -> str:

@@ -259,3 +259,13 @@ lingdraft/
 - 检查点里的 Pydantic 模型通过 `JsonPlusSerializer(allowed_msgpack_modules=...)` 显式放行，避免 LangGraph 未来版本拒绝反序列化。
 
 未验证：`ArkPlanner` 对豆包的 `json_schema` 结构化输出路径尚未实测（本机无 `ARK_API_KEY`），这是 M2 开始前的第一件事。
+
+## 13. M2 实施记录（2026-10-27）
+
+- 新增 review 动作 `change_style`：清空当前风格回到 `ask_style`（或带描述直接 `gen_style_options`），之后经 `gen_background` 直接 `render`，不重新写文案；元素内容、状态、版本号全部不变（T3）。
+- 新增节点 `gen_background`：按风格调 Seedream 生成无文字背景（`LINGDRAFT_BACKGROUND=0` 可关），模板在生成图上压一层同色渐变保证文字区可读。FakePlanner 用 Pillow 画渐变代替。
+- FastAPI：`POST /api/threads`、`POST /api/threads/{id}/resume` 以 SSE 推送节点进度、interrupt 载荷和最终状态；`GET state / files / export`。图执行放在单个工作线程（Playwright 同步 API 绑定线程），用锁串行。
+- 前端：一个 `App.jsx`，按 interrupt 类型切换表单；元素列表显示 草稿 / 已确认 / 手工编辑 / 事实绑定 四种徽标，事实绑定元素只给"改事实"按钮。
+- 浏览器实测（假模型）：需求 → 确认事实 → 选风格 → 初稿 → 改标题 v2 → 换风格 v3 → 导出 zip，全程无前端报错。
+
+未验证：豆包文本与 Seedream 图片接口都未真实调用；`images.generate` 的 `size="1080x1440"` 与 `watermark` 参数是按文档写的，首次联调时要确认。

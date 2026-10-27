@@ -39,13 +39,16 @@ def build_graph(planner: Planner, checkpointer: BaseCheckpointSaver, out_dir: Pa
 
     g.add_edge(START, "intake")
     g.add_edge("intake", "confirm_facts")
-    g.add_conditional_edges("confirm_facts", N.route_after_facts, ["render", "plan_layout", "gen_style_options"])
-    g.add_conditional_edges("gen_style_options", N.route_after_style_gen, ["plan_layout", "ask_style"])
-    g.add_conditional_edges("ask_style", N.route_after_ask_style, ["plan_layout", "gen_style_options"])
+    g.add_conditional_edges("confirm_facts", N.route_after_facts, ["render", "gen_background", "gen_style_options"])
+    g.add_conditional_edges("gen_style_options", N.route_after_style_gen, ["gen_background", "ask_style"])
+    g.add_conditional_edges("ask_style", N.route_after_ask_style, ["gen_background", "gen_style_options"])
+    g.add_conditional_edges("gen_background", N.route_after_background, ["render", "plan_layout"])
     g.add_edge("plan_layout", "render")
     g.add_edge("render", "check")
     g.add_conditional_edges("check", N.route_after_check, ["plan_layout", "review"])
-    g.add_conditional_edges("review", N.route_after_review, ["export", "revise", "manual_edit", "confirm_facts"])
+    g.add_conditional_edges(
+        "review", N.route_after_review, ["export", "revise", "manual_edit", "confirm_facts", "ask_style", "gen_style_options"]
+    )
     g.add_conditional_edges("revise", N.route_after_revise, ["render", "review"])
     g.add_conditional_edges("manual_edit", N.route_after_revise, ["render", "review"])
     g.add_edge("export", END)

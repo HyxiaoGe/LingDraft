@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -59,6 +60,10 @@ class Planner(Protocol):
         instruction: str | None,
         constraints: list[str],
     ) -> list[ElementUpdate]: ...
+
+    def background(self, style: StyleOption, facts: dict[str, Fact], out_path: Path) -> Path:
+        """生成一张无文字的背景图写到 out_path。只画氛围，不画任何文字和数字。"""
+        ...
 
 
 def _facts_text(facts: dict[str, Fact]) -> str:
@@ -139,6 +144,27 @@ class ArkPlanner:
         res = chain.invoke([("system", prompts.COMPOSE_SYSTEM), ("user", "\n\n".join(parts))])
         return [u for u in res.updates if u.id in targets]
 
+    def background(self, style: StyleOption, facts: dict[str, Fact], out_path: Path) -> Path:
+        import httpx
+        from openai import OpenAI
+
+        client = OpenAI(base_url=config.ARK_BASE_URL, api_key=config.ARK_API_KEY, timeout=120)
+        product = facts["product_name"].value or "商品"
+        prompt = prompts.BACKGROUND_PROMPT.format(
+            mood=style.mood, description=style.description, palette="、".join(style.palette), product=product
+        )
+        res = client.images.generate(
+            model=config.ARK_IMAGE_MODEL,
+            prompt=prompt,
+            size="1080x1440",
+            response_format="url",
+            extra_body={"watermark": False},
+        )
+        url = res.data[0].url
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(httpx.get(url, timeout=120).content)
+        return out_path
+
 
 # ---- 测试 / 演示实现：确定性输出，不联网 ------------------------------------
 
@@ -186,3 +212,28 @@ class FakePlanner:
             defaults["headline"] = "黑五预热"
             defaults["subhead"] = "限时放送"
         return [ElementUpdate(id=t, content=defaults[t]) for t in targets if t in defaults]
+
+    def background(self, style: StyleOption, facts: dict[str, Fact], out_path: Path) -> Path:
+        """用 Pillow 画一张纵向渐变 + 圆形光斑，模拟生成结果。"""
+        from PIL import Image, ImageDraw
+
+        self.calls.append(("background", style.id))
+
+        def hex2rgb(h):
+            h = h.lstrip("#")
+            return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
+
+        top, bottom, accent = hex2rgb(style.palette[0]), hex2rgb(style.palette[1]), hex2rgb(style.palette[2])
+        w, h = 1080, 1440
+        img = Image.new("RGB", (w, h))
+        px = img.load()
+        for y in range(h):
+            t = y / (h - 1)
+            c = tuple(int(top[i] * (1 - t) + bottom[i] * t) for i in range(3))
+            for x in range(w):
+                px[x, y] = c
+        d = ImageDraw.Draw(img, "RGBA")
+        d.ellipse((560, 560, 1200, 1200), fill=accent + (40,))
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(out_path)
+        return out_path

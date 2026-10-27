@@ -1,4 +1,4 @@
-# LingDraft backend（M1：海报 HITL 链路）
+# LingDraft backend（M1 图 + M2 接口）
 
 黑五海报单场景的 LangGraph 实现：`intake → confirm_facts(中断) → 风格 → plan_layout → render → check → review(中断) → revise / manual_edit / change_fact / export`。
 设计见 `../docs/黑五海报PoC技术方案.md`。
@@ -8,8 +8,19 @@
 ```bash
 uv sync
 uv run playwright install chromium
-uv run pytest -q            # 16 个用例，不联网（FakePlanner）
+uv run pytest -q            # 22 个用例，不联网（FakePlanner）
 ```
+
+Web 方式（M2）：
+
+```bash
+LINGDRAFT_FAKE=1 uv run uvicorn app.api.main:app --port 8000   # 去掉 LINGDRAFT_FAKE 走豆包，需要 ARK_API_KEY
+cd ../frontend && npm install && npm run dev                    # http://localhost:5173，/api 代理到 8000
+```
+
+环境变量：`ARK_API_KEY`、`ARK_MODEL`、`ARK_MODEL_LITE`、`ARK_IMAGE_MODEL`、`LINGDRAFT_BACKGROUND=0` 关闭背景图生成、`LINGDRAFT_FAKE=1` 用假模型。
+
+接口：`POST /api/threads`（multipart：request，image 可选）和 `POST /api/threads/{id}/resume`（`{"payload": ...}`）都返回 SSE：`node` / `interrupt` / `error` 事件，最后一个 `state` 事件是完整状态；`GET /api/threads/{id}/state`；`GET /api/threads/{id}/files/{name}`；`GET /api/threads/{id}/export` 打包 zip。
 
 CLI 演示（`--fake` 用确定性假模型；去掉 `--fake` 需设置 `ARK_API_KEY`，走豆包）：
 
@@ -33,4 +44,6 @@ uv run python -m app.cli state <thread_id>
 - `app/graph/poster/nodes.py` 节点与路由；`graph.py` 建图与检查点
 - `app/llm.py` `Planner` 协议：`ArkPlanner`（豆包，json_schema 结构化输出）/ `FakePlanner`
 - `app/render/` Jinja2 模板 → Playwright 截图；`checks.py` 事实逐字比对 / 违禁词 / 溢出
+- `app/api/` FastAPI；`runner.py` 把图执行放到单工作线程并转成 SSE
+- `../frontend/` Vite + React 最薄页面：需求 → 事实表单 → 风格卡片 → 预览与逐元素反馈 → 导出
 - `tests/` T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等

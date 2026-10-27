@@ -62,3 +62,46 @@ def test_t4_manual_edit_is_never_overwritten(graph):
     r = resume(graph, "t4", {"action": "edit", "target": "subhead", "instruction": "换一个"})
     payload = interrupt_of(r)
     assert payload["version"] == 3 and any("手工编辑" in n for n in payload["notes"])
+
+
+def test_t3_change_style_touches_no_content(graph, planner):
+    run_to_review(graph, "t3")
+    before = _elements(graph, "t3")
+    st1 = graph.get_state(cfg("t3")).values
+    assert st1["background_image"] and st1["background_image"].endswith("bg_v1.png")
+
+    r = resume(graph, "t3", {"action": "change_style"})
+    payload = interrupt_of(r)
+    assert payload["type"] == "choose_style" and "不会改动" in payload["message"]
+    r = resume(graph, "t3", {"style_id": "s3"})
+    payload = interrupt_of(r)
+    assert payload["type"] == "review" and payload["version"] == 2
+    st = graph.get_state(cfg("t3")).values
+    assert st["style"].id == "s3" and st["versions"][-1].note.startswith("更换风格")
+    assert st["background_image"].endswith("bg_v2.png")
+    after = _elements(graph, "t3")
+    for eid, e in after.items():
+        assert e.content == before[eid].content and e.status == before[eid].status and e.version == before[eid].version, eid
+    assert st["versions"][-1].layout["headline"]["text"] == st1["versions"][-1].layout["headline"]["text"]
+    # 没有再调文案模型；背景按新风格重新生成
+    assert [c for c in planner.calls if c[0] == "compose"] == [c for c in planner.calls if c[0] == "compose"][:1]
+    assert [c for c in planner.calls if c[0] == "background"][-1][1] == "s3"
+
+
+def test_t3_change_style_with_instruction(graph, planner):
+    run_to_review(graph, "t3b")
+    r = resume(graph, "t3b", {"action": "change_style", "instruction": "极简白底"})
+    payload = interrupt_of(r)
+    assert payload["type"] == "review" and payload["version"] == 2
+    assert graph.get_state(cfg("t3b")).values["style"].name == "极简白底"
+
+
+def test_background_switch_off(planner, out_dir, monkeypatch):
+    from app import config as cfg_mod
+    from app.graph.poster.graph import build_graph, memory_checkpointer
+
+    monkeypatch.setattr(cfg_mod, "BACKGROUND_ENABLED", False)
+    graph = build_graph(planner, memory_checkpointer(), out_dir)
+    run_to_review(graph, "tbg")
+    st = graph.get_state(cfg("tbg")).values
+    assert st["background_image"] is None and not [c for c in planner.calls if c[0] == "background"]
