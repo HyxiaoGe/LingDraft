@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.graph import END, START, StateGraph
+
+from app.graph.research import nodes as N
+from app.graph.research.state import ResearchState
+from app.research_llm import ResearchPlanner
+
+ALLOWED_MODELS = [
+    ("app.graph.research.state", n)
+    for n in ("Scope", "OutlineNode", "Source", "Claim", "SectionText", "Sentence", "ReportVersion", "CheckResult")
+] + [("app.graph.research.agent", n) for n in ("Findings", "ProposedClaim")]
+
+
+def make_serde() -> JsonPlusSerializer:
+    return JsonPlusSerializer(allowed_msgpack_modules=ALLOWED_MODELS)
+
+
+def open_sqlite_checkpointer(path: Path) -> SqliteSaver:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path), check_same_thread=False)
+    return SqliteSaver(conn, serde=make_serde())
+
+
+def memory_checkpointer() -> InMemorySaver:
+    return InMemorySaver(serde=make_serde())
+
+
+def build_graph(planner: ResearchPlanner, checkpointer: BaseCheckpointSaver, out_dir: Path):
+    fns = N.make_nodes(planner, Path(out_dir))
+    g = StateGraph(ResearchState)
+    for name, fn in fns.items():
+        g.add_node(name, fn)
+    g.add_edge(START, "intake")
+    g.add_edge("intake", "confirm_scope")
+    g.add_edge("confirm_scope", "plan")
+    g.add_conditional_edges("plan", N.route_after_research, ["research_section", "confirm_outline"])
+    g.add_conditional_edges("research_section", N.route_after_research, ["research_section", "confirm_outline"])
+    g.add_conditional_edges("confirm_outline", N.route_after_outline, ["write", "research_section", "confirm_outline"])
+    g.add_edge("write", "check")
+    g.add_edge("check", "review")
+    g.add_conditional_edges("review", N.route_after_review, ["write", "confirm_outline", "export", "review"])
+    g.add_edge("export", END)
+    return g.compile(checkpointer=checkpointer)
