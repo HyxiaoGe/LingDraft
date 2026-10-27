@@ -53,11 +53,8 @@ def run_to_review(graph, tid: str = "t1", answer: dict | None = None) -> dict:
     r = graph.invoke({"request": REQUEST}, cfg(tid))
     p = intr(r)
     assert p["type"] == "research.scope"
-    assert p["fields"][0]["key"] == "question" and p["fields"][0]["required"]
-    # 只问推断出值的和必填的；空的可选项不问
-    assert [f["key"] for f in p["fields"] if f["ask"]] == [f["key"] for f in p["fields"] if f["value"] or f["required"]]
-    assert any(not f["ask"] for f in p["fields"])
-    r = resume(graph, tid, {"values": {"question": p["fields"][0]["value"], "region": "中国"}})
+    assert p["scope"]["question"] and [q["id"] for q in p["questions"]] == ["q1"] and p["questions"][0]["why"]
+    r = resume(graph, tid, {"answers": {"q1": "改文字"}})
     p = intr(r)
     assert is_ask_interrupt(p)
     view = interrupt_view(p)
@@ -151,7 +148,7 @@ def test_rewrite_section_with_instruction(graph, planner):
 def test_outline_edit_researches_new_section_only(graph, planner):
     tid = "t1"
     r = graph.invoke({"request": REQUEST}, cfg(tid))
-    r = resume(graph, tid, {"values": {"question": "q"}})
+    r = resume(graph, tid, {"answers": {"q1": "改文字"}})
     r = resume(graph, tid, {"answer": "包含"})
     p = intr(r)
     assert p["type"] == "research.outline"
@@ -173,8 +170,25 @@ def test_skip_ask_records_assumption(graph):
 
 def test_invalid_scope_rejected(graph):
     graph.invoke({"request": REQUEST}, cfg("t1"))
-    with pytest.raises(ValueError, match="研究问题"):
-        resume(graph, "t1", {"values": {"question": ""}})
+    with pytest.raises(ValueError, match="不是当前问题"):
+        resume(graph, "t1", {"answers": {"nope": "x"}})
+
+
+def test_clear_request_skips_scope_card(graph):
+    """需求清楚就不弹范围卡：第一个中断直接是调研中的提问。"""
+    r = graph.invoke({"request": "最近新加坡的天气情况如何？"}, cfg("t1"))
+    assert is_ask_interrupt(intr(r))
+    v = graph.get_state(cfg("t1")).values
+    assert v["scope_confirmed"] and v["clarify"] == [] and v["scope"].extra is None
+
+
+def test_clarify_answer_lands_in_scope_and_skip_records_assumption(graph):
+    p = run_to_review(graph)
+    assert "改文字" in p["report"]
+    r = graph.invoke({"request": REQUEST}, cfg("t2"))
+    r = resume(graph, "t2", {"answers": {"q1": None}})
+    assert is_ask_interrupt(intr(r))
+    assert any("未回答" in a for a in graph.get_state(cfg("t2")).values["assumptions"])
 
 
 def test_resume_across_graph_instances_with_sqlite(planner, tmp_path):
@@ -182,7 +196,7 @@ def test_resume_across_graph_instances_with_sqlite(planner, tmp_path):
     db = tmp_path / "cp.sqlite"
     g1 = build_graph(planner, open_sqlite_checkpointer(db), tmp_path / "out")
     r = g1.invoke({"request": REQUEST}, cfg("t1"))
-    r = resume(g1, "t1", {"values": {"question": "q"}})
+    r = resume(g1, "t1", {"answers": {"q1": "改文字"}})
     assert is_ask_interrupt(intr(r))
     g2 = build_graph(FakeResearchPlanner(), open_sqlite_checkpointer(db), tmp_path / "out")
     assert is_ask_interrupt(pending_interrupt(g2, cfg("t1")))

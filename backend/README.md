@@ -12,7 +12,7 @@
 ```bash
 uv sync
 uv run playwright install chromium
-uv run pytest -q            # 45 个用例，不联网（FakePlanner / FakeResearchPlanner + MockTransport 网关）
+uv run pytest -q            # 48 个用例，不联网（FakePlanner / FakeResearchPlanner + MockTransport 网关）
 ```
 
 Web 方式（M2）：
@@ -69,5 +69,5 @@ uv run python -m app.cli --scenario research state <thread_id>
 - `app/research_llm.py` `ResearchPlanner` 协议：`ArkResearchPlanner`（豆包 + 真实网关）/ `FakeResearchPlanner`（脚本化的假工具模型 + MockTransport 网关）
 - `app/tools/` agent-tools 网关客户端（搜索 / 网页读取）与调研 agent 的工具（`search_web` / `read_page` / `ask_user`）
 - `scripts/` 对真实模型与网关的验证脚本：`probe_create_agent.py`（假搜索）、`probe_gateway_agent.py`（真实搜索 / 读取）、`probe_research_llm.py`（调研场景三种结构化输出），`PYTHONPATH=. uv run python scripts/<name>.py`
-- `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）。海报：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出。调研（`src/research.jsx`，顶栏切换）：范围逐项确认 → agent 提问卡（带“不问会怎样”，可跳过）→ 大纲 + 论断 + 假设 → 报告 / 论断 / 来源三个页签，点论断或来源单独处理 → 终审卡 / 自由文本重写某章 → 导出确认物包
+- `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）。海报：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出。调研（`src/research.jsx`，顶栏切换）：需求清楚直接开始，模糊才弹澄清卡 → agent 提问卡（带“不问会怎样”，可跳过）→ 大纲 + 论断 + 假设 → 报告 / 论断 / 来源三个页签，点论断或来源单独处理 → 终审卡 / 自由文本重写某章 → 导出确认物包
 - `tests/` 海报：T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等；调研：`test_research.py`（全流程可追溯 / 排除来源传播 / 改论断 / 重写章节 / 改大纲只补调研新章 / 跳过提问 / sqlite 跨实例恢复）

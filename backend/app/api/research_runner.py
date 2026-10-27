@@ -100,6 +100,8 @@ class ResearchRunner(BaseRunner):
         out = {"node": node}
         if not update:
             return out
+        if node == "confirm_scope" and update.get("scope"):
+            out["scope"] = jsonable(update["scope"])
         if node == "research_section":
             done = [n for n in update.get("outline", []) if n.researched]
             out["section"] = done[-1].title if done else None

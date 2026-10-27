@@ -14,30 +14,32 @@ export function researchCardFor(it, st, resume, setCard) {
   return null;
 }
 
-// ---- 范围：只问值得问的（推断出了值的、必填的），一项一页；其余默认"不限" ----
+// ---- 澄清：只有 intake 认为需求真的模糊时才会有这张卡，一个问题一页 ----
 function scopeCard(it, resume, answers = {}, idx = 0, history = []) {
-  const fields = it.fields.filter((f) => f.ask ?? (f.value || f.required));
-  if (idx >= fields.length) {
-    const values = {};
-    it.fields.forEach((f) => (values[f.key] = answers[f.key] ?? null));
-    const rest = it.fields.filter((f) => !fields.includes(f)).map((f) => ({ q: f.label, a: "（不限）" }));
-    resume({ values }, null, [...history, ...rest]);
+  const qs = it.questions || [];
+  if (idx >= qs.length) {
+    resume({ answers }, null, history);
     return null;
   }
-  const f = fields[idx];
-  const options = f.value ? [{ label: f.value, hint: f.source === "inferred" ? "从需求里理解的" : "当前值", value: f.value }] : [];
-  const next = (v) => scopeCard(it, resume, { ...answers, [f.key]: v }, idx + 1, [...history, { q: f.label, a: v || "（不限）" }]);
+  const q = qs[idx];
+  const next = (v) => scopeCard(it, resume, { ...answers, [q.id]: v }, idx + 1, [...history, { q: q.title, a: v || "（跳过，模型自行判断并记录假设）" }]);
   return {
-    title: `${f.label}${f.required ? "" : "（可选）"}`,
-    sub: f.hint,
-    page: `${idx + 1}/${fields.length}`,
-    options,
-    customPlaceholder: f.required ? "一句话说清要回答什么…" : "补充或改写…",
-    skip: f.required ? null : "不限",
-    requireAnswer: f.required,
+    title: q.title,
+    sub: q.why ? `不问会怎样：${q.why}` : null,
+    page: `${idx + 1}/${qs.length}`,
+    options: q.options.map((o) => ({ label: o, value: o })),
+    customPlaceholder: "或者直接回答…",
+    skip: "跳过，让模型自己判断",
     onAnswer: (v) => next(v),
     onSkip: () => next(null),
   };
+}
+
+export function scopeLine(scope) {
+  if (!scope) return "";
+  const parts = [["时间", scope.time_range], ["地域", scope.region], ["信源", scope.lang], ["不含", scope.exclude], ["交付", scope.deliverable], ["补充", scope.extra]]
+    .filter(([, v]) => v).map(([k, v]) => `${k} ${v}`);
+  return parts.length ? `范围按需求定了：${parts.join(" · ")}` : "范围按需求原话定了，没有额外限制";
 }
 
 // ---- 动态提问：模型在调研中途问的 ----
@@ -215,9 +217,7 @@ export function routeResearchText(text, st, resume, setCard) {
 
 export function ResearchBody({ st, it, onCard, resume }) {
   if (it?.type === "research.scope") {
-    const n = it.fields.filter((f) => f.value).length;
-    const rest = it.fields.filter((f) => !(f.ask ?? (f.value || f.required))).map((f) => f.label).join("、");
-    return <p>先定研究范围。我从需求里理解到 {n} 项，确认一下{rest ? `；${rest}没提到，先按不限，确认后可以改` : ""}。</p>;
+    return <p>需求里有 {it.questions.length} 处要先问清，不然调研方向可能会偏。</p>;
   }
   if (it?.type === "research.ask") {
     return <p>调研到一半有个问题要问你（已完成 {st.progress.researched}/{st.progress.total} 章）。</p>;

@@ -21,15 +21,14 @@ from app.graph.research.state import (
     MAX_OUTLINE_NODES,
     MAX_READS_PER_SECTION,
     MAX_SEARCHES_PER_SECTION,
-    SCOPE_FIELDS,
     Claim,
+    ClarifyForm,
     OutlineDecision,
     OutlineNode,
     ReportVersion,
     ResearchState,
     ReviewDecision,
     Scope,
-    ScopeForm,
     SectionText,
     Source,
 )
@@ -71,31 +70,37 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
 
     def intake(state: ResearchState) -> dict:
         _stage("正在理解研究问题")
-        scope = planner.intake(state["request"])
+        res = planner.intake(state["request"])
         return {
-            "scope": scope, "scope_confirmed": False, "outline": [], "outline_confirmed": False, "section_idx": 0,
+            "scope": res.scope, "clarify": res.questions[:2], "scope_confirmed": False, "outline": [], "outline_confirmed": False, "section_idx": 0,
             "sources": [], "claims": [], "assumptions": [], "asks_used": 0, "sections": {}, "rewrite_targets": [],
             "rewrite_instruction": None, "versions": [], "check_results": [], "notes": [], "exported": None, "approved": False,
         }
 
     def confirm_scope(state: ResearchState) -> dict:
+        """只在 intake 提出了澄清问题时才打断；需求清楚就直接按原话定范围，不弹卡。"""
         scope = state.get("scope") or Scope(question=state["request"])
+        questions = state.get("clarify") or []
+        if not questions:
+            return {"scope": scope, "scope_confirmed": True}
         payload = {
             "type": "research.scope",
-            "title": "先定研究范围",
-            "fields": [
-                {"key": k, "label": label, "value": getattr(scope, k), "required": req, "hint": hint,
-                 "source": "inferred" if getattr(scope, k) else "missing",
-                 # 只有推断出了值（要你确认）或必填的才值得问；其余默认"不限"，确认后可改
-                 "ask": bool(getattr(scope, k)) or req}
-                for k, label, req, hint in SCOPE_FIELDS
-            ],
+            "title": "有几处要先问清",
+            "scope": scope.model_dump(),
+            "questions": [q.model_dump() for q in questions],
         }
-        form = _validated(interrupt(payload, response_schema=ScopeForm), ScopeForm)
-        values = {k: (v.strip() if isinstance(v, str) and v.strip() else None) for k, v in form.values.items()}
-        merged = scope.model_dump()
-        merged.update({k: v for k, v in values.items() if k in merged})
-        return {"scope": Scope(**merged), "scope_confirmed": True}
+        form = _validated(interrupt(payload, response_schema=ClarifyForm), ClarifyForm)
+        unknown = set(form.answers) - {q.id for q in questions}
+        if unknown:
+            raise ValueError(f"回答的不是当前问题：{', '.join(sorted(unknown))}")
+        answered = [f"{q.title}{(form.answers.get(q.id) or '').strip()}" for q in questions if (form.answers.get(q.id) or "").strip()]
+        skipped = [q.title for q in questions if not (form.answers.get(q.id) or "").strip()]
+        assumptions = list(state.get("assumptions", [])) + [f"「{t}」未回答，按模型默认理解处理" for t in skipped]
+        return {
+            "scope": scope.model_copy(update={"extra": "；".join(answered) or None}),
+            "scope_confirmed": True,
+            "assumptions": assumptions,
+        }
 
     # ---- 大纲与调研 ----
 

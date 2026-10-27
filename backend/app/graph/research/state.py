@@ -31,6 +31,23 @@ class Scope(BaseModel):
     lang: str | None = Field(default=None, description="信源语言要求，如“中英文都要”")
     exclude: str | None = Field(default=None, description="不研究什么，如“不含纯营销稿”")
     deliverable: str | None = Field(default=None, description="交付形式，如“调研报告”")
+    extra: str | None = Field(default=None, description="用户对澄清问题的回答，作为补充说明")
+
+
+class ClarifyQuestion(BaseModel):
+    """intake 在需求真的模糊时提出的澄清问题；需求清楚就一个都不提。"""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(description="q1、q2…")
+    title: str = Field(description="一句话问题")
+    options: list[str] = Field(description="2～4 个可选答案，用户也可以自己写")
+    why: str = Field(description="不问会怎样：说明这个问题会怎样影响调研方向")
+
+
+class IntakeResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    scope: Scope
+    questions: list[ClarifyQuestion] = Field(description="最多 2 个；需求清楚时为空")
 
 
 SCOPE_FIELDS: list[tuple[str, str, bool, str]] = [
@@ -110,12 +127,10 @@ class CheckResult(BaseModel):
 # ---- 中断的回传 schema ----
 
 
-class ScopeForm(BaseModel):
-    values: dict[str, str | None]
+class ClarifyForm(BaseModel):
+    """澄清问题的回答：{问题 id: 答案}；None 或空串表示跳过，让模型自己判断。"""
 
-    def model_post_init(self, context, /) -> None:
-        if not (self.values.get("question") or "").strip():
-            raise ValueError("必填项缺失：研究问题")
+    answers: dict[str, str | None]
 
 
 class OutlineEdit(BaseModel):
@@ -147,6 +162,7 @@ class AskAnswer(BaseModel):
 class ResearchState(TypedDict, total=False):
     request: str
     scope: Scope | None
+    clarify: list[ClarifyQuestion]
     scope_confirmed: bool
     outline: list[OutlineNode]
     outline_confirmed: bool

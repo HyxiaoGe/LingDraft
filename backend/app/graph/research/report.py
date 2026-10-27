@@ -33,7 +33,8 @@ def assemble(
 
     lines = [f"# {scope.question}", ""]
     bounds = [f"{label}：{val}" for label, val in (
-        ("时间", scope.time_range), ("地域", scope.region), ("信源语言", scope.lang), ("不含", scope.exclude)
+        ("时间", scope.time_range), ("地域", scope.region), ("信源语言", scope.lang), ("不含", scope.exclude),
+        ("补充", scope.extra),
     ) if val]
     if bounds:
         lines += ["范围：" + "；".join(bounds), ""]

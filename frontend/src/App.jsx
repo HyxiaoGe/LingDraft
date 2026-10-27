@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createThread, resumeThread, createResearchThread, resumeResearchThread } from "./api.js";
-import { RESEARCH_DEFAULT, ResearchBody, researchCardFor, routeResearchText } from "./research.jsx";
+import { RESEARCH_DEFAULT, ResearchBody, researchCardFor, routeResearchText, scopeLine } from "./research.jsx";
 
 const KIND = { headline: "标题", subhead: "副标题", offer: "优惠", date: "活动时间", cta: "行动号召", product_image: "产品图" };
 const STATUS = { draft: "草稿", confirmed: "已确认", user_edited: "手工编辑" };
@@ -340,6 +340,7 @@ function AiMsg({ m, onPickElement, onCard, resume }) {
           </>
         )}
         {m.steps.filter((s) => s.node === "render").map((s) => <div className="done-line" key={s.version}>已渲染第 {s.version} 版 · {s.note}</div>)}
+        {m.steps.filter((s) => s.node === "confirm_scope" && s.scope).map((s, i) => <div className="done-line" key={"sc" + i}>{scopeLine(s.scope)}</div>)}
         {m.steps.filter((s) => s.node === "research_section" && s.section).map((s, i) => <div className="done-line" key={i}>调研完「{s.section}」· 累计 {s.sources} 条来源、{s.claims} 条论断</div>)}
         {m.steps.filter((s) => s.node === "write").map((s) => <div className="done-line" key={s.version}>已生成第 {s.version} 版报告 · {s.note}</div>)}
         {st?.scenario !== "research" && m.steps.filter((s) => s.notes?.length).map((s, i) => <p key={i}>{s.notes.join("；")}</p>)}

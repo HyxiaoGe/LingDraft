@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app import config
 from app.graph.research import prompts
-from app.graph.research.state import Claim, OutlineNode, Scope, SectionText, Sentence
+from app.graph.research.state import Claim, ClarifyQuestion, IntakeResult, OutlineNode, Scope, SectionText, Sentence
 from app.tools.gateway import GatewayClient
 from app.tools.research_tools import make_research_tools
 
@@ -52,7 +52,7 @@ class SectionDraft(BaseModel):
 
 
 class ResearchPlanner(Protocol):
-    def intake(self, request: str) -> Scope: ...
+    def intake(self, request: str) -> IntakeResult: ...
 
     def plan(self, scope: Scope) -> list[OutlineNode]: ...
 
@@ -92,8 +92,8 @@ class ArkResearchPlanner:
     def _structured(self, llm, schema):
         return llm.with_structured_output(schema, method="json_schema", strict=True)
 
-    def intake(self, request: str) -> Scope:
-        return self._structured(self._lite, Scope).invoke(
+    def intake(self, request: str) -> IntakeResult:
+        return self._structured(self._lite, IntakeResult).invoke(
             [("system", prompts.INTAKE_SYSTEM), ("user", f"用户需求：{request}")]
         )
 
@@ -235,9 +235,14 @@ class FakeResearchPlanner:
         self._tools = make_research_tools(self._gateway)
         self._model = FakeToolModel()
 
-    def intake(self, request: str) -> Scope:
+    def intake(self, request: str) -> IntakeResult:
         self.calls.append(("intake", request))
-        return Scope(question=f"{request}的现状如何？", time_range="2026" if "2026" in request else None)
+        scope = Scope(question=f"{request}的现状如何？", time_range="2026" if "2026" in request else None)
+        # 模拟"需求模糊才问"：提到局部修改但没说是改文字还是换图时问一个；其余需求直接通过
+        questions = []
+        if "局部修改" in request and not any(k in request for k in ("改文字", "换图")):
+            questions.append(ClarifyQuestion(id="q1", title="局部修改指的是哪种？", options=["改文字", "换图"], why="两种方向的检索词和评测标准不同"))
+        return IntakeResult(scope=scope, questions=questions)
 
     def plan(self, scope: Scope) -> list[OutlineNode]:
         self.calls.append(("plan", scope.question))

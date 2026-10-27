@@ -40,8 +40,9 @@ def test_research_flow_over_http(client):
     tid = st["thread_id"]
     assert st["scenario"] == "research" and st["interrupt"]["type"] == "research.scope"
 
-    values = {f["key"]: f["value"] for f in st["interrupt"]["fields"]}
-    ev = _events(client.post(f"/api/research/threads/{tid}/resume", json={"payload": {"values": values}}))
+    assert [q["id"] for q in st["interrupt"]["questions"]] == ["q1"] and st["scope"]["question"]
+    ev = _events(client.post(f"/api/research/threads/{tid}/resume", json={"payload": {"answers": {"q1": "改文字"}}}))
+    assert any(e == "node" and d["node"] == "confirm_scope" and d["scope"]["extra"] for e, d in ev)
     ask = _last(ev, "interrupt")
     assert ask["type"] == "research.ask" and ask["options"] == ["包含", "不包含"] and ask["why"]
     st = _last(ev, "state")
@@ -75,11 +76,18 @@ def test_research_flow_over_http(client):
 
 
 def test_invalid_answer_reports_error(client):
-    st = _last(_events(client.post("/api/research/threads", json={"request": "x"})), "state")
+    st = _last(_events(client.post("/api/research/threads", json={"request": "AI 海报工具在局部修改上的现状"})), "state")
     tid = st["thread_id"]
-    ev = _events(client.post(f"/api/research/threads/{tid}/resume", json={"payload": {"values": {"question": ""}}}))
-    assert any(e == "error" and "研究问题" in d["message"] for e, d in ev)
+    ev = _events(client.post(f"/api/research/threads/{tid}/resume", json={"payload": {"answers": {"nope": "x"}}}))
+    assert any(e == "error" and "不是当前问题" in d["message"] for e, d in ev)
     assert _last(ev, "state")["interrupt"]["type"] == "research.scope"
+
+
+def test_clear_request_has_no_scope_card(client):
+    ev = _events(client.post("/api/research/threads", json={"request": "最近新加坡的天气情况如何？"}))
+    assert not any(e == "interrupt" and d["type"] == "research.scope" for e, d in ev)
+    st = _last(ev, "state")
+    assert st["scope_confirmed"] and st["interrupt"]["type"] == "research.ask"
 
 
 def test_unknown_research_thread_404(client):
