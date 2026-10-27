@@ -47,5 +47,5 @@ uv run python -m app.cli state <thread_id>
 - `app/llm.py` `Planner` 协议：`ArkPlanner`（豆包，json_schema 结构化输出）/ `FakePlanner`
 - `app/render/` Jinja2 模板 → Playwright 截图；`checks.py` 事实逐字比对 / 违禁词 / 溢出
 - `app/api/` FastAPI；`runner.py` 把图执行放到单工作线程并转成 SSE
-- `../frontend/` Vite + React 最薄页面：需求 → 事实表单 → 风格卡片 → 预览与逐元素反馈 → 导出
+- `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出
 - `tests/` T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等

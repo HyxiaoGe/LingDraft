@@ -11,6 +11,7 @@ import shutil
 from pathlib import Path
 
 from langchain_core.runnables import RunnableConfig
+from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
 
 from app import config as cfg
@@ -30,6 +31,14 @@ from app.render import checks as checks_mod
 from app.render import renderer
 
 DEFAULT_TEMPLATE = "bold_sale"
+
+
+def _stage(message: str) -> None:
+    """向前端推送"正在做什么"。节点在图外被直接调用（测试）时静默。"""
+    try:
+        get_stream_writer()({"stage": message})
+    except RuntimeError:
+        pass
 
 
 def _thread_dir(out_dir: Path, config: RunnableConfig) -> Path:
@@ -99,7 +108,8 @@ def _element_view(e: Element, facts: dict[str, Fact]) -> dict:
         "status": e.status,
         "bound_fact": e.bound_fact,
         "text": renderer.resolve_text(e, facts) if e.kind != "product_image" else None,
-        "editable_by_model": not e.locked,
+        # 已确认的元素被点名时会重新打开，所以只有事实绑定和手工编辑过的才不可由模型改
+        "editable_by_model": e.bound_fact is None and e.status != "user_edited",
         "version": e.version,
     }
 
@@ -108,6 +118,7 @@ def make_nodes(planner: Planner, out_dir: Path):
     # ---- 生成前 ----
 
     def intake(state: PosterState) -> dict:
+        _stage("正在理解需求，提取关键事实…")
         res = planner.intake(state["request"])
         facts = empty_facts()
         for k, f in facts.items():
@@ -154,6 +165,7 @@ def make_nodes(planner: Planner, out_dir: Path):
 
     def gen_style_options(state: PosterState) -> dict:
         hint = state.get("style_hint")
+        _stage("正在构思视觉方向…")
         options = planner.style_options(state["request"], state["facts"], hint)
         if hint:
             return {"style_options": (state.get("style_options") or []) + options, "style": options[0]}
@@ -184,6 +196,7 @@ def make_nodes(planner: Planner, out_dir: Path):
             update["render_reason"] = f"更换风格：{state['style'].name}"
         if not cfg.BACKGROUND_ENABLED:
             return update
+        _stage("正在生成背景图（约 15 秒）…")
         tdir = _thread_dir(out_dir, config)
         n = len(state.get("versions") or []) + 1
         path = planner.background(state["style"], state["facts"], tdir / f"bg_v{n}.png")
@@ -196,6 +209,7 @@ def make_nodes(planner: Planner, out_dir: Path):
         elements = state.get("elements") or _skeleton(state["facts"], state.get("product_image"))
         targets = [e.id for e in elements if e.kind in TEXT_KINDS and not e.locked]
         constraints = checks_mod.constraints_from(state.get("check_results", []))
+        _stage("正在撰写文案…" if not constraints else "校验未通过，正在按约束重写文案…")
         updates = planner.compose(state["facts"], state["style"], elements, targets, None, constraints)
         elements, changed = _apply_updates(elements, updates, set(targets))
         reason = "校验未通过后重新生成" if constraints else "初稿"
@@ -209,6 +223,7 @@ def make_nodes(planner: Planner, out_dir: Path):
     def render(state: PosterState, config: RunnableConfig) -> dict:
         versions = list(state.get("versions", []))
         n = len(versions) + 1
+        _stage(f"正在排版渲染第 {n} 版…")
         res = renderer.render(
             state["elements"],
             state["facts"],
@@ -224,6 +239,7 @@ def make_nodes(planner: Planner, out_dir: Path):
 
     def check(state: PosterState) -> dict:
         layout = state["versions"][-1].layout
+        _stage("正在校验事实、违禁词与排版…")
         results = checks_mod.run_checks(state["elements"], state["facts"], layout)
         failed = any(not r.passed for r in results)
         return {"check_results": results, "retry_count": (state.get("retry_count", 0) + 1) if failed else 0}
@@ -273,6 +289,7 @@ def make_nodes(planner: Planner, out_dir: Path):
             return {"elements": elements, "last_change": [], "notes": [f"{target} 已被你手工编辑过，模型不再改动它。如需改动请继续手工编辑。"]}
         # 用户明确点名要改：已确认的元素重新打开为 draft，只开放这一个
         elements = [x.model_copy(update={"status": "draft"}) if x.id == target else x for x in elements]
+        _stage(f"正在按你的意见修改 {target}…")
         updates = planner.compose(state["facts"], state["style"], elements, [target], action.instruction, [])
         elements, changed = _apply_updates(elements, updates, {target})
         notes = [] if changed else [f"模型没有对 {target} 给出新内容"]
