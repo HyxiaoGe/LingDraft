@@ -47,5 +47,7 @@ uv run python -m app.cli state <thread_id>
 - `app/llm.py` `Planner` 协议：`ArkPlanner`（豆包，json_schema 结构化输出）/ `FakePlanner`
 - `app/render/` Jinja2 模板 → Playwright 截图；`checks.py` 事实逐字比对 / 违禁词 / 溢出
 - `app/api/` FastAPI；`runner.py` 把图执行放到单工作线程并转成 SSE
+- `app/tools/` agent-tools 网关客户端（搜索 / 网页读取）与调研 agent 的工具（`search_web` / `read_page` / `ask_user`）
+- `scripts/` 对真实模型与网关的验证脚本：`probe_create_agent.py`（假搜索）、`probe_gateway_agent.py`（真实搜索 / 读取），`PYTHONPATH=. uv run python scripts/<name>.py`
 - `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出
 - `tests/` T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等

@@ -23,3 +23,7 @@ BACKGROUND_ENABLED = os.environ.get("LINGDRAFT_BACKGROUND", "1") not in ("0", "f
 USE_FAKE_PLANNER = os.environ.get("LINGDRAFT_FAKE", "0") in ("1", "true")
 
 MAX_CHECK_RETRIES = 2
+
+# dev 上的 agent-tools 网关：搜索 / 网页读取，Bearer 产品密钥
+AGENT_TOOLS_URL = os.environ.get("AGENT_TOOLS_URL", "http://agent-tools-gateway:8100")
+AGENT_TOOLS_API_KEY = os.environ.get("AGENT_TOOLS_API_KEY", "")
