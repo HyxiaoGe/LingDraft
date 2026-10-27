@@ -3,8 +3,8 @@ import React, { useEffect, useState } from "react";
 
 export const RESEARCH_DEFAULT = "AI 海报工具在局部修改和事实准确性上的现状（2026），只看中文信源";
 const CKIND = { fact: "事实", inference: "推断" };
-const CSTATUS = { draft: "草稿", confirmed: "已确认", user_edited: "用户改过" };
-const SSTATUS = { candidate: "候选", adopted: "已采纳", excluded: "已排除" };
+const CSTATUS = { draft: "草稿", confirmed: "用户确认", user_edited: "用户改过" };
+const SSTATUS = { candidate: "候选", adopted: "系统选用", excluded: "用户排除" };
 
 export function researchCardFor(it, st, resume, setCard) {
   if (it.type === "research.scope") return scopeCard(it, resume);
@@ -57,11 +57,12 @@ function askCard(it, resume) {
 
 // ---- 终审 ----
 function reviewCard(it, st, resume, setCard) {
+  const invalid = (it.checks || []).some((c) => c.name === "report_valid" && !c.passed);
   return {
-    title: `第 ${it.version} 版报告怎么样？`,
+    title: invalid ? `第 ${it.version} 版报告没有带来源的论断，不能导出` : `第 ${it.version} 版报告怎么样？`,
     page: "1/1",
     options: [
-      { label: "就这版，导出", hint: "报告 + 论断清单 + 来源清单", value: "approve" },
+      ...(invalid ? [] : [{ label: "就这版，导出", hint: "报告 + 论断清单 + 来源清单", value: "approve" }]),
       { label: "排除某条来源", hint: "只靠它的论断会退回草稿并移出报告", value: "source" },
       { label: "改某条论断", hint: "改过的表述模型不再碰", value: "claim" },
       { label: "重写某一节", hint: "只按已确认的论断重写这一节", value: "section" },
@@ -188,6 +189,7 @@ export function ResearchBody({ st, it, onCard, resume }) {
 const CHECK_LABEL = {
   answer_present: "调研有答案", claims_sourced: "论断有来源", no_excluded_sources: "未引用已排除来源", inference_marked: "推断已标记",
   sources_complete: "来源信息完整", no_orphaned_claims: "无失去来源的论断", scope_time: "时间在范围内",
+  report_valid: "报告有带来源的论断", question_answered: "回答了研究问题",
 };
 
 function ReviewBody({ st, it, onCard, resume }) {

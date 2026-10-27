@@ -76,6 +76,16 @@ def answer_check(answer: str | None, how: str) -> CheckResult:
     return CheckResult(name="answer_present", passed=True, detail="由受控收尾补得；" if how == "close" else "")
 
 
+def report_check(sections: dict[str, SectionText], claims: list[Claim], answered: bool) -> list[CheckResult]:
+    """最终交付物本身要有效：至少一句挂着有来源的论断；整理步骤认为问题被回答了。"""
+    usable = {c.id for c in claims if c.source_ids and not c.orphaned}
+    linked = sum(1 for sec in sections.values() for s in sec.sentences if s.claim_id in usable)
+    return [
+        CheckResult(name="report_valid", passed=linked > 0, detail="" if linked else "报告里没有任何带来源的论断；"),
+        CheckResult(name="question_answered", passed=answered, detail="" if answered else "整理步骤判断候选答案没有回答研究问题；"),
+    ]
+
+
 def run_checks(
     sections: dict[str, SectionText], claims: list[Claim], sources: list[Source], scope: Scope
 ) -> list[CheckResult]:

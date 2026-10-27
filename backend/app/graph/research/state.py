@@ -148,6 +148,7 @@ class ResearchState(TypedDict, total=False):
     scope_confirmed: bool
     answer: str | None  # agent 的文字候选答案
     answer_how: str  # 怎么得到的：agent / close / none
+    answered: bool  # 整理步骤判断候选答案是否回答了研究问题
     gap: str | None  # 整理时发现的关键证据缺口，回研究环节补
     gap_rounds: int
     outline: list[OutlineNode]

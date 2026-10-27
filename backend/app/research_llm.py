@@ -172,16 +172,20 @@ class LiveResearchPlanner:
             [("system", prompts.INTAKE_SYSTEM), ("user", f"用户需求：{request}")]
         )
 
-    def consolidate(self, scope: Scope, answer: str, sources: list[Source]) -> ConsolidateResult:
+    @staticmethod
+    def _consolidate_messages(scope: Scope, answer: str, sources: list[Source]) -> list:
         user = (
             f"研究问题：{scope.question}\n范围：{scope.model_dump_json(exclude_none=True)}\n\n"
             f"候选答案：\n{answer}\n\n来源列表（id | 网址 | 标题 | 片段类型 | 片段）：\n{_sources_block(sources)}\n"
         )
+        return [("system", prompts.CONSOLIDATE_SYSTEM), ("user", user)]
+
+    def consolidate(self, scope: Scope, answer: str, sources: list[Source]) -> ConsolidateResult:
         chain = self._structured(self._fast, ConsolidateResult)
         last: Exception | None = None
         for _ in range(CONSOLIDATE_RETRIES):
             try:
-                return chain.invoke([("system", prompts.CONSOLIDATE_SYSTEM), ("user", user)])
+                return chain.invoke(self._consolidate_messages(scope, answer, sources))
             except Exception as e:  # noqa: BLE001
                 last = e
         raise RuntimeError(f"整理失败：{last}")
@@ -258,6 +262,13 @@ class FakeToolModel(BaseChatModel):
         n = len(messages)
         if isinstance(last, HumanMessage) and str(last.content).startswith("（系统）工具已不可用"):
             msg = AIMessage(content=_answer_text(req, _hits(messages), _answer(messages), how="收尾"))
+        elif "连发" in req and not any(isinstance(m, AIMessage) for m in messages):
+            msg = AIMessage(content="", tool_calls=[{"name": "search_web", "args": {"query": f"{req} {i}", "count": 3},
+                                                     "id": f"call_batch_{i}", "type": "tool_call"} for i in range(10)])
+        elif "多问" in req and sum(1 for m in messages if isinstance(m, AIMessage)) < 4:
+            # 无视绑定列表，每轮都问：看提问额度能不能在产生问题卡之前拦住
+            n_ai = sum(1 for m in messages if isinstance(m, AIMessage))
+            msg = _call("ask_user", {"question": f"第 {n_ai + 1} 个问题？", "options": ["A", "B"], "why": "测试"}, n)
         elif isinstance(last, HumanMessage):
             if "坏JSON" in req and not any(isinstance(m, AIMessage) for m in messages):
                 msg = AIMessage(content="", invalid_tool_calls=[{"name": "search_web", "args": '{"query": "坏', "id": f"bad_{n}",
@@ -339,6 +350,9 @@ class FakeResearchPlanner:
         return IntakeResult(scope=scope, questions=questions)
 
     def consolidate(self, scope: Scope, answer: str, sources: list[Source]) -> ConsolidateResult:
+        if "整理失败" in scope.question:
+            self.calls.append(("consolidate", scope.question))
+            raise RuntimeError("假模型：整理失败")
         self.calls.append(("consolidate", answer))
         by_url = {s.url: s.id for s in sources if s.status != "excluded"}
         titles = {"c1": ("局部修改机制", "主流工具怎么做局部修改？"), "c2": ("事实准确性", "价格日期这类事实怎么保证？")}
@@ -360,6 +374,8 @@ class FakeResearchPlanner:
         assumptions = [ln.strip() for ln in answer.splitlines() if ln.startswith("用户回答：")]
         first = sum(1 for c in self.calls if c[0] == "consolidate") == 1
         gap = "缺价格数据" if ("回补" in scope.question and first) else None
+        if "没回答" in scope.question and first:
+            return ConsolidateResult(sections=sections, claims=claims, assumptions=assumptions, answered=False, gap=None)
         return ConsolidateResult(sections=sections, claims=claims, assumptions=assumptions, answered=gap is None, gap=gap)
 
     def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None) -> SectionText:

@@ -63,7 +63,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         res = planner.intake(state["request"])
         return {
             "scope": res.scope, "clarify": res.questions[:2], "scope_confirmed": False,
-            "answer": None, "answer_how": "none", "gap": None, "gap_rounds": 0, "outline": [],
+            "answer": None, "answer_how": "none", "answered": False, "gap": None, "gap_rounds": 0, "outline": [],
             "sources": [], "claims": [], "assumptions": [], "asks_used": 0, "sections": {}, "rewrite_targets": [],
             "rewrite_instruction": None, "versions": [], "check_results": [], "notes": [], "exported": None, "approved": False,
         }
@@ -100,14 +100,15 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         gap = state.get("gap")
         _stage("补查证据：" + gap if gap else "正在调研")
         asks_used = state.get("asks_used", 0)
-        allow_ask = asks_used < MAX_ASKS
+        ask_limit = max(MAX_ASKS - asks_used, 0)
+        allow_ask = ask_limit > 0
         system = prompts.RESEARCH_SYSTEM.format(
             scope=scope.model_dump_json(indent=1, exclude_none=True),
             max_searches=MAX_SEARCHES, max_reads=MAX_READS,
             ask_note="" if allow_ask else "（提问额度已用完，不要调用 ask_user，自行判断并在答案里写明假设。）",
         )
         user = scope.question if not gap else scope.question + prompts.GAP_FILL_NOTE.format(gap=gap, answer=state.get("answer") or "")
-        agent = build_agent(planner.agent_model(), planner.tools(), system, allow_ask=allow_ask)
+        agent = build_agent(planner.agent_model(), planner.tools(), system, ask_limit=ask_limit)
         result = agent.invoke({"messages": [("user", user)]}, config)
         messages = result.get("messages", [])
 
@@ -135,13 +136,13 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         sources = list(state.get("sources", []))
         if not answer:
             notes.append("没有候选答案，无法整理；报告为空")
-            return {"outline": [], "sections": {}, "claims": [], "notes": notes, "rewrite_targets": []}
+            return {"outline": [], "sections": {}, "claims": [], "answered": False, "notes": notes, "rewrite_targets": []}
         _stage("整理论断与来源")
         try:
             res = planner.consolidate(state["scope"], answer, sources)
         except Exception as e:  # noqa: BLE001
             notes.append(f"整理失败：{e}")
-            return {"outline": [], "sections": {}, "claims": [], "notes": notes, "rewrite_targets": []}
+            return {"outline": [], "sections": {}, "claims": [], "answered": False, "notes": notes, "rewrite_targets": []}
 
         known = {s.id for s in sources if s.status != "excluded"}
         claims: list[Claim] = []
@@ -169,32 +170,39 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             claims.append(Claim(id=claim_id, statement=cd.statement, kind=cd.kind, source_ids=sids,
                                 outline_id=sec_of_ref.get(cd.ref, outline[0].id), confidence=cd.confidence))
         kind_of = {c.id: c.kind for c in claims}
+        dropped_sents: list[str] = []
         for i, sd in enumerate(res.sections, start=1):
             cid = f"c{i}"
             sents = []
             for s in sd.sentences:
+                if s.claim_ref and s.claim_ref not in ref_to_id:
+                    dropped_sents.append(s.text.strip())  # 论断被丢弃，句子不能悄悄变成“不需要引用的过渡句”
+                    continue
                 claim_id = ref_to_id.get(s.claim_ref) if s.claim_ref else None
                 text = s.text.strip()
                 if claim_id and kind_of.get(claim_id) == "inference" and not text.startswith(report.INFERENCE_PREFIX):
                     text = report.INFERENCE_PREFIX + text  # 推断句的标记由代码保证，不靠模型
                 sents.append(Sentence(text=text, claim_id=claim_id))
             sections[cid] = SectionText(outline_id=cid, sentences=sents)
+        if dropped_sents:
+            notes.append("随无来源论断一起从正文移除的句子：" + "；".join(dropped_sents))
         if "c1" not in sections:
             sections["c1"] = SectionText(outline_id="c1", sentences=[])
         used = {sid for c in claims for sid in c.source_ids}
         sources = [s.model_copy(update={"status": "adopted"}) if s.id in used and s.status != "excluded" else s for s in sources]
         assumptions = list(state.get("assumptions", [])) + [a.strip() for a in res.assumptions if a.strip() and a.strip() not in state.get("assumptions", [])]
 
-        gap = None if res.answered else ((res.gap or "").strip() or None)
+        answered = bool(res.answered)
+        gap = None if answered else ((res.gap or "").strip() or "候选答案没有回答研究问题")
         rounds = state.get("gap_rounds", 0)
         if gap and rounds < MAX_GAP_ROUNDS:
-            notes.append(f"整理发现证据缺口，回研究环节补一轮：{gap}")
+            notes.append(f"整理判断问题还没回答，回研究环节补一轮：{gap}")
             return {"outline": outline, "sections": sections, "claims": claims, "sources": sources, "assumptions": assumptions,
-                    "notes": notes, "gap": gap, "gap_rounds": rounds + 1, "rewrite_targets": []}
+                    "notes": notes, "answered": False, "gap": gap, "gap_rounds": rounds + 1, "rewrite_targets": []}
         if gap:
-            assumptions.append(f"证据缺口未补齐：{gap}")
+            notes.append(f"补了一轮仍没回答研究问题：{gap}")
         return {"outline": outline, "sections": sections, "claims": claims, "sources": sources, "assumptions": assumptions,
-                "notes": notes, "gap": None, "rewrite_targets": []}
+                "notes": notes, "answered": answered, "gap": None, "rewrite_targets": []}
 
     # ---- 写作、校验、终审 ----
 
@@ -218,7 +226,10 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             kind_of = {c.id: c.kind for c in usable}
             sents = []
             for s in sec.sentences:
-                claim_id = s.claim_id if s.claim_id in kind_of else None
+                if s.claim_id and s.claim_id not in kind_of:
+                    notes.append(f"重写「{node.title}」时丢弃挂在不可用论断上的句子：{s.text.strip()}")
+                    continue
+                claim_id = s.claim_id
                 text = s.text.strip()
                 if claim_id and kind_of[claim_id] == "inference" and not text.startswith(report.INFERENCE_PREFIX):
                     text = report.INFERENCE_PREFIX + text  # 推断标记由代码保证，重写也一样
@@ -242,7 +253,8 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
     def check(state: ResearchState) -> dict:
         _stage("校验引用与标记")
         results = report.run_checks(state["sections"], state["claims"], state["sources"], state["scope"])
-        results.insert(0, report.answer_check(state.get("answer"), state.get("answer_how", "none")))
+        results = [report.answer_check(state.get("answer"), state.get("answer_how", "none"))] + results
+        results += report.report_check(state["sections"], state["claims"], state.get("answered", False))
         return {"check_results": results}
 
     def review(state: ResearchState) -> dict:
@@ -269,6 +281,9 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         }
         d = _validated(interrupt(payload, response_schema=ReviewDecision), ReviewDecision)
         if d.action == "approve":
+            invalid = [c for c in state.get("check_results", []) if c.name == "report_valid" and not c.passed]
+            if invalid:
+                raise ValueError("报告里没有任何带来源的论断，不能当作成功结果导出；请换个问法重新发起")
             return {"approved": True,
                     "claims": [c.model_copy(update={"status": "confirmed"}) if c.status == "draft" and not c.orphaned else c
                                for c in claims]}

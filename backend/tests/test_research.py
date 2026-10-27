@@ -6,13 +6,16 @@ import json
 from pathlib import Path
 
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
 from app.cli import interrupt_view, pending_interrupt, research_resume_payload
 from app.graph.research.agent import (
+    ASK_BLOCKED,
+    DANGLING_NOTE,
     SKIP_MESSAGE,
     UNSHOWN_MESSAGE,
+    answer_dangling_calls,
     ask_resume,
     build_agent,
     collect_sources,
@@ -20,7 +23,7 @@ from app.graph.research.agent import (
     is_ask_interrupt,
 )
 from app.graph.research.graph import build_graph, memory_checkpointer, open_sqlite_checkpointer
-from app.graph.research.state import MAX_SEARCHES
+from app.graph.research.state import MAX_ASKS, MAX_SEARCHES
 from app.research_llm import FakeResearchPlanner
 
 REQUEST = "AI 海报工具在局部修改上的现状（2026）"
@@ -81,8 +84,9 @@ def test_full_flow_traceable_and_exported(graph, tmp_path):
     assert {c["kind"] for c in claims} == {"fact", "inference"}
     # 读过正文的来源用正文片段，其他是搜索摘要
     assert {s["excerpt_kind"] for s in sources.values()} == {"body", "summary"}
-    # 无来源的论断被丢弃并记录
+    # 无来源的论断被丢弃并记录；挂在它上面的句子也从正文移除，不能变成“不需要引用的过渡句”
     assert any("丢弃无来源论断" in n for n in p["notes"])
+    assert "没有来源的论断应被丢弃" not in p["report"] and any("一起从正文移除" in n for n in p["notes"])
     # 报告里推断句带标记并带引用标号；来源表完整
     report = p["report"]
     assert "推断：" in report and "[S1]" in report and "## 来源" in report
@@ -223,7 +227,7 @@ def test_resume_across_graph_instances_with_sqlite(planner, tmp_path):
 
 
 def test_build_agent_without_ask_drops_tool(planner):
-    agent = build_agent(planner.agent_model(), planner.tools(), "sys", allow_ask=False)
+    agent = build_agent(planner.agent_model(), planner.tools(), "sys", ask_limit=0)
     names = {t.name for t in agent.get_graph().nodes["tools"].data.tools_by_name.values()} if "tools" in agent.get_graph().nodes else set()
     assert "ask_user" not in names
 
@@ -268,3 +272,63 @@ def test_exclude_unreferenced_source_returns_to_review(graph):
     assert any("没有被任何论断引用" in n for n in p2["notes"])
     r = resume(graph, "t1", {"action": "approve"})
     assert r["exported"]
+
+
+def test_batch_tool_calls_count_toward_budget(planner):
+    """同一批里发 10 个搜索：只执行到额度为止，其余在执行层拦下。"""
+    agent = build_agent(planner.agent_model(), planner.tools(), "sys", ask_limit=0)
+    res = agent.invoke({"messages": [("user", "题（连发）")]})
+    searches = [m for m in res["messages"] if isinstance(m, ToolMessage) and m.name == "search_web"]
+    assert len(searches) == 10
+    assert sum(1 for m in searches if m.status != "error") == MAX_SEARCHES
+    assert all("额度已用完" in m.content for m in searches if m.status == "error")
+
+
+def test_ask_budget_enforced_before_card(graph):
+    """模型无视绑定列表每轮都问：只出 MAX_ASKS 张问题卡，超额的提问在变成卡之前被改成错误结果。"""
+    r = graph.invoke({"request": "题（多问）"}, cfg("t1"))
+    cards = 0
+    while is_ask_interrupt(intr(r)):
+        cards += 1
+        assert cards <= MAX_ASKS + 1
+        r = resume(graph, "t1", {"answer": f"答 {cards}"})
+    assert cards == MAX_ASKS
+    p = intr(r)
+    assert p["type"] == "research.review"
+    v = graph.get_state(cfg("t1")).values
+    assert v["asks_used"] == MAX_ASKS
+    assert all(c["passed"] for c in p["checks"]), p["checks"]
+
+
+def test_consolidate_failure_cannot_be_exported(graph):
+    r = graph.invoke({"request": "题（整理失败）"}, cfg("t1"))
+    p = intr(r)
+    assert p["type"] == "research.review" and p["claims"] == []
+    failed = {c["name"] for c in p["checks"] if not c["passed"]}
+    assert {"report_valid", "question_answered"} <= failed
+    assert any("整理失败" in n for n in p["notes"])
+    with pytest.raises(ValueError, match="不能当作成功结果导出"):
+        resume(graph, "t1", {"action": "approve"})
+
+
+def test_unanswered_without_gap_text_still_refills(graph, planner):
+    r = graph.invoke({"request": "题（没回答）"}, cfg("t1"))
+    p = intr(r)
+    assert p["type"] == "research.review"
+    v = graph.get_state(cfg("t1")).values
+    assert v["gap_rounds"] == 1 and v["answered"] is True
+    assert sum(1 for c in planner.calls if c[0] == "consolidate") == 2
+    assert next(c for c in p["checks"] if c["name"] == "question_answered")["passed"]
+
+
+def test_close_out_history_answers_dangling_tool_calls():
+    msgs = [
+        HumanMessage("题"),
+        AIMessage(content="", tool_calls=[{"name": "search_web", "args": {}, "id": "ok1", "type": "tool_call"}]),
+        ToolMessage(content="[]", name="search_web", tool_call_id="ok1"),
+        AIMessage(content="", invalid_tool_calls=[{"name": "search_web", "args": "{bad", "id": "bad1", "error": "x", "type": "invalid_tool_call"}]),
+    ]
+    out = answer_dangling_calls(msgs)
+    assert len(out) == 5 and isinstance(out[-1], ToolMessage) and out[-1].tool_call_id == "bad1" and out[-1].content == DANGLING_NOTE
+    assert answer_dangling_calls(msgs[:3]) == msgs[:3]
+    assert ASK_BLOCKED != "ask_user"

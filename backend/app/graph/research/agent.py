@@ -35,10 +35,17 @@ from app.graph.research.state import (
 EXCERPT_CHARS = 400
 LIMIT_EXCEEDED_PREFIX = "Model call limits exceeded"
 EXHAUSTED_NOTE = "（系统）以下工具的额度已用完，不再提供：{names}。请基于已有材料继续或直接作答。"
+ASK_BLOCKED = "ask_user_over_budget"  # 超额的 ask_user 调用改成这个名字，HITL 中间件就不会再把它变成问题卡
+DANGLING_NOTE = "（系统）这个工具调用没有被执行：工具已不可用或参数无法解析。"
 
 
 class ToolBudgetMiddleware(AgentMiddleware):
-    """按工具名限制一次运行里的调用次数：用完就从模型可见的工具里摘掉，并在执行层硬拦。"""
+    """按工具名限制一次运行里的调用次数：用完就从模型可见的工具里摘掉，并在执行层硬拦。
+
+    同一批里发多个调用也算额度（第 9 个搜索不会因为前 8 个还没执行就放过）。
+    ask_user 由 HITL 中间件在执行前拦截、执行层拦不到，所以超额的提问在 after_model 里改名——
+    本中间件排在 HITL 之后，after_model 反序执行，先于 HITL 看到这条消息。
+    """
 
     def __init__(self, limits: dict[str, int]) -> None:
         super().__init__()
@@ -50,6 +57,32 @@ class ToolBudgetMiddleware(AgentMiddleware):
             if isinstance(m, ToolMessage) and m.name in self.limits:
                 used[m.name] = used.get(m.name, 0) + 1
         return used
+
+    def _over_budget(self, messages: list[BaseMessage], tool_call_id: str) -> bool:
+        """这条调用（算上同一批里排在它前面的同名调用）是否超额。"""
+        last = messages[-1] if messages else None
+        if not isinstance(last, AIMessage):
+            return False
+        used = self._used(messages[:-1])
+        for tc in last.tool_calls:
+            name = tc["name"]
+            lim = self.limits.get(name)
+            if tc["id"] == tool_call_id:
+                return lim is not None and used.get(name, 0) >= lim
+            if lim is not None:
+                used[name] = used.get(name, 0) + 1
+        return False
+
+    def after_model(self, state: AgentState, runtime) -> dict[str, Any] | None:
+        msgs = state.get("messages") or []
+        last = msgs[-1] if msgs else None
+        if not isinstance(last, AIMessage) or "ask_user" not in self.limits:
+            return None
+        if not any(tc["name"] == "ask_user" and self._over_budget(msgs, tc["id"]) for tc in last.tool_calls):
+            return None
+        calls = [dict(tc, name=ASK_BLOCKED) if tc["name"] == "ask_user" and self._over_budget(msgs, tc["id"]) else tc
+                 for tc in last.tool_calls]
+        return {"messages": [last.model_copy(update={"tool_calls": calls})]}  # 同一个 id：替换，不是追加
 
     def wrap_model_call(self, request: ModelRequest, handler):
         used = self._used(request.messages)
@@ -64,8 +97,10 @@ class ToolBudgetMiddleware(AgentMiddleware):
 
     def wrap_tool_call(self, request, handler):
         name = request.tool_call["name"]
-        lim = self.limits.get(name)
-        if lim is not None and self._used(request.state.get("messages", [])).get(name, 0) >= lim:
+        if name == ASK_BLOCKED:
+            return ToolMessage(content="提问额度已用完，这个问题没有呈现给用户。自行判断并在答案里写明假设。",
+                               name=ASK_BLOCKED, tool_call_id=request.tool_call["id"], status="error")
+        if name in self.limits and self._over_budget(request.state.get("messages", []), request.tool_call["id"]):
             return ToolMessage(content=f"工具 {name} 的额度已用完，不要再调用它。", name=name,
                                tool_call_id=request.tool_call["id"], status="error")
         return handler(request)
@@ -95,13 +130,15 @@ class InvalidToolCallRetryMiddleware(AgentMiddleware[_RetryState]):
         return {"jump_to": "model", "invalid_retries": n + 1}
 
 
-def build_agent(model: BaseChatModel, tools: list, system_prompt: str, *, allow_ask: bool = True):
+def build_agent(model: BaseChatModel, tools: list, system_prompt: str, *, ask_limit: int = MAX_ASKS):
+    """ask_limit 是本次运行还能问的次数（整线程上限减去已问过的）；0 就不绑 ask_user、不装 HITL。"""
+    allow_ask = ask_limit > 0
     tools = [t for t in tools if allow_ask or t.name != "ask_user"]
     limits = {"search_web": MAX_SEARCHES, "read_page": MAX_READS}
     middleware: list = []
     if allow_ask:
         middleware.append(HumanInTheLoopMiddleware(interrupt_on={"ask_user": {"allowed_decisions": ["respond"]}}))
-        limits["ask_user"] = MAX_ASKS
+        limits["ask_user"] = ask_limit
     middleware += [
         ToolBudgetMiddleware(limits),
         InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
@@ -133,10 +170,25 @@ def final_answer_text(messages: list[BaseMessage]) -> str | None:
     return None
 
 
+def answer_dangling_calls(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """没有工具结果的工具调用（无效调用重试耗尽、或超限结束）补一条错误结果，历史才是合法的对话。"""
+    answered = {m.tool_call_id for m in messages if isinstance(m, ToolMessage)}
+    out: list[BaseMessage] = []
+    for m in messages:
+        out.append(m)
+        if not isinstance(m, AIMessage):
+            continue
+        for tc in list(m.tool_calls) + list(m.invalid_tool_calls):
+            if tc.get("id") and tc["id"] not in answered:
+                out.append(ToolMessage(content=DANGLING_NOTE, name=tc.get("name") or "unknown", tool_call_id=tc["id"], status="error"))
+                answered.add(tc["id"])
+    return out
+
+
 def close_out(model: BaseChatModel, messages: list[BaseMessage]) -> tuple[str | None, str]:
     """不带工具再要一次答案。返回 (文字或 None, 说明)。"""
     convo = [m for m in messages if not (isinstance(m, AIMessage) and str(m.content).startswith(LIMIT_EXCEEDED_PREFIX))]
-    convo = convo + [HumanMessage(prompts.CLOSE_PROMPT)]
+    convo = answer_dangling_calls(convo) + [HumanMessage(prompts.CLOSE_PROMPT)]
     last_err = ""
     for i in range(CLOSE_RETRIES):
         try:
