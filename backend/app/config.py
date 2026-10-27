@@ -21,6 +21,12 @@ DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.co
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")
 
+# 调研场景的模型：探针对照后定为 DeepSeek V4 Pro 思考 high（docs/probe/autonomy）；设 RESEARCH_PROVIDER=ark 可切回豆包
+RESEARCH_PROVIDER = os.environ.get("RESEARCH_PROVIDER", "deepseek")
+RESEARCH_MODEL = os.environ.get("RESEARCH_MODEL", "")  # 空则按提供方默认
+RESEARCH_THINKING = os.environ.get("RESEARCH_THINKING", "1") not in ("0", "false", "")
+RESEARCH_EFFORT = os.environ.get("RESEARCH_EFFORT", "high")
+
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-flash-260915")
 # 背景图生成开关（M2 起默认开）；关闭时背景为模板渐变
 BACKGROUND_ENABLED = os.environ.get("LINGDRAFT_BACKGROUND", "1") not in ("0", "false", "")

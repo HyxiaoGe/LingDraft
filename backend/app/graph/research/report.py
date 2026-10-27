@@ -69,6 +69,13 @@ def assemble(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def answer_check(answer: str | None, how: str) -> CheckResult:
+    """没有有效候选答案就不能算成功；受控收尾得到的答案要标出来。"""
+    if not answer:
+        return CheckResult(name="answer_present", passed=False, detail="调研没有产出答案；")
+    return CheckResult(name="answer_present", passed=True, detail="由受控收尾补得；" if how == "close" else "")
+
+
 def run_checks(
     sections: dict[str, SectionText], claims: list[Claim], sources: list[Source], scope: Scope
 ) -> list[CheckResult]:

@@ -9,7 +9,6 @@ const SSTATUS = { candidate: "候选", adopted: "已采纳", excluded: "已排�
 export function researchCardFor(it, st, resume, setCard) {
   if (it.type === "research.scope") return scopeCard(it, resume);
   if (it.type === "research.ask") return askCard(it, resume);
-  if (it.type === "research.outline") return outlineCard(it, resume);
   if (it.type === "research.review") return reviewCard(it, st, resume, setCard);
   return null;
 }
@@ -56,44 +55,6 @@ function askCard(it, resume) {
   };
 }
 
-// ---- 大纲确认 ----
-function outlineCard(it, resume) {
-  const nodes = it.nodes.map((n) => ({ id: n.id, title: n.title, question: n.question }));
-  const edit = (newNodes, text) => (resume({ action: "edit", nodes: newNodes }, text), null);
-  return {
-    title: "大纲和证据可以吗？",
-    sub: "确认后按这份大纲写报告；被引用的来源会标为已采纳",
-    page: "1/1",
-    options: [
-      { label: "可以，开始写", hint: `${nodes.length} 章`, value: "approve" },
-      { label: "删掉一章", hint: "它的论断不进报告", value: "remove" },
-      { label: "加一章", hint: "会单独为它补调研", value: "add" },
-    ],
-    customPlaceholder: "或直接写要加的章节，例如：评测基准与真实场景表现",
-    onAnswer: (v, isCustom) => {
-      if (isCustom) return edit([...nodes, { id: null, title: v, question: v }], `加一章：${v}`);
-      if (v === "approve") return (resume({ action: "approve" }, "大纲可以，开始写"), null);
-      if (v === "remove")
-        return {
-          title: "删掉哪一章？",
-          page: "2/2",
-          options: nodes.map((n) => ({ label: n.title, hint: n.question, value: n.id })),
-          onAnswer: (id) => edit(nodes.filter((n) => n.id !== id), `删掉：${nodes.find((n) => n.id === id)?.title}`),
-        };
-      if (v === "add")
-        return {
-          title: "加哪一章？",
-          page: "2/2",
-          options: [],
-          customPlaceholder: "章节标题，例如：评测基准与真实场景表现",
-          requireAnswer: true,
-          onAnswer: (t) => edit([...nodes, { id: null, title: t, question: t }], `加一章：${t}`),
-        };
-      return null;
-    },
-  };
-}
-
 // ---- 终审 ----
 function reviewCard(it, st, resume, setCard) {
   return {
@@ -103,14 +64,12 @@ function reviewCard(it, st, resume, setCard) {
       { label: "就这版，导出", hint: "报告 + 论断清单 + 来源清单", value: "approve" },
       { label: "排除某条来源", hint: "只靠它的论断会退回草稿并移出报告", value: "source" },
       { label: "改某条论断", hint: "改过的表述模型不再碰", value: "claim" },
-      { label: "重写某一章", hint: "只按已确认的论断重写这一章", value: "section" },
-      { label: "回到大纲", hint: "增删章节，已调研的章不重做", value: "outline" },
+      { label: "重写某一节", hint: "只按已确认的论断重写这一节", value: "section" },
     ],
-    customPlaceholder: "或直接说要改什么，例如：第一章更简短",
+    customPlaceholder: "或直接说要改什么，例如：第一节更简短",
     onAnswer: (v, isCustom) => {
       if (isCustom) return routeResearchText(v, st, resume, setCard), null;
       if (v === "approve") return (resume({ action: "approve" }, "就这版，导出"), null);
-      if (v === "outline") return (resume({ action: "reopen_outline" }, "回到大纲"), null);
       if (v === "source") return pickSourceCard(it, resume);
       if (v === "claim") return pickClaimCard(it, (c) => claimCard(c, it, resume));
       if (v === "section") return pickSectionCard(it, (sec) => instructionCard(sec, resume));
@@ -180,7 +139,7 @@ export function sourceCard(s, resume) {
 
 function pickSectionCard(it, next, instruction) {
   return {
-    title: instruction ? `“${instruction}”是改哪一章？` : "重写哪一章？",
+    title: instruction ? `“${instruction}”是改哪一节？` : "重写哪一节？",
     page: "2/3",
     options: it.sections.map((s) => ({ label: s.title, hint: `${s.sentences.length} 句`, value: s.id })),
     onAnswer: (id) => next(it.sections.find((s) => s.id === id)),
@@ -201,7 +160,7 @@ function instructionCard(sec, resume) {
   };
 }
 
-// 终审阶段的自由文本：能对上章节标题就重写那一章，否则反问改哪一章
+// 终审阶段的自由文本：能对上节标题就重写那一节，否则反问改哪一节
 export function routeResearchText(text, st, resume, setCard) {
   const t = text.trim();
   if (!t) return;
@@ -220,30 +179,10 @@ export function ResearchBody({ st, it, onCard, resume }) {
     return <p>需求里有 {it.questions.length} 处要先问清，不然调研方向可能会偏。</p>;
   }
   if (it?.type === "research.ask") {
-    return <p>调研到一半有个问题要问你（已完成 {st.progress.researched}/{st.progress.total} 章）。</p>;
+    return <p>调研到一半有个只有你能回答的问题。</p>;
   }
-  if (it?.type === "research.outline") return <OutlineBody it={it} />;
   if (it?.type === "research.review" || st.exported) return <ReviewBody st={st} it={it} onCard={onCard} resume={resume} />;
   return null;
-}
-
-function OutlineBody({ it }) {
-  const cited = new Set(it.nodes.flatMap((n) => n.claims.flatMap((c) => c.source_ids)));
-  return (
-    <>
-      <p>调研完了。候选大纲 {it.nodes.length} 章，共找到 {it.sources.length} 条来源，其中 {cited.size} 条被论断引用。确认大纲后我再写报告。</p>
-      <div className="outline">
-        {it.nodes.map((n, i) => (
-          <div className="onode" key={n.id}>
-            <div className="ot"><span className="num">{i + 1}</span>{n.title}<span className="cnt">{n.claims.length} 条论断</span></div>
-            <div className="oq">{n.question}</div>
-            {n.claims.map((c) => <ClaimRow key={c.id} c={c} />)}
-          </div>
-        ))}
-      </div>
-      {it.assumptions.length > 0 && <Assumptions items={it.assumptions} />}
-    </>
-  );
 }
 
 function ReviewBody({ st, it, onCard, resume }) {
@@ -263,7 +202,7 @@ function ReviewBody({ st, it, onCard, resume }) {
   const notes = [...new Set(it?.notes || st.notes || [])];
   return (
     <>
-      {it ? <p>第 {it.version} 版好了（{last?.note}）。每句话都挂着论断，推断句有标记；点论断或来源可以单独处理。</p>
+      {it ? <p>第 {it.version} 版好了（{last?.note}）。每句话都挂着论断，推断句有标记；点论断或来源可以单独处理。{it.answer_how === "close" ? " 这次调研没有自己收尾，答案是基于已查到的材料补的，请多留意。" : ""}</p>
           : <p>已导出第 {st.exported.version} 版的确认物包。</p>}
       <div className="rtabs">
         {[["report", "报告"], ["claims", `论断 ${claims.filter((c) => !c.orphaned).length}`], ["sources", `来源 ${sources.length}`]].map(([k, l]) => (

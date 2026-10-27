@@ -12,7 +12,7 @@ from app.api.runner import BaseRunner, jsonable
 from app.graph.research.agent import ask_resume, ask_view, is_ask_interrupt
 from app.graph.research.graph import build_graph, open_sqlite_checkpointer
 from app.graph.research.state import AskAnswer
-from app.research_llm import ArkResearchPlanner, FakeResearchPlanner
+from app.research_llm import FakeResearchPlanner, LiveResearchPlanner
 
 
 class ResearchRunner(BaseRunner):
@@ -21,7 +21,7 @@ class ResearchRunner(BaseRunner):
     def __init__(self, fake: bool | None = None, data_dir: Path | None = None, out_dir: Path | None = None):
         fake = config.USE_FAKE_PLANNER if fake is None else fake
         self.out_dir = Path(out_dir or config.OUTPUT_DIR / "research")
-        self.planner = FakeResearchPlanner() if fake else ArkResearchPlanner()
+        self.planner = FakeResearchPlanner() if fake else LiveResearchPlanner()
         saver = open_sqlite_checkpointer(Path(data_dir or config.DATA_DIR) / "checkpoints_research.sqlite")
         self.graph = build_graph(self.planner, saver, self.out_dir)
 
@@ -62,7 +62,6 @@ class ResearchRunner(BaseRunner):
         for task in snap.tasks:
             for it in task.interrupts:
                 pending = it.value
-        outline = v.get("outline", [])
         return {
             "thread_id": thread_id,
             "exists": True,
@@ -71,9 +70,10 @@ class ResearchRunner(BaseRunner):
             "request": v.get("request"),
             "scope": jsonable(v.get("scope")),
             "scope_confirmed": v.get("scope_confirmed", False),
-            "outline": jsonable(outline),
-            "outline_confirmed": v.get("outline_confirmed", False),
-            "progress": {"researched": sum(1 for n in outline if n.researched), "total": len(outline)},
+            "outline": jsonable(v.get("outline", [])),
+            "answer": v.get("answer"),
+            "answer_how": v.get("answer_how", "none"),
+            "gap_rounds": v.get("gap_rounds", 0),
             "sources": jsonable(v.get("sources", [])),
             "claims": jsonable(v.get("claims", [])),
             "assumptions": v.get("assumptions", []),
@@ -102,11 +102,13 @@ class ResearchRunner(BaseRunner):
             return out
         if node == "confirm_scope" and update.get("scope"):
             out["scope"] = jsonable(update["scope"])
-        if node == "research_section":
-            done = [n for n in update.get("outline", []) if n.researched]
-            out["section"] = done[-1].title if done else None
+        if node == "research":
             out["sources"] = len(update.get("sources", []))
+            out["answer_how"] = update.get("answer_how")
+        if node == "consolidate":
+            out["sections"] = len(update.get("outline", []))
             out["claims"] = len(update.get("claims", []))
+            out["gap"] = update.get("gap")
         if node == "write" and update.get("versions"):
             v = update["versions"][-1]
             out.update({"version": v.n, "note": v.note, "md_url": self.file_url(thread_id, v.path)})

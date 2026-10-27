@@ -1,7 +1,7 @@
 """调研场景的 state。
 
-已确认内容三种：来源（候选 / 已采纳 / 已排除，由用户定）、论断（草稿 / 已确认 / 用户改过，强制标事实或推断）、
-大纲（确认后结构锁定）。模型只能提候选。
+一个 agent 对整个问题自主调研，交文字候选答案；再由一次无工具的结构化整理得到章节、论断与来源关联。
+已确认内容：来源（候选 / 系统选用 / 用户排除）、论断（草稿 / 已确认 / 用户改过，强制标事实或推断）。模型只能提候选。
 """
 
 from __future__ import annotations
@@ -15,12 +15,15 @@ ClaimKind = Literal["fact", "inference"]
 ClaimStatus = Literal["draft", "confirmed", "user_edited"]
 Confidence = Literal["high", "medium", "low"]
 
-ASK_LIMIT_PER_SECTION = 3  # 每轮（每章 agent 跑一次）上限，Sean 定
-ASK_LIMIT_PER_THREAD = 6  # 整个线程的总上限，超了后续章节不再提问，只记假设
-MAX_SEARCHES_PER_SECTION = 3
-MAX_READS_PER_SECTION = 3
-MAX_MODEL_CALLS_PER_SECTION = 20  # 真实跑过一次：14 次时有一章没来得及输出 Findings
-MAX_OUTLINE_NODES = 4
+# 研究预算（每次调研 agent 运行）；收尾、整理各有自己的预算，互不占用
+MAX_SEARCHES = 8
+MAX_READS = 6
+MAX_ASKS = 2  # 整个线程的提问上限
+MAX_MODEL_CALLS = 30
+INVALID_TOOL_CALL_RETRIES = 2  # 模型返回无法解析的工具调用时，让它重发的次数
+CLOSE_RETRIES = 2  # 受控收尾（无工具，基于已有材料作答）的尝试次数
+CONSOLIDATE_RETRIES = 2
+MAX_GAP_ROUNDS = 1  # 整理时发现关键证据缺口，回研究环节补的轮数
 
 
 class Scope(BaseModel):
@@ -50,22 +53,13 @@ class IntakeResult(BaseModel):
     questions: list[ClarifyQuestion] = Field(description="最多 2 个；需求清楚时为空")
 
 
-SCOPE_FIELDS: list[tuple[str, str, bool, str]] = [
-    ("question", "研究问题", True, "一句话说清要回答什么"),
-    ("time_range", "时间范围", False, "只看哪段时间的信息"),
-    ("region", "地域范围", False, "看哪些地区的产品或信源"),
-    ("lang", "信源语言", False, "中文、英文还是都要"),
-    ("exclude", "不研究什么", False, "明确排除的范围"),
-    ("deliverable", "交付形式", False, "报告 / 对比表 / 要点清单"),
-]
-
-
 class OutlineNode(BaseModel):
+    """报告的一节：由整理步骤按候选答案的内容划分，简单问题只有一节。"""
+
     model_config = ConfigDict(extra="forbid")
     id: str
     title: str
-    question: str = Field(description="这一章要回答的问题")
-    researched: bool = False
+    question: str = Field(description="这一节回答的问题")
 
 
 class Source(BaseModel):
@@ -94,7 +88,7 @@ class Claim(BaseModel):
 
 
 class SectionText(BaseModel):
-    """一章的正文：按句给出，每句挂论断，便于逐句回指。"""
+    """一节的正文：按句给出，每句挂论断，便于逐句回指。"""
 
     model_config = ConfigDict(extra="forbid")
     outline_id: str
@@ -133,20 +127,8 @@ class ClarifyForm(BaseModel):
     answers: dict[str, str | None]
 
 
-class OutlineEdit(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    id: str | None = Field(default=None, description="保留的章节给原 id；新增章节为 null")
-    title: str
-    question: str
-
-
-class OutlineDecision(BaseModel):
-    action: Literal["approve", "edit"]
-    nodes: list[OutlineEdit] | None = None
-
-
 class ReviewDecision(BaseModel):
-    action: Literal["approve", "exclude_source", "edit_claim", "rewrite_section", "reopen_outline"]
+    action: Literal["approve", "exclude_source", "edit_claim", "rewrite_section"]
     target: str | None = None
     content: str | None = None
     instruction: str | None = None
@@ -164,9 +146,11 @@ class ResearchState(TypedDict, total=False):
     scope: Scope | None
     clarify: list[ClarifyQuestion]
     scope_confirmed: bool
+    answer: str | None  # agent 的文字候选答案
+    answer_how: str  # 怎么得到的：agent / close / none
+    gap: str | None  # 整理时发现的关键证据缺口，回研究环节补
+    gap_rounds: int
     outline: list[OutlineNode]
-    outline_confirmed: bool
-    section_idx: int
     sources: list[Source]
     claims: list[Claim]
     assumptions: list[str]

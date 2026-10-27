@@ -46,18 +46,15 @@ def test_research_flow_over_http(client):
     ask = _last(ev, "interrupt")
     assert ask["type"] == "research.ask" and ask["options"] == ["包含", "不包含"] and ask["why"]
     st = _last(ev, "state")
-    assert st["interrupt"]["type"] == "research.ask" and st["progress"] == {"researched": 0, "total": 2}
+    assert st["interrupt"]["type"] == "research.ask" and st["answer"] is None
 
     ev = _events(client.post(f"/api/research/threads/{tid}/resume", json={"payload": {"answer": "包含"}}))
-    outline = _last(ev, "interrupt")
-    assert outline["type"] == "research.outline" and [n["id"] for n in outline["nodes"]] == ["c1", "c2"]
-    sections = [d for e, d in ev if e == "node" and d["node"] == "research_section"]
-    assert [s["section"] for s in sections] == ["局部修改机制", "事实准确性"]
-    assert _last(ev, "state")["progress"] == {"researched": 2, "total": 2}
-
-    ev = _events(client.post(f"/api/research/threads/{tid}/resume", json={"payload": {"action": "approve"}}))
     review = _last(ev, "interrupt")
     assert review["type"] == "research.review" and review["version"] == 1 and review["md_url"].endswith("/files/report_v1.md")
+    research = next(d for e, d in ev if e == "node" and d["node"] == "research")
+    assert research["sources"] == 3 and research["answer_how"] == "agent"
+    cons = next(d for e, d in ev if e == "node" and d["node"] == "consolidate")
+    assert cons["sections"] == 2 and cons["claims"] == 3 and cons["gap"] is None
     assert any(e == "node" and d["node"] == "write" and d["version"] == 1 for e, d in ev)
     md = client.get(review["md_url"])
     assert md.status_code == 200 and md.text.startswith("# ")
@@ -85,9 +82,9 @@ def test_invalid_answer_reports_error(client):
 
 def test_clear_request_has_no_scope_card(client):
     ev = _events(client.post("/api/research/threads", json={"request": "最近新加坡的天气情况如何？"}))
-    assert not any(e == "interrupt" and d["type"] == "research.scope" for e, d in ev)
+    assert not any(e == "interrupt" and d["type"] in ("research.scope", "research.ask") for e, d in ev)
     st = _last(ev, "state")
-    assert st["scope_confirmed"] and st["interrupt"]["type"] == "research.ask"
+    assert st["scope_confirmed"] and st["interrupt"]["type"] == "research.review" and st["answer_how"] == "agent"
 
 
 def test_unknown_research_thread_404(client):

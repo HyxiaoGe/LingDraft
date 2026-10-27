@@ -12,7 +12,7 @@
   大纲       {"action": "approve"} 或 {"action": "edit", "nodes": [{"id": "c1", "title": "...", "question": "..."}, ...]}
   终审       {"action": "approve"} | {"action": "exclude_source", "target": "s2"}
              | {"action": "edit_claim", "target": "k1", "content": "..."}
-             | {"action": "rewrite_section", "target": "c1", "instruction": "..."} | {"action": "reopen_outline"}
+             | {"action": "rewrite_section", "target": "c1", "instruction": "..."}
 """
 
 from __future__ import annotations
@@ -31,12 +31,12 @@ from app.graph.research.graph import build_graph as build_research
 from app.graph.research.graph import open_sqlite_checkpointer as open_research_saver
 from app.graph.research.state import AskAnswer
 from app.llm import ArkPlanner, FakePlanner
-from app.research_llm import ArkResearchPlanner, FakeResearchPlanner
+from app.research_llm import FakeResearchPlanner, LiveResearchPlanner
 
 
 def _graph(scenario: str, fake: bool):
     if scenario == "research":
-        planner = FakeResearchPlanner() if fake else ArkResearchPlanner()
+        planner = FakeResearchPlanner() if fake else LiveResearchPlanner()
         saver = open_research_saver(config.DATA_DIR / "checkpoints_research.sqlite")
         return build_research(planner, saver, config.OUTPUT_DIR / "research")
     planner = FakePlanner() if fake else ArkPlanner()
@@ -88,6 +88,8 @@ def _state_view(scenario: str, snap) -> dict:
             "next": snap.next,
             "scope": v.get("scope").model_dump() if v.get("scope") else None,
             "outline": [n.model_dump() for n in v.get("outline", [])],
+            "answer": v.get("answer"),
+            "answer_how": v.get("answer_how"),
             "sources": [s.model_dump(exclude={"excerpt"}) for s in v.get("sources", [])],
             "claims": [c.model_dump() for c in v.get("claims", [])],
             "assumptions": v.get("assumptions", []),

@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app import config
 from app.graph.research.agent import ask_resume, ask_view, is_ask_interrupt
+from app.research_llm import make_chat_model
 from app.tools.gateway import GatewayClient
 from app.tools.research_tools import make_research_tools
 
@@ -68,33 +69,7 @@ CASES = [
 
 
 def make_model(provider: str, model: str, thinking: bool, effort: str):
-    """按提供方构造 agent 用的聊天模型。DeepSeek 思考模式下多轮工具调用必须把 reasoning_content 原样传回，
-    langchain-openai / langchain-deepseek 都不回传，这里补上。"""
-    if provider == "ark":
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(model=model or config.ARK_MODEL, base_url=config.ARK_BASE_URL, api_key=config.ARK_API_KEY,
-                          extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}}, timeout=90, max_retries=2, temperature=0)
-    from langchain_deepseek import ChatDeepSeek
-
-    class ChatDeepSeekRT(ChatDeepSeek):
-        def _get_request_payload(self, input_, *, stop=None, **kwargs):
-            payload = super()._get_request_payload(input_, stop=stop, **kwargs)
-            # 思考模式不接受强制 tool_choice（ToolStrategy 会设成 any/required），去掉，交给模型自己决定何时提交 Answer
-            if thinking and payload.get("tool_choice") not in (None, "auto", "none"):
-                payload.pop("tool_choice")
-            msgs = self._convert_input(input_).to_messages()
-            if len(msgs) == len(payload.get("messages", [])):
-                for m, d in zip(msgs, payload["messages"]):
-                    if isinstance(m, AIMessage) and m.additional_kwargs.get("reasoning_content") is not None:
-                        d["reasoning_content"] = m.additional_kwargs["reasoning_content"]
-            return payload
-
-    if not config.DEEPSEEK_API_KEY:
-        raise RuntimeError("未设置 DEEPSEEK_API_KEY")
-    extra = {"thinking": {"type": "enabled" if thinking else "disabled"}}
-    kw = {"reasoning_effort": effort} if thinking else {"temperature": 0}
-    return ChatDeepSeekRT(model=model or config.DEEPSEEK_MODEL, api_key=config.DEEPSEEK_API_KEY, api_base=config.DEEPSEEK_BASE_URL,
-                          extra_body=extra, timeout=180, max_retries=2, **kw)
+    return make_chat_model(provider, model, thinking=thinking, effort=effort)
 
 
 def build(model, tools, plain: bool):

@@ -297,7 +297,7 @@ function Welcome({ scenario, onPick }) {
       <div className="msg-ai">
         <div className="head"><span className="avatar">灵</span><span className="name">灵稿</span></div>
         <div className="body">
-          <p>我可以帮你做产品调研。说一句要研究什么，我会先和你定范围，再按章节搜资料、读原文，中途拿不准的会问你；大纲和证据你确认后我才写报告。报告里每句话都能回指来源，事实和推断分开标；你排除一条来源，靠它的论断会自动退回。</p>
+          <p>我可以帮你做调研。说一句要研究什么：需求清楚就直接查，真有歧义才问你；简单问题直接给答案，复杂问题多方查证、读原文核实。报告里每句话都能回指来源，事实和推断分开标；你排除一条来源，靠它的论断会自动退回。</p>
           <p>试试：<a href="#" onClick={(e) => { e.preventDefault(); onPick(RESEARCH_DEFAULT); }}>{RESEARCH_DEFAULT}</a></p>
         </div>
       </div>
@@ -341,7 +341,8 @@ function AiMsg({ m, onPickElement, onCard, resume }) {
         )}
         {m.steps.filter((s) => s.node === "render").map((s) => <div className="done-line" key={s.version}>已渲染第 {s.version} 版 · {s.note}</div>)}
         {m.steps.filter((s) => s.node === "confirm_scope" && s.scope).map((s, i) => <div className="done-line" key={"sc" + i}>{scopeLine(s.scope)}</div>)}
-        {m.steps.filter((s) => s.node === "research_section" && s.section).map((s, i) => <div className="done-line" key={i}>调研完「{s.section}」· 累计 {s.sources} 条来源、{s.claims} 条论断</div>)}
+        {m.steps.filter((s) => s.node === "research").map((s, i) => <div className="done-line" key={"r" + i}>{s.answer_how === "close" ? "调研没有自己收尾，基于已有材料补了答案" : "调研完了"} · 共 {s.sources} 条候选来源</div>)}
+        {m.steps.filter((s) => s.node === "consolidate").map((s, i) => <div className="done-line" key={"c" + i}>{s.gap ? `整理时发现证据缺口，回去补查：${s.gap}` : `整理出 ${s.sections} 节、${s.claims} 条论断`}</div>)}
         {m.steps.filter((s) => s.node === "write").map((s) => <div className="done-line" key={s.version}>已生成第 {s.version} 版报告 · {s.note}</div>)}
         {st?.scenario !== "research" && m.steps.filter((s) => s.notes?.length).map((s, i) => <p key={i}>{s.notes.join("；")}</p>)}
         {m.stage && <div className="status"><span className="dots">{m.stage}</span><span className="sep">|</span><span>你可以随时关掉页面，回来后从这一步继续</span></div>}
@@ -445,8 +446,8 @@ function QuestionCard({ card, onClose }) {
 function InputBox({ scenario, mode, busy, hasCard, onSend, onReopen, image, onImage }) {
   const [text, setText] = useState("");
   const research = scenario === "research";
-  const placeholder = mode === "new" ? (research ? "想研究什么？说清主题、时间和信源要求" : "今天帮你做什么海报？说清商品、优惠、时间")
-    : mode === "review" ? (research ? "对这版报告说点什么，例如：第一章更简短" : "对这一版说点什么，例如：标题更有紧迫感")
+  const placeholder = mode === "new" ? (research ? "想研究什么？简单问题直接问，复杂的说清主题、时间和信源要求" : "今天帮你做什么海报？说清商品、优惠、时间")
+    : mode === "review" ? (research ? "对这版报告说点什么，例如：第一节更简短" : "对这一版说点什么，例如：标题更有紧迫感")
     : mode === "ask" ? "直接回答上面的问题…" : "请先回答上方的问题";
   const send = () => { if (text.trim() && !busy && mode !== "locked") { onSend(text.trim()); setText(""); } };
   return (

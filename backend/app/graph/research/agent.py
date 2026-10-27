@@ -1,72 +1,154 @@
-"""调研 agent：create_agent + 中间件。外层图把它当一个节点调用。
+"""调研 agent：create_agent + 中间件。外层图把它当一个节点调用，对整个问题跑一次。
 
 - ask_user 由 HumanInTheLoopMiddleware 在执行前拦截（respond），用户回答直接成为工具结果。
-- ToolCallLimitMiddleware 限制每章的搜索 / 读取 / 提问次数；ModelCallLimitMiddleware 兜底防止死循环。
-- 候选来源不靠闭包收集，而是事后从 agent 的工具消息里解析（消息在检查点里，跨进程恢复也不丢）。
+- ToolBudgetMiddleware：额度用尽的工具从后续模型调用的工具列表里摘掉（模型看不到就不会反复调），
+  执行层再硬拦一次；ModelCallLimitMiddleware 兜底防止死循环。
+- InvalidToolCallRetryMiddleware：模型返回无法解析的工具调用（例如参数 JSON 里有裸引号）时，
+  默认循环会直接结束；这里让它带着解析错误重发，最多几次。
+- 收尾：agent 结束时没有文字答案，就用同一个模型不带工具再要一次（受控收尾，预算独立）。
+- 候选来源从 agent 的工具消息里解析（消息在检查点里，跨进程恢复也不丢）。
 """
 
 from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, NotRequired
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import HumanInTheLoopMiddleware, ModelCallLimitMiddleware, ToolCallLimitMiddleware
-from langchain.agents.structured_output import ToolStrategy
+from langchain.agents.middleware import HumanInTheLoopMiddleware, ModelCallLimitMiddleware
+from langchain.agents.middleware.types import AgentMiddleware, AgentState, ModelRequest, hook_config
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage, ToolMessage
-from pydantic import BaseModel, ConfigDict, Field
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
+from app.graph.research import prompts
 from app.graph.research.state import (
-    ASK_LIMIT_PER_SECTION,
-    MAX_MODEL_CALLS_PER_SECTION,
-    MAX_READS_PER_SECTION,
-    MAX_SEARCHES_PER_SECTION,
+    CLOSE_RETRIES,
+    INVALID_TOOL_CALL_RETRIES,
+    MAX_ASKS,
+    MAX_MODEL_CALLS,
+    MAX_READS,
+    MAX_SEARCHES,
     Source,
 )
 
 EXCERPT_CHARS = 400
+LIMIT_EXCEEDED_PREFIX = "Model call limits exceeded"
+EXHAUSTED_NOTE = "（系统）以下工具的额度已用完，不再提供：{names}。请基于已有材料继续或直接作答。"
 
 
-class ProposedClaim(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    statement: str = Field(description="一句话论断")
-    kind: Literal["fact", "inference"] = Field(description="fact=来源里明确写了；inference=从来源推出来的")
-    source_urls: list[str] = Field(description="支撑这条论断的网址，必须是搜到或读过的")
-    confidence: Literal["high", "medium", "low"]
+class ToolBudgetMiddleware(AgentMiddleware):
+    """按工具名限制一次运行里的调用次数：用完就从模型可见的工具里摘掉，并在执行层硬拦。"""
+
+    def __init__(self, limits: dict[str, int]) -> None:
+        super().__init__()
+        self.limits = limits
+
+    def _used(self, messages: list[BaseMessage]) -> dict[str, int]:
+        used: dict[str, int] = {}
+        for m in messages:
+            if isinstance(m, ToolMessage) and m.name in self.limits:
+                used[m.name] = used.get(m.name, 0) + 1
+        return used
+
+    def wrap_model_call(self, request: ModelRequest, handler):
+        used = self._used(request.messages)
+        exhausted = {n for n, lim in self.limits.items() if used.get(n, 0) >= lim}
+        if not exhausted:
+            return handler(request)
+        tools = [t for t in request.tools if getattr(t, "name", None) not in exhausted]
+        note = EXHAUSTED_NOTE.format(names="、".join(sorted(exhausted)))
+        base = request.system_message.content if request.system_message else ""
+        base = base if isinstance(base, str) else str(base)
+        return handler(request.override(tools=tools, system_message=SystemMessage(f"{base}\n\n{note}")))
+
+    def wrap_tool_call(self, request, handler):
+        name = request.tool_call["name"]
+        lim = self.limits.get(name)
+        if lim is not None and self._used(request.state.get("messages", [])).get(name, 0) >= lim:
+            return ToolMessage(content=f"工具 {name} 的额度已用完，不要再调用它。", name=name,
+                               tool_call_id=request.tool_call["id"], status="error")
+        return handler(request)
 
 
-class Findings(BaseModel):
-    """一章的调研结果。"""
+class _RetryState(AgentState):
+    invalid_retries: NotRequired[int]
 
-    model_config = ConfigDict(extra="forbid")
-    claims: list[ProposedClaim]
-    assumptions: list[str] = Field(description="没问用户、自行决定的取舍，或没有来源支撑的判断")
-    summary: str = Field(description="两句话概括这一章找到了什么")
+
+class InvalidToolCallRetryMiddleware(AgentMiddleware[_RetryState]):
+    """最后一条模型消息只有无效工具调用、没有有效调用时，让模型带着解析错误重发。"""
+
+    state_schema = _RetryState
+
+    def __init__(self, max_retries: int) -> None:
+        super().__init__()
+        self.max_retries = max_retries
+
+    @hook_config(can_jump_to=["model"])
+    def after_model(self, state: _RetryState, runtime) -> dict[str, Any] | None:
+        last = state["messages"][-1] if state.get("messages") else None
+        if not isinstance(last, AIMessage) or last.tool_calls or not last.invalid_tool_calls:
+            return None
+        n = state.get("invalid_retries", 0)
+        if n >= self.max_retries:
+            return None
+        return {"jump_to": "model", "invalid_retries": n + 1}
 
 
 def build_agent(model: BaseChatModel, tools: list, system_prompt: str, *, allow_ask: bool = True):
     tools = [t for t in tools if allow_ask or t.name != "ask_user"]
-    middleware = [
-        ToolCallLimitMiddleware(tool_name="search_web", run_limit=MAX_SEARCHES_PER_SECTION, exit_behavior="continue"),
-        ToolCallLimitMiddleware(tool_name="read_page", run_limit=MAX_READS_PER_SECTION, exit_behavior="continue"),
-        ModelCallLimitMiddleware(run_limit=MAX_MODEL_CALLS_PER_SECTION, exit_behavior="end"),
-    ]
+    limits = {"search_web": MAX_SEARCHES, "read_page": MAX_READS}
+    middleware: list = []
     if allow_ask:
-        middleware.insert(0, HumanInTheLoopMiddleware(interrupt_on={"ask_user": {"allowed_decisions": ["respond"]}}))
-        middleware.append(ToolCallLimitMiddleware(tool_name="ask_user", run_limit=ASK_LIMIT_PER_SECTION, exit_behavior="continue"))
+        middleware.append(HumanInTheLoopMiddleware(interrupt_on={"ask_user": {"allowed_decisions": ["respond"]}}))
+        limits["ask_user"] = MAX_ASKS
+    middleware += [
+        ToolBudgetMiddleware(limits),
+        InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
+        ModelCallLimitMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end"),
+    ]
     return create_agent(
         model=model,
         tools=tools,
         system_prompt=system_prompt,
         middleware=middleware,
-        response_format=ToolStrategy(Findings),
-        # 不传 checkpointer：作为子图时借用父图的检查点，命名空间带任务 id，每章一份独立历史；
-        # 中断后父节点重跑时任务 id 不变，子图从自己的检查点接着跑。
-        # （checkpointer=True 会按线程只留一份历史，各章消息会串在一起。）
+        # 不传 checkpointer：作为子图时借用父图的检查点，命名空间带任务 id；中断后父节点重跑，子图从自己的检查点接着跑。
         name="research_agent",
     )
+
+
+# ---- 候选答案与受控收尾 ----
+
+
+def final_answer_text(messages: list[BaseMessage]) -> str | None:
+    """agent 的文字答案：最后一条有正文、没有工具调用的模型消息；中间件注入的“超限”消息不算。"""
+    for m in reversed(messages):
+        if isinstance(m, AIMessage):
+            text = m.content if isinstance(m.content, str) else "".join(
+                b.get("text", "") for b in m.content if isinstance(b, dict)
+            )
+            if m.tool_calls or m.invalid_tool_calls or not text.strip() or text.startswith(LIMIT_EXCEEDED_PREFIX):
+                continue
+            return text.strip()
+    return None
+
+
+def close_out(model: BaseChatModel, messages: list[BaseMessage]) -> tuple[str | None, str]:
+    """不带工具再要一次答案。返回 (文字或 None, 说明)。"""
+    convo = [m for m in messages if not (isinstance(m, AIMessage) and str(m.content).startswith(LIMIT_EXCEEDED_PREFIX))]
+    convo = convo + [HumanMessage(prompts.CLOSE_PROMPT)]
+    last_err = ""
+    for i in range(CLOSE_RETRIES):
+        try:
+            res = model.invoke(convo)
+        except Exception as e:  # noqa: BLE001
+            last_err = f"{type(e).__name__}: {e}"
+            continue
+        text = final_answer_text([res])
+        if text:
+            return text, f"收尾第 {i + 1} 次成功"
+        last_err = "模型没有给出文字"
+    return None, f"收尾 {CLOSE_RETRIES} 次都失败：{last_err}"
 
 
 # ---- 中断的转换：中间件的载荷 ↔ 统一的问题卡 ----
@@ -87,8 +169,8 @@ def ask_view(value: dict) -> dict:
     }
 
 
-SKIP_MESSAGE = "（用户跳过了这个问题。按你的最佳判断继续，并把你采用的假设写进 assumptions。）"
-UNSHOWN_MESSAGE = "（这个问题没有呈现给用户：一次只能问一个问题。按你的最佳判断处理，并把假设写进 assumptions。）"
+SKIP_MESSAGE = "（用户跳过了这个问题。按你的最佳判断继续，并在答案末尾写明你采用的假设。）"
+UNSHOWN_MESSAGE = "（这个问题没有呈现给用户：一次只能问一个问题。按你的最佳判断处理，并在答案末尾写明假设。）"
 
 
 def ask_resume(answer: str | None, skip: bool = False, pending: dict | None = None) -> dict:

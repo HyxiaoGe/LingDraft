@@ -1,7 +1,6 @@
 """调研图的节点。约定与海报图一致：interrupt 节点不调模型；调模型的节点只写 state；拼装 / 校验 / 导出是纯确定性节点。
 
-research_section 是例外：它把 agent 子图当函数调用，子图里的 ask_user 中断会冒到外层；恢复时本节点重跑，
-子图从自己的检查点接着跑（create_agent(checkpointer=True)）。
+research 把 agent 子图当函数调用，子图里的 ask_user 中断会冒到外层；恢复时本节点重跑，子图从自己的检查点接着跑。
 """
 
 from __future__ import annotations
@@ -15,22 +14,21 @@ from langgraph.config import get_stream_writer
 from langgraph.types import interrupt
 
 from app.graph.research import prompts, report
-from app.graph.research.agent import Findings, build_agent, collect_sources, count_asks
+from app.graph.research.agent import build_agent, close_out, collect_sources, count_asks, final_answer_text
 from app.graph.research.state import (
-    ASK_LIMIT_PER_THREAD,
-    MAX_OUTLINE_NODES,
-    MAX_READS_PER_SECTION,
-    MAX_SEARCHES_PER_SECTION,
+    MAX_ASKS,
+    MAX_GAP_ROUNDS,
+    MAX_READS,
+    MAX_SEARCHES,
     Claim,
     ClarifyForm,
-    OutlineDecision,
     OutlineNode,
     ReportVersion,
     ResearchState,
     ReviewDecision,
     Scope,
     SectionText,
-    Source,
+    Sentence,
 )
 from app.research_llm import ResearchPlanner
 
@@ -55,14 +53,6 @@ def _next_index(items, prefix: str) -> int:
     return (max(nums) + 1) if nums else 1
 
 
-def _source_view(s: Source) -> dict:
-    return s.model_dump()
-
-
-def _claim_view(c: Claim) -> dict:
-    return c.model_dump()
-
-
 def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
     out_dir = Path(out_dir)
 
@@ -72,7 +62,8 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         _stage("正在理解研究问题")
         res = planner.intake(state["request"])
         return {
-            "scope": res.scope, "clarify": res.questions[:2], "scope_confirmed": False, "outline": [], "outline_confirmed": False, "section_idx": 0,
+            "scope": res.scope, "clarify": res.questions[:2], "scope_confirmed": False,
+            "answer": None, "answer_how": "none", "gap": None, "gap_rounds": 0, "outline": [],
             "sources": [], "claims": [], "assumptions": [], "asks_used": 0, "sections": {}, "rewrite_targets": [],
             "rewrite_instruction": None, "versions": [], "check_results": [], "notes": [], "exported": None, "approved": False,
         }
@@ -102,106 +93,108 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             "assumptions": assumptions,
         }
 
-    # ---- 大纲与调研 ----
+    # ---- 调研 ----
 
-    def plan(state: ResearchState) -> dict:
-        _stage("拟候选大纲")
-        nodes = planner.plan(state["scope"])[:MAX_OUTLINE_NODES]
-        return {"outline": [n.model_copy(update={"researched": False}) for n in nodes], "outline_confirmed": False}
-
-    def research_section(state: ResearchState, config: RunnableConfig) -> dict:
-        outline = state["outline"]
-        node = next(n for n in outline if not n.researched)
-        _stage(f"调研：{node.title}")
+    def research(state: ResearchState, config: RunnableConfig) -> dict:
         scope = state["scope"]
+        gap = state.get("gap")
+        _stage("补查证据：" + gap if gap else "正在调研")
         asks_used = state.get("asks_used", 0)
-        allow_ask = asks_used < ASK_LIMIT_PER_THREAD
-        others = "；".join(f"{n.id} {n.title}" for n in outline if n.id != node.id) or "（无）"
-        system = prompts.AGENT_SYSTEM.format(
-            scope=scope.model_dump_json(indent=1),
-            title=node.title,
-            question=node.question,
-            others=others,
-            max_searches=MAX_SEARCHES_PER_SECTION,
-            max_reads=MAX_READS_PER_SECTION,
-            ask_note="" if allow_ask else "（本次调研的提问额度已用完，不要调用 ask_user，自行判断并写进 assumptions。）",
+        allow_ask = asks_used < MAX_ASKS
+        system = prompts.RESEARCH_SYSTEM.format(
+            scope=scope.model_dump_json(indent=1, exclude_none=True),
+            max_searches=MAX_SEARCHES, max_reads=MAX_READS,
+            ask_note="" if allow_ask else "（提问额度已用完，不要调用 ask_user，自行判断并在答案里写明假设。）",
         )
+        user = scope.question if not gap else scope.question + prompts.GAP_FILL_NOTE.format(gap=gap, answer=state.get("answer") or "")
         agent = build_agent(planner.agent_model(), planner.tools(), system, allow_ask=allow_ask)
-        brief = f"[section:{node.id}] 请为章节“{node.title}”收集证据并输出 Findings。"
-        result = agent.invoke({"messages": [("user", brief)]}, config)
-
+        result = agent.invoke({"messages": [("user", user)]}, config)
         messages = result.get("messages", [])
+
         sources = list(state.get("sources", []))
-        new_sources, url_to_id = collect_sources(messages, sources, _next_index(sources, "s"))
+        new_sources, _ = collect_sources(messages, sources, _next_index(sources, "s"))
         sources += new_sources
 
-        findings = result.get("structured_response")
         notes = list(state.get("notes", []))
-        claims = list(state.get("claims", []))
-        assumptions = list(state.get("assumptions", []))
-        if isinstance(findings, Findings):
-            idx = _next_index(claims, "k")
-            for pc in findings.claims:
-                sids = [url_to_id[u] for u in pc.source_urls if u in url_to_id]
-                if not sids:
-                    notes.append(f"丢弃无来源论断：{pc.statement}")
-                    continue
-                claims.append(Claim(id=f"k{idx}", statement=pc.statement, kind=pc.kind, source_ids=sids,
-                                    outline_id=node.id, confidence=pc.confidence))
-                idx += 1
-            assumptions += [a for a in findings.assumptions if a not in assumptions]
-        else:
-            notes.append(f"章节“{node.title}”没有产出结构化结果（可能触发了调用上限）")
-
-        new_outline = [n.model_copy(update={"researched": True}) if n.id == node.id else n for n in outline]
+        answer = final_answer_text(messages)
+        how = "agent"
+        if answer is None:
+            _stage("调研没有收尾，基于已有材料补一次")
+            answer, why = close_out(planner.agent_model(), messages)
+            how = "close" if answer else "none"
+            notes.append(f"agent 没有给出文字答案（{why}）")
         return {
-            "outline": new_outline, "sources": sources, "claims": claims, "assumptions": assumptions,
+            "sources": sources, "answer": answer, "answer_how": how, "gap": None,
             "asks_used": asks_used + count_asks(messages), "notes": notes,
         }
 
-    def confirm_outline(state: ResearchState) -> dict:
-        outline = state["outline"]
-        claims = state.get("claims", [])
-        sources = {s.id: s for s in state.get("sources", [])}
-        payload = {
-            "type": "research.outline",
-            "title": "大纲与找到的证据",
-            "nodes": [
-                {
-                    "id": n.id, "title": n.title, "question": n.question,
-                    "claims": [_claim_view(c) for c in claims if c.outline_id == n.id and not c.orphaned],
-                }
-                for n in outline
-            ],
-            "sources": [_source_view(s) for s in sources.values()],
-            "assumptions": state.get("assumptions", []),
-            "note": "确认大纲即采纳这些论断引用的来源；终审时仍可排除。",
-        }
-        decision = _validated(interrupt(payload, response_schema=OutlineDecision), OutlineDecision)
-        if decision.action == "approve":
-            used = {sid for c in claims if not c.orphaned for sid in c.source_ids}
-            new_sources = [s.model_copy(update={"status": "adopted"}) if s.id in used and s.status != "excluded" else s
-                           for s in sources.values()]
-            return {"outline_confirmed": True, "sources": new_sources,
-                    "rewrite_targets": [n.id for n in outline], "rewrite_instruction": None}
-        # 编辑：保留带 id 的章节（含其调研结果），新章节待调研；删掉的章节其论断不再进报告
-        by_id = {n.id: n for n in outline}
-        new_outline: list[OutlineNode] = []
-        next_n = _next_index(outline, "c")
-        for e in decision.nodes or []:
-            if e.id and e.id in by_id:
-                new_outline.append(by_id[e.id].model_copy(update={"title": e.title, "question": e.question}))
-            else:
-                new_outline.append(OutlineNode(id=f"c{next_n}", title=e.title, question=e.question))
-                next_n += 1
-        keep = {n.id for n in new_outline}
-        return {"outline": new_outline[:MAX_OUTLINE_NODES], "outline_confirmed": False,
-                "claims": [c for c in claims if c.outline_id in keep]}
+    def consolidate(state: ResearchState) -> dict:
+        """无工具的结构化整理：候选答案 + 已存来源 → 节、论断、来源关联。不新增事实。"""
+        answer = state.get("answer")
+        notes = list(state.get("notes", []))
+        sources = list(state.get("sources", []))
+        if not answer:
+            notes.append("没有候选答案，无法整理；报告为空")
+            return {"outline": [], "sections": {}, "claims": [], "notes": notes, "rewrite_targets": []}
+        _stage("整理论断与来源")
+        try:
+            res = planner.consolidate(state["scope"], answer, sources)
+        except Exception as e:  # noqa: BLE001
+            notes.append(f"整理失败：{e}")
+            return {"outline": [], "sections": {}, "claims": [], "notes": notes, "rewrite_targets": []}
+
+        known = {s.id for s in sources if s.status != "excluded"}
+        claims: list[Claim] = []
+        ref_to_id: dict[str, str] = {}
+        sec_of_ref: dict[str, str] = {}
+        outline: list[OutlineNode] = []
+        sections: dict[str, SectionText] = {}
+        for i, sd in enumerate(res.sections, start=1):
+            cid = f"c{i}"
+            outline.append(OutlineNode(id=cid, title=sd.title, question=sd.question))
+            for s in sd.sentences:
+                if s.claim_ref:
+                    sec_of_ref.setdefault(s.claim_ref, cid)
+        if not outline:
+            outline.append(OutlineNode(id="c1", title="结论", question=state["scope"].question))
+        idx = _next_index(state.get("claims", []), "k")
+        for cd in res.claims:
+            sids = [sid for sid in cd.source_ids if sid in known]
+            if not sids:
+                notes.append(f"丢弃无来源论断：{cd.statement}")
+                continue
+            claim_id = f"k{idx}"
+            idx += 1
+            ref_to_id[cd.ref] = claim_id
+            claims.append(Claim(id=claim_id, statement=cd.statement, kind=cd.kind, source_ids=sids,
+                                outline_id=sec_of_ref.get(cd.ref, outline[0].id), confidence=cd.confidence))
+        for i, sd in enumerate(res.sections, start=1):
+            cid = f"c{i}"
+            sections[cid] = SectionText(outline_id=cid, sentences=[
+                Sentence(text=s.text, claim_id=ref_to_id.get(s.claim_ref) if s.claim_ref else None) for s in sd.sentences
+            ])
+        if "c1" not in sections:
+            sections["c1"] = SectionText(outline_id="c1", sentences=[])
+        used = {sid for c in claims for sid in c.source_ids}
+        sources = [s.model_copy(update={"status": "adopted"}) if s.id in used and s.status != "excluded" else s for s in sources]
+        assumptions = list(state.get("assumptions", [])) + [a for a in res.assumptions if a not in state.get("assumptions", [])]
+
+        gap = (res.gap or "").strip() or None
+        rounds = state.get("gap_rounds", 0)
+        if gap and rounds < MAX_GAP_ROUNDS:
+            notes.append(f"整理发现证据缺口，回研究环节补一轮：{gap}")
+            return {"outline": outline, "sections": sections, "claims": claims, "sources": sources, "assumptions": assumptions,
+                    "notes": notes, "gap": gap, "gap_rounds": rounds + 1, "rewrite_targets": []}
+        if gap:
+            assumptions.append(f"证据缺口未补齐：{gap}")
+        return {"outline": outline, "sections": sections, "claims": claims, "sources": sources, "assumptions": assumptions,
+                "notes": notes, "gap": None, "rewrite_targets": []}
 
     # ---- 写作、校验、终审 ----
 
     def write(state: ResearchState, config: RunnableConfig) -> dict:
-        targets = state.get("rewrite_targets") or [n.id for n in state["outline"]]
+        """初稿直接拼装整理结果；终审后的改动只重写受影响的节。"""
+        targets = state.get("rewrite_targets") or []
         instruction = state.get("rewrite_instruction")
         sections = dict(state.get("sections", {}))
         claims = state.get("claims", [])
@@ -209,19 +202,18 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         for node in state["outline"]:
             if node.id not in targets:
                 continue
-            _stage(f"撰写：{node.title}")
+            _stage(f"重写：{node.title}")
             usable = [c for c in claims if c.outline_id == node.id and not c.orphaned]
             if not usable:
                 sections[node.id] = SectionText(outline_id=node.id, sentences=[])
-                notes.append(f"章节“{node.title}”没有可用论断，正文留空")
+                notes.append(f"「{node.title}」没有可用论断，正文留空")
                 continue
             sec = planner.write_section(state["scope"], node, usable, instruction)
             ok_ids = {c.id for c in usable}
-            sec = SectionText(outline_id=node.id, sentences=[
+            sections[node.id] = SectionText(outline_id=node.id, sentences=[
                 s if (s.claim_id is None or s.claim_id in ok_ids) else s.model_copy(update={"claim_id": None})
                 for s in sec.sentences
             ])
-            sections[node.id] = sec
         _stage("拼装报告")
         text = report.assemble(state["scope"], state["outline"], sections, claims, state.get("sources", []),
                                state.get("assumptions", []))
@@ -239,7 +231,9 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
 
     def check(state: ResearchState) -> dict:
         _stage("校验引用与标记")
-        return {"check_results": report.run_checks(state["sections"], state["claims"], state["sources"], state["scope"])}
+        results = report.run_checks(state["sections"], state["claims"], state["sources"], state["scope"])
+        results.insert(0, report.answer_check(state.get("answer"), state.get("answer_how", "none")))
+        return {"check_results": results}
 
     def review(state: ResearchState) -> dict:
         v = state["versions"][-1]
@@ -256,11 +250,12 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
                  "sentences": [s.model_dump() for s in state["sections"].get(n.id, SectionText(outline_id=n.id, sentences=[])).sentences]}
                 for n in state["outline"]
             ],
-            "claims": [_claim_view(c) for c in claims],
-            "sources": [_source_view(s) for s in sources],
+            "claims": [c.model_dump() for c in claims],
+            "sources": [s.model_dump() for s in sources],
             "checks": [c.model_dump() for c in state.get("check_results", [])],
             "assumptions": state.get("assumptions", []),
             "notes": state.get("notes", []),
+            "answer_how": state.get("answer_how", "none"),
         }
         d = _validated(interrupt(payload, response_schema=ReviewDecision), ReviewDecision)
         if d.action == "approve":
@@ -297,12 +292,10 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             new_claims = [c.model_copy(update={"statement": d.content.strip(), "status": "user_edited"}) if c.id == d.target else c
                           for c in claims]
             return {"approved": False, "claims": new_claims, "rewrite_targets": [target.outline_id], "rewrite_instruction": None}
-        if d.action == "rewrite_section":
-            if d.target not in {n.id for n in state["outline"]}:
-                raise ValueError(f"章节不存在：{d.target}")
-            return {"approved": False, "rewrite_targets": [d.target], "rewrite_instruction": d.instruction}
-        # reopen_outline
-        return {"approved": False, "outline_confirmed": False}
+        # rewrite_section
+        if d.target not in {n.id for n in state["outline"]}:
+            raise ValueError(f"章节不存在：{d.target}")
+        return {"approved": False, "rewrite_targets": [d.target], "rewrite_instruction": d.instruction}
 
     def export(state: ResearchState, config: RunnableConfig) -> dict:
         _stage("导出确认物包")
@@ -314,7 +307,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         scope = state["scope"]
         items = [{"id": "scope", "kind": "scope", "content": scope.model_dump(), "status": "confirmed", "provenance": "research.scope"}]
         items += [{"id": n.id, "kind": "outline", "content": {"title": n.title, "question": n.question},
-                   "status": "confirmed", "provenance": "research.outline"} for n in state["outline"]]
+                   "status": "confirmed", "provenance": "research.consolidate"} for n in state["outline"]]
         items += [{"id": c.id, "kind": f"claim.{c.kind}", "content": c.statement, "status": c.status,
                    "source_ids": c.source_ids, "outline_id": c.outline_id, "confidence": c.confidence,
                    "provenance": "research.review"} for c in state["claims"] if not c.orphaned and c.status != "draft"]
@@ -331,29 +324,21 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
                              "manifest": str(pkg / "manifest.json")}}
 
     return {
-        "intake": intake, "confirm_scope": confirm_scope, "plan": plan, "research_section": research_section,
-        "confirm_outline": confirm_outline, "write": write, "check": check, "review": review, "export": export,
+        "intake": intake, "confirm_scope": confirm_scope, "research": research, "consolidate": consolidate,
+        "write": write, "check": check, "review": review, "export": export,
     }
 
 
 # ---- 路由 ----
 
 
-def route_after_research(state: ResearchState) -> str:
-    return "research_section" if any(not n.researched for n in state["outline"]) else "confirm_outline"
-
-
-def route_after_outline(state: ResearchState) -> str:
-    if state.get("outline_confirmed"):
-        return "write"
-    return "research_section" if any(not n.researched for n in state["outline"]) else "confirm_outline"
+def route_after_consolidate(state: ResearchState) -> str:
+    return "research" if state.get("gap") else "write"
 
 
 def route_after_review(state: ResearchState) -> str:
     if state.get("rewrite_targets"):
         return "write"
-    if not state.get("outline_confirmed", True):
-        return "confirm_outline"
     if state.get("approved"):
         return "export"
-    return "review"  # 例如排除了一个没被引用的来源：没有要重写的章，回到终审
+    return "review"  # 例如排除了一个没被引用的来源：没有要重写的节，回到终审
