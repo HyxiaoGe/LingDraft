@@ -77,6 +77,7 @@ class ResearchRunner(BaseRunner):
             "sources": jsonable(v.get("sources", [])),
             "claims": jsonable(v.get("claims", [])),
             "assumptions": v.get("assumptions", []),
+            "asks": jsonable(v.get("asks", [])),
             "asks_used": v.get("asks_used", 0),
             "sections": jsonable(v.get("sections", {})),
             "versions": self._versions(thread_id, v.get("versions", [])),

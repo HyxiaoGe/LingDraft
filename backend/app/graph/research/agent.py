@@ -29,6 +29,7 @@ from app.graph.research.state import (
     MAX_MODEL_CALLS,
     MAX_READS,
     MAX_SEARCHES,
+    AskRecord,
     Source,
 )
 
@@ -284,6 +285,28 @@ def collect_sources(messages: list[BaseMessage], existing: list[Source], next_in
             if data.get("title") and not src.title:
                 src.title = data["title"]
     return new, {u: s.id for u, s in by_url.items()}
+
+
+def collect_asks(messages: list[BaseMessage]) -> list[AskRecord]:
+    """从一次运行的消息里取出呈现给用户的提问和回答。没呈现的（未呈现、超额）不算。"""
+    results = {m.tool_call_id: m for m in messages if isinstance(m, ToolMessage) and m.name == "ask_user"}
+    out: list[AskRecord] = []
+    for m in messages:
+        if not isinstance(m, AIMessage):
+            continue
+        for tc in m.tool_calls:
+            res = results.get(tc["id"])
+            if tc["name"] != "ask_user" or res is None:
+                continue
+            content = str(res.content).strip()
+            if content == UNSHOWN_MESSAGE or res.status == "error":
+                continue
+            q = str((tc.get("args") or {}).get("question") or "").strip()
+            if content == SKIP_MESSAGE:
+                out.append(AskRecord(question=q, answer=None, skipped=True))
+            else:
+                out.append(AskRecord(question=q, answer=content))
+    return out
 
 
 def count_asks(messages: list[BaseMessage]) -> int:

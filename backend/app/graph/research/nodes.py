@@ -15,12 +15,13 @@ from langgraph.graph import END
 from langgraph.types import interrupt
 
 from app.graph.research import prompts, report
-from app.graph.research.agent import build_agent, close_out, collect_sources, count_asks, final_answer_text
+from app.graph.research.agent import build_agent, close_out, collect_asks, collect_sources, count_asks, final_answer_text
 from app.graph.research.state import (
     MAX_ASKS,
     MAX_GAP_ROUNDS,
     MAX_READS,
     MAX_SEARCHES,
+    AskRecord,
     Claim,
     ClarifyForm,
     OutlineNode,
@@ -54,6 +55,12 @@ def _next_index(items, prefix: str) -> int:
     return (max(nums) + 1) if nums else 1
 
 
+def _user_facts(state: ResearchState) -> list[str]:
+    """用户在调研途中亲口回答的内容：是已确认的前提，不是模型假设，也不需要来源佐证。"""
+    asks = [_validated(a, AskRecord) for a in state.get("asks", [])]  # 中断恢复后字段可能是 dict
+    return [f"{a.question} → {a.answer}" for a in asks if not a.skipped and a.answer]
+
+
 def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
     out_dir = Path(out_dir)
 
@@ -65,7 +72,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         return {
             "scope": res.scope, "clarify": res.questions[:2], "scope_confirmed": False,
             "answer": None, "answer_how": "none", "answered": False, "gap": None, "gap_rounds": 0, "outline": [],
-            "sources": [], "claims": [], "assumptions": [], "asks_used": 0, "sections": {}, "rewrite_targets": [],
+            "sources": [], "claims": [], "assumptions": [], "asks": [], "asks_used": 0, "sections": {}, "rewrite_targets": [],
             "rewrite_instruction": None, "versions": [], "check_results": [], "notes": [], "exported": None, "approved": False,
         }
 
@@ -125,8 +132,11 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             answer, why = close_out(planner.agent_model(), messages)
             how = "close" if answer else "none"
             notes.append(f"agent 没有给出文字答案（{why}）")
+        new_asks = collect_asks(messages)
+        asks = list(state.get("asks", [])) + new_asks
+        assumptions = list(state.get("assumptions", [])) + [f"「{a.question}」用户跳过了，按模型假设处理" for a in new_asks if a.skipped]
         return {
-            "sources": sources, "answer": answer, "answer_how": how, "gap": None,
+            "sources": sources, "answer": answer, "answer_how": how, "gap": None, "asks": asks, "assumptions": assumptions,
             "asks_used": asks_used + count_asks(messages), "notes": notes,
         }
 
@@ -140,7 +150,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             return {"outline": [], "sections": {}, "claims": [], "answered": False, "notes": notes, "rewrite_targets": []}
         _stage("整理论断与来源")
         try:
-            res = planner.consolidate(state["scope"], answer, sources)
+            res = planner.consolidate(state["scope"], answer, sources, _user_facts(state))
         except Exception as e:  # noqa: BLE001
             notes.append(f"整理失败：{e}")
             return {"outline": [], "sections": {}, "claims": [], "answered": False, "notes": notes, "rewrite_targets": []}
@@ -238,7 +248,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             sections[node.id] = SectionText(outline_id=node.id, sentences=sents)
         _stage("拼装报告")
         text = report.assemble(state["scope"], state["outline"], sections, claims, state.get("sources", []),
-                               state.get("assumptions", []))
+                               state.get("assumptions", []), _user_facts(state))
         tdir = _thread_dir(out_dir, config)
         tdir.mkdir(parents=True, exist_ok=True)
         n = len(state.get("versions", [])) + 1
@@ -332,6 +342,8 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         items = [{"id": "scope", "kind": "scope", "content": scope.model_dump(), "status": "confirmed", "provenance": "research.scope"}]
         items += [{"id": n.id, "kind": "outline", "content": {"title": n.title, "question": n.question},
                    "status": "confirmed", "provenance": "research.consolidate"} for n in state["outline"]]
+        items += [{"id": f"u{i + 1}", "kind": "user_fact", "content": f, "status": "confirmed", "provenance": "research.ask"}
+                  for i, f in enumerate(_user_facts(state))]
         items += [{"id": c.id, "kind": f"claim.{c.kind}", "content": c.statement, "status": c.status,
                    "source_ids": c.source_ids, "outline_id": c.outline_id, "confidence": c.confidence,
                    "provenance": "research.consolidate" if c.status == "draft" else "research.review"}

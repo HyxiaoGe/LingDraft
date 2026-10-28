@@ -37,6 +37,14 @@ class Scope(BaseModel):
     extra: str | None = Field(default=None, description="用户对澄清问题的回答，作为补充说明")
 
 
+class AskRecord(BaseModel):
+    """调研途中 ask_user 的一问一答。answer 为 None 表示用户跳过。"""
+
+    question: str
+    answer: str | None = None
+    skipped: bool = False
+
+
 class ClarifyQuestion(BaseModel):
     """intake 在需求真的模糊时提出的澄清问题；需求清楚就一个都不提。"""
 
@@ -155,6 +163,7 @@ class ResearchState(TypedDict, total=False):
     sources: list[Source]
     claims: list[Claim]
     assumptions: list[str]
+    asks: list[AskRecord]  # 途中提问的记录；有回答的是用户确认的前提，不需要来源佐证
     asks_used: int
     sections: dict[str, SectionText]
     rewrite_targets: list[str]

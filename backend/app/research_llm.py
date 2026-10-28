@@ -85,7 +85,7 @@ RewriteDraft.model_rebuild()
 class ResearchPlanner(Protocol):
     def intake(self, request: str) -> IntakeResult: ...
 
-    def consolidate(self, scope: Scope, answer: str, sources: list[Source]) -> ConsolidateResult: ...
+    def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> ConsolidateResult: ...
 
     def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None) -> SectionText: ...
 
@@ -173,19 +173,20 @@ class LiveResearchPlanner:
         )
 
     @staticmethod
-    def _consolidate_messages(scope: Scope, answer: str, sources: list[Source]) -> list:
+    def _consolidate_messages(scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> list:
+        facts = ("用户确认的前提（用户亲口回答，不需要来源佐证）：\n" + "\n".join(f"- {f}" for f in user_facts) + "\n\n") if user_facts else ""
         user = (
-            f"研究问题：{scope.question}\n范围：{scope.model_dump_json(exclude_none=True)}\n\n"
+            f"研究问题：{scope.question}\n范围：{scope.model_dump_json(exclude_none=True)}\n\n{facts}"
             f"候选答案：\n{answer}\n\n来源列表（id | 网址 | 标题 | 片段类型 | 片段）：\n{_sources_block(sources)}\n"
         )
         return [("system", prompts.CONSOLIDATE_SYSTEM), ("user", user)]
 
-    def consolidate(self, scope: Scope, answer: str, sources: list[Source]) -> ConsolidateResult:
+    def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> ConsolidateResult:
         chain = self._structured(self._fast, ConsolidateResult)
         last: Exception | None = None
         for _ in range(CONSOLIDATE_RETRIES):
             try:
-                return chain.invoke(self._consolidate_messages(scope, answer, sources))
+                return chain.invoke(self._consolidate_messages(scope, answer, sources, user_facts))
             except Exception as e:  # noqa: BLE001
                 last = e
         raise RuntimeError(f"整理失败：{last}")
@@ -349,7 +350,7 @@ class FakeResearchPlanner:
             questions.append(ClarifyQuestion(id="q1", title="局部修改指的是哪种？", options=["改文字", "换图"], why="两种方向的检索词和评测标准不同"))
         return IntakeResult(scope=scope, questions=questions)
 
-    def consolidate(self, scope: Scope, answer: str, sources: list[Source]) -> ConsolidateResult:
+    def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> ConsolidateResult:
         if "整理失败" in scope.question:
             self.calls.append(("consolidate", scope.question))
             raise RuntimeError("假模型：整理失败")
@@ -371,7 +372,7 @@ class FakeResearchPlanner:
                 c = next(x for x in claims if x.ref == ref)
                 sents.append(SentenceDraft(text=("推断：" if c.kind == "inference" else "") + c.statement, claim_ref=ref))
             sections.append(SectionDraft(title=title, question=q, sentences=sents))
-        assumptions = [ln.strip() for ln in answer.splitlines() if ln.startswith("用户回答：")]
+        assumptions = ["候选答案里没有来源支撑的说法：稳定性仍是短板的程度"]
         first = sum(1 for c in self.calls if c[0] == "consolidate") == 1
         gap = "缺价格数据" if ("回补" in scope.question and first) else None
         if "没回答" in scope.question and first:

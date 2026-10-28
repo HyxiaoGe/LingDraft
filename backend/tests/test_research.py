@@ -90,8 +90,9 @@ def test_full_flow_traceable_and_exported(graph, tmp_path):
     # 报告里推断句带标记并带引用标号；来源表完整
     report = p["report"]
     assert "推断：" in report and "[S1]" in report and "## 来源" in report
-    # 动态提问的回答进了假设；澄清的回答进了范围
-    assert any("包含" in a for a in p["assumptions"])
+    # 动态提问的回答是用户确认的前提，进报告单独一节、不进假设；澄清的回答进了范围
+    assert "## 用户确认的前提" in report and "范围是否包含 PPT 工具？ → 包含" in report
+    assert not any("包含" in a for a in p["assumptions"])
     assert "改文字" in report
 
     # 校验过就已经导出，不等批准；论断状态照实导出（系统交付不等于人工确认）
@@ -156,7 +157,8 @@ def test_rewrite_section_with_instruction(graph, planner):
 
 def test_skip_ask_records_assumption(graph):
     p = run_to_review(graph, answer={"skip": True})
-    assert any(SKIP_MESSAGE in a for a in p["assumptions"])
+    assert any("用户跳过了" in a and "PPT" in a for a in p["assumptions"])
+    assert "## 用户确认的前提" not in p["report"]
 
 
 def test_invalid_scope_rejected(graph):
