@@ -59,17 +59,17 @@ def test_research_flow_over_http(client):
 
     ev = _events(_resume(client, st, {"answer": "包含"}))
     review = _last(ev, "interrupt")
-    assert review["type"] == "research.review" and review["version"] == 1 and review["md_url"].endswith("/files/report_v1.md")
+    assert review["type"] == "research.review" and review["version"] == 1
     research = next(d for e, d in ev if e == "node" and d["node"] == "research")
     assert research["sources"] == 3 and research["answer_how"] == "agent"
     cons = next(d for e, d in ev if e == "node" and d["node"] == "consolidate")
     assert cons["sections"] == 2 and cons["claims"] == 3 and cons["gap"] is None
     assert any(e == "node" and d["node"] == "write" and d["version"] == 1 for e, d in ev)
     assert not any(e == "node" and d["node"] == "export" for e, d in ev)  # 没有单独的“导出”步骤
-    pkg = _last(ev, "state")["package"]
-    assert pkg["version"] == 1 and client.get(pkg["zip_url"]).headers["content-type"] == "application/zip"
-    md = client.get(review["md_url"])
-    assert md.status_code == 200 and md.text.startswith("# ")
+    # 下载已停掉（2026-10-29）：状态里没有下载地址，原来的下载接口也不在了
+    assert "package" not in _last(ev, "state") and "md_url" not in review
+    for path in ("files/report_v1.md", "package/report.md", "export"):
+        assert client.get(f"/api/research/threads/{tid}/{path}").status_code == 404
 
     sid = review["claims"][0]["source_ids"][0]
     ev = _events(_resume(client, _last(ev, "state"), {"action": "exclude_source", "target": sid}))
@@ -77,12 +77,10 @@ def test_research_flow_over_http(client):
     st = client.get(f"/api/research/threads/{tid}/state").json()
     assert st["next"] == ["review"] and len(st["versions"]) == 2
 
-    pkg = st["package"]
-    assert pkg["version"] == 2 and st["interrupt"]["type"] == "research.review"
-    assert client.get(pkg["items_url"]).json()[0]["kind"] == "scope"
+    assert st["interrupt"]["type"] == "research.review"
     ev = _events(_resume(client, st, {"action": "approve"}))
     st = _last(ev, "state")
-    assert st["next"] == [] and st["package"]["version"] == 2 and st["interrupt"] is None
+    assert st["next"] == [] and len(st["versions"]) == 2 and st["interrupt"] is None
 
 
 def test_free_text_review_over_http(client):
@@ -107,7 +105,7 @@ def test_free_text_review_over_http(client):
                                               reply=None)]
     ev = _events(_resume(client, st, {"action": "instruct", "text": "第一节"}))
     st = _last(ev, "state")
-    assert st["interrupt"]["version"] == 2 and st["interrupt"]["reply"] is None and st["package"]["version"] == 2
+    assert st["interrupt"]["version"] == 2 and st["interrupt"]["reply"] is None and len(st["versions"]) == 2
 
 
 def test_invalid_answer_rejected_before_graph(client):

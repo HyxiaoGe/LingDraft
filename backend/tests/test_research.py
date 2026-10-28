@@ -54,11 +54,6 @@ def resume(graph, tid: str, payload: dict) -> dict:
     return graph.invoke(research_resume(graph, cfg(tid), payload), cfg(tid))
 
 
-def pkg_of(p: dict) -> Path:
-    """终审卡对应的下载包目录（每版写报告时一起写好）。"""
-    return Path(p["report_path"]).parent / "package"
-
-
 def run_to_review(graph, tid: str = "t1", answer: dict | None = None) -> dict:
     r = graph.invoke({"request": REQUEST}, cfg(tid))
     p = intr(r)
@@ -100,20 +95,13 @@ def test_full_flow_traceable_and_delivered(graph, tmp_path):
     assert not any("包含" in a for a in p["assumptions"])
     assert "改文字" in report
 
-    # 这一版写出来就有下载包，不等批准；论断状态照实写（系统交付不等于人工确认）
-    pkg = pkg_of(p)
-    assert {f.name for f in pkg.iterdir()} == {"manifest.json", "report.md", "items.json", "sources.json"}
-    assert (pkg / "report.md").read_text() == p["report"]
-    items = json.loads((pkg / "items.json").read_text())
-    kinds = {i["kind"] for i in items}
-    assert {"scope", "outline", "claim.fact", "claim.inference"} <= kinds
-    assert all(i["status"] == "draft" for i in items if i["kind"].startswith("claim."))
+    # 每版只写报告本身，下载包已停掉（2026-10-29）
+    tdir = Path(p["report_path"]).parent
+    assert {f.name for f in tdir.iterdir()} == {"report_v1.md"} and Path(p["report_path"]).read_text() == p["report"]
+    # “不用改了”只是结束：论断状态照实保留（系统交付不等于人工确认）
     r = resume(graph, "t1", {"action": "approve"})
     assert r["approved"] and graph.get_state(cfg("t1")).next == ()
-    adopted = json.loads((pkg / "sources.json").read_text())
-    assert adopted and all(s["status"] == "adopted" for s in adopted)
-    manifest = json.loads((pkg / "manifest.json").read_text())
-    assert manifest["scenario"] == "research" and manifest["thread_id"] == "t1" and manifest["version"] == 1 and manifest["answered"]
+    assert all(c.status == "draft" for c in graph.get_state(cfg("t1")).values["claims"])
 
 
 def test_exclude_source_orphans_dependent_claim(graph):
@@ -131,11 +119,8 @@ def test_exclude_source_orphans_dependent_claim(graph):
     # 报告里不再出现这条论断，校验仍全部通过；只重写了受影响的节
     assert fact["statement"] not in p2["report"]
     assert all(c["passed"] for c in p2["checks"]), p2["checks"]
-    # 改完出第 2 版，下载包跟着换成第 2 版；被排除的来源不在包里
-    pkg = pkg_of(p2)
-    assert json.loads((pkg / "manifest.json").read_text())["version"] == 2
-    assert fact["id"] not in {i["id"] for i in json.loads((pkg / "items.json").read_text())}
-    assert sid not in {s["id"] for s in json.loads((pkg / "sources.json").read_text())}
+    # 改完出第 2 版；被排除的来源不在报告的来源表里
+    assert f"[{sid.upper()}]" not in p2["report"]
 
 
 def test_edit_claim_marks_user_edited_and_rewrites(graph, planner):
@@ -323,7 +308,7 @@ def test_exclude_unreferenced_source_returns_to_review(graph):
     assert p2["type"] == "research.review" and p2["version"] == 1
     assert next(s for s in p2["sources"] if s["id"] == unused)["status"] == "excluded"
     assert any("没有被任何论断引用" in n for n in p2["notes"])
-    assert json.loads((pkg_of(p2) / "manifest.json").read_text())["version"] == 1  # 没重写就没有新的一版
+    assert len(graph.get_state(cfg("t1")).values["versions"]) == 1  # 没重写就没有新的一版
 
 
 def test_batch_tool_calls_count_toward_budget(planner):
@@ -412,7 +397,7 @@ def test_gap_round_without_answer_keeps_first_result(graph):
     check = next(c for c in p["checks"] if c["name"] == "question_answered")
     assert not check["passed"] and "缺价格数据" in check["detail"]
     assert "没有完全回答" in p["report"] and "缺价格数据" in p["report"]
-    assert (pkg_of(p) / "report.md").read_text() == p["report"]
+    assert Path(p["report_path"]).read_text() == p["report"]
 
 
 def test_gap_round_consolidate_failure_keeps_first_result(graph, planner):
@@ -431,7 +416,6 @@ def test_source_status_follows_current_report(graph):
     cited = {sid for c in p["claims"] if not c["orphaned"] for sid in c["source_ids"]}
     adopted = {s["id"] for s in p["sources"] if s["status"] == "adopted"}
     assert cited and adopted == cited
-    assert {s["id"] for s in json.loads((pkg_of(p) / "sources.json").read_text())} == cited
 
 
 def test_source_status_recomputed_from_sections():
@@ -470,16 +454,13 @@ def test_live_rewrite_prompt_carries_scope_and_user_facts():
 
 
 def test_invalid_report_is_still_delivered(graph):
-    """整理失败、报告里没有带来源的论断：照样给出这一版和下载包，校验结果只是说明。"""
+    """整理失败、报告里没有带来源的论断：照样给出这一版，校验结果只是说明。"""
     p = intr(graph.invoke({"request": "题（整理失败）"}, cfg("t1")))
     assert p["type"] == "research.review" and p["version"] == 1 and p["claims"] == []
     failed = {c["name"] for c in p["checks"] if not c["passed"]}
     assert {"report_valid", "question_answered"} <= failed
     assert any("整理失败" in n for n in p["notes"]) and "没有完全回答" in p["report"]
-    pkg = pkg_of(p)
-    assert {f.name for f in pkg.iterdir()} == {"manifest.json", "report.md", "items.json", "sources.json"}
-    manifest = json.loads((pkg / "manifest.json").read_text())
-    assert manifest["version"] == 1 and manifest["answered"] is False
+    assert graph.get_state(cfg("t1")).values["answered"] is False
     r = resume(graph, "t1", {"action": "approve"})  # “不用改了”只是结束
     assert r["approved"] and graph.get_state(cfg("t1")).next == ()
 
@@ -601,7 +582,7 @@ def test_inference_marked_from_claim_kind_not_text(graph):
     assert sents and all(s["text"].startswith("推断：") == (kind[s["claim_id"]] == "inference") for s in sents)
     blocks = [b for b in p["blocks"] if b["type"] == "sentence" and b["claim_id"]]
     assert all(b["inference"] == (kind[b["claim_id"]] == "inference") and b["marks"] for b in blocks)
-    assert to_markdown(p["blocks"]) == p["report"] == (pkg_of(p) / "report.md").read_text()
+    assert to_markdown(p["blocks"]) == p["report"] == Path(p["report_path"]).read_text()
     # 报告里的来源标注就是来源 id：排除一条来源后，其余来源的标注不变
     labels = {b["source_id"]: b["label"] for b in p["blocks"] if b["type"] == "source"}
     assert labels and all(lab == sid.upper() for sid, lab in labels.items())

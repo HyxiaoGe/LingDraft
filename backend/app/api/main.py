@@ -68,11 +68,11 @@ def _inside(root: Path, path: Path) -> bool:
     return path.resolve().is_relative_to(root.resolve())
 
 
-def _safe_file(root: Path, name: str, sub: str | None = None) -> Path:
-    """root 是线程目录，sub 是其中的子目录（如 package）；边界按线程目录算，子目录本身是链接也不行。"""
+def _safe_file(root: Path, name: str) -> Path:
+    """root 是线程目录；边界按线程目录算，目录里指向外面的链接也读不出去。"""
     if "/" in name or "\\" in name or name.startswith("."):
         raise HTTPException(400, "非法文件名")
-    path = (root / sub if sub else root) / name
+    path = root / name
     if not _inside(root, path) or not path.is_file():
         raise HTTPException(404, "文件不存在")
     return path
@@ -196,22 +196,3 @@ async def research_state(thread_id: str):
     return _view(research(), thread_id)
 
 
-@app.get("/api/research/threads/{thread_id}/files/{name}")
-async def research_file(thread_id: str, name: str):
-    return FileResponse(_safe_file(_dir(research(), thread_id), name), media_type="text/markdown; charset=utf-8")
-
-
-@app.get("/api/research/threads/{thread_id}/package/{name}")
-async def research_package_file(thread_id: str, name: str):
-    path = _safe_file(_dir(research(), thread_id), name, "package")
-    media = "application/json" if name.endswith(".json") else "text/markdown; charset=utf-8"
-    return FileResponse(path, media_type=media)
-
-
-@app.get("/api/research/threads/{thread_id}/export")
-async def research_export(thread_id: str):
-    """把最新一版的报告、论断、来源打包下载。每一版写出来就能下，不用先确认。"""
-    if not _view(research(), thread_id)["package"]:
-        raise HTTPException(404, "这个线程还没有可下载的报告")
-    tdir = _dir(research(), thread_id)
-    return _zip(tdir, tdir / "package", f"research-{thread_id}.zip")

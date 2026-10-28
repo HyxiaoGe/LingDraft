@@ -34,7 +34,7 @@ def memory_checkpointer() -> InMemorySaver:
 
 
 def build_graph(planner: ResearchPlanner, checkpointer: BaseCheckpointSaver, out_dir: Path):
-    """按需澄清 → 全局调研 agent → 结构化整理（缺口回补一轮）→ 拼装（每版连同下载包一起写好）→ 校验（只是说明）→ 终审（可选的修改，改完出新一版）。
+    """按需澄清 → 全局调研 agent → 结构化整理（缺口回补一轮）→ 拼装（每版写出来就是交付物）→ 校验（只是说明）→ 终审（可选的修改，改完出新一版）。
 
 终审时用户直接说的话先经 interpret 交给模型理解成具体操作。"""
     fns = N.make_nodes(planner, Path(out_dir))

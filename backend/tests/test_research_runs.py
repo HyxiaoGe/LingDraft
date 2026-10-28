@@ -165,7 +165,7 @@ def test_quiet_stream_sends_heartbeat(rr, monkeypatch):
 
 def test_failed_step_keeps_content_and_can_retry(client, rr):
     st = _new(client, SIMPLE)
-    assert st["status"] == "waiting" and st["package"]["version"] == 1
+    assert st["status"] == "waiting" and len(st["versions"]) == 1
     orig = rr.planner.write_section
 
     def boom(*a, **kw):
@@ -176,14 +176,14 @@ def test_failed_step_keeps_content_and_can_retry(client, rr):
     ev = _events(_answer(client, st, {"action": "rewrite_section", "target": sec, "instruction": "短一点"}))
     failed = _last(ev, "state")
     assert failed["status"] == "failed" and "网络断了" in failed["error"] and failed["interrupt"] is None
-    # 失败的那一步没有抹掉已有的结果：第 1 版和它的下载包、来源、论断都在
-    assert failed["package"]["version"] == 1 and len(failed["versions"]) == 1
+    # 失败的那一步没有抹掉已有的结果：第 1 版、来源、论断都在
+    assert len(failed["versions"]) == 1 and failed["report_blocks"]
     assert failed["claims"] == st["claims"] and failed["sources"] == st["sources"]
     assert _state(client, st["thread_id"])["status"] == "failed"  # 刷新回来也一样
 
     rr.planner.write_section = orig
     end = _last(_events(_retry(client, st["thread_id"])), "state")
-    assert end["status"] == "waiting" and end["interrupt"]["type"] == "research.review" and end["package"]["version"] == 2
+    assert end["status"] == "waiting" and end["interrupt"]["type"] == "research.review" and len(end["versions"]) == 2
 
 
 def test_retry_resumes_agent_without_redoing_searches(client, rr):

@@ -233,7 +233,7 @@ function ReviewBody({ st, it, live, onCard, resume }) {
         ))}
         {versions.length > 1 && <span className="vnote">v{versions.length} · 共 {versions.length} 版</span>}
       </div>
-      {tab === "report" && (blocks?.length ? <Report blocks={blocks} /> : last && <p><a href={last.md_url} target="_blank" rel="noreferrer">打开 report_v{last.n}.md</a></p>)}
+      {tab === "report" && blocks?.length > 0 && <Report blocks={blocks} />}
       {tab === "claims" && (
         <div className="claims">
           {sections.map((sec) => (
@@ -250,16 +250,6 @@ function ReviewBody({ st, it, live, onCard, resume }) {
       {failed.length > 0 ? <div className="checks bad">需要留意：{failed.map((c) => `「${CHECK_LABEL[c.name] || c.name}」没通过` + (c.detail ? `（${c.detail.replace(/；$/, "")}）` : "")).join("；")}</div>
         : checks.length > 0 && <div className="checks">{checks.map((c) => "✓ " + (CHECK_LABEL[c.name] || c.name) + (c.detail ? `（${c.detail.replace(/；$/, "")}）` : "")).join(" · ")}</div>}
       {notes.length > 0 && <div className="notes">{notes.map((n, i) => <div key={i}>· {n}</div>)}</div>}
-      {/* 下载的是最新一版：历史消息里不给，免得点开拿到的不是那时候的版本 */}
-      {live && st.package && (
-        <div className="export-links">
-          <span>下载第 {st.package.version} 版：</span>
-          <a href={st.package.report_url} target="_blank" rel="noreferrer">report.md</a>
-          <a href={st.package.items_url} target="_blank" rel="noreferrer">items.json</a>
-          <a href={st.package.sources_url} target="_blank" rel="noreferrer">sources.json</a>
-          <a href={st.package.zip_url}>全部打包</a>
-        </div>
-      )}
     </>
   );
 }

@@ -54,7 +54,7 @@ def report_blocks(
     order = referenced_source_ids(sections, by_claim)
 
     blocks: list[dict] = [{"type": "title", "text": scope.question}]
-    if not answered:  # 没答完也照常交付，但报告自己要说清楚，下载出去的文件也一样
+    if not answered:  # 没答完也照常交付，但报告自己要说清楚
         blocks.append({"type": "notice", "text": "注意：这份报告没有完全回答研究问题" + (f"，还缺：{open_gap}" if open_gap else "") + "。"})
     bounds = [f"{label}：{val}" for label, val in (
         ("时间", scope.time_range), ("地域", scope.region), ("信源语言", scope.lang), ("不含", scope.exclude),

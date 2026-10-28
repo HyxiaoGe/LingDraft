@@ -6,7 +6,6 @@ research 把 agent 子图当函数调用，子图里的 ask_user 中断会冒到
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from langchain_core.runnables import RunnableConfig
@@ -278,7 +277,6 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         n = len(state.get("versions", [])) + 1
         path = tdir / f"report_v{n}.md"
         path.write_text(text, encoding="utf-8")
-        _write_package(tdir / "package", config["configurable"]["thread_id"], n, text, state, sections, claims, sources)
         title = {o.id: o.title for o in state["outline"]}
         note = "初稿" if n == 1 else "重写" + "，".join(f"「{title.get(t, t)}」" + (f"：{instructions[t]}" if instructions.get(t) else "")
                                                      for t in targets)
@@ -364,7 +362,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
 def _apply(state: ResearchState, decisions: list[ReviewDecision]) -> dict:
     """按顺序应用终审操作（按钮来的和模型理解出来的走同一条路）。approve 只在单独出现时结束线程。"""
     if len(decisions) == 1 and decisions[0].action == "approve":
-        # “不用改了”：结束线程。每一版写出来就是交付物（下载包也已经写好），这里不再动论断状态——系统交付不等于人工确认
+        # “不用改了”：结束线程。每一版写出来就是交付物，这里不再动论断状态——系统交付不等于人工确认
         return {"approved": True}
     sources, claims = list(state["sources"]), list(state["claims"])
     notes = list(state.get("notes", []))
@@ -414,30 +412,6 @@ def _describe(state: ResearchState, d: ReviewDecision) -> str:
         node = next((n for n in state["outline"] if n.id == d.target), None)
         return f"重写「{node.title if node else d.target}」" + (f"：{d.instruction.strip()}" if d.instruction else "")
     return "不用改了"
-
-
-def _write_package(pkg: Path, thread_id: str, n: int, text: str, state: ResearchState,
-                   sections: dict[str, SectionText], claims: list[Claim], sources: list) -> None:
-    """这一版的下载包：报告、正文用到的论断、它们引用的来源。每版都写，覆盖上一版；下载就是把它打包。"""
-    pkg.mkdir(parents=True, exist_ok=True)
-    (pkg / "report.md").write_text(text, encoding="utf-8")
-    scope = state["scope"]
-    cited = report.cited_claim_ids(sections, claims)
-    items = [{"id": "scope", "kind": "scope", "content": scope.model_dump(), "status": "confirmed", "provenance": "research.scope"}]
-    items += [{"id": o.id, "kind": "outline", "content": {"title": o.title, "question": o.question},
-               "status": "confirmed", "provenance": "research.consolidate"} for o in state["outline"]]
-    items += [{"id": f"u{i + 1}", "kind": "user_answer", "content": f, "status": "confirmed", "provenance": "research.ask"}
-              for i, f in enumerate(_user_answers(state))]
-    items += [{"id": c.id, "kind": f"claim.{c.kind}", "content": c.statement, "status": c.status,
-               "source_ids": c.source_ids, "outline_id": c.outline_id, "confidence": c.confidence,
-               "provenance": "research.consolidate" if c.status == "draft" else "research.review"}
-              for c in claims if c.id in cited]
-    (pkg / "items.json").write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
-    (pkg / "sources.json").write_text(
-        json.dumps([s.model_dump() for s in sources if s.status == "adopted"], ensure_ascii=False, indent=2), encoding="utf-8")
-    manifest = {"scenario": "research", "thread_id": thread_id, "version": n, "question": scope.question,
-                "answered": _answered(state), "files": ["report.md", "items.json", "sources.json"]}
-    (pkg / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 # ---- 路由 ----
