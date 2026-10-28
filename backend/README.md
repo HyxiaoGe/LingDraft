@@ -12,7 +12,7 @@
 ```bash
 uv sync
 uv run playwright install chromium
-uv run pytest -q            # 74 个用例，不联网（FakePlanner / FakeResearchPlanner + MockTransport 网关）
+uv run pytest -q            # 84 个用例，不联网（FakePlanner / FakeResearchPlanner + MockTransport 网关）
 ```
 
 Web 方式（M2）：
@@ -22,13 +22,17 @@ LINGDRAFT_FAKE=1 uv run uvicorn app.api.main:app --port 8000   # 去掉 LINGDRAF
 cd ../frontend && npm install && npm run dev                    # http://localhost:5173，/api 代理到 8000
 ```
 
-环境变量：`ARK_API_KEY`、`ARK_MODEL`、`ARK_MODEL_LITE`、`ARK_IMAGE_MODEL`、`LINGDRAFT_BACKGROUND=0` 关闭背景图生成、`LINGDRAFT_FAKE=1` 用假模型；调研场景另需 `AGENT_TOOLS_URL` / `AGENT_TOOLS_API_KEY`（agent-tools 网关）与 `DEEPSEEK_API_KEY`；`RESEARCH_PROVIDER`（deepseek / ark）、`RESEARCH_MODEL`、`RESEARCH_THINKING`、`RESEARCH_EFFORT` 可改调研模型。
+环境变量：`ARK_API_KEY`、`ARK_MODEL`、`ARK_MODEL_LITE`、`ARK_IMAGE_MODEL`、`LINGDRAFT_BACKGROUND=0` 关闭背景图生成、`LINGDRAFT_FAKE=1` 用假模型、`LINGDRAFT_RESEARCH_WORKERS` 同时跑几个调研线程（默认 4，多出来的排队）；调研场景另需 `AGENT_TOOLS_URL` / `AGENT_TOOLS_API_KEY`（agent-tools 网关）与 `DEEPSEEK_API_KEY`；`RESEARCH_PROVIDER`（deepseek / ark）、`RESEARCH_MODEL`、`RESEARCH_THINKING`、`RESEARCH_EFFORT` 可改调研模型。
 
-接口：`POST /api/threads`（multipart：request，image 可选）和 `POST /api/threads/{id}/resume`（`{"payload": ...}`）都返回 SSE：`progress` / `node` / `interrupt` / `error` 事件，最后一个 `state` 事件是完整状态；`GET /api/threads/{id}/state`；`GET /api/threads/{id}/files/{name}`；`GET /api/threads/{id}/export` 打包 zip。
+接口：`POST /api/threads`（multipart：request，image 可选）和 `POST /api/threads/{id}/resume`（`{"payload": ...}`）都返回 SSE：`thread` / `started` / `progress` / `node` / `interrupt` / `error` 事件，`state` 事件是完整状态，最后以 `end` 收尾；每个事件带 `id`（“执行-序号”），安静 15 秒发一行注释保活；`GET /api/threads/{id}/state`；`GET /api/threads/{id}/files/{name}`；`GET /api/threads/{id}/export` 打包 zip。
 
-调研接口同构，前缀 `/api/research/threads`：`POST`（json `{"request"}`）、`/{id}/resume`、`/{id}/state`、`/{id}/files/report_v{n}.md`、`/{id}/package/{report.md|items.json|sources.json|manifest.json}`、`/{id}/export`。agent 的动态提问在接口上统一成 `{"type":"research.ask", title, options, why}`，回传 `{"answer"}` 或 `{"skip":true}`（二选一），由 `ResearchRunner` 转成中间件的 decisions。
+调研接口同构，前缀 `/api/research/threads`：`POST`（json `{"request"}`）、`/{id}/resume`、`/{id}/retry`、`/{id}/events?after=<事件 id>`、`/{id}/state`、`/{id}/files/report_v{n}.md`、`/{id}/package/{report.md|items.json|sources.json|manifest.json}`、`/{id}/export`。agent 的动态提问在接口上统一成 `{"type":"research.ask", title, options, why}`，回传 `{"answer"}` 或 `{"skip":true}`（二选一），由 `ResearchRunner` 转成中间件的 decisions。
 
-调研的 resume 要带上当前这张卡的中断 id：`{"interrupt_id": "...", "payload": {...}}`，id 在 `state.interrupt.id` 和 `interrupt` 事件里。回答先过 `app/graph/research/answers.py` 的校验（CLI 也用同一份）再交给图：不合法返回 400，线程停在原卡上；卡已过期（线程往前走了）或这一步还在排队 / 运行返回 409。同一个线程同时只接受一次执行：请求被接受时占位（`state.running` / `state.queued`），执行完才释放，浏览器断开不影响；新线程排队时也能马上查到状态。
+调研的 resume 要带上当前这张卡的中断 id：`{"interrupt_id": "...", "payload": {...}}`，id 在 `state.interrupt.id` 和 `interrupt` 事件里。回答先过 `app/graph/research/answers.py` 的校验（CLI 也用同一份）再交给图：不合法返回 400，线程停在原卡上；卡已过期（线程往前走了）或这一步还在排队 / 运行返回 409。同一个线程同时只接受一次执行：请求被接受时占位，执行完才释放，浏览器断开不影响；新线程排队时也能马上查到状态。
+
+调研线程的 `state.status`：`queued` / `running`（有执行占着位）、`waiting`（停在卡上等用户）、`done`（走完了）、`failed`（某一步出错，或执行被掐断、比如服务重启；原因在 `state.error`）。失败不会抹掉已有内容，`POST /{id}/retry` 从最后一个检查点接着跑：失败的那一步重做，agent 里已经做过的搜索、读页不重来；没失败的返回 409。回答提交后那一步就出错的，回答没被用上，线程仍是 `waiting`、停在原卡上，重新回答即可。
+
+执行的事件先写进事件日志（`EventLog`，进程内实现，多 worker 时换 Redis Stream），连接只是去读：页面断线或刷新后带着最后一个事件 id 请求 `/{id}/events`，执行还没结束就从断点接着推（没有 id 就从这次执行的开头补发），已经结束就只给当前状态。日志只留在内存里，进程重启就没了，那时以检查点为准。
 
 CLI 演示（`--fake` 用确定性假模型；去掉 `--fake` 需设置 `ARK_API_KEY`，走豆包）：
 
@@ -67,10 +71,10 @@ uv run python -m app.cli --scenario research state <thread_id>
 - `app/graph/poster/nodes.py` 节点与路由；`graph.py` 建图与检查点
 - `app/llm.py` `Planner` 协议：`ArkPlanner`（豆包，json_schema 结构化输出）/ `FakePlanner`
 - `app/render/` Jinja2 模板 → Playwright 截图；`checks.py` 事实逐字比对 / 违禁词 / 溢出
-- `app/api/` FastAPI；`runner.py` `BaseRunner`（图执行放到单工作线程并转成 SSE；`RunRegistry` 运行占位，进程内实现，多 worker 时换共享存储）+ 海报 `GraphRunner`；`research_runner.py` 调研的状态视图 / 中断整形（带中断 id）/ 事件摘要
+- `app/api/` FastAPI；`runner.py` `BaseRunner`（图执行放到工作线程，事件写进 `EventLog` 再转成 SSE；`RunRegistry` 运行占位；两者都是进程内实现，多 worker 时换共享存储）+ 海报 `GraphRunner`（单线程）；`research_runner.py` 调研的执行器（多线程）、状态视图与运行状态、重试、中断整形（带中断 id）、事件摘要
 - `app/graph/research/` 调研场景：`state.py`（范围 / 大纲 / 来源 / 论断 / 逐句正文）、`agent.py`（`create_agent` + HITL / 调用上限中间件、`Findings` 结构化产出、从工具消息里解析候选来源）、`answers.py`（三种确认卡的回答校验，接口 / CLI / 节点共用）、`nodes.py` / `graph.py`、`report.py`（确定性拼装报告与六项校验）、`prompts.py`
 - `app/research_llm.py` `ResearchPlanner` 协议：`ArkResearchPlanner`（豆包 + 真实网关）/ `FakeResearchPlanner`（脚本化的假工具模型 + MockTransport 网关）
 - `app/tools/` agent-tools 网关客户端（搜索 / 网页读取）与调研 agent 的工具（`search_web` / `read_page` / `ask_user`）
 - `scripts/` 对真实模型与网关的验证脚本：`probe_create_agent.py`（假搜索）、`probe_gateway_agent.py`（真实搜索 / 读取）、`probe_research_llm.py`（调研场景三种结构化输出），`PYTHONPATH=. uv run python scripts/<name>.py`
 - `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）。海报：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出。调研（`src/research.jsx`，顶栏切换）：需求清楚直接开始，模糊才弹澄清卡 → agent 提问卡（带“不问会怎样”，可跳过）→ 大纲 + 论断 + 假设 → 报告 / 论断 / 来源三个页签，点论断或来源单独处理 → 终审卡 / 自由文本重写某章 → 导出确认物包
-- `tests/` 海报：T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等；调研：`test_research.py`（全流程可追溯 / 排除来源传播 / 改论断 / 重写章节 / 改大纲只补调研新章 / 跳过提问 / sqlite 跨实例恢复）、`test_research_resume.py`（路径穿越 / 严格载荷 / 被拒后能继续 / 过期中断 id / 重复提交 / 断线与排队）
+- `tests/` 海报：T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等；调研：`test_research.py`（全流程可追溯 / 排除来源传播 / 改论断 / 重写章节 / 改大纲只补调研新章 / 跳过提问 / sqlite 跨实例恢复）、`test_research_resume.py`（路径穿越 / 严格载荷 / 被拒后能继续 / 过期中断 id / 重复提交 / 断线与排队）、`test_research_runs.py`（并行执行 / 提交失败退还占位 / 断线续读与刷新补发 / 保活 / 失败保留内容与重试 / 被掐断的执行可重试）

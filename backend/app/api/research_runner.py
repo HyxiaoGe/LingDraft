@@ -8,7 +8,7 @@ from typing import Any
 from langgraph.types import Command
 
 from app import config
-from app.api.runner import BaseRunner, jsonable
+from app.api.runner import BaseRunner, Executor, jsonable
 from app.graph.research.agent import ask_view, is_ask_interrupt
 from app.graph.research.answers import resume_value
 from app.graph.research.graph import build_graph, open_sqlite_checkpointer
@@ -19,18 +19,37 @@ class StaleInterrupt(Exception):
     """回答对着的不是线程当前等着的那张卡。"""
 
 
+class NothingToRetry(Exception):
+    """线程没有失败（在等用户、已完成），不需要重试。"""
+
+
+CUT_SHORT = "上次运行没跑完就停了（多半是服务重启过）"
+
+
 class ResearchRunner(BaseRunner):
     api_prefix = "/api/research/threads"
 
-    def __init__(self, fake: bool | None = None, data_dir: Path | None = None, out_dir: Path | None = None):
+    def __init__(self, fake: bool | None = None, data_dir: Path | None = None, out_dir: Path | None = None, workers: int | None = None):
         fake = config.USE_FAKE_PLANNER if fake is None else fake
         self.out_dir = Path(out_dir or config.OUTPUT_DIR / "research")
         self.planner = FakeResearchPlanner() if fake else LiveResearchPlanner()
         saver = open_sqlite_checkpointer(Path(data_dir or config.DATA_DIR) / "checkpoints_research.sqlite")
         self.graph = build_graph(self.planner, saver, self.out_dir)
+        # 调研不碰浏览器，几个线程各跑各的；检查点共用一个连接，SqliteSaver 自己加锁
+        self.executor = Executor(workers or config.RESEARCH_WORKERS, "research")
 
     def start(self, thread_id: str, request: str):
         return self._submit(thread_id, lambda: {"request": request}, info={"request": request})
+
+    def retry(self, thread_id: str):
+        return self._submit(thread_id, lambda: self.retry_input(thread_id))
+
+    def retry_input(self, thread_id: str) -> None:
+        """只有失败的线程能重试：从最后一个检查点接着跑（输入为 None），失败那一步重做，之前的步骤和 agent 里做过的搜索都不重来。"""
+        snap = self.graph.get_state({"configurable": {"thread_id": thread_id}})
+        if not snap.values or not snap.next or any(t.interrupts for t in snap.tasks):
+            raise NothingToRetry("这个线程没有失败，不需要重试")
+        return None
 
     def resume_input(self, thread_id: str, payload: dict, interrupt_id: str | None = None) -> Any:
         """回答要对着当前这张卡（中断 id 一致）并通过校验，才交给图；按 id 恢复，图里不会错配到别的中断。"""
@@ -66,16 +85,17 @@ class ResearchRunner(BaseRunner):
             if run is None:
                 return {"thread_id": thread_id, "exists": False}
             # 请求已接受、图还没写下第一个检查点（多半在排队）：先能查到，页面刷新回来才不会 404
-            return {"thread_id": thread_id, "exists": True, "scenario": "research", "next": [], "running": True,
-                    "queued": run["queued"], "request": run.get("request"), "interrupt": None}
+            return {"thread_id": thread_id, "exists": True, "scenario": "research", "next": [],
+                    "status": "queued" if run["queued"] else "running", "error": None, "request": run.get("request"), "interrupt": None}
         pending = next((it for task in snap.tasks for it in task.interrupts), None)
+        status, error = self._status(snap, run, pending)
         return {
             "thread_id": thread_id,
             "exists": True,
             "scenario": "research",
             "next": list(snap.next),
-            "running": run is not None,
-            "queued": bool(run and run["queued"]),
+            "status": status,
+            "error": error,
             "request": v.get("request"),
             "scope": jsonable(v.get("scope")),
             "scope_confirmed": v.get("scope_confirmed", False),
@@ -96,6 +116,21 @@ class ResearchRunner(BaseRunner):
             # 跑着的时候检查点里可能还是上一张卡，不给出去
             "interrupt": self._interrupt_view(thread_id, pending) if pending and run is None else None,
         }
+
+    @staticmethod
+    def _status(snap, run: dict | None, pending) -> tuple[str, str | None]:
+        """queued / running：有执行占着位；waiting：停在卡上等用户；done：图走完了；failed：没在跑、没在等、也没走完。
+
+        failed 有两种：某一步抛了错（错误记在检查点里，重启后也在），或执行半路被掐断（进程重启，没有错误记录）。
+        """
+        if run is not None:
+            return ("queued" if run["queued"] else "running"), None
+        if pending is not None:
+            return "waiting", None
+        if not snap.next:
+            return "done", None
+        err = next((t.error for t in snap.tasks if t.error), None)
+        return "failed", str(err) if err else CUT_SHORT
 
     def _interrupt_view(self, thread_id: str, it) -> dict | None:
         view = self._decorate_interrupt(thread_id, it.value)

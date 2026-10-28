@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
-import { createThread, resumeThread, createResearchThread, resumeResearchThread, getResearchState } from "./api.js";
-import { RESEARCH_DEFAULT, ResearchBody, researchCardFor, routeResearchText, scopeLine } from "./research.jsx";
+import { createThread, resumeThread, createResearchThread, resumeResearchThread, retryResearchThread, followResearchThread, getResearchState } from "./api.js";
+import { RESEARCH_DEFAULT, ResearchBody, researchCardFor, retryCard, routeResearchText, scopeLine } from "./research.jsx";
 
 const KIND = { headline: "标题", subhead: "副标题", offer: "优惠", date: "活动时间", cta: "行动号召", product_image: "产品图" };
 const STATUS = { draft: "草稿", confirmed: "已确认", user_edited: "手工编辑" };
 const DEFAULT_REQUEST = "某品牌蓝牙耳机黑五预热，5 折，11.20 到 11.27";
+const QUEUED = "排队中，前面的任务跑完就开始";
+const ACTIVE = new Set(["queued", "running"]); // 调研线程的这两种状态说明服务器上还有执行没结束
 
 let seq = 0;
 const uid = () => ++seq;
@@ -21,6 +23,7 @@ export default function App() {
   const fileRef = useRef(null);
   const threadRef = useRef(null); // 问题卡的回调在 state 更新前就建好了，thread_id 走 ref
   const interruptRef = useRef(null); // 同理：当前这张卡的中断 id，回答时带回去，后端据此判断卡有没有过期
+  const lastEventRef = useRef(null); // 调研：收到的最后一个事件 id，断线或刷新后凭它接着读，不重不漏
   const scenarioRef = useRef(scenario); // 同理：恢复线程时卡片在 setScenario 生效前就建好了，场景也走 ref
   scenarioRef.current = scenario;
 
@@ -49,18 +52,43 @@ export default function App() {
     setCard(cardFor(st));
   };
 
-  // 从服务器取调研进度：还在跑（或排队）就每 5 秒看一次，停下来就按当时的状态展示、弹出那张卡
-  const follow = async (threadId, id, waiting, first) => {
-    let st = first || (await getResearchState(threadId));
-    while (st.running) {
-      patchAi(id, (m) => ({ ...m, stage: st.queued ? "排队中，前面的任务跑完就开始" : waiting }));
-      await new Promise((r) => setTimeout(r, 5000));
-      st = await getResearchState(threadId);
+  // 一次执行的事件流 → 更新这条助手消息。调研的 error 事件先收着：最终状态是失败的话，失败卡里会写原因
+  const onEvents = (id, research, errs) => (ev, data, evId) => {
+    if (research && evId) lastEventRef.current = evId;
+    if (ev === "thread" && research) {
+      threadRef.current = data.thread_id;
+      history.replaceState(null, "", "#r/" + data.thread_id);
+      if (data.queued) patchAi(id, (m) => ({ ...m, stage: QUEUED }));
     }
-    show(id, st, { restored: true });
+    if (ev === "started") patchAi(id, (m) => (m.stage === QUEUED ? { ...m, stage: "正在准备…" } : m));
+    if (ev === "progress" && data.stage) patchAi(id, (m) => ({ ...m, stage: data.stage, acts: data.kind ? [...(m.acts || []), data] : m.acts }));
+    if (ev === "node") patchAi(id, (m) => ({ ...m, steps: [...m.steps, data] }));
+    if (ev === "error") research ? errs.push(data.message) : setError(data.message);
   };
 
-  // 跑一轮（新建或 resume）：开一条助手消息，边收事件边更新，结束后按 interrupt 类型弹问题卡
+  // 一轮停下来：展示状态。执行中出过错但线程没算失败（比如回答提交后那一步出错，卡还在），把错误告诉用户
+  const finish = (id, st, errs, extra) => {
+    show(id, st, extra);
+    if (errs.length && st.status !== "failed") setError(st.status === "waiting" ? `${errs[errs.length - 1]}（这次的回答没用上，请重新回答）` : errs[errs.length - 1]);
+  };
+
+  // 接上服务器上这次调研的执行：补发断线期间漏掉的事件，再接着收；连不上就隔一会儿重连。拿到停下来的状态就展示、弹卡
+  const follow = async (threadId, id, note, errs = []) => {
+    patchAi(id, (m) => ({ ...m, stage: note }));
+    for (let fails = 0; ;) {
+      try {
+        const st = await followResearchThread(threadId, lastEventRef.current, onEvents(id, true, errs));
+        if (st && !ACTIVE.has(st.status)) return finish(id, st, errs, { restored: true });
+        fails = 0; // 连得上，只是流又断了、或者执行刚开始：接着读
+      } catch (e) {
+        if (e.status === 404 || ++fails > 30) throw e; // 线程不在了，或者几分钟都连不上；后端重启时代理回的 5xx 也按断线重连
+        patchAi(id, (m) => ({ ...m, stage: "连接断了，正在重连…" }));
+      }
+      await new Promise((r) => setTimeout(r, fails ? Math.min(1000 * 2 ** (fails - 1), 10000) : 500));
+    }
+  };
+
+  // 跑一轮（新建、resume 或重试）：开一条助手消息，边收事件边更新，结束后按状态弹问题卡
   const run = async (fn, userText, qa) => {
     setBusy(true);
     setError(null);
@@ -69,26 +97,22 @@ export default function App() {
     const id = uid();
     const started = Date.now();
     const research = scenarioRef.current === "research";
+    const errs = [];
     setMessages((ms) => [...ms, { id, role: "ai", stage: "正在准备…", steps: [], qa: qa || null, started }]);
     try {
-      const st = await fn((ev, data) => {
-        if (ev === "thread" && research) { threadRef.current = data.thread_id; history.replaceState(null, "", "#r/" + data.thread_id); }
-        if (ev === "progress" && data.stage) patchAi(id, (m) => ({ ...m, stage: data.stage, acts: data.kind ? [...(m.acts || []), data] : m.acts }));
-        if (ev === "node") patchAi(id, (m) => ({ ...m, steps: [...m.steps, data] }));
-        if (ev === "error") setError(data.message);
-      });
+      const st = await fn(onEvents(id, research, errs));
       const elapsed = Math.round((Date.now() - started) / 1000);
-      if (st) show(id, st, { elapsed });
-      else if (research && threadRef.current) await follow(threadRef.current, id, "连接断了，服务器还在处理，等它完成"); // 流没收完就断了
+      if (st && !(research && ACTIVE.has(st.status))) finish(id, st, errs, { elapsed });
+      else if (research && threadRef.current) await follow(threadRef.current, id, "连接断了，正在重连…", errs); // 流没收完就断了
       else patchAi(id, (m) => ({ ...m, stage: null, elapsed }));
     } catch (e) {
-      // 调研：回答被拒（400）、卡已过期或这一步还在处理（409）、连接断了（没有状态码）——都回服务器取当前进度，重建问题卡
+      // 调研：回答被拒（400）、卡已过期或这一步还在处理（409）、连接断了（没有状态码）——都回服务器接上当前进度，重建问题卡
       const recoverable = research && threadRef.current && (!e.status || e.status === 400 || e.status === 409);
       if (e.status || !recoverable) setError(String(e.message || e));
       if (e.status) patchAi(id, (m) => ({ ...m, qa: null })); // 这次回答被拒了，不能显示成已回答
       if (recoverable) {
         try {
-          await follow(threadRef.current, id, e.status ? "服务器还在处理这一步，等它完成" : "连接断了，服务器还在处理，等它完成");
+          await follow(threadRef.current, id, e.status ? "服务器还在处理这一步，等它完成" : "连接断了，正在重连…", errs);
         } catch (e2) {
           setError(`取回进度失败：${String(e2.message || e2)}`);
           patchAi(id, (m) => ({ ...m, stage: null }));
@@ -103,6 +127,7 @@ export default function App() {
 
   const start = (text) => {
     threadRef.current = null; // 新线程：断线后只按这次拿到的 id 恢复，不能落回上一个线程
+    lastEventRef.current = null;
     return run((cb) => (scenarioRef.current === "research" ? createResearchThread(text, cb) : createThread(text, image, cb)), text);
   };
 
@@ -111,12 +136,15 @@ export default function App() {
     scenarioRef.current = "research";
     setScenario("research");
     setBusy(true);
+    threadRef.current = threadId;
+    lastEventRef.current = null; // 刷新后没有事件 id：还在跑的话，服务器从这次执行的开头补发进度
     const id = uid();
     setMessages([{ id: uid(), role: "user", text: "（恢复中…）" }, { id, role: "ai", stage: "正在取回这次调研的进度", steps: [], started: Date.now() }]);
     try {
       const st = await getResearchState(threadId);
       setMessages((ms) => ms.map((m) => (m.role === "user" ? { ...m, text: st.request } : m)));
-      await follow(threadId, id, "服务器还在处理这一步，等它完成", st);
+      if (ACTIVE.has(st.status)) await follow(threadId, id, st.status === "queued" ? QUEUED : "服务器还在处理这一步，等它完成");
+      else show(id, st, { restored: true });
     } catch (e) {
       setError(`恢复失败：${String(e.message || e)}`);
       patchAi(id, (m) => ({ ...m, stage: null }));
@@ -129,9 +157,11 @@ export default function App() {
     run((cb) => (scenarioRef.current === "research"
       ? resumeResearchThread(threadRef.current, interruptRef.current, payload, cb)
       : resumeThread(threadRef.current, payload, cb)), userText, qa);
+  const retry = () => run((cb) => retryResearchThread(threadRef.current, cb), "重试");
 
   // ---- 把 interrupt 变成问题卡 ----
   const cardFor = (st) => {
+    if (st.scenario === "research" && st.status === "failed") return retryCard(retry); // 原因写在回复正文里
     const it = st.interrupt;
     if (!it) return null;
     if (it.type.startsWith("research.")) return researchCardFor(it, st, resume, setCard);
@@ -141,9 +171,10 @@ export default function App() {
     return null;
   };
 
-  // 底部输入框：没开始 → 新建；review 中 → 自由文本按关键词路由；其他中断 → 禁用
+  // 底部输入框：没开始或已结束 → 新建；review 中 → 自由文本按关键词路由；其他中断、调研失败 → 禁用
   const interruptType = state?.interrupt?.type;
-  const inputMode = !state || (state.exported && !interruptType) ? "new"
+  const finished = state && (state.scenario === "research" ? state.status === "done" : state.exported && !interruptType);
+  const inputMode = !state || finished ? "new"
     : interruptType === "review" || interruptType === "research.review" ? "review"
     : interruptType === "research.ask" ? "ask" : "locked";
   const onSend = (text) => {
@@ -158,7 +189,7 @@ export default function App() {
     <div className="app">
       <div className="topbar">
         <h1>{title}</h1>
-        {!state && (
+        {!state && !busy && ( // 跑着的时候不能切场景：卡片按线程的场景回传
           <div className="scen">
             {[["poster", "海报"], ["research", "调研"]].map(([k, l]) => <button key={k} className={scenario === k ? "sel" : ""} onClick={() => { setScenario(k); history.replaceState(null, "", location.pathname); }}>{l}</button>)}
           </div>

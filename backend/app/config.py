@@ -31,6 +31,7 @@ ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-flash-2
 # 背景图生成开关（M2 起默认开）；关闭时背景为模板渐变
 BACKGROUND_ENABLED = os.environ.get("LINGDRAFT_BACKGROUND", "1") not in ("0", "false", "")
 USE_FAKE_PLANNER = os.environ.get("LINGDRAFT_FAKE", "0") in ("1", "true")
+RESEARCH_WORKERS = int(os.environ.get("LINGDRAFT_RESEARCH_WORKERS", "4"))  # 同时跑几个调研线程，多出来的排队
 
 MAX_CHECK_RETRIES = 2
 

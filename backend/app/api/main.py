@@ -11,7 +11,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
-from app.api.research_runner import ResearchRunner, StaleInterrupt
+from app.api.research_runner import NothingToRetry, ResearchRunner, StaleInterrupt
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 from app.graph.research.answers import InvalidAnswer
 
@@ -160,6 +160,25 @@ async def research_resume(thread_id: str, body: ResearchResumeBody):
         raise HTTPException(409, str(e)) from None
     except InvalidAnswer as e:
         raise HTTPException(400, str(e)) from None
+
+
+@app.post("/api/research/threads/{thread_id}/retry")
+async def research_retry(thread_id: str):
+    """失败的线程从断开的那一步接着跑；没失败的返回 409。"""
+    r = research()
+    _view(r, thread_id)
+    try:
+        return _sse(r.retry(thread_id))
+    except (RunConflict, NothingToRetry) as e:
+        raise HTTPException(409, str(e)) from None
+
+
+@app.get("/api/research/threads/{thread_id}/events")
+async def research_events(thread_id: str, after: str | None = None):
+    """接上线程当前这次执行的事件流（after 是收到的最后一个事件 id），以 end 事件收尾；断线、刷新后用。"""
+    r = research()
+    _view(r, thread_id)
+    return _sse(r.follow(thread_id, after))
 
 
 @app.get("/api/research/threads/{thread_id}/state")

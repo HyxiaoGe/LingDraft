@@ -83,10 +83,10 @@ def _hold(planner, name: str) -> threading.Event:
     return gate
 
 
-def _run_async(coro) -> None:
+def _run_async(coro):
     """在新线程里跑事件循环：同一进程里的海报测试会在主线程留下 Playwright 的循环，主线程不能再 asyncio.run。"""
     with ThreadPoolExecutor(1) as ex:
-        ex.submit(asyncio.run, coro).result(60)
+        return ex.submit(asyncio.run, coro).result(60)
 
 
 def _wait_until(fn, timeout: float = 10) -> bool:
@@ -229,7 +229,7 @@ def test_concurrent_duplicate_resume_only_one_applies(client, rr):
     t = threading.Thread(target=lambda: first.setdefault("resp", _answer(client, st, {"answer": "包含"})))
     t.start()
     try:
-        assert _wait_until(lambda: _state(client, tid)["running"])
+        assert _wait_until(lambda: _state(client, tid)["status"] == "running")
         r = _answer(client, st, {"answer": "包含"})
         assert r.status_code == 409, r.text
     finally:
@@ -238,7 +238,7 @@ def test_concurrent_duplicate_resume_only_one_applies(client, rr):
     _events(first["resp"])
     end = _state(client, tid)
     assert [(a["question"], a["answer"]) for a in end["asks"]] == [("范围是否包含 PPT 工具？", "包含")]
-    assert end["interrupt"]["type"] == "research.review" and not end["running"]
+    assert end["interrupt"]["type"] == "research.review" and end["status"] == "waiting"
 
 
 def test_disconnect_does_not_release_or_cancel_the_run(rr):
@@ -253,31 +253,34 @@ def test_disconnect_does_not_release_or_cancel_the_run(rr):
             assert json.loads((await half.__anext__()).split("data: ", 1)[1])["thread_id"] == "drop0002"
             await half.aclose()
             for tid in ("drop0001", "drop0002"):
-                assert rr.state_view(tid)["running"], tid
+                assert rr.state_view(tid)["status"] in ("queued", "running"), tid
         finally:
             gate.set()
         for _ in range(400):
-            if not any(rr.state_view(t)["running"] for t in ("drop0001", "drop0002")):
+            if all(rr.state_view(t)["status"] == "waiting" for t in ("drop0001", "drop0002")):
                 break
             await asyncio.sleep(0.05)
         assert rr.state_view("drop0001")["interrupt"]["type"] == "research.review"
         assert rr.state_view("drop0002")["interrupt"]["type"] == "research.scope"
-        assert not rr.state_view("drop0002")["running"]
+
 
     _run_async(go())
 
 
-def test_queued_new_thread_is_visible_at_once(rr):
+def test_queued_new_thread_is_visible_at_once(tmp_path):
+    rr = ResearchRunner(fake=True, data_dir=tmp_path / "data", out_dir=tmp_path / "out", workers=1)
+
     async def go():
         gate = _hold(rr.planner, "intake")
         a = rr.start("queue001", SIMPLE)  # 占住唯一的执行线程
         try:
-            await asyncio.wait_for(a.__anext__(), 5)
+            ev = await asyncio.wait_for(a.__anext__(), 5)
+            assert '"queued": false' in ev
             b = rr.start("queue002", SIMPLE)
             ev = await asyncio.wait_for(b.__anext__(), 2)  # 排队中也要马上拿到 id
-            assert ev.startswith("event: thread")
+            assert "event: thread" in ev and '"queued": true' in ev
             v = rr.state_view("queue002")
-            assert v["exists"] and v["running"] and v["queued"] and v["request"] == SIMPLE and v["interrupt"] is None
+            assert v["exists"] and v["status"] == "queued" and v["request"] == SIMPLE and v["interrupt"] is None
         finally:
             gate.set()
         async for _ in a:
@@ -285,13 +288,14 @@ def test_queued_new_thread_is_visible_at_once(rr):
         async for _ in b:
             pass
         v = rr.state_view("queue002")
-        assert not v["running"] and not v["queued"] and v["interrupt"]["type"] == "research.review"
+        assert v["status"] == "waiting" and v["interrupt"]["type"] == "research.review"
 
     _run_async(go())
 
 
 def test_failed_run_releases_slot(client, rr):
     st = _to_ask(client)
+    orig = rr.planner.agent_model
 
     def boom(*a, **kw):
         raise RuntimeError("假模型：网络断了")
@@ -299,4 +303,9 @@ def test_failed_run_releases_slot(client, rr):
     rr.planner.agent_model = boom  # 恢复时 research 节点重建 agent 就失败，异常冒出图
     ev = _events(_answer(client, st, {"answer": "包含"}))
     assert any(e == "error" for e, _ in ev)
-    assert _last(ev, "state")["running"] is False
+    # 回答没被用上：还是这张卡、在等用户（不算失败，不用重试），占位已释放，重新回答就能接着走
+    after = _last(ev, "state")
+    assert after["status"] == "waiting" and after["interrupt"]["id"] == st["interrupt"]["id"] and after["asks"] == []
+    rr.planner.agent_model = orig
+    end = _last(_events(_answer(client, after, {"answer": "包含"})), "state")
+    assert end["interrupt"]["type"] == "research.review" and [a["answer"] for a in end["asks"]] == ["包含"]

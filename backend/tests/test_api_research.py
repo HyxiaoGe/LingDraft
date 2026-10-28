@@ -40,11 +40,11 @@ def _resume(client, st: dict, payload: dict):
 def test_research_flow_over_http(client):
     ev = _events(client.post("/api/research/threads", json={"request": "AI 海报工具在局部修改上的现状（2026）"}))
     kinds = [e for e, _ in ev]
-    assert kinds[:2] == ["thread", "progress"] and kinds[-3:] == ["node", "interrupt", "state"]
+    assert kinds[:3] == ["thread", "started", "progress"] and kinds[-4:] == ["node", "interrupt", "state", "end"]
     st = _last(ev, "state")
     tid = st["thread_id"]
     assert st["scenario"] == "research" and st["interrupt"]["type"] == "research.scope"
-    assert st["running"] is False
+    assert st["status"] == "waiting"
 
     assert [q["id"] for q in st["interrupt"]["questions"]] == ["q1"] and st["scope"]["question"]
     ev = _events(_resume(client, st, {"answers": {"q1": "改文字"}}))

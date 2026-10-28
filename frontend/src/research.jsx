@@ -55,6 +55,16 @@ function askCard(it, resume) {
   };
 }
 
+// ---- 失败：某一步出错或执行被掐断，已有的内容都在，从断开的地方接着跑 ----
+export function retryCard(retry) {
+  return {
+    title: "这一步没跑完，要从断开的地方重试吗？",
+    page: "1/1",
+    options: [{ label: "重试", hint: "已经做过的搜索、整理和报告都保留，从没跑完的那一步接着跑", value: "retry" }],
+    onAnswer: () => (retry(), null),
+  };
+}
+
 // ---- 终审 ----
 function reviewCard(it, st, resume, setCard) {
   const invalid = (it.checks || []).some((c) => c.name === "report_valid" && !c.passed);
@@ -176,6 +186,14 @@ export function routeResearchText(text, st, resume, setCard) {
 // ---------------- 结果渲染 ----------------
 
 export function ResearchBody({ st, it, onCard, resume }) {
+  if (st.status === "failed") {
+    return (
+      <>
+        <p>这一步没跑完：{st.error}。已有的内容都还在，可以从断开的地方重试。</p>
+        {st.exported && <ReviewBody st={st} it={null} onCard={onCard} resume={resume} />}
+      </>
+    );
+  }
   if (it?.type === "research.scope") {
     return <p>需求里有 {(it.questions || []).length} 处要先问清，不然调研方向可能会偏。</p>;
   }
@@ -211,7 +229,7 @@ function ReviewBody({ st, it, onCard, resume }) {
   return (
     <>
       {it ? <p>第 {it.version} 版{st.exported?.version === it.version ? "已导出" : "好了，但没有带来源的论断，没有导出"}（{last?.note}）。每句话都挂着论断，推断句有标记；觉得不合适，点论断或来源可以单独处理。{it.answer_how === "close" ? " 这次调研没有自己收尾，答案是基于已查到的材料补的，请多留意。" : ""}</p>
-          : <p>已结束，用的是第 {st.exported?.version} 版。</p>}
+          : st.status !== "failed" && <p>已结束，用的是第 {st.exported?.version} 版。</p>}
       <div className="rtabs">
         {[["report", "报告"], ["claims", `论断 ${claims.filter((c) => !c.orphaned).length}`], ["sources", `来源 ${sources.filter((s) => s.status === "adopted").length}`]].map(([k, l]) => (
           <button key={k} className={tab === k ? "sel" : ""} onClick={() => setTab(k)}>{l}</button>
