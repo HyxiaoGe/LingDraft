@@ -3,7 +3,7 @@
 黑五海报单场景的 LangGraph 实现：`intake → confirm_facts(中断) → 风格 → plan_layout → render → check → review(中断) → revise / manual_edit / change_fact / export`。
 设计见 `../docs/黑五海报PoC技术方案.md`。
 
-调研场景（图 + CLI + 接口 + 前端）：`intake → confirm_scope(只在需要澄清时中断) → research（全局 create_agent，`ask_user` 会中断；无文字答案时无工具受控收尾）→ consolidate（无工具结构化整理，关键缺口回 research 补一轮；补查没拿到新答案或整理失败就保留上一轮的结果）→ write（每版连同下载包一起写好，来源状态按这版正文重算）→ check（只是说明，不拦交付）→ review(可选修改：exclude_source / edit_claim / rewrite_section 改完出新一版；approve 只是结束)`。每一版报告写出来就是交付物；没答完的会在报告开头写明还缺什么。模型默认 DeepSeek V4 Pro（调研 agent 开思考，结构化步骤不开）。设计见 `../docs/调研场景与多场景架构设计.md` 第 17 节。
+调研场景（图 + CLI + 接口 + 前端）：`intake → confirm_scope(只在需要澄清时中断) → research（全局 create_agent，`ask_user` 会中断；无文字答案时无工具受控收尾）→ consolidate（无工具结构化整理，关键缺口回 research 补一轮；补查没拿到新答案或整理失败就保留上一轮的结果）→ write（每版写好就是交付物，来源状态按这版正文重算）→ check（只是说明，不拦交付）→ review(可选修改：exclude_source / edit_claim / rewrite_section 改完出新一版；approve 只是结束)`。每一版报告写出来就是交付物；没答完的会在报告开头写明还缺什么。模型默认 DeepSeek V4 Pro（调研 agent 开思考，结构化步骤不开）。设计见 `../docs/调研场景与多场景架构设计.md` 第 17 节。
 
 ## 运行
 
@@ -59,6 +59,8 @@ uv run python -m app.cli --scenario research --fake resume <thread_id> '{"action
 uv run python -m app.cli --scenario research state <thread_id>
 ```
 
+调研给模型看的文字都在 `app/graph/research/prompts.toml`，改文字不用动代码，改完重启后端。调研方法（技能）在 `app/graph/research/skills/<name>/`，文件格式沿用 Agent Skills：`SKILL.md` 的 frontmatter 写 `name`（和目录同名）、`description`（用途，模型靠它判断用不用）、`metadata.title`（页面上显示的名字），正文是查法；`references/report.md` 是报告结构和论断写法的示例。agent 的系统提示词只列目录，由模型决定读不读；选定的方法补查时直接带上，整理和重写按它的报告结构分节。加一类方法就加一个目录，写坏了启动时直接报错。改了提示词、调研方法或调研链路，先跑一遍回放评测（`uv run python -m app.evals.research`）。
+
 调研的检查点在 `data/checkpoints_research.sqlite`。每版报告另写一份 `report_v{n}.md` 留档在 `output/research/<thread_id>/`，流程不读它：页面、终审卡和理解用户的话用的报告都从检查点里的数据生成。以前的线程留下的 `package/` 目录没删，也不再更新。
 
 修复前留下的卡死线程：旧版节点拒绝回答后，坏回答会留在检查点里，之后每次提交正确回答都报同一个错（比如一直“回答的不是当前问题”）。停在澄清卡或终审卡上的这种线程，用 `PYTHONPATH=. uv run python scripts/unstick_research_thread.py <thread_id> ...` 手工解卡（不调模型；先确认线程没在跑），然后刷新页面重新回答。
@@ -72,9 +74,10 @@ uv run python -m app.cli --scenario research state <thread_id>
 - `app/llm.py` `Planner` 协议：`ArkPlanner`（豆包，json_schema 结构化输出）/ `FakePlanner`
 - `app/render/` Jinja2 模板 → Playwright 截图；`checks.py` 事实逐字比对 / 违禁词 / 溢出
 - `app/api/` FastAPI；`runner.py` `BaseRunner`（图执行放到工作线程，事件写进 `EventLog` 再转成 SSE；`RunRegistry` 运行占位；两者都是进程内实现，多 worker 时换共享存储）+ 海报 `GraphRunner`（单线程）；`research_runner.py` 调研的执行器（多线程）、状态视图与运行状态、重试、中断整形（带中断 id）、事件摘要
-- `app/graph/research/` 调研场景：`state.py`（范围 / 大纲 / 来源 / 论断 / 逐句正文）、`agent.py`（`create_agent` + HITL / 调用上限中间件、`Findings` 结构化产出、从工具消息里解析候选来源）、`answers.py`（三种确认卡的回答校验，接口 / CLI / 节点共用）、`nodes.py` / `graph.py`、`report.py`（确定性拼装报告与六项校验）、`prompts.py`
+- `app/graph/research/` 调研场景：`state.py`（范围 / 大纲 / 来源 / 论断 / 逐句正文）、`agent.py`（`create_agent` + HITL / 调用上限中间件、`Findings` 结构化产出、从工具消息里解析候选来源）、`answers.py`（三种确认卡的回答校验，接口 / CLI / 节点共用）、`nodes.py` / `graph.py`、`report.py`（确定性拼装报告与六项校验）、`prompts.toml`（给模型看的文字：系统提示词、每步的输入模板、工具描述、注入的说明；`prompts.py` 只负责渲染）、`skills/`（调研方法，见下）
 - `app/research_llm.py` `ResearchPlanner` 协议：`ArkResearchPlanner`（豆包 + 真实网关）/ `FakeResearchPlanner`（脚本化的假工具模型 + MockTransport 网关）
-- `app/tools/` agent-tools 网关客户端（搜索 / 网页读取）与调研 agent 的工具（`search_web` / `read_page` / `ask_user`）
+- `app/tools/` agent-tools 网关客户端（搜索 / 网页读取）与调研 agent 的工具（`search_web` / `read_page` / `ask_user` / `load_skill`；描述在 `prompts.toml` 的 `[tools.*]`）
+- `app/evals/` + `evals/` 回放评测：用真实模型跑 `evals/research/cases.yaml`，按轨迹和裁判模型打分，用法和写用例的约定见 `evals/README.md`
 - `scripts/` 对真实模型与网关的验证脚本：`probe_create_agent.py`（假搜索）、`probe_gateway_agent.py`（真实搜索 / 读取）、`probe_research_llm.py`（调研场景三种结构化输出），`PYTHONPATH=. uv run python scripts/<name>.py`
 - `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）。海报：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出。调研（`src/research.jsx`，顶栏切换）：需求清楚直接开始，模糊才弹澄清卡 → agent 提问卡（带“不问会怎样”，可跳过）→ 大纲 + 论断 + 假设 → 报告 / 论断 / 来源三个页签，点论断或来源单独处理 → 终审卡 / 自由文本重写某章 → 导出确认物包
 - `tests/` 海报：T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等；调研：`test_research.py`（全流程可追溯 / 排除来源传播 / 改论断 / 重写章节 / 改大纲只补调研新章 / 跳过提问 / sqlite 跨实例恢复 / 同批夹提问也按额度 / 没呈现的提问不占额度 / 回补失败保留第一轮 / 来源状态随报告重算 / 重写带用户约束 / 无效报告照样交付）、`test_research_resume.py`（路径穿越与符号链接 / 严格载荷 / 被拒后能继续 / 过期中断 id / 重复提交 / 断线与排队）、`test_research_runs.py`（并行执行 / 提交失败退还占位 / 断线续读与刷新补发 / 保活 / 失败保留内容与重试 / 回答已用上后出错不再让人重答 / 排队中重启后可重试 / 被掐断的执行可重试）

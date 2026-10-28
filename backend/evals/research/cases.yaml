@@ -1,0 +1,59 @@
+# 调研回放评测用例。字段和检查方式见 app/evals/research.py，写用例的约定见 ../README.md。
+
+- id: weather
+  source: 探针 autonomy 例 1（docs/probe/autonomy，2026-10-28）：简单事实题，应直接答
+  request: 最近新加坡的天气情况如何？
+  expect:
+    scope_card: false
+    asked: false
+    skill: null
+    max_searches: 4
+  judge: 报告给出了新加坡最近几天或接下来几天的具体天气（例如气温、降雨、天气现象）并写明对应的日期；已经发生的天气和预报分得清（分节写或在句子里写明是预报都算）。
+
+- id: selection
+  source: 探针 ask（docs/probe/ask，2026-10-28）：要明确推荐，而数据能不能出网只有用户知道，应先问
+  request: 我们公司要给内部员工上一个基于大模型的知识库问答。帮我在「直接调 DeepSeek 官方 API」和「私有化部署开源 DeepSeek 模型」之间选一个，给出明确推荐和理由。
+  ask_answers:
+    - 内部文档不允许发给外部服务；公司有 GPU 服务器，也有人能运维。
+  expect:
+    asked: true
+    skill: comparison
+  judge: 报告给出了一个明确的推荐（不是只说看情况），推荐和用户回答里说的条件一致，并说明了在什么情况下另一个选项更合适。
+
+- id: cost-conflict
+  source: 探针 autonomy 例 4（docs/probe/autonomy，2026-10-28）：来源说法不一致，应自己核对口径，不问用户
+  request: DeepSeek V3 的训练成本到底是多少？不同说法差很多
+  expect:
+    asked: false
+    skill: fact-check
+    min_reads: 1
+  judge: 报告说明了不同说法各自算的是什么范围（口径）和各自的出处，没有把某一个口径的数字说成全部成本。
+
+- id: wal-vs-rollback
+  source: 真实模型验收（2026-10-29，第一次搜索注入 502 那次）：技术机制对比，不用选择，应读官方文档
+  request: SQLite 的 WAL 模式相比默认的回滚日志模式，在并发读写上有什么区别？
+  expect:
+    asked: false
+    skill: comparison
+    min_reads: 1
+    cites_domain: sqlite.org
+  judge: 报告分别说明了两种模式下读和写会不会互相阻塞、同时能有几个写者。
+
+- id: landscape-2026
+  source: 调研方法（技能）上线时新增（2026-10-29）：限定了时间的现状盘点，搜索应限定时间，清单应说明可能不全
+  request: 2026 年以来国产开源大模型有哪些重要发布？
+  expect:
+    asked: false
+    skill: landscape
+    recency: true
+  judge: 报告列出的每项发布都写了发布时间，而且都在 2026 年以内（更早的材料只作背景并说明了）；说明了清单可能不全。
+
+- id: vague-scope
+  source: 探针 autonomy 例 3（docs/probe/autonomy，2026-10-28）：需求太宽，应先在范围卡上问清行业或场景
+  request: 帮我调研一下大模型的落地情况
+  scope_answers:
+    - 制造业，主要看质检和设备运维这两类场景；地域以中国大陆为主。
+  expect:
+    scope_card: true
+    skill: landscape
+  judge: 报告围绕用户回答的行业和场景（制造业的质检、设备运维）展开，不是泛泛的大模型落地综述。

@@ -427,13 +427,13 @@ def _answer_text(req: str, hits: list[dict], answer: str | None, how: str = "") 
 
 
 class FakeResearchPlanner:
-    def __init__(self) -> None:
+    def __init__(self, gateway: GatewayClient | None = None) -> None:
         self.calls: list[tuple[str, Any]] = []
         self.write_inputs: list[dict] = []  # 重写时拿到的范围、用户回答和报告结构
         self.consolidate_reports: list[str | None] = []  # 整理时拿到的报告结构
         self.time_issues: list[TimeIssue] = []  # 整理时要报告的时间范围问题（测试按需设）
         self.review_plans: list[ReviewPlan] = []  # 终审时用户的话依次被理解成什么（测试按需设）；没有预设就是没对上
-        self._gateway = fake_gateway_client()
+        self._gateway = gateway or fake_gateway_client()
         self._tools = make_research_tools(self._gateway)
         self._model = FakeToolModel()
 

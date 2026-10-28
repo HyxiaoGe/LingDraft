@@ -63,6 +63,7 @@ load_skill.handle_tool_error = True
 
 
 def make_research_tools(client: GatewayClient) -> list:
+    skills.catalog()  # 技能文件写坏了，在构建工具（服务启动）时就报错，不等 agent 读取时才发现
     @tool("search_web", description=prompts.render("tools.search_web.description"), args_schema=SearchArgs)
     def search_web(query: str, count: int = 5, recency_days: int | None = None, domains: list[str] | None = None) -> str:
         # 超出范围的取值收进范围，不为此多耗一轮模型调用

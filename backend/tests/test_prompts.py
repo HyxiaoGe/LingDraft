@@ -4,13 +4,14 @@ import pytest
 from jinja2 import UndefinedError
 
 from app.graph.research import prompts
+from app.prompting import ENV
 
 
 def test_every_prompt_parses():
     texts = prompts.texts()
     assert {"agent.system", "consolidate.system", "tools.search_web.description"} <= texts.keys()
     for src in texts.values():
-        prompts._env.parse(src)
+        ENV.parse(src)
 
 
 def test_missing_variable_fails_loudly():
