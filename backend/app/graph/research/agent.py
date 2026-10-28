@@ -305,8 +305,17 @@ def collect_asks(messages: list[BaseMessage]) -> list[AskRecord]:
             if content == SKIP_MESSAGE:
                 out.append(AskRecord(question=q, answer=None, skipped=True))
             else:
-                out.append(AskRecord(question=q, answer=content))
+                # 选了“尚不清楚…”这类选项等同跳过：不是用户确认的前提，结论按标注的假设给
+                out.append(AskRecord(question=q, answer=content, skipped=is_unclear_answer(content)))
     return out
+
+
+UNCLEAR_PREFIXES = ("尚不清楚", "不清楚", "不确定", "拿不准", "我不知道", "不知道")
+
+
+def is_unclear_answer(text: str) -> bool:
+    t = text.strip().lstrip("（(「\"'“")
+    return t.startswith(UNCLEAR_PREFIXES)
 
 
 def count_asks(messages: list[BaseMessage]) -> int:

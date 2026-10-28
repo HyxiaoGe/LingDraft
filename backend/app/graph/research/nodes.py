@@ -134,7 +134,10 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             notes.append(f"agent 没有给出文字答案（{why}）")
         new_asks = collect_asks(messages)
         asks = list(state.get("asks", [])) + new_asks
-        assumptions = list(state.get("assumptions", [])) + [f"「{a.question}」用户跳过了，按模型假设处理" for a in new_asks if a.skipped]
+        assumptions = list(state.get("assumptions", [])) + [
+            (f"「{a.question}」用户答“{a.answer}”，按模型假设处理" if a.answer else f"「{a.question}」用户跳过了，按模型假设处理")
+            for a in new_asks if a.skipped
+        ]
         return {
             "sources": sources, "answer": answer, "answer_how": how, "gap": None, "asks": asks, "assumptions": assumptions,
             "asks_used": asks_used + count_asks(messages), "notes": notes,

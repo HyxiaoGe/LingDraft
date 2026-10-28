@@ -155,6 +155,12 @@ def test_rewrite_section_with_instruction(graph, planner):
     assert len(writes) == 1
 
 
+def test_unclear_answer_is_not_a_confirmed_premise(graph):
+    p = run_to_review(graph, answer={"answer": "尚不清楚，先按标注的假设给建议"})
+    assert any("尚不清楚" in a and "按模型假设处理" in a for a in p["assumptions"])
+    assert "## 用户确认的前提" not in p["report"]
+
+
 def test_skip_ask_records_assumption(graph):
     p = run_to_review(graph, answer={"skip": True})
     assert any("用户跳过了" in a and "PPT" in a for a in p["assumptions"])

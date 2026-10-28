@@ -15,7 +15,7 @@ from app.research_llm import ResearchPlanner
 
 ALLOWED_MODELS = [
     ("app.graph.research.state", n)
-    for n in ("Scope", "ClarifyQuestion", "OutlineNode", "Source", "Claim", "SectionText", "Sentence", "ReportVersion", "CheckResult")
+    for n in ("Scope", "ClarifyQuestion", "OutlineNode", "Source", "Claim", "SectionText", "Sentence", "ReportVersion", "CheckResult", "AskRecord")
 ]
 
 
