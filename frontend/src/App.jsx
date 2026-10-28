@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createThread, resumeThread, createResearchThread, resumeResearchThread, retryResearchThread, followResearchThread, getResearchState } from "./api.js";
-import { RESEARCH_DEFAULT, ResearchBody, researchCardFor, retryCard, routeResearchText, scopeLine } from "./research.jsx";
+import { RESEARCH_DEFAULT, ResearchBody, researchCardFor, researchStepLine, retryCard } from "./research.jsx";
 
 const KIND = { headline: "标题", subhead: "副标题", offer: "优惠", date: "活动时间", cta: "行动号召", product_image: "产品图" };
 const STATUS = { draft: "草稿", confirmed: "已确认", user_edited: "手工编辑" };
@@ -164,14 +164,14 @@ export default function App() {
     if (st.scenario === "research" && st.status === "failed") return retryCard(() => retry(st.thread_id)); // 原因写在回复正文里
     const it = st.interrupt;
     if (!it) return null;
-    if (it.type.startsWith("research.")) return researchCardFor(it, st, resumeFor(st), setCard);
+    if (it.type.startsWith("research.")) return researchCardFor(it, resumeFor(st));
     if (it.type === "confirm_facts") return factsCard(it, resume);
     if (it.type === "choose_style") return styleCard(it, resume);
     if (it.type === "review") return reviewCard(it, st, resume);
     return null;
   };
 
-  // 底部输入框：没开始或已结束 → 新建；review 中 → 自由文本交给后端由模型理解；其他中断、调研失败 → 禁用
+  // 底部输入框：没开始或已结束 → 新建；review 中 → 原话交给后端由模型理解（对不上时回复显示在下一张卡的标题上）；其他中断、调研失败 → 禁用
   const interruptType = state?.interrupt?.type;
   const finished = state && (state.scenario === "research" ? state.status === "done" : state.exported && !interruptType);
   const inputMode = !state || finished ? "new"
@@ -180,7 +180,7 @@ export default function App() {
   const onSend = (text) => {
     if (inputMode === "new") return start(text);
     if (inputMode === "ask") return resumeFor(state)({ answer: text }, null, [{ q: state.interrupt.title, a: text }]);
-    if (inputMode === "review") return state.scenario === "research" ? routeResearchText(text, state, resumeFor(state)) : routeFreeText(text, resume);
+    if (inputMode === "review") return (state.scenario === "research" ? resumeFor(state) : resume)({ action: "instruct", text }, text);
   };
   const title = !state ? (scenario === "research" ? "灵稿 · 产品调研" : "灵稿 · 宣传海报")
     : scenario === "research" ? (state.scope?.question || "产品调研") : "黑五预热宣传海报";
@@ -292,7 +292,7 @@ function reviewCard(it, st, resume) {
     ],
     customPlaceholder: "或直接说要改什么，例如：标题更有紧迫感 / 折扣改成 6 折",
     onAnswer: (v, isCustom) => {
-      if (isCustom) return routeFreeText(v, resume), null;
+      if (isCustom) return (resume({ action: "instruct", text: v }, v), null); // 原话交给后端，由模型理解成改文案 / 改事实 / 换风格 / 导出
       if (v === "approve") return resume({ action: "approve" }, "就这版，导出"), null;
       if (v === "fact") return resume({ action: "change_fact" }, "修改事实"), null;
       if (v === "style") return styleChangeCard(st, resume);
@@ -370,35 +370,35 @@ function styleChangeCard(st, resume) {
   };
 }
 
-// review 阶段的自由文本：原话交给后端，由模型理解成改文案 / 改事实 / 换风格 / 导出；对不上时回复显示在下一张卡的标题上
-function routeFreeText(text, resume) {
-  const t = text.trim();
-  if (t) resume({ action: "instruct", text: t }, t);
-}
-
 // ---------------- 组件 ----------------
 
+const INTRO = {
+  research: ["我可以帮你做调研。说一句要研究什么：需求清楚就直接查，真有歧义才问你；简单问题直接给答案，复杂问题多方查证、读原文核实。报告里每句话都能回指来源，事实和推断分开标；你排除一条来源，靠它的论断会自动退回。", RESEARCH_DEFAULT],
+  poster: ["我可以帮你做宣传海报。说一句需求就行，我会先把价格、折扣、日期这些关键事实列出来让你确认，再问视觉方向，然后出初稿；之后你改哪一处，其余已确认的内容我都不会动。", DEFAULT_REQUEST],
+};
+
 function Welcome({ scenario, onPick }) {
-  if (scenario === "research") {
-    return (
-      <div className="msg-ai">
-        <div className="head"><span className="avatar">灵</span><span className="name">灵稿</span></div>
-        <div className="body">
-          <p>我可以帮你做调研。说一句要研究什么：需求清楚就直接查，真有歧义才问你；简单问题直接给答案，复杂问题多方查证、读原文核实。报告里每句话都能回指来源，事实和推断分开标；你排除一条来源，靠它的论断会自动退回。</p>
-          <p>试试：<a href="#" onClick={(e) => { e.preventDefault(); onPick(RESEARCH_DEFAULT); }}>{RESEARCH_DEFAULT}</a></p>
-        </div>
-      </div>
-    );
-  }
+  const [intro, example] = INTRO[scenario];
   return (
     <div className="msg-ai">
-      <div className="head"><span className="avatar">灵</span><span className="name">灵稿</span></div>
+      <AiHead />
       <div className="body">
-        <p>我可以帮你做宣传海报。说一句需求就行，我会先把价格、折扣、日期这些关键事实列出来让你确认，再问视觉方向，然后出初稿；之后你改哪一处，其余已确认的内容我都不会动。</p>
-        <p>试试：<a href="#" onClick={(e) => { e.preventDefault(); onPick(DEFAULT_REQUEST); }}>{DEFAULT_REQUEST}</a></p>
+        <p>{intro}</p>
+        <p>试试：<a href="#" onClick={(e) => { e.preventDefault(); onPick(example); }}>{example}</a></p>
       </div>
     </div>
   );
+}
+
+function AiHead({ children }) {
+  return <div className="head"><span className="avatar">灵</span><span className="name">灵稿</span>{children}</div>;
+}
+
+// 进度：一步做完一行，按发生的顺序排（有补查时“发现缺口”在两轮调研之间）
+function stepLine(s) {
+  if (s.node === "render" && s.version != null) return `已渲染第 ${s.version} 版 · ${s.note}`;
+  if (s.node === "export" && s.exported) return `已导出第 ${s.exported.version} 版确认物包`;
+  return researchStepLine(s);
 }
 
 // 调研期间每次搜索 / 读页一行；跑完折叠成一句
@@ -407,13 +407,12 @@ function ActLog({ acts, live }) {
   const n = { search: 0, read: 0 };
   acts.forEach((a) => { n[a.kind] = (n[a.kind] || 0) + 1; });
   const summary = `搜索 ${n.search} 次 · 读取 ${n.read} 页`;
-  if (live) {
-    return <div className="actlog">{acts.slice(-4).map((a, i) => <div key={i} className={a.kind}>{a.stage}</div>)}</div>;
-  }
+  const list = (xs) => <div className="actlog">{xs.map((a, i) => <div key={i} className={a.kind}>{a.stage}</div>)}</div>;
+  if (live) return list(acts.slice(-4));
   return (
     <>
       <div className="qa-toggle" onClick={() => setOpen(!open)}>⌕ {summary} {open ? "⌃" : "⌄"}</div>
-      {open && <div className="actlog">{acts.map((a, i) => <div key={i} className={a.kind}>{a.stage}</div>)}</div>}
+      {open && list(acts)}
     </>
   );
 }
@@ -433,11 +432,10 @@ function AiMsg({ m, live, onPickElement, onCard, resume }) {
   const elements = it?.type === "review" ? it.elements : st?.elements;
   return (
     <div className="msg-ai">
-      <div className="head">
-        <span className="avatar">灵</span><span className="name">灵稿</span>
+      <AiHead>
         {m.elapsed != null && <span className="meta">已处理 {m.elapsed}s</span>}
         {m.restored && <span className="meta">从上次的进度恢复</span>}
-      </div>
+      </AiHead>
       <div className="body">
         {m.qa && m.qa.length > 0 && (
           <>
@@ -445,12 +443,7 @@ function AiMsg({ m, live, onPickElement, onCard, resume }) {
             {open && <div className="qa-box">{m.qa.map((x, i) => <div className="a" key={i}><div className="q">{x.q}</div><div>{x.a}</div></div>)}</div>}
           </>
         )}
-        {m.steps.filter((s) => s.node === "render").map((s) => <div className="done-line" key={s.version}>已渲染第 {s.version} 版 · {s.note}</div>)}
-        {m.steps.filter((s) => s.node === "confirm_scope" && s.scope).map((s, i) => <div className="done-line" key={"sc" + i}>{scopeLine(s.scope)}</div>)}
-        {m.steps.filter((s) => s.node === "research").map((s, i) => <div className="done-line" key={"r" + i}>{s.answer_how === "close" ? "调研没有自己收尾，基于已有材料补了答案" : "调研完了"} · 共 {s.sources} 条候选来源</div>)}
-        {m.steps.filter((s) => s.node === "consolidate").map((s, i) => <div className="done-line" key={"c" + i}>{s.gap ? `整理时发现证据缺口，回去补查：${s.gap}` : `整理出 ${s.sections} 节、${s.claims} 条论断`}</div>)}
-        {m.steps.filter((s) => s.node === "write").map((s) => <div className="done-line" key={s.version}>已生成第 {s.version} 版报告 · {s.note}</div>)}
-        {m.steps.filter((s) => s.node === "export" && s.exported).map((s, i) => <div className="done-line" key={"e" + i}>已导出第 {s.exported.version} 版确认物包</div>)}
+        {m.steps.map((s, i) => { const line = stepLine(s); return line && <div className="done-line" key={i}>{line}</div>; })}
         {/* 调研的说明在报告下面单独列；跑着的时候还没有结果，按消息自己记的场景判断 */}
         {!m.research && st?.scenario !== "research" && m.steps.filter((s) => s.notes?.length).map((s, i) => <p key={i}>{s.notes.join("；")}</p>)}
         {m.acts?.length > 0 && <ActLog acts={m.acts} live={!!m.stage} />}
@@ -527,16 +520,19 @@ function QuestionCard({ card, onClose }) {
           <button className="x" onClick={onClose} title="先收起，稍后可从输入框右侧重新打开">×</button>
         </div>
       </div>
-      {cur.options.map((o, i) => (
-        <div className={"opt" + (sel === i ? " sel" : "")} key={i} onMouseEnter={() => setSel(i)} onClick={() => pick(o)}>
-          <span className="num">{i + 1}</span>
-          <span className="label">
-            {o.swatches && <span className="sw">{o.swatches.map((c) => <i key={c} style={{ background: c }} />)}</span>}
-            {o.label}{o.hint && <span className="hint">　{o.hint}</span>}
-          </span>
-          <span className="arrow">→</span>
-        </div>
-      ))}
+      {/* 选项多时（比如几十条来源）在卡里滚动，卡片不会长出屏幕顶端 */}
+      <div className="opts">
+        {cur.options.map((o, i) => (
+          <div className={"opt" + (sel === i ? " sel" : "")} key={i} onMouseEnter={() => setSel(i)} onClick={() => pick(o)}>
+            <span className="num">{i + 1}</span>
+            <span className="label">
+              {o.swatches && <span className="sw">{o.swatches.map((c) => <i key={c} style={{ background: c }} />)}</span>}
+              {o.label}{o.hint && <span className="hint">　{o.hint}</span>}
+            </span>
+            <span className="arrow">→</span>
+          </div>
+        ))}
+      </div>
       {cur.customPlaceholder !== undefined && (
         <div className="custom">
           <span className="pen">✎</span>

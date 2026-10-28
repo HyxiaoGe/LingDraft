@@ -194,6 +194,9 @@ def test_interrupt_events_carry_the_state_id_once(client):
     ev = _events(_answer(client, st, {"answers": {"q1": "改文字"}}))
     ints = [d for e, d in ev if e == "interrupt"]
     assert len(ints) == 1 and ints[0]["type"] == "research.ask" and ints[0]["id"] == _last(ev, "state")["interrupt"]["id"]
+    ev = _events(_answer(client, _last(ev, "state"), {"answer": "包含"}))
+    ints = [d for e, d in ev if e == "interrupt"]
+    assert len(ints) == 1 and ints[0]["type"] == "research.review" and ints[0]["id"] == _last(ev, "state")["interrupt"]["id"]
 
 
 def test_stale_interrupt_id_conflicts_and_leaves_state(client):

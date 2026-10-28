@@ -88,7 +88,8 @@ def report_blocks(
             meta.append(f"发布 {src.published_at[:10]}")
         if src.retrieved_at:
             meta.append(f"抓取 {src.retrieved_at[:10]}")
-        blocks.append({"type": "source", "label": source_label(sid), "source_id": sid, "title": src.title or src.url, "url": src.url, "meta": "，".join(meta)})
+        # 没有标题就只写网址，不把网址当标题再写一遍
+        blocks.append({"type": "source", "label": source_label(sid), "source_id": sid, "title": src.title or "", "url": src.url, "meta": "，".join(meta)})
     return blocks
 
 
@@ -111,7 +112,7 @@ def to_markdown(blocks: list[dict]) -> str:
         elif t == "item":
             out.append(f"- {b['text']}")
         elif t == "source":
-            out.append(f"[{b['label']}] {b['title']} — {b['url']}" + (f"（{b['meta']}）" if b["meta"] else ""))
+            out.append(f"[{b['label']}] " + (f"{b['title']} — " if b["title"] else "") + b["url"] + (f"（{b['meta']}）" if b["meta"] else ""))
     return "\n".join(out).rstrip() + "\n"
 
 

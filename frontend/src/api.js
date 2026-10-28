@@ -62,6 +62,8 @@ async function readSse(resp, onEvent, alive) {
   return last;
 }
 
+const postJson = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
 export async function createThread(request, imageFile, onEvent) {
   const fd = new FormData();
   fd.append("request", request);
@@ -70,11 +72,7 @@ export async function createThread(request, imageFile, onEvent) {
 }
 
 export async function resumeThread(threadId, payload, onEvent) {
-  return sse(`/api/threads/${threadId}/resume`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ payload }),
-  }, onEvent);
+  return sse(`/api/threads/${threadId}/resume`, postJson({ payload }), onEvent);
 }
 
 export async function getState(threadId) {
@@ -86,11 +84,7 @@ export async function getState(threadId) {
 // ---- 调研场景 ----
 
 export async function createResearchThread(request, onEvent) {
-  return sse("/api/research/threads", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ request }),
-  }, onEvent);
+  return sse("/api/research/threads", postJson({ request }), onEvent);
 }
 
 export async function getResearchState(threadId) {
@@ -101,11 +95,7 @@ export async function getResearchState(threadId) {
 
 // interruptId 是这张卡的中断 id：线程已经往前走了（卡过期）或正在处理，后端返回 409
 export async function resumeResearchThread(threadId, interruptId, payload, onEvent) {
-  return sse(`/api/research/threads/${threadId}/resume`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ interrupt_id: interruptId, payload }),
-  }, onEvent);
+  return sse(`/api/research/threads/${threadId}/resume`, postJson({ interrupt_id: interruptId, payload }), onEvent);
 }
 
 // 失败的线程从断开的那一步接着跑；没失败的返回 409

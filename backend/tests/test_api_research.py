@@ -123,6 +123,13 @@ def test_clear_request_has_no_scope_card(client):
     assert st["scope_confirmed"] and st["interrupt"]["type"] == "research.review" and st["answer_how"] == "agent"
 
 
+def test_research_step_tells_how_each_round_ended(client):
+    """进度里每一轮调研怎么收尾的都要说清：补查没拿到新答案、沿用上一轮结果的那一轮记作 kept，页面不能写成“调研完了”。"""
+    ev = _events(client.post("/api/research/threads", json={"request": "某题（回补，补查失败）"}))
+    steps = [(d["node"], d.get("answer_how") or d.get("gap")) for e, d in ev if e == "node" and d["node"] in ("research", "consolidate")]
+    assert steps == [("research", "agent"), ("consolidate", "缺价格数据"), ("research", "kept")]
+
+
 def test_unknown_research_thread_404(client):
     assert client.get("/api/research/threads/nope/state").status_code == 404
     assert client.post("/api/research/threads", json={"request": "  "}).status_code == 400

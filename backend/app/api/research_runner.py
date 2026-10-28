@@ -167,7 +167,8 @@ class ResearchRunner(BaseRunner):
             out["scope"] = jsonable(update["scope"])
         if node == "research":
             out["sources"] = len(update.get("sources", []))
-            out["answer_how"] = update.get("answer_how")
+            # agent / close / none；补查没拿到新答案时这一轮不写答案，沿用上一轮的，记作 kept
+            out["answer_how"] = update.get("answer_how", "kept")
         if node == "consolidate":
             out["sections"] = len(update.get("outline", []))
             out["claims"] = len(update.get("claims", []))

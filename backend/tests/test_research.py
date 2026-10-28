@@ -623,6 +623,19 @@ def test_time_check_ignores_uncited_sources():
     assert not res["scope_time"].passed and res["scope_time"].detail == "s1：太旧；"
 
 
+def test_untitled_source_listed_once():
+    """来源没有标题时报告的来源表只写网址，不把网址当标题再写一遍。"""
+    from app.graph.research.report import report_blocks, to_markdown
+    from app.graph.research.state import Claim, OutlineNode, Scope, SectionText, Sentence, Source
+
+    sources = [Source(id="s1", url="https://a.test/x.pdf"), Source(id="s2", url="https://b.test/", title="B 站")]
+    claims = [Claim(id="k1", statement="a", kind="fact", source_ids=["s1", "s2"], outline_id="c1")]
+    sections = {"c1": SectionText(outline_id="c1", sentences=[Sentence(text="a", claim_id="k1")])}
+    blocks = report_blocks(Scope(question="q"), [OutlineNode(id="c1", title="一", question="?")], sections, claims, sources, [])
+    lines = [ln for ln in to_markdown(blocks).splitlines() if ln.startswith("[S")]
+    assert lines == ["[S1] https://a.test/x.pdf", "[S2] B 站 — https://b.test/"]
+
+
 # ---- 后端流程：搜索服务出错、来源去重、报告不依赖磁盘文件 ----
 
 

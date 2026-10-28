@@ -6,10 +6,10 @@ const CKIND = { fact: "事实", inference: "推断" };
 const CSTATUS = { draft: "草稿", confirmed: "用户确认", user_edited: "用户改过" };
 const SSTATUS = { candidate: "候选", adopted: "系统选用", excluded: "用户排除" };
 
-export function researchCardFor(it, st, resume, setCard) {
+export function researchCardFor(it, resume) {
   if (it.type === "research.scope") return scopeCard(it, resume);
   if (it.type === "research.ask") return askCard(it, resume);
-  if (it.type === "research.review") return reviewCard(it, st, resume, setCard);
+  if (it.type === "research.review") return reviewCard(it, resume);
   return null;
 }
 
@@ -34,11 +34,28 @@ function scopeCard(it, resume, answers = {}, idx = 0, history = []) {
   };
 }
 
-export function scopeLine(scope) {
+function scopeLine(scope) {
   if (!scope) return "";
   const parts = [["时间", scope.time_range], ["地域", scope.region], ["信源", scope.lang], ["不含", scope.exclude], ["交付", scope.deliverable], ["补充", scope.extra]]
     .filter(([, v]) => v).map(([k, v]) => `${k} ${v}`);
   return parts.length ? `范围按需求定了：${parts.join(" · ")}` : "范围按需求原话定了，没有额外限制";
+}
+
+// 每轮调研怎么收尾的（后端进度事件里的 answer_how）；没拿到答案不能写成“调研完了”
+const ROUND_END = {
+  agent: "调研完了",
+  close: "调研没有自己收尾，基于已有材料补了答案",
+  none: "调研没有拿到答案",
+  kept: "补查没有给出新答案，沿用上一轮的结果",
+};
+
+// 调研各步做完时的进度行；不需要说的步骤返回 null
+export function researchStepLine(s) {
+  if (s.node === "confirm_scope") return s.scope ? scopeLine(s.scope) : null;
+  if (s.node === "research") return `${ROUND_END[s.answer_how] || "调研完了"} · 共 ${s.sources} 条候选来源`;
+  if (s.node === "consolidate") return s.gap ? `整理时发现证据缺口，回去补查：${s.gap}` : `整理出 ${s.sections} 节、${s.claims} 条论断`;
+  if (s.node === "write" && s.version != null) return `已生成第 ${s.version} 版报告 · ${s.note}`;
+  return null;
 }
 
 // ---- 动态提问：模型在调研中途问的 ----
@@ -66,7 +83,12 @@ export function retryCard(retry) {
 }
 
 // ---- 终审：报告已经交付，这里只是可选的修改 ----
-function reviewCard(it, st, resume, setCard) {
+
+const exclude = (id, resume) => (resume({ action: "exclude_source", target: id }, `排除来源 ${id}`), null);
+// 来源没有标题时用网址当名字，这时就不再另外列一遍网址
+const sourceName = (s) => s.title || s.url;
+
+function reviewCard(it, resume) {
   const failed = (name) => (it.checks || []).some((c) => c.name === name && !c.passed);
   // reply：上一句话模型没能完全对上时的回复，放在标题上让用户接着说
   const title = it.reply ? it.reply
@@ -84,7 +106,7 @@ function reviewCard(it, st, resume, setCard) {
     ],
     customPlaceholder: "或直接说要改什么，例如：第一节更简短",
     onAnswer: (v, isCustom) => {
-      if (isCustom) return routeResearchText(v, st, resume), null;
+      if (isCustom) return (resume({ action: "instruct", text: v }, v), null); // 原话交给后端由模型理解，对不上时回复显示在下一张卡的标题上
       if (v === "approve") return (resume({ action: "approve" }, "不用改了"), null);
       if (v === "source") return pickSourceCard(it, resume);
       if (v === "claim") return pickClaimCard(it, (c) => claimCard(c, it, resume));
@@ -99,8 +121,8 @@ function pickSourceCard(it, resume) {
   return {
     title: "排除哪条来源？",
     page: "2/2",
-    options: srcs.map((s) => ({ label: `${s.id} ${s.title || s.url}`, hint: s.url, value: s.id })),
-    onAnswer: (id) => (resume({ action: "exclude_source", target: id }, `排除来源 ${id}`), null),
+    options: srcs.map((s) => ({ label: `${s.id} ${sourceName(s)}`, hint: s.title ? s.url : null, value: s.id })),
+    onAnswer: (id) => exclude(id, resume),
   };
 }
 
@@ -119,11 +141,11 @@ export function claimCard(c, it, resume) {
   const sec = it.sections?.find((s) => s.id === c.outline_id);
   return {
     title: `${CKIND[c.kind]}：${c.statement}`,
-    sub: `来源 ${c.source_ids.join("、")} · ${CSTATUS[c.status]}${c.orphaned ? " · 失去来源支撑" : ""}`,
+    sub: [c.source_ids.length > 0 && `来源 ${c.source_ids.join("、")}`, CSTATUS[c.status], c.orphaned && "失去来源支撑"].filter(Boolean).join(" · "),
     page: "1/1",
     options: [
       { label: "改这条论断的表述", hint: "改过的表述模型不再碰", value: "edit" },
-      ...srcs.map((s) => ({ label: `排除来源 ${s.id}`, hint: s.title || s.url, value: `src:${s.id}` })),
+      ...srcs.map((s) => ({ label: `排除来源 ${s.id}`, hint: sourceName(s), value: `src:${s.id}` })),
       ...(sec ? [{ label: `重写「${sec.title}」`, hint: "只按已确认的论断重写", value: "section" }] : []),
     ],
     onAnswer: (v) => {
@@ -136,7 +158,7 @@ export function claimCard(c, it, resume) {
           requireAnswer: true,
           onAnswer: (t) => (resume({ action: "edit_claim", target: c.id, content: t }, `论断 ${c.id} 改成：${t}`), null),
         };
-      if (v.startsWith("src:")) return (resume({ action: "exclude_source", target: v.slice(4) }, `排除来源 ${v.slice(4)}`), null);
+      if (v.startsWith("src:")) return exclude(v.slice(4), resume);
       if (v === "section") return instructionCard(sec, resume);
       return null;
     },
@@ -145,11 +167,11 @@ export function claimCard(c, it, resume) {
 
 export function sourceCard(s, resume) {
   return {
-    title: s.title || s.url,
-    sub: `${s.url} · ${SSTATUS[s.status]}${s.published_at ? " · 发布 " + s.published_at.slice(0, 10) : ""}`,
+    title: sourceName(s),
+    sub: [s.title && s.url, SSTATUS[s.status], s.published_at && "发布 " + s.published_at.slice(0, 10)].filter(Boolean).join(" · "),
     page: "1/1",
     options: s.status === "excluded" ? [] : [{ label: "排除这条来源", hint: "只靠它的论断会退回草稿并移出报告", value: "x" }],
-    onAnswer: () => (resume({ action: "exclude_source", target: s.id }, `排除来源 ${s.id}`), null),
+    onAnswer: () => exclude(s.id, resume),
   };
 }
 
@@ -174,12 +196,6 @@ function instructionCard(sec, resume) {
     customPlaceholder: "其他要求…",
     onAnswer: (v) => (resume({ action: "rewrite_section", target: sec.id, instruction: v }, `重写「${sec.title}」：${v}`), null),
   };
-}
-
-// 终审阶段的自由文本：原话交给后端，由模型理解成要改什么；对不上时模型的回复会出现在下一张卡的标题上
-export function routeResearchText(text, st, resume) {
-  const t = text.trim();
-  if (t) resume({ action: "instruct", text: t }, t);
 }
 
 // ---------------- 结果渲染 ----------------
@@ -210,6 +226,8 @@ const CHECK_LABEL = {
   sources_complete: "来源信息完整", no_orphaned_claims: "无失去来源的论断", scope_time: "时间在范围内",
   report_valid: "报告有带来源的论断", question_answered: "回答了研究问题",
 };
+const checkLabel = (c) => CHECK_LABEL[c.name] || c.name;
+const checkDetail = (c) => (c.detail ? `（${c.detail.replace(/；$/, "")}）` : "");
 
 function ReviewBody({ st, it, live, onCard, resume }) {
   const [tab, setTab] = useState("report");
@@ -247,8 +265,8 @@ function ReviewBody({ st, it, live, onCard, resume }) {
         </div>
       )}
       {tab === "sources" && <SourceList sources={sources} it={act} onCard={onCard} resume={resume} />}
-      {failed.length > 0 ? <div className="checks bad">需要留意：{failed.map((c) => `「${CHECK_LABEL[c.name] || c.name}」没通过` + (c.detail ? `（${c.detail.replace(/；$/, "")}）` : "")).join("；")}</div>
-        : checks.length > 0 && <div className="checks">{checks.map((c) => "✓ " + (CHECK_LABEL[c.name] || c.name) + (c.detail ? `（${c.detail.replace(/；$/, "")}）` : "")).join(" · ")}</div>}
+      {failed.length > 0 ? <div className="checks warn">需要留意：{failed.map((c) => `「${checkLabel(c)}」没通过${checkDetail(c)}`).join("；")}</div>
+        : checks.length > 0 && <div className="checks">{checks.map((c) => `✓ ${checkLabel(c)}${checkDetail(c)}`).join(" · ")}</div>}
       {notes.length > 0 && <div className="notes">{notes.map((n, i) => <div key={i}>· {n}</div>)}</div>}
     </>
   );
@@ -263,7 +281,7 @@ function SourceList({ sources, it, onCard, resume }) {
   const row = (s) => (
     <div className={"src " + s.status} key={s.id} onClick={it && s.status !== "excluded" ? () => onCard(sourceCard(s, resume)) : null}>
       <span className="sid">{s.id}</span>
-      <span className="st">{s.title || s.url}<span className="url">{s.url}</span></span>
+      <span className="st">{sourceName(s)}{s.title && <span className="url">{s.url}</span>}</span>
       <span className={"chip " + s.status}>{SSTATUS[s.status]}</span>
     </div>
   );
@@ -280,7 +298,7 @@ function ClaimRow({ c, onClick }) {
     <div className={"claim" + (c.orphaned ? " orphan" : "") + (onClick ? " clickable" : "")} onClick={onClick || undefined}>
       <span className={"chip " + c.kind}>{CKIND[c.kind]}</span>
       <span className="t">{c.statement}</span>
-      <span className="src">{c.source_ids.join(" ")}</span>
+      <span className="sids">{c.source_ids.join(" ")}</span>
       {c.orphaned ? <span className="chip orphan">失去来源</span> : <span className={"chip " + c.status}>{CSTATUS[c.status]}</span>}
     </div>
   );
@@ -294,7 +312,8 @@ function Report({ blocks }) {
     if (b.type === "notice") return <p key={i} className="notice">{b.text}</p>;
     if (b.type === "scope") return <p key={i}>{b.text}</p>;
     if (b.type === "item") return <li key={i}>{b.text}</li>;
-    if (b.type === "source") return <div className="srcline" key={i}>[{b.label}] {b.title} — {b.url}{b.meta ? `（${b.meta}）` : ""}</div>;
+    // 旧版本的块里没有标题的来源 title 就是网址
+    if (b.type === "source") return <div className="srcline" key={i}>[{b.label}] {b.title && b.title !== b.url && `${b.title} — `}{b.url}{b.meta ? `（${b.meta}）` : ""}</div>;
     if (b.type === "sentence")
       return <p key={i} className={b.inference ? "inf" : ""}>{b.text}{b.marks.map((m) => <sup key={m} className="mark">{m}</sup>)}</p>;
     return null;
