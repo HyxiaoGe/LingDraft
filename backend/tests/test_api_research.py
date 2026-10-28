@@ -35,14 +35,18 @@ def _last(events, name):
 def test_research_flow_over_http(client):
     ev = _events(client.post("/api/research/threads", json={"request": "AI 海报工具在局部修改上的现状（2026）"}))
     kinds = [e for e, _ in ev]
-    assert kinds[0] == "progress" and kinds[-3:] == ["node", "interrupt", "state"]
+    assert kinds[:2] == ["thread", "progress"] and kinds[-3:] == ["node", "interrupt", "state"]
     st = _last(ev, "state")
     tid = st["thread_id"]
     assert st["scenario"] == "research" and st["interrupt"]["type"] == "research.scope"
+    assert st["running"] is False
 
     assert [q["id"] for q in st["interrupt"]["questions"]] == ["q1"] and st["scope"]["question"]
     ev = _events(client.post(f"/api/research/threads/{tid}/resume", json={"payload": {"answers": {"q1": "改文字"}}}))
     assert any(e == "node" and d["node"] == "confirm_scope" and d["scope"]["extra"] for e, d in ev)
+    # 调研期间每次搜索 / 读页都有进度事件（来自 agent 子图），页面据此显示在做什么
+    acts = [d for e, d in ev if e == "progress" and d.get("kind")]
+    assert {a["kind"] for a in acts} >= {"search", "read"} and all(a["stage"].startswith(("搜索：", "读取：")) for a in acts)
     ask = _last(ev, "interrupt")
     assert ask["type"] == "research.ask" and ask["options"] == ["包含", "不包含"] and ask["why"]
     st = _last(ev, "state")

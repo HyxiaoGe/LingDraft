@@ -22,6 +22,11 @@ from app.llm import ArkPlanner, FakePlanner
 
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="graph")
 _lock = threading.Lock()
+_running: set[str] = set()  # 正在执行（含排队）的 thread：页面刷新回来时据此判断“还在跑”而不是重新弹旧问题卡
+
+
+def is_running(thread_id: str) -> bool:
+    return thread_id in _running
 
 
 def jsonable(x: Any) -> Any:
@@ -71,17 +76,24 @@ class BaseRunner:
 
     def _events(self, thread_id: str, inp: Any):
         cfg = {"configurable": {"thread_id": thread_id}}
-        with _lock:
-            for mode, chunk in self.graph.stream(inp, cfg, stream_mode=["updates", "custom"], subgraphs=False):
-                if mode == "custom":
-                    yield {"event": "progress", "data": jsonable(chunk)}
-                    continue
-                for node, update in chunk.items():
-                    if node == "__interrupt__":
-                        yield {"event": "interrupt", "data": self._decorate_interrupt(thread_id, update[0].value)}
+        yield {"event": "thread", "data": {"thread_id": thread_id}}  # 先把 id 给页面，中途关掉也能回来
+        _running.add(thread_id)
+        try:
+            with _lock:
+                # subgraphs=True 是为了拿到 agent 子图里写的进度（搜索、读页）；子图自己的节点更新不往外吐
+                for ns, mode, chunk in self.graph.stream(inp, cfg, stream_mode=["updates", "custom"], subgraphs=True):
+                    if mode == "custom":
+                        yield {"event": "progress", "data": jsonable(chunk)}
                         continue
-                    yield {"event": "node", "data": self._summarize(thread_id, node, update)}
-            yield {"event": "state", "data": self.state_view(thread_id)}
+                    for node, update in chunk.items():
+                        if node == "__interrupt__":
+                            yield {"event": "interrupt", "data": self._decorate_interrupt(thread_id, update[0].value)}
+                            continue
+                        if ns == ():
+                            yield {"event": "node", "data": self._summarize(thread_id, node, update)}
+        finally:
+            _running.discard(thread_id)
+        yield {"event": "state", "data": self.state_view(thread_id)}
 
     async def stream(self, thread_id: str, inp: Any) -> AsyncIterator[str]:
         """把工作线程里的事件转成 SSE 文本行。"""

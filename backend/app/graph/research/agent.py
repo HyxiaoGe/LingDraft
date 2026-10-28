@@ -20,6 +20,7 @@ from langchain.agents.middleware import HumanInTheLoopMiddleware, ModelCallLimit
 from langchain.agents.middleware.types import AgentMiddleware, AgentState, ModelRequest, hook_config
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langgraph.config import get_stream_writer
 
 from app.graph.research import prompts
 from app.graph.research.state import (
@@ -38,6 +39,25 @@ LIMIT_EXCEEDED_PREFIX = "Model call limits exceeded"
 EXHAUSTED_NOTE = "（系统）以下工具的额度已用完，不再提供：{names}。请基于已有材料继续或直接作答。"
 ASK_BLOCKED = "ask_user_over_budget"  # 超额的 ask_user 调用改成这个名字，HITL 中间件就不会再把它变成问题卡
 DANGLING_NOTE = "（系统）这个工具调用没有被执行：工具已不可用或参数无法解析。"
+
+
+class ToolProgressMiddleware(AgentMiddleware):
+    """每次调工具前往自定义流里写一句进度，页面在“正在调研”期间能看到在搜什么、读什么。"""
+
+    def wrap_tool_call(self, request, handler):
+        name = request.tool_call["name"]
+        args = request.tool_call.get("args") or {}
+        text = None
+        if name == "search_web":
+            text, kind = f"搜索：{args.get('query', '')}", "search"
+        elif name == "read_page":
+            text, kind = f"读取：{args.get('url', '')}", "read"
+        if text:
+            try:
+                get_stream_writer()({"stage": text[:160], "kind": kind})
+            except RuntimeError:
+                pass
+        return handler(request)
 
 
 class ToolBudgetMiddleware(AgentMiddleware):
@@ -141,6 +161,7 @@ def build_agent(model: BaseChatModel, tools: list, system_prompt: str, *, ask_li
         middleware.append(HumanInTheLoopMiddleware(interrupt_on={"ask_user": {"allowed_decisions": ["respond"]}}))
         limits["ask_user"] = ask_limit
     middleware += [
+        ToolProgressMiddleware(),
         ToolBudgetMiddleware(limits),
         InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
         ModelCallLimitMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end"),

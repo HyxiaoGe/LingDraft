@@ -155,3 +155,5 @@ body { background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, 
 .src .st { flex: 1; min-width: 0; }
 .src .url { display: block; color: var(--muted2); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notes { color: var(--muted); font-size: 12px; margin-top: 8px; }
+.actlog { color: var(--muted); font-size: 12px; margin: 4px 0 6px; border-left: 2px solid var(--line); padding-left: 10px; }
+.actlog div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

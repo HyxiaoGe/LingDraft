@@ -34,7 +34,7 @@ def _last(events, name):
 def test_full_flow_over_http(client):
     ev = _events(client.post("/api/threads", data={"request": "某品牌蓝牙耳机黑五预热，5 折，11.20 到 11.27"}))
     kinds = [e for e, _ in ev]
-    assert kinds[0] == "progress" and "stage" in ev[0][1]
+    assert kinds[:2] == ["thread", "progress"] and "stage" in ev[1][1]
     assert kinds[-3:] == ["node", "interrupt", "state"]
     state = _last(ev, "state")
     tid = state["thread_id"]

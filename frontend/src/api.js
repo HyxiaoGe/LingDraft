@@ -60,6 +60,12 @@ export async function createResearchThread(request, onEvent) {
   return readSse(resp, onEvent);
 }
 
+export async function getResearchState(threadId) {
+  const resp = await fetch(`/api/research/threads/${threadId}/state`);
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
 export async function resumeResearchThread(threadId, payload, onEvent) {
   const resp = await fetch(`/api/research/threads/${threadId}/resume`, {
     method: "POST",

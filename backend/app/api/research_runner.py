@@ -8,7 +8,7 @@ from typing import Any
 from langgraph.types import Command
 
 from app import config
-from app.api.runner import BaseRunner, jsonable
+from app.api.runner import BaseRunner, is_running, jsonable
 from app.graph.research.agent import ask_resume, ask_view, is_ask_interrupt
 from app.graph.research.graph import build_graph, open_sqlite_checkpointer
 from app.graph.research.state import AskAnswer
@@ -67,6 +67,7 @@ class ResearchRunner(BaseRunner):
             "exists": True,
             "scenario": "research",
             "next": list(snap.next),
+            "running": is_running(thread_id),
             "request": v.get("request"),
             "scope": jsonable(v.get("scope")),
             "scope_confirmed": v.get("scope_confirmed", False),

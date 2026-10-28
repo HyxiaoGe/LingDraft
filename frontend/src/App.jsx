@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { createThread, resumeThread, createResearchThread, resumeResearchThread } from "./api.js";
+import { createThread, resumeThread, createResearchThread, resumeResearchThread, getResearchState } from "./api.js";
 import { RESEARCH_DEFAULT, ResearchBody, researchCardFor, routeResearchText, scopeLine } from "./research.jsx";
 
 const KIND = { headline: "标题", subhead: "副标题", offer: "优惠", date: "活动时间", cta: "行动号召", product_image: "产品图" };
@@ -20,10 +20,21 @@ export default function App() {
   const chatRef = useRef(null);
   const fileRef = useRef(null);
   const threadRef = useRef(null); // 问题卡的回调在 state 更新前就建好了，thread_id 走 ref
+  const scenarioRef = useRef(scenario); // 同理：恢复线程时卡片在 setScenario 生效前就建好了，场景也走 ref
+  scenarioRef.current = scenario;
 
   useEffect(() => {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, card, busy]);
+
+  useEffect(() => { document.title = title; });
+
+  // 调研线程的 id 放在地址栏（#r/<id>）：刷新或关掉页面再回来，从服务器取状态接着走
+  useEffect(() => {
+    const m = location.hash.match(/^#r\/([0-9a-f]{6,})$/);
+    if (m) restoreResearch(m[1]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const patchAi = (id, fn) => setMessages((ms) => ms.map((m) => (m.id === id ? fn(m) : m)));
 
@@ -38,13 +49,15 @@ export default function App() {
     setMessages((ms) => [...ms, { id, role: "ai", stage: "正在准备…", steps: [], qa: qa || null, started }]);
     try {
       const st = await fn((ev, data) => {
-        if (ev === "progress" && data.stage) patchAi(id, (m) => ({ ...m, stage: data.stage }));
+        if (ev === "thread" && scenarioRef.current === "research") { threadRef.current = data.thread_id; history.replaceState(null, "", "#r/" + data.thread_id); }
+        if (ev === "progress" && data.stage) patchAi(id, (m) => ({ ...m, stage: data.stage, acts: data.kind ? [...(m.acts || []), data] : m.acts }));
         if (ev === "node") patchAi(id, (m) => ({ ...m, steps: [...m.steps, data] }));
         if (ev === "error") setError(data.message);
       });
       const elapsed = Math.round((Date.now() - started) / 1000);
       if (st) {
         threadRef.current = st.thread_id;
+        if (st.scenario === "research") history.replaceState(null, "", "#r/" + st.thread_id);
         setState(st);
         patchAi(id, (m) => ({ ...m, stage: null, elapsed, result: st }));
         setCard(cardFor(st));
@@ -59,9 +72,37 @@ export default function App() {
     }
   };
 
-  const start = (text) => run((cb) => (scenario === "research" ? createResearchThread(text, cb) : createThread(text, image, cb)), text);
+  const start = (text) => run((cb) => (scenarioRef.current === "research" ? createResearchThread(text, cb) : createThread(text, image, cb)), text);
+
+  // 从地址栏的线程 id 恢复：服务器还在跑这一步就等它（每 5 秒看一次），停在问题上就把那张卡弹出来，结束了就展示结果
+  const restoreResearch = async (threadId) => {
+    scenarioRef.current = "research";
+    setScenario("research");
+    setBusy(true);
+    const id = uid();
+    setMessages([{ id: uid(), role: "user", text: "（恢复中…）" }, { id, role: "ai", stage: "正在取回这次调研的进度", steps: [], started: Date.now() }]);
+    try {
+      let st = await getResearchState(threadId);
+      setMessages((ms) => ms.map((m) => (m.role === "user" ? { ...m, text: st.request } : m)));
+      while (st.running) {
+        patchAi(id, (m) => ({ ...m, stage: "服务器还在处理这一步，等它完成" }));
+        await new Promise((r) => setTimeout(r, 5000));
+        st = await getResearchState(threadId);
+      }
+      threadRef.current = st.thread_id;
+      setState(st);
+      patchAi(id, (m) => ({ ...m, stage: null, restored: true, result: st }));
+      setCard(cardFor(st));
+    } catch (e) {
+      setError(`恢复失败：${String(e.message || e)}`);
+      patchAi(id, (m) => ({ ...m, stage: null }));
+      history.replaceState(null, "", location.pathname);
+    } finally {
+      setBusy(false);
+    }
+  };
   const resume = (payload, userText, qa) =>
-    run((cb) => (scenario === "research" ? resumeResearchThread(threadRef.current, payload, cb) : resumeThread(threadRef.current, payload, cb)), userText, qa);
+    run((cb) => (scenarioRef.current === "research" ? resumeResearchThread(threadRef.current, payload, cb) : resumeThread(threadRef.current, payload, cb)), userText, qa);
 
   // ---- 把 interrupt 变成问题卡 ----
   const cardFor = (st) => {
@@ -82,7 +123,7 @@ export default function App() {
   const onSend = (text) => {
     if (inputMode === "new") return start(text);
     if (inputMode === "ask") return resume({ answer: text }, null, [{ q: state.interrupt.title, a: text }]);
-    if (inputMode === "review") return scenario === "research" ? routeResearchText(text, state, resume, setCard) : routeFreeText(text, state, resume, setCard);
+    if (inputMode === "review") return scenarioRef.current === "research" ? routeResearchText(text, state, resume, setCard) : routeFreeText(text, state, resume, setCard);
   };
   const title = !state ? (scenario === "research" ? "灵稿 · 产品调研" : "灵稿 · 宣传海报")
     : scenario === "research" ? (state.scope?.question || "产品调研") : "黑五预热宣传海报";
@@ -93,7 +134,7 @@ export default function App() {
         <h1>{title}</h1>
         {!state && (
           <div className="scen">
-            {[["poster", "海报"], ["research", "调研"]].map(([k, l]) => <button key={k} className={scenario === k ? "sel" : ""} onClick={() => setScenario(k)}>{l}</button>)}
+            {[["poster", "海报"], ["research", "调研"]].map(([k, l]) => <button key={k} className={scenario === k ? "sel" : ""} onClick={() => { setScenario(k); history.replaceState(null, "", location.pathname); }}>{l}</button>)}
           </div>
         )}
         <div className="icons"><span title="搜索">⌕</span><span title="分享">⇪</span><span title="预览">▭</span></div>
@@ -314,6 +355,23 @@ function Welcome({ scenario, onPick }) {
   );
 }
 
+// 调研期间每次搜索 / 读页一行；跑完折叠成一句
+function ActLog({ acts, live }) {
+  const [open, setOpen] = useState(false);
+  const n = { search: 0, read: 0 };
+  acts.forEach((a) => { n[a.kind] = (n[a.kind] || 0) + 1; });
+  const summary = `搜索 ${n.search} 次 · 读取 ${n.read} 页`;
+  if (live) {
+    return <div className="actlog">{acts.slice(-4).map((a, i) => <div key={i} className={a.kind}>{a.stage}</div>)}</div>;
+  }
+  return (
+    <>
+      <div className="qa-toggle" onClick={() => setOpen(!open)}>⌕ {summary} {open ? "⌃" : "⌄"}</div>
+      {open && <div className="actlog">{acts.map((a, i) => <div key={i} className={a.kind}>{a.stage}</div>)}</div>}
+    </>
+  );
+}
+
 function UserMsg({ text }) {
   return <div className="msg-user"><div className="bubble">{text}</div></div>;
 }
@@ -331,6 +389,7 @@ function AiMsg({ m, onPickElement, onCard, resume }) {
       <div className="head">
         <span className="avatar">灵</span><span className="name">灵稿</span>
         {m.elapsed != null && <span className="meta">已处理 {m.elapsed}s</span>}
+        {m.restored && <span className="meta">从上次的进度恢复</span>}
       </div>
       <div className="body">
         {m.qa && m.qa.length > 0 && (
@@ -346,7 +405,8 @@ function AiMsg({ m, onPickElement, onCard, resume }) {
         {m.steps.filter((s) => s.node === "write").map((s) => <div className="done-line" key={s.version}>已生成第 {s.version} 版报告 · {s.note}</div>)}
         {m.steps.filter((s) => s.node === "export" && s.exported).map((s, i) => <div className="done-line" key={"e" + i}>已导出第 {s.exported.version} 版确认物包</div>)}
         {st?.scenario !== "research" && m.steps.filter((s) => s.notes?.length).map((s, i) => <p key={i}>{s.notes.join("；")}</p>)}
-        {m.stage && <div className="status"><span className="dots">{m.stage}</span><span className="sep">|</span><span>你可以随时关掉页面，回来后从这一步继续</span></div>}
+        {m.acts?.length > 0 && <ActLog acts={m.acts} live={!!m.stage} />}
+        {m.stage && <div className="status"><span className="dots">{m.stage}</span><span className="sep">|</span><span>{st?.scenario === "research" || m.restored || !st ? "可以关掉页面，回来后从这一步继续" : "请稍候"}</span></div>}
         {st && !m.stage && (st.scenario === "research"
           ? <ResearchBody st={st} it={it} onCard={onCard} resume={resume} />
           : <ResultBody st={st} it={it} cur={cur} sel={sel} setSel={setSel} elements={elements} onPickElement={onPickElement} />)}

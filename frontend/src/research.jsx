@@ -177,7 +177,7 @@ export function routeResearchText(text, st, resume, setCard) {
 
 export function ResearchBody({ st, it, onCard, resume }) {
   if (it?.type === "research.scope") {
-    return <p>需求里有 {it.questions.length} 处要先问清，不然调研方向可能会偏。</p>;
+    return <p>需求里有 {(it.questions || []).length} 处要先问清，不然调研方向可能会偏。</p>;
   }
   if (it?.type === "research.ask") {
     return <p>调研到一半有个只有你能回答的问题。</p>;
@@ -213,7 +213,7 @@ function ReviewBody({ st, it, onCard, resume }) {
       {it ? <p>第 {it.version} 版{st.exported?.version === it.version ? "已导出" : "好了，但没有带来源的论断，没有导出"}（{last?.note}）。每句话都挂着论断，推断句有标记；觉得不合适，点论断或来源可以单独处理。{it.answer_how === "close" ? " 这次调研没有自己收尾，答案是基于已查到的材料补的，请多留意。" : ""}</p>
           : <p>已结束，用的是第 {st.exported?.version} 版。</p>}
       <div className="rtabs">
-        {[["report", "报告"], ["claims", `论断 ${claims.filter((c) => !c.orphaned).length}`], ["sources", `来源 ${sources.length}`]].map(([k, l]) => (
+        {[["report", "报告"], ["claims", `论断 ${claims.filter((c) => !c.orphaned).length}`], ["sources", `来源 ${sources.filter((s) => s.status === "adopted").length}`]].map(([k, l]) => (
           <button key={k} className={tab === k ? "sel" : ""} onClick={() => setTab(k)}>{l}</button>
         ))}
         {versions.length > 1 && <span className="vnote">v{versions.length} · 共 {versions.length} 版</span>}
@@ -231,17 +231,7 @@ function ReviewBody({ st, it, onCard, resume }) {
           ))}
         </div>
       )}
-      {tab === "sources" && (
-        <div className="sources">
-          {sources.map((s) => (
-            <div className={"src " + s.status} key={s.id} onClick={it && s.status !== "excluded" ? () => onCard(sourceCard(s, resume)) : null}>
-              <span className="sid">{s.id}</span>
-              <span className="st">{s.title || s.url}<span className="url">{s.url}</span></span>
-              <span className={"chip " + s.status}>{SSTATUS[s.status]}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      {tab === "sources" && <SourceList sources={sources} it={it} onCard={onCard} resume={resume} />}
       {failed.length > 0 ? <div className="checks bad">自动校验未通过：{failed.map((c) => `${CHECK_LABEL[c.name] || c.name} ${c.detail}`).join("；")}</div>
         : checks.length > 0 && <div className="checks">{checks.map((c) => "✓ " + (CHECK_LABEL[c.name] || c.name) + (c.detail ? `（${c.detail.replace(/；$/, "")}）` : "")).join(" · ")}</div>}
       {notes.length > 0 && <div className="notes">{notes.map((n, i) => <div key={i}>· {n}</div>)}</div>}
@@ -257,6 +247,27 @@ function ReviewBody({ st, it, onCard, resume }) {
   );
 }
 
+// 来源：报告引用的在前，排除的其次；搜到但没引用的候选默认收起
+function SourceList({ sources, it, onCard, resume }) {
+  const [showAll, setShowAll] = useState(false);
+  const used = sources.filter((s) => s.status !== "candidate");
+  const rest = sources.filter((s) => s.status === "candidate");
+  const shown = showAll ? [...used, ...rest] : used;
+  const row = (s) => (
+    <div className={"src " + s.status} key={s.id} onClick={it && s.status !== "excluded" ? () => onCard(sourceCard(s, resume)) : null}>
+      <span className="sid">{s.id}</span>
+      <span className="st">{s.title || s.url}<span className="url">{s.url}</span></span>
+      <span className={"chip " + s.status}>{SSTATUS[s.status]}</span>
+    </div>
+  );
+  return (
+    <>
+      <div className="sources">{shown.map(row)}{shown.length === 0 && <div className="src">还没有被引用的来源</div>}</div>
+      {rest.length > 0 && <div className="qa-toggle" onClick={() => setShowAll(!showAll)}>{showAll ? "收起候选来源" : `还有 ${rest.length} 条搜到但没引用的候选来源`} {showAll ? "⌃" : "⌄"}</div>}
+    </>
+  );
+}
+
 function ClaimRow({ c, onClick }) {
   return (
     <div className={"claim" + (c.orphaned ? " orphan" : "") + (onClick ? " clickable" : "")} onClick={onClick || undefined}>
@@ -265,16 +276,6 @@ function ClaimRow({ c, onClick }) {
       <span className="src">{c.source_ids.join(" ")}</span>
       {c.orphaned ? <span className="chip orphan">失去来源</span> : <span className={"chip " + c.status}>{CSTATUS[c.status]}</span>}
     </div>
-  );
-}
-
-function Assumptions({ items }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <div className="qa-toggle" onClick={() => setOpen(!open)}>假设与取舍 {items.length} 条 {open ? "⌃" : "⌄"}</div>
-      {open && <div className="qa-box">{items.map((a, i) => <div className="a" key={i}>{a}</div>)}</div>}
-    </>
   );
 }
 
