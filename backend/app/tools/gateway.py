@@ -11,9 +11,39 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 # 正文最多给模型这么多字，避免一页就吃掉上下文
 READ_MAX_CHARS = 6000
+
+
+# ---- 网关成功响应的结构：在边界上校验，结构不对按失败处理，不让坏数据流到后面 ----
+
+
+class _Hit(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    url: str | None = None  # 个别条目没有网址就跳过；有但不是字符串算格式错
+    title: str | None = None
+    description: str | None = None
+    content: str | None = None
+    published_at: str | None = None
+
+
+class _SearchBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    results: list[_Hit]  # 没搜到是 []；缺了、不是列表、条目不对都算格式错
+
+
+class _ReadBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    title: str | None = None
+    content: str | None = None
+    provider: str | None = None
+
+
+def _brief(e: ValidationError) -> str:
+    err = e.errors()[0]
+    return ".".join(str(x) for x in err["loc"]) + "：" + err["msg"] if err["loc"] else err["msg"]
 
 
 @dataclass
@@ -111,23 +141,17 @@ class GatewayClient:
                                retryable=resp.status_code in (429, 502, 503, 504))
         try:
             data = resp.json()
-        except ValueError as e:
+        except ValueError as e:  # 多半是中间代理的错误页，可能一会儿就好
             raise GatewayError("搜索服务返回的不是 JSON", kind="bad_response", retryable=True) from e
-        results = data.get("results") if isinstance(data, dict) else None
-        hits = []
-        for r in results or []:
-            if not isinstance(r, dict):
-                continue
-            hits.append(
-                SearchHit(
-                    title=r.get("title") or "",
-                    url=r.get("url") or "",
-                    description=r.get("description") or "",
-                    content=r.get("content") or r.get("description") or "",
-                    published_at=r.get("published_at"),
-                )
-            )
-        return hits
+        try:
+            body = _SearchBody.model_validate(data)
+        except ValidationError as e:
+            raise GatewayError(f"搜索服务返回的格式不对（{_brief(e)}）", kind="bad_response") from e
+        return [
+            SearchHit(title=r.title or "", url=r.url, description=r.description or "", content=r.content or r.description or "",
+                      published_at=r.published_at)
+            for r in body.results if r.url
+        ]
 
     def read(self, url: str, *, full: bool = False, max_chars: int = READ_MAX_CHARS) -> ReadResult:
         params: dict[str, Any] = {"url": url}
@@ -143,18 +167,19 @@ class GatewayClient:
             try:
                 data = resp.json()
             except ValueError:
-                data = None
-            if not isinstance(data, dict):
-                return ReadResult(ok=False, url=url, kind="bad_response", message="读取服务返回的不是 JSON 对象", retryable=True)
-            content = data.get("content") or ""
-            truncated = len(content) > max_chars
+                return ReadResult(ok=False, url=url, kind="bad_response", message="读取服务返回的不是 JSON", retryable=True)
+            try:
+                body = _ReadBody.model_validate(data)
+            except ValidationError as e:
+                return ReadResult(ok=False, url=url, kind="bad_response", message=f"读取服务返回的格式不对（{_brief(e)}）")
+            content = body.content or ""
             return ReadResult(
                 ok=True,
                 url=url,
-                title=data.get("title") or "",
+                title=body.title or "",
                 content=content[:max_chars],
-                provider=data.get("provider") or "",
-                truncated=truncated,
+                provider=body.provider or "",
+                truncated=len(content) > max_chars,
             )
         # reader-service 的失败是结构化的 detail；网关自己的失败是 {"error": ...}
         try:

@@ -12,9 +12,11 @@
 from __future__ import annotations
 
 import json
+import re
+import string
 from datetime import UTC, datetime
 from typing import Any, NotRequired
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, urlsplit
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, ModelCallLimitMiddleware
@@ -308,25 +310,43 @@ def _parse(msg: ToolMessage) -> Any:
         return None
 
 
+_DEFAULT_PORT = {"http": 80, "https": 443}
+_UNRESERVED = frozenset(string.ascii_letters + string.digits + "-._~")
+_PRINTABLE_ASCII = "".join(chr(i) for i in range(0x21, 0x7F))
+
+
+def _pct(s: str) -> str:
+    """百分号编码统一成一种写法：非 ASCII 字符编码成 %XX，编了码的非保留字符解开，十六进制大写。
+
+    保留字符（/ ? & = 等）编码与否意思不同（%2F 不是路径分隔，%26 不是参数分隔），保持原样。
+    """
+    s = quote(s, safe=_PRINTABLE_ASCII)
+    return re.sub(r"%([0-9A-Fa-f]{2})",
+                  lambda m: c if (c := chr(int(m.group(1), 16))) in _UNRESERVED else "%" + m.group(1).upper(), s)
+
+
 def url_key(url: str) -> str:
-    """去重用：同一个网页的不同写法（http / https、www、域名大小写、默认端口、结尾斜杠、#锚点、百分号编码）归成一个来源。"""
+    """去重用：只做不改变指向的规范化——协议和域名的大小写、协议的默认端口、#锚点、百分号编码的写法、空路径。
+
+    www、http / https、结尾斜杠、保留字符的编码都可能指向不同的页面，不合并：
+    误合并会把一页的正文挂到另一页的来源上（证据错配），漏合并只是多一个来源。
+    """
     url = url.strip()
     try:
         p = urlsplit(url)
-        host, port = (p.hostname or "").lower(), p.port
+        scheme, host, port = p.scheme.lower(), (p.hostname or "").lower(), p.port
     except ValueError:  # 端口之类写坏了：按原样比较
         return url
     if not host:
         return url
-    host = host.removeprefix("www.") + (f":{port}" if port and port not in (80, 443) else "")
-    query = unquote(p.query)
-    return host + (unquote(p.path).rstrip("/") or "/") + (f"?{query}" if query else "")
+    netloc = (f"[{host}]" if ":" in host else host) + (f":{port}" if port is not None and port != _DEFAULT_PORT.get(scheme) else "")
+    return f"{scheme}://{netloc}{_pct(p.path) or '/'}" + (f"?{_pct(p.query)}" if p.query else "")
 
 
 def collect_sources(messages: list[BaseMessage], existing: list[Source], next_index: int) -> tuple[list[Source], dict[str, str]]:
     """返回新增的来源和 url→id 映射（含已有的）。读到正文的来源用正文片段替换搜索摘要。
 
-    同一个网页按 url_key 算一个来源，网址保留第一次见到的写法：读页时网址写法和搜索结果略有不同，也落在搜到的那个来源上。
+    同一个网页按 url_key 算一个来源，网址保留第一次见到的写法：读页时网址只是写法不同（大小写、锚点、编码），也落在搜到的那个来源上。
     """
     by_url = {url_key(s.url): s for s in existing}
     new: list[Source] = []

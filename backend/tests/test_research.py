@@ -666,23 +666,38 @@ def test_search_auth_error_fails_the_run(planner, tmp_path):
 
 
 def test_url_variants_are_one_source():
-    """读页时网址写法和搜索结果不同（http、www、大小写、结尾斜杠、锚点）：还是搜到的那个来源，发布时间保留。"""
-    hits = [{"url": "https://www.Example.test/a/", "title": "A", "description": "摘要", "published_at": "2026-01-01"},
-            {"url": "https://example.test/a", "title": "A 重复", "description": "摘要"}]
+    """读页时网址只是写法不同（域名大小写、锚点、默认端口、编码）：还是搜到的那个来源，发布时间保留。"""
+    hits = [{"url": "https://Example.test/文档/a", "title": "A", "description": "摘要", "published_at": "2026-01-01"},
+            {"url": "https://example.test/%E6%96%87%E6%A1%A3/a#top", "title": "A 重复", "description": "摘要"}]
     msgs = [
         ToolMessage(content=json.dumps(hits), name="search_web", tool_call_id="1"),
-        ToolMessage(content=json.dumps({"ok": True, "url": "http://example.test/a#top", "title": "A", "content": "正文"}),
+        ToolMessage(content=json.dumps({"ok": True, "url": "https://example.test:443/%e6%96%87%e6%a1%a3/a", "title": "A", "content": "正文"}),
                     name="read_page", tool_call_id="2"),
     ]
     new, mapping = collect_sources(msgs, [], 1)
-    assert [(s.id, s.url, s.excerpt_kind, s.published_at) for s in new] == [("s1", "https://www.Example.test/a/", "body", "2026-01-01")]
-    assert mapping == {"https://www.Example.test/a/": "s1"}
+    assert [(s.id, s.url, s.excerpt_kind, s.published_at) for s in new] == [("s1", "https://Example.test/文档/a", "body", "2026-01-01")]
+    assert mapping == {"https://Example.test/文档/a": "s1"}
     # 上一轮已有的来源也一样：补查时换个写法读同一页，不新增来源
-    again, _ = collect_sources([ToolMessage(content=json.dumps({"ok": True, "url": "https://example.test/a?", "content": "新正文"}),
+    again, _ = collect_sources([ToolMessage(content=json.dumps({"ok": True, "url": "https://example.test/文档/a?", "content": "新正文"}),
                                             name="read_page", tool_call_id="3")], new, 2)
     assert again == [] and new[0].excerpt == "新正文"
-    assert url_key("https://example.test/b") != url_key("https://example.test/a") != url_key("https://other.test/a")
-    assert url_key("https://example.test/a?x=1") != url_key("https://example.test/a?x=2")
+
+
+def test_different_pages_are_not_merged():
+    """可能是不同页面的写法不合并：误合并会把 B 的正文挂到 A 的网址和标题上。"""
+    pairs = [
+        ("https://a.test/x?id=contract%26version=1", "https://a.test/x?id=contract&version=1"),  # %26 不是参数分隔
+        ("https://a.test/customer%2Fcontract", "https://a.test/customer/contract"),  # %2F 不是路径分隔
+        ("http://docs.test:443/a", "http://docs.test/a"),  # 443 不是 http 的默认端口
+        ("https://www.a.test/a", "https://a.test/a"), ("http://a.test/a", "https://a.test/a"), ("https://a.test/a/", "https://a.test/a"),
+        ("https://a.test/a?x=1", "https://a.test/a?x=2"), ("https://a.test/A", "https://a.test/a"),
+    ]
+    for a, b in pairs:
+        assert url_key(a) != url_key(b), (a, b)
+        msgs = [ToolMessage(content=json.dumps([{"url": a, "title": "A"}, {"url": b, "title": "B"}]), name="search_web", tool_call_id="1"),
+                ToolMessage(content=json.dumps({"ok": True, "url": b, "content": "B 的正文"}), name="read_page", tool_call_id="2")]
+        new, _ = collect_sources(msgs, [], 1)
+        assert [(s.title, s.excerpt_kind) for s in new] == [("A", "summary"), ("B", "body")], (a, b)
 
 
 def test_review_does_not_depend_on_report_file(graph):

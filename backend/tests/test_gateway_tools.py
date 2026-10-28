@@ -132,3 +132,21 @@ def test_search_tool_hands_service_errors_to_agent():
     tools = {t.name: t for t in make_research_tools(_client(lambda req: httpx.Response(401, json={"error": "unauthorized"})))}
     with pytest.raises(GatewayAuthError):
         tools["search_web"].invoke(call)
+
+
+def test_malformed_responses_are_failures():
+    """200 但结构不对：按格式错处理，不当成没搜到，也不让坏数据流到后面；合法的空结果照常是空列表。"""
+    for body in ([], {"results": ["bad"]}, {"results": 1}, {"results": [{"url": 123}]}, {"results": [{"url": "https://a", "title": 5}]}, {}):
+        with pytest.raises(GatewayError) as e:
+            _client(lambda req, body=body: httpx.Response(200, json=body)).search("q")
+        assert e.value.kind == "bad_response" and not e.value.retryable, body
+    assert _client(lambda req: httpx.Response(200, json={"results": []})).search("q") == []
+    body = {"results": [{"url": None, "title": "无网址"}, {"url": "https://a", "title": None, "x": 1}]}
+    (hit,) = _client(lambda req: httpx.Response(200, json=body)).search("q")  # 没有网址的条目跳过
+    assert hit.to_dict() == {"title": "", "url": "https://a", "description": "", "content": "", "published_at": None}
+    for body in ({"content": 7}, [], {"title": ["T"]}):
+        r = _client(lambda req, body=body: httpx.Response(200, json=body)).read("https://a")
+        assert not r.ok and r.kind == "bad_response" and not r.retryable, body
+    tools = {t.name: t for t in make_research_tools(_client(lambda req: httpx.Response(200, json={"results": 1})))}
+    msg = tools["search_web"].invoke({"name": "search_web", "args": {"query": "q"}, "id": "c1", "type": "tool_call"})
+    assert msg.status == "error" and json.loads(msg.content)["kind"] == "bad_response"

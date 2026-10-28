@@ -26,7 +26,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 
 接口：`POST /api/threads`（multipart：request，image 可选）和 `POST /api/threads/{id}/resume`（`{"payload": ...}`）都返回 SSE：`thread` / `started` / `progress` / `node` / `interrupt` / `error` 事件，`state` 事件是完整状态，最后以 `end` 收尾；每个事件带 `id`（“执行-序号”），安静 15 秒发一行注释保活；`GET /api/threads/{id}/state`；`GET /api/threads/{id}/files/{name}`；`GET /api/threads/{id}/export` 打包 zip。
 
-调研接口同构，前缀 `/api/research/threads`：`POST`（json `{"request"}`）、`/{id}/resume`、`/{id}/retry`、`/{id}/events?after=<事件 id>`、`/{id}/state`、`/{id}/files/report_v{n}.md`、`/{id}/package/{report.md|items.json|sources.json|manifest.json}`、`/{id}/export`。agent 的动态提问在接口上统一成 `{"type":"research.ask", title, options, why}`，回传 `{"answer"}` 或 `{"skip":true}`（二选一），由 `ResearchRunner` 转成中间件的 decisions。
+调研接口同构，前缀 `/api/research/threads`：`POST`（json `{"request"}`）、`/{id}/resume`、`/{id}/retry`、`/{id}/events?after=<事件 id>`、`/{id}/state`。调研的下载 2026-10-29 先停掉了，没有文件和打包接口。agent 的动态提问在接口上统一成 `{"type":"research.ask", title, options, why}`，回传 `{"answer"}` 或 `{"skip":true}`（二选一），由 `ResearchRunner` 转成中间件的 decisions。
 
 调研的 resume 要带上当前这张卡的中断 id：`{"interrupt_id": "...", "payload": {...}}`，id 在 `state.interrupt.id` 和 `interrupt` 事件里。回答先过 `app/graph/research/answers.py` 的校验（CLI 也用同一份）再交给图：不合法返回 400，线程停在原卡上；卡已过期（线程往前走了）或这一步还在排队 / 运行返回 409。同一个线程同时只接受一次执行：请求被接受时占位，执行完才释放，浏览器断开不影响；新线程排队时也能马上查到状态。
 
@@ -59,7 +59,7 @@ uv run python -m app.cli --scenario research --fake resume <thread_id> '{"action
 uv run python -m app.cli --scenario research state <thread_id>
 ```
 
-调研的检查点在 `data/checkpoints_research.sqlite`，每版报告 `report_v{n}.md` 和最新一版的下载包 `package/{manifest,items,sources}.json + report.md`（`items.json` 只含正文用到的论断，`sources.json` 只含它们引用的来源）在 `output/research/<thread_id>/`。“导出”只指下载：`state.package` 给出最新一版的下载地址，`/{id}/export` 打成 zip；改动前留下的旧线程，包和最新一版对不上的不给下载地址。
+调研的检查点在 `data/checkpoints_research.sqlite`。每版报告另写一份 `report_v{n}.md` 留档在 `output/research/<thread_id>/`，流程不读它：页面、终审卡和理解用户的话用的报告都从检查点里的数据生成。以前的线程留下的 `package/` 目录没删，也不再更新。
 
 修复前留下的卡死线程：旧版节点拒绝回答后，坏回答会留在检查点里，之后每次提交正确回答都报同一个错（比如一直“回答的不是当前问题”）。停在澄清卡或终审卡上的这种线程，用 `PYTHONPATH=. uv run python scripts/unstick_research_thread.py <thread_id> ...` 手工解卡（不调模型；先确认线程没在跑），然后刷新页面重新回答。
 
