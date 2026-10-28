@@ -16,6 +16,7 @@ from langgraph.types import interrupt
 
 from app.graph.research import prompts, report
 from app.graph.research.agent import build_agent, close_out, collect_asks, collect_sources, count_asks, final_answer_text
+from app.graph.research.answers import card_schema
 from app.graph.research.state import (
     MAX_ASKS,
     MAX_GAP_ROUNDS,
@@ -88,10 +89,8 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             "scope": scope.model_dump(),
             "questions": [q.model_dump() for q in questions],
         }
-        form = _validated(interrupt(payload, response_schema=ClarifyForm), ClarifyForm)
-        unknown = set(form.answers) - {q.id for q in questions}
-        if unknown:
-            raise ValueError(f"回答的不是当前问题：{', '.join(sorted(unknown))}")
+        # 回答不合法时 interrupt() 自己抛错且什么都不存，线程停在这张卡上；不要在 interrupt() 之后再 raise，那样坏回答会留在检查点里反复重放
+        form = _validated(interrupt(payload, response_schema=card_schema(payload)), ClarifyForm)
         answered = [f"{q.title}{(form.answers.get(q.id) or '').strip()}" for q in questions if (form.answers.get(q.id) or "").strip()]
         skipped = [q.title for q in questions if not (form.answers.get(q.id) or "").strip()]
         assumptions = list(state.get("assumptions", [])) + [f"「{t}」未回答，按模型默认理解处理" for t in skipped]
@@ -291,13 +290,11 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             "answer_how": state.get("answer_how", "none"),
             "exported": state.get("exported"),
         }
-        d = _validated(interrupt(payload, response_schema=ReviewDecision), ReviewDecision)
+        d = _validated(interrupt(payload, response_schema=card_schema(payload)), ReviewDecision)  # 目标存在、字段齐全由 schema 保证
         if d.action == "approve":
             # “不用改了”：结束线程。确认物包在校验过的那一刻已经导出，这里不再动论断状态——系统交付不等于人工确认
             return {"approved": True}
         if d.action == "exclude_source":
-            if not d.target or d.target not in {s.id for s in sources}:
-                raise ValueError(f"来源不存在：{d.target}")
             new_sources = [s.model_copy(update={"status": "excluded"}) if s.id == d.target else s for s in sources]
             new_claims, affected, orphan_ids = [], [], []
             for c in claims:
@@ -319,15 +316,11 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             return {"approved": False, "sources": new_sources, "claims": new_claims, "rewrite_targets": sorted(set(affected)),
                     "rewrite_instruction": None, "notes": notes}
         if d.action == "edit_claim":
-            target = next((c for c in claims if c.id == d.target), None)
-            if target is None or not (d.content or "").strip():
-                raise ValueError("edit_claim 需要有效的 target 与 content")
+            target = next(c for c in claims if c.id == d.target)
             new_claims = [c.model_copy(update={"statement": d.content.strip(), "status": "user_edited"}) if c.id == d.target else c
                           for c in claims]
             return {"approved": False, "claims": new_claims, "rewrite_targets": [target.outline_id], "rewrite_instruction": None}
         # rewrite_section
-        if d.target not in {n.id for n in state["outline"]}:
-            raise ValueError(f"章节不存在：{d.target}")
         return {"approved": False, "rewrite_targets": [d.target], "rewrite_instruction": d.instruction}
 
     def export(state: ResearchState, config: RunnableConfig) -> dict:

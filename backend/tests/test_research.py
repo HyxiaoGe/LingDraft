@@ -7,9 +7,8 @@ from pathlib import Path
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langgraph.types import Command
 
-from app.cli import interrupt_view, pending_interrupt, research_resume_payload
+from app.cli import interrupt_view, pending, research_resume
 from app.graph.research.agent import (
     ASK_BLOCKED,
     DANGLING_NOTE,
@@ -49,9 +48,8 @@ def graph(planner, tmp_path: Path):
 
 
 def resume(graph, tid: str, payload: dict) -> dict:
-    """像 CLI / 接口层那样：先看挂起的是不是 agent 提问，再转换回传格式。"""
-    pending = pending_interrupt(graph, cfg(tid))
-    return graph.invoke(Command(resume=research_resume_payload(pending, payload)), cfg(tid))
+    """像 CLI / 接口层那样：先过同一份校验、转成图要的格式，再按中断 id 恢复。"""
+    return graph.invoke(research_resume(graph, cfg(tid), payload), cfg(tid))
 
 
 def run_to_review(graph, tid: str = "t1", answer: dict | None = None) -> dict:
@@ -172,6 +170,7 @@ def test_invalid_scope_rejected(graph):
     graph.invoke({"request": REQUEST}, cfg("t1"))
     with pytest.raises(ValueError, match="不是当前问题"):
         resume(graph, "t1", {"answers": {"nope": "x"}})
+    assert is_ask_interrupt(intr(resume(graph, "t1", {"answers": {"q1": "改文字"}})))  # 被拒的回答不留痕，正确的照常继续
 
 
 def test_simple_question_one_section_no_cards(graph):
@@ -234,7 +233,7 @@ def test_resume_across_graph_instances_with_sqlite(planner, tmp_path):
     r = resume(g1, "t1", {"answers": {"q1": "改文字"}})
     assert is_ask_interrupt(intr(r))
     g2 = build_graph(FakeResearchPlanner(), open_sqlite_checkpointer(db), tmp_path / "out")
-    assert is_ask_interrupt(pending_interrupt(g2, cfg("t1")))
+    assert is_ask_interrupt(pending(g2, cfg("t1")).value)
     r = resume(g2, "t1", {"answer": "包含"})
     assert intr(r)["type"] == "research.review"
 

@@ -32,6 +32,11 @@ def _last(events, name):
     return [d for e, d in events if e == name][-1]
 
 
+def _resume(client, st: dict, payload: dict):
+    """回答当前这张卡：带上它的中断 id。"""
+    return client.post(f"/api/research/threads/{st['thread_id']}/resume", json={"interrupt_id": st["interrupt"]["id"], "payload": payload})
+
+
 def test_research_flow_over_http(client):
     ev = _events(client.post("/api/research/threads", json={"request": "AI 海报工具在局部修改上的现状（2026）"}))
     kinds = [e for e, _ in ev]
@@ -42,7 +47,7 @@ def test_research_flow_over_http(client):
     assert st["running"] is False
 
     assert [q["id"] for q in st["interrupt"]["questions"]] == ["q1"] and st["scope"]["question"]
-    ev = _events(client.post(f"/api/research/threads/{tid}/resume", json={"payload": {"answers": {"q1": "改文字"}}}))
+    ev = _events(_resume(client, st, {"answers": {"q1": "改文字"}}))
     assert any(e == "node" and d["node"] == "confirm_scope" and d["scope"]["extra"] for e, d in ev)
     # 调研期间每次搜索 / 读页都有进度事件（来自 agent 子图），页面据此显示在做什么
     acts = [d for e, d in ev if e == "progress" and d.get("kind")]
@@ -52,7 +57,7 @@ def test_research_flow_over_http(client):
     st = _last(ev, "state")
     assert st["interrupt"]["type"] == "research.ask" and st["answer"] is None
 
-    ev = _events(client.post(f"/api/research/threads/{tid}/resume", json={"payload": {"answer": "包含"}}))
+    ev = _events(_resume(client, st, {"answer": "包含"}))
     review = _last(ev, "interrupt")
     assert review["type"] == "research.review" and review["version"] == 1 and review["md_url"].endswith("/files/report_v1.md")
     research = next(d for e, d in ev if e == "node" and d["node"] == "research")
@@ -66,7 +71,7 @@ def test_research_flow_over_http(client):
     assert md.status_code == 200 and md.text.startswith("# ")
 
     sid = review["claims"][0]["source_ids"][0]
-    ev = _events(client.post(f"/api/research/threads/{tid}/resume", json={"payload": {"action": "exclude_source", "target": sid}}))
+    ev = _events(_resume(client, _last(ev, "state"), {"action": "exclude_source", "target": sid}))
     assert _last(ev, "interrupt")["version"] == 2
     st = client.get(f"/api/research/threads/{tid}/state").json()
     assert st["next"] == ["review"] and len(st["versions"]) == 2
@@ -74,17 +79,17 @@ def test_research_flow_over_http(client):
     exported = st["exported"]
     assert exported["version"] == 2 and st["interrupt"]["type"] == "research.review"
     assert client.get(exported["items_url"]).json()[0]["kind"] == "scope"
-    ev = _events(client.post(f"/api/research/threads/{tid}/resume", json={"payload": {"action": "approve"}}))
+    ev = _events(_resume(client, st, {"action": "approve"}))
     st = _last(ev, "state")
     assert st["next"] == [] and st["exported"]["version"] == 2 and st["interrupt"] is None
 
 
-def test_invalid_answer_reports_error(client):
+def test_invalid_answer_rejected_before_graph(client):
     st = _last(_events(client.post("/api/research/threads", json={"request": "AI 海报工具在局部修改上的现状"})), "state")
-    tid = st["thread_id"]
-    ev = _events(client.post(f"/api/research/threads/{tid}/resume", json={"payload": {"answers": {"nope": "x"}}}))
-    assert any(e == "error" and "不是当前问题" in d["message"] for e, d in ev)
-    assert _last(ev, "state")["interrupt"]["type"] == "research.scope"
+    r = _resume(client, st, {"answers": {"nope": "x"}})
+    assert r.status_code == 400 and "不是当前问题" in r.json()["detail"]
+    after = client.get(f"/api/research/threads/{st['thread_id']}/state").json()
+    assert after["interrupt"]["type"] == "research.scope" and after["interrupt"]["id"] == st["interrupt"]["id"]
 
 
 def test_clear_request_has_no_scope_card(client):

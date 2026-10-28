@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 SourceStatus = Literal["candidate", "adopted", "excluded"]
 ClaimKind = Literal["fact", "inference"]
@@ -127,26 +127,61 @@ class CheckResult(BaseModel):
 
 
 # ---- 中断的回传 schema ----
+# 这里只管结构；“回答的是不是这张卡上的问题 / 来源 / 论断”由 answers.card_schema 按卡片内容补上。
 
 
 class ClarifyForm(BaseModel):
-    """澄清问题的回答：{问题 id: 答案}；None 或空串表示跳过，让模型自己判断。"""
+    """澄清问题的回答：{问题 id: 答案}；null 或不传表示跳过，让模型自己判断。空白答案不算跳过。"""
 
+    model_config = ConfigDict(extra="forbid")
     answers: dict[str, str | None]
+
+    @model_validator(mode="after")
+    def _no_blank(self):
+        blank = sorted(k for k, v in self.answers.items() if v is not None and not v.strip())
+        if blank:
+            raise ValueError(f"回答是空白（要跳过请传 null）：{', '.join(blank)}")
+        return self
+
+
+# 终审每种操作带哪些字段：必填的，和允许出现的
+_REVIEW_REQUIRED = {"approve": (), "exclude_source": ("target",), "edit_claim": ("target", "content"), "rewrite_section": ("target",)}
+_REVIEW_ALLOWED = {"approve": (), "exclude_source": ("target",), "edit_claim": ("target", "content"),
+                   "rewrite_section": ("target", "instruction")}
 
 
 class ReviewDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     action: Literal["approve", "exclude_source", "edit_claim", "rewrite_section"]
     target: str | None = None
     content: str | None = None
     instruction: str | None = None
 
+    @model_validator(mode="after")
+    def _fields(self):
+        extra = [f for f in ("target", "content", "instruction") if getattr(self, f) is not None and f not in _REVIEW_ALLOWED[self.action]]
+        if extra:
+            raise ValueError(f"{self.action} 不接受：{', '.join(extra)}")
+        missing = [f for f in _REVIEW_REQUIRED[self.action] if not (getattr(self, f) or "").strip()]
+        if missing:
+            raise ValueError(f"{self.action} 缺少：{', '.join(missing)}")
+        return self
+
 
 class AskAnswer(BaseModel):
-    """agent 动态提问的回答；skip 为真时按模型最佳判断继续并记录假设。"""
+    """agent 动态提问的回答：给出回答，或者跳过（按模型最佳判断继续并记录假设），二者必居其一。"""
 
+    model_config = ConfigDict(extra="forbid")
     answer: str | None = None
     skip: bool = False
+
+    @model_validator(mode="after")
+    def _one_of(self):
+        if self.skip and self.answer is not None:
+            raise ValueError("回答和跳过只能二选一")
+        if not self.skip and not (self.answer or "").strip():
+            raise ValueError("回答是空的；说不清楚请用跳过")
+        return self
 
 
 class ResearchState(TypedDict, total=False):

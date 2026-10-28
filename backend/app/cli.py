@@ -6,9 +6,9 @@
 
 每次运行到 interrupt 时打印确认点载荷；用 resume 回传答案继续。
 
-调研场景的回传格式：
-  澄清问题   {"answers": {"q1": "..."}}（未回答的记为假设）
-  动态提问   {"answer": "..."} 或 {"skip": true}
+调研场景的回传格式（与接口层同一份校验，不合法的不会交给图）：
+  澄清问题   {"answers": {"q1": "..."}}（null 或不传的记为假设）
+  动态提问   {"answer": "..."} 或 {"skip": true}，二选一
   终审       报告校验过就已经导出；这里是可选的修改，改完会重新导出覆盖
              {"action": "approve"}（不用改了，结束） | {"action": "exclude_source", "target": "s2"}
              | {"action": "edit_claim", "target": "k1", "content": "..."}
@@ -26,10 +26,10 @@ from langgraph.types import Command
 from app import config
 from app.graph.poster.graph import build_graph as build_poster
 from app.graph.poster.graph import open_sqlite_checkpointer as open_poster_saver
-from app.graph.research.agent import ask_resume, ask_view, is_ask_interrupt
+from app.graph.research.agent import ask_view, is_ask_interrupt
+from app.graph.research.answers import InvalidAnswer, resume_value
 from app.graph.research.graph import build_graph as build_research
 from app.graph.research.graph import open_sqlite_checkpointer as open_research_saver
-from app.graph.research.state import AskAnswer
 from app.llm import ArkPlanner, FakePlanner
 from app.research_llm import FakeResearchPlanner, LiveResearchPlanner
 
@@ -44,19 +44,20 @@ def _graph(scenario: str, fake: bool):
     return build_poster(planner, saver, config.OUTPUT_DIR)
 
 
-def pending_interrupt(graph, cfg: dict) -> dict | None:
+def pending(graph, cfg: dict):
+    """当前挂起的中断（带 id 和 value）；没有就是 None。"""
     for task in graph.get_state(cfg).tasks:
         for it in task.interrupts:
-            return it.value
+            return it
     return None
 
 
-def research_resume_payload(pending: dict | None, payload: dict) -> dict:
-    """把统一的回答格式转成图需要的 resume 值；agent 的动态提问要转成中间件的 decisions 格式。"""
-    if is_ask_interrupt(pending):
-        a = AskAnswer.model_validate(payload)
-        return ask_resume(a.answer, a.skip, pending)
-    return payload
+def research_resume(graph, cfg: dict, payload: dict) -> Command:
+    """校验回答并按中断 id 恢复；校验不过抛 InvalidAnswer，图看不到这个回答。"""
+    it = pending(graph, cfg)
+    if it is None:
+        raise InvalidAnswer("这个线程没有在等回答")
+    return Command(resume={it.id: resume_value(it.value, payload)})
 
 
 def interrupt_view(value: dict) -> dict:
@@ -134,8 +135,13 @@ def main() -> None:
         cfg = {"configurable": {"thread_id": args.thread_id}}
         payload = json.loads(args.payload)
         if args.scenario == "research":
-            payload = research_resume_payload(pending_interrupt(graph, cfg), payload)
-        _report(graph.invoke(Command(resume=payload), cfg), args.thread_id)
+            try:
+                cmd = research_resume(graph, cfg, payload)
+            except InvalidAnswer as e:
+                raise SystemExit(f"回答不合法：{e}") from None
+        else:
+            cmd = Command(resume=payload)
+        _report(graph.invoke(cmd, cfg), args.thread_id)
     else:
         cfg = {"configurable": {"thread_id": args.thread_id}}
         print(json.dumps(_state_view(args.scenario, graph.get_state(cfg)), ensure_ascii=False, indent=2))

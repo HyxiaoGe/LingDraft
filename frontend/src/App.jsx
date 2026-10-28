@@ -20,6 +20,7 @@ export default function App() {
   const chatRef = useRef(null);
   const fileRef = useRef(null);
   const threadRef = useRef(null); // 问题卡的回调在 state 更新前就建好了，thread_id 走 ref
+  const interruptRef = useRef(null); // 同理：当前这张卡的中断 id，回答时带回去，后端据此判断卡有没有过期
   const scenarioRef = useRef(scenario); // 同理：恢复线程时卡片在 setScenario 生效前就建好了，场景也走 ref
   scenarioRef.current = scenario;
 
@@ -38,6 +39,27 @@ export default function App() {
 
   const patchAi = (id, fn) => setMessages((ms) => ms.map((m) => (m.id === id ? fn(m) : m)));
 
+  // 一轮结束或恢复回来：记下状态和这张卡的中断 id，按 interrupt 类型弹问题卡
+  const show = (id, st, extra) => {
+    threadRef.current = st.thread_id;
+    interruptRef.current = st.interrupt?.id ?? null;
+    if (st.scenario === "research") history.replaceState(null, "", "#r/" + st.thread_id);
+    setState(st);
+    patchAi(id, (m) => ({ ...m, stage: null, result: st, ...extra }));
+    setCard(cardFor(st));
+  };
+
+  // 从服务器取调研进度：还在跑（或排队）就每 5 秒看一次，停下来就按当时的状态展示、弹出那张卡
+  const follow = async (threadId, id, waiting, first) => {
+    let st = first || (await getResearchState(threadId));
+    while (st.running) {
+      patchAi(id, (m) => ({ ...m, stage: st.queued ? "排队中，前面的任务跑完就开始" : waiting }));
+      await new Promise((r) => setTimeout(r, 5000));
+      st = await getResearchState(threadId);
+    }
+    show(id, st, { restored: true });
+  };
+
   // 跑一轮（新建或 resume）：开一条助手消息，边收事件边更新，结束后按 interrupt 类型弹问题卡
   const run = async (fn, userText, qa) => {
     setBusy(true);
@@ -46,35 +68,45 @@ export default function App() {
     if (userText) setMessages((ms) => [...ms, { id: uid(), role: "user", text: userText }]);
     const id = uid();
     const started = Date.now();
+    const research = scenarioRef.current === "research";
     setMessages((ms) => [...ms, { id, role: "ai", stage: "正在准备…", steps: [], qa: qa || null, started }]);
     try {
       const st = await fn((ev, data) => {
-        if (ev === "thread" && scenarioRef.current === "research") { threadRef.current = data.thread_id; history.replaceState(null, "", "#r/" + data.thread_id); }
+        if (ev === "thread" && research) { threadRef.current = data.thread_id; history.replaceState(null, "", "#r/" + data.thread_id); }
         if (ev === "progress" && data.stage) patchAi(id, (m) => ({ ...m, stage: data.stage, acts: data.kind ? [...(m.acts || []), data] : m.acts }));
         if (ev === "node") patchAi(id, (m) => ({ ...m, steps: [...m.steps, data] }));
         if (ev === "error") setError(data.message);
       });
       const elapsed = Math.round((Date.now() - started) / 1000);
-      if (st) {
-        threadRef.current = st.thread_id;
-        if (st.scenario === "research") history.replaceState(null, "", "#r/" + st.thread_id);
-        setState(st);
-        patchAi(id, (m) => ({ ...m, stage: null, elapsed, result: st }));
-        setCard(cardFor(st));
-      } else {
-        patchAi(id, (m) => ({ ...m, stage: null, elapsed }));
-      }
+      if (st) show(id, st, { elapsed });
+      else if (research && threadRef.current) await follow(threadRef.current, id, "连接断了，服务器还在处理，等它完成"); // 流没收完就断了
+      else patchAi(id, (m) => ({ ...m, stage: null, elapsed }));
     } catch (e) {
-      setError(String(e.message || e));
-      patchAi(id, (m) => ({ ...m, stage: null }));
+      // 调研：回答被拒（400）、卡已过期或这一步还在处理（409）、连接断了（没有状态码）——都回服务器取当前进度，重建问题卡
+      const recoverable = research && threadRef.current && (!e.status || e.status === 400 || e.status === 409);
+      if (e.status || !recoverable) setError(String(e.message || e));
+      if (e.status) patchAi(id, (m) => ({ ...m, qa: null })); // 这次回答被拒了，不能显示成已回答
+      if (recoverable) {
+        try {
+          await follow(threadRef.current, id, e.status ? "服务器还在处理这一步，等它完成" : "连接断了，服务器还在处理，等它完成");
+        } catch (e2) {
+          setError(`取回进度失败：${String(e2.message || e2)}`);
+          patchAi(id, (m) => ({ ...m, stage: null }));
+        }
+      } else {
+        patchAi(id, (m) => ({ ...m, stage: null }));
+      }
     } finally {
       setBusy(false);
     }
   };
 
-  const start = (text) => run((cb) => (scenarioRef.current === "research" ? createResearchThread(text, cb) : createThread(text, image, cb)), text);
+  const start = (text) => {
+    threadRef.current = null; // 新线程：断线后只按这次拿到的 id 恢复，不能落回上一个线程
+    return run((cb) => (scenarioRef.current === "research" ? createResearchThread(text, cb) : createThread(text, image, cb)), text);
+  };
 
-  // 从地址栏的线程 id 恢复：服务器还在跑这一步就等它（每 5 秒看一次），停在问题上就把那张卡弹出来，结束了就展示结果
+  // 从地址栏的线程 id 恢复：服务器还在跑这一步就等它，停在问题上就把那张卡弹出来，结束了就展示结果
   const restoreResearch = async (threadId) => {
     scenarioRef.current = "research";
     setScenario("research");
@@ -82,27 +114,21 @@ export default function App() {
     const id = uid();
     setMessages([{ id: uid(), role: "user", text: "（恢复中…）" }, { id, role: "ai", stage: "正在取回这次调研的进度", steps: [], started: Date.now() }]);
     try {
-      let st = await getResearchState(threadId);
+      const st = await getResearchState(threadId);
       setMessages((ms) => ms.map((m) => (m.role === "user" ? { ...m, text: st.request } : m)));
-      while (st.running) {
-        patchAi(id, (m) => ({ ...m, stage: "服务器还在处理这一步，等它完成" }));
-        await new Promise((r) => setTimeout(r, 5000));
-        st = await getResearchState(threadId);
-      }
-      threadRef.current = st.thread_id;
-      setState(st);
-      patchAi(id, (m) => ({ ...m, stage: null, restored: true, result: st }));
-      setCard(cardFor(st));
+      await follow(threadId, id, "服务器还在处理这一步，等它完成", st);
     } catch (e) {
       setError(`恢复失败：${String(e.message || e)}`);
       patchAi(id, (m) => ({ ...m, stage: null }));
-      history.replaceState(null, "", location.pathname);
+      if (e.status === 404) history.replaceState(null, "", location.pathname); // 线程确实不在了才清地址栏；网络抖动时留着，刷新还能再试
     } finally {
       setBusy(false);
     }
   };
   const resume = (payload, userText, qa) =>
-    run((cb) => (scenarioRef.current === "research" ? resumeResearchThread(threadRef.current, payload, cb) : resumeThread(threadRef.current, payload, cb)), userText, qa);
+    run((cb) => (scenarioRef.current === "research"
+      ? resumeResearchThread(threadRef.current, interruptRef.current, payload, cb)
+      : resumeThread(threadRef.current, payload, cb)), userText, qa);
 
   // ---- 把 interrupt 变成问题卡 ----
   const cardFor = (st) => {

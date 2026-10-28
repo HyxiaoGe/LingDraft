@@ -9,10 +9,11 @@ from typing import Annotated
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
-from app.api.research_runner import ResearchRunner
-from app.api.runner import GraphRunner
+from app.api.research_runner import ResearchRunner, StaleInterrupt
+from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
+from app.graph.research.answers import InvalidAnswer
 
 app = FastAPI(title="LingDraft PoC")
 _runner: GraphRunner | None = None
@@ -47,6 +48,30 @@ def _sse(gen):
     return StreamingResponse(gen, media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+def _view(r: BaseRunner, thread_id: str) -> dict:
+    """URL 里的 thread_id 格式不对、或线程不存在，一律 404。"""
+    view = r.state_view(thread_id) if valid_thread_id(thread_id) else {"exists": False}
+    if not view["exists"]:
+        raise HTTPException(404, "thread 不存在")
+    return view
+
+
+def _dir(r: BaseRunner, thread_id: str) -> Path:
+    try:
+        return r.thread_dir(thread_id)
+    except ValueError:
+        raise HTTPException(404, "thread 不存在") from None
+
+
+def _safe_file(base: Path, name: str) -> Path:
+    if "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(400, "非法文件名")
+    path = base / name
+    if not path.resolve().is_relative_to(base.resolve()) or not path.is_file():
+        raise HTTPException(404, "文件不存在")
+    return path
+
+
 @app.post("/api/threads")
 async def create_thread(
     request: Annotated[str, Form()],
@@ -73,35 +98,28 @@ class ResumeBody(BaseModel):
 @app.post("/api/threads/{thread_id}/resume")
 async def resume_thread(thread_id: str, body: ResumeBody):
     r = runner()
-    if not r.state_view(thread_id)["exists"]:
-        raise HTTPException(404, "thread 不存在")
-    return _sse(r.resume(thread_id, body.payload))
+    _view(r, thread_id)
+    try:
+        return _sse(r.resume(thread_id, body.payload))
+    except RunConflict as e:
+        raise HTTPException(409, str(e)) from None
 
 
 @app.get("/api/threads/{thread_id}/state")
 async def get_state(thread_id: str):
-    view = runner().state_view(thread_id)
-    if not view["exists"]:
-        raise HTTPException(404, "thread 不存在")
-    return view
+    return _view(runner(), thread_id)
 
 
 @app.get("/api/threads/{thread_id}/files/{name}")
 async def get_file(thread_id: str, name: str):
-    if "/" in name or name.startswith("."):
-        raise HTTPException(400, "非法文件名")
-    path = runner().thread_dir(thread_id) / name
-    if not path.is_file():
-        raise HTTPException(404, "文件不存在")
-    return FileResponse(path)
+    return FileResponse(_safe_file(_dir(runner(), thread_id), name))
 
 
 @app.get("/api/threads/{thread_id}/export")
 async def export_zip(thread_id: str):
-    view = runner().state_view(thread_id)
-    if not view["exists"] or not view["exported"]:
+    if not _view(runner(), thread_id)["exported"]:
         raise HTTPException(404, "尚未导出，请先在 review 中确认")
-    tdir = runner().thread_dir(thread_id)
+    tdir = _dir(runner(), thread_id)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for p in tdir.iterdir():
@@ -124,49 +142,48 @@ async def research_create(body: ResearchCreateBody):
     return _sse(research().start(uuid.uuid4().hex[:8], body.request.strip()))
 
 
+class ResearchResumeBody(BaseModel):
+    """interrupt_id 是页面上这张卡的中断 id（state / interrupt 事件里给的）；对不上说明卡已过期。"""
+
+    model_config = ConfigDict(extra="forbid")
+    interrupt_id: str
+    payload: dict
+
+
 @app.post("/api/research/threads/{thread_id}/resume")
-async def research_resume(thread_id: str, body: ResumeBody):
+async def research_resume(thread_id: str, body: ResearchResumeBody):
     r = research()
-    if not r.state_view(thread_id)["exists"]:
-        raise HTTPException(404, "thread 不存在")
-    return _sse(r.resume(thread_id, body.payload))
+    _view(r, thread_id)
+    try:
+        return _sse(r.resume(thread_id, body.payload, body.interrupt_id))
+    except (RunConflict, StaleInterrupt) as e:
+        raise HTTPException(409, str(e)) from None
+    except InvalidAnswer as e:
+        raise HTTPException(400, str(e)) from None
 
 
 @app.get("/api/research/threads/{thread_id}/state")
 async def research_state(thread_id: str):
-    view = research().state_view(thread_id)
-    if not view["exists"]:
-        raise HTTPException(404, "thread 不存在")
-    return view
-
-
-def _safe_file(base: Path, name: str) -> Path:
-    if "/" in name or name.startswith("."):
-        raise HTTPException(400, "非法文件名")
-    path = base / name
-    if not path.is_file():
-        raise HTTPException(404, "文件不存在")
-    return path
+    return _view(research(), thread_id)
 
 
 @app.get("/api/research/threads/{thread_id}/files/{name}")
 async def research_file(thread_id: str, name: str):
-    return FileResponse(_safe_file(research().thread_dir(thread_id), name), media_type="text/markdown; charset=utf-8")
+    return FileResponse(_safe_file(_dir(research(), thread_id), name), media_type="text/markdown; charset=utf-8")
 
 
 @app.get("/api/research/threads/{thread_id}/package/{name}")
 async def research_package_file(thread_id: str, name: str):
-    path = _safe_file(research().thread_dir(thread_id) / "package", name)
+    path = _safe_file(_dir(research(), thread_id) / "package", name)
     media = "application/json" if name.endswith(".json") else "text/markdown; charset=utf-8"
     return FileResponse(path, media_type=media)
 
 
 @app.get("/api/research/threads/{thread_id}/export")
 async def research_export(thread_id: str):
-    view = research().state_view(thread_id)
-    if not view["exists"] or not view["exported"]:
+    if not _view(research(), thread_id)["exported"]:
         raise HTTPException(404, "尚未导出，请先在终审中确认")
-    pkg = research().thread_dir(thread_id) / "package"
+    pkg = _dir(research(), thread_id) / "package"
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for p in pkg.iterdir():
