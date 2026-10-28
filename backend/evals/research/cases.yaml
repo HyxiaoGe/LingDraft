@@ -37,7 +37,7 @@
     skill: comparison
     min_reads: 1
     cites_domain: sqlite.org
-  judge: 报告分别说明了两种模式下读和写会不会互相阻塞、同时能有几个写者。
+  judge: 报告说明了两种模式下读和写会不会互相阻塞、同时能有几个写者（两种模式相同的地方合并说明也算）。
 
 - id: landscape-2026
   source: 调研方法（技能）上线时新增（2026-10-29）：限定了时间的现状盘点，搜索应限定时间，清单应说明可能不全
@@ -46,7 +46,7 @@
     asked: false
     skill: landscape
     recency: true
-  judge: 报告列出的每项发布都写了发布时间，而且都在 2026 年以内（更早的材料只作背景并说明了）；说明了清单可能不全。
+  judge: 报告列出的发布都写了时间（到月即可），来源没给时间的写明了没查到；列出的发布都在 2026 年以内（更早的材料只作背景并说明了）；说明了清单可能不全。
 
 - id: vague-scope
   source: 探针 autonomy 例 3（docs/probe/autonomy，2026-10-28）：需求太宽，应先在范围卡上问清行业或场景
