@@ -34,7 +34,9 @@ def memory_checkpointer() -> InMemorySaver:
 
 
 def build_graph(planner: ResearchPlanner, checkpointer: BaseCheckpointSaver, out_dir: Path):
-    """按需澄清 → 全局调研 agent → 结构化整理（缺口回补一轮）→ 拼装（每版连同下载包一起写好）→ 校验（只是说明）→ 终审（可选的修改，改完出新一版）。"""
+    """按需澄清 → 全局调研 agent → 结构化整理（缺口回补一轮）→ 拼装（每版连同下载包一起写好）→ 校验（只是说明）→ 终审（可选的修改，改完出新一版）。
+
+终审时用户直接说的话先经 interpret 交给模型理解成具体操作。"""
     fns = N.make_nodes(planner, Path(out_dir))
     g = StateGraph(ResearchState)
     for name, fn in fns.items():
@@ -46,5 +48,6 @@ def build_graph(planner: ResearchPlanner, checkpointer: BaseCheckpointSaver, out
     g.add_conditional_edges("consolidate", N.route_after_consolidate, ["research", "write"])
     g.add_edge("write", "check")
     g.add_edge("check", "review")
-    g.add_conditional_edges("review", N.route_after_review, ["write", "review", END])
+    g.add_conditional_edges("review", N.route_after_review, ["interpret", "write", "review", END])
+    g.add_conditional_edges("interpret", N.route_after_interpret, ["write", "review", END])
     return g.compile(checkpointer=checkpointer)

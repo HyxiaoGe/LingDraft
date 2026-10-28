@@ -4,6 +4,8 @@ import { RESEARCH_DEFAULT, ResearchBody, researchCardFor, retryCard, routeResear
 
 const KIND = { headline: "标题", subhead: "副标题", offer: "优惠", date: "活动时间", cta: "行动号召", product_image: "产品图" };
 const STATUS = { draft: "草稿", confirmed: "已确认", user_edited: "手工编辑" };
+// 旧线程里还有 forbidden_words / no_numbers_in_copy 两项（现在合并成文案合规，由模型判断）
+const CHECK_NAME = { fact_match: "事实比对", copy_compliance: "文案合规", overflow: "排版溢出", forbidden_words: "违禁词", no_numbers_in_copy: "文案数字" };
 const DEFAULT_REQUEST = "某品牌蓝牙耳机黑五预热，5 折，11.20 到 11.27";
 const QUEUED = "排队中，前面的任务跑完就开始";
 const ACTIVE = new Set(["queued", "running"]); // 调研线程的这两种状态说明服务器上还有执行没结束
@@ -96,7 +98,7 @@ export default function App() {
     const started = Date.now();
     const research = scenarioRef.current === "research";
     const errs = [];
-    setMessages((ms) => [...ms, { id, role: "ai", stage: "正在准备…", steps: [], qa: qa || null, started }]);
+    setMessages((ms) => [...ms, { id, role: "ai", stage: "正在准备…", steps: [], qa: qa || null, started, research }]);
     try {
       const st = await fn(onEvents(id, research, errs));
       const elapsed = Math.round((Date.now() - started) / 1000);
@@ -137,7 +139,7 @@ export default function App() {
     threadRef.current = threadId;
     lastEventRef.current = null; // 刷新后没有事件 id：还在跑的话，服务器从这次执行的开头补发进度
     const id = uid();
-    setMessages([{ id: uid(), role: "user", text: "（恢复中…）" }, { id, role: "ai", stage: "正在取回这次调研的进度", steps: [], started: Date.now() }]);
+    setMessages([{ id: uid(), role: "user", text: "（恢复中…）" }, { id, role: "ai", stage: "正在取回这次调研的进度", steps: [], started: Date.now(), research: true }]);
     try {
       const st = await getResearchState(threadId);
       setMessages((ms) => ms.map((m) => (m.role === "user" ? { ...m, text: st.request } : m)));
@@ -165,11 +167,11 @@ export default function App() {
     if (it.type.startsWith("research.")) return researchCardFor(it, st, resumeFor(st), setCard);
     if (it.type === "confirm_facts") return factsCard(it, resume);
     if (it.type === "choose_style") return styleCard(it, resume);
-    if (it.type === "review") return reviewCard(it, st, resume, setCard);
+    if (it.type === "review") return reviewCard(it, st, resume);
     return null;
   };
 
-  // 底部输入框：没开始或已结束 → 新建；review 中 → 自由文本按关键词路由；其他中断、调研失败 → 禁用
+  // 底部输入框：没开始或已结束 → 新建；review 中 → 自由文本交给后端由模型理解；其他中断、调研失败 → 禁用
   const interruptType = state?.interrupt?.type;
   const finished = state && (state.scenario === "research" ? state.status === "done" : state.exported && !interruptType);
   const inputMode = !state || finished ? "new"
@@ -178,7 +180,7 @@ export default function App() {
   const onSend = (text) => {
     if (inputMode === "new") return start(text);
     if (inputMode === "ask") return resumeFor(state)({ answer: text }, null, [{ q: state.interrupt.title, a: text }]);
-    if (inputMode === "review") return state.scenario === "research" ? routeResearchText(text, state, resumeFor(state), setCard) : routeFreeText(text, state, resume, setCard);
+    if (inputMode === "review") return state.scenario === "research" ? routeResearchText(text, state, resumeFor(state)) : routeFreeText(text, resume);
   };
   const title = !state ? (scenario === "research" ? "灵稿 · 产品调研" : "灵稿 · 宣传海报")
     : scenario === "research" ? (state.scope?.question || "产品调研") : "黑五预热宣传海报";
@@ -237,7 +239,8 @@ function factsCard(it, resume, answers = {}, idx = 0, history = []) {
   }
   const f = fields[idx];
   const options = [];
-  if (f.value) options.push({ label: f.value, hint: f.source === "inferred" ? "从需求中提取" : "当前值", value: f.value });
+  const hint = f.source === "proposed" ? `按你刚才说的，原来是${f.previous ? `“${f.previous}”` : "空"}` : f.source === "inferred" ? "从需求中提取" : "当前值";
+  if (f.value) options.push({ label: f.value, hint, value: f.value });
   const next = (v) => {
     const a = { ...answers, [f.key]: v };
     const h = [...history, { q: `${f.label}是什么？`, a: v || "（不填，海报上不出现）" }];
@@ -274,11 +277,11 @@ function styleCard(it, resume) {
   };
 }
 
-function reviewCard(it, st, resume, setCard) {
+function reviewCard(it, st, resume) {
   const editable = it.elements.filter((e) => e.editable_by_model);
   const manual = it.elements.filter((e) => !e.bound_fact && e.kind !== "product_image" && e.kind !== "background");
   return {
-    title: `第 ${it.version} 版怎么样？`,
+    title: it.reply || `第 ${it.version} 版怎么样？`,
     page: "1/1",
     options: [
       { label: "就这版，导出", hint: "PNG + HTML + 事实清单", value: "approve" },
@@ -289,7 +292,7 @@ function reviewCard(it, st, resume, setCard) {
     ],
     customPlaceholder: "或直接说要改什么，例如：标题更有紧迫感 / 折扣改成 6 折",
     onAnswer: (v, isCustom) => {
-      if (isCustom) return routeFreeText(v, st, resume, setCard), null;
+      if (isCustom) return routeFreeText(v, resume), null;
       if (v === "approve") return resume({ action: "approve" }, "就这版，导出"), null;
       if (v === "fact") return resume({ action: "change_fact" }, "修改事实"), null;
       if (v === "style") return styleChangeCard(st, resume);
@@ -367,23 +370,10 @@ function styleChangeCard(st, resume) {
   };
 }
 
-// review 阶段的自由文本：按关键词路由到元素 / 事实 / 风格，猜不出来就反问
-function routeFreeText(text, st, resume, setCard) {
+// review 阶段的自由文本：原话交给后端，由模型理解成改文案 / 改事实 / 换风格 / 导出；对不上时回复显示在下一张卡的标题上
+function routeFreeText(text, resume) {
   const t = text.trim();
-  if (!t) return;
-  const els = st.interrupt.elements;
-  const byId = Object.fromEntries(els.map((e) => [e.id, e]));
-  if (/折|价|优惠|日期|时间|几号|活动/.test(t)) return resume({ action: "change_fact" }, t);
-  if (/风格|配色|颜色|背景|色调|深色|浅色/.test(t)) return resume({ action: "change_style", instruction: t }, t);
-  const target = /副标题/.test(t) ? "subhead" : /标题/.test(t) ? "headline" : /按钮|号召|行动/.test(t) ? "cta" : null;
-  if (target && byId[target]?.editable_by_model) return resume({ action: "edit", target, instruction: t }, t);
-  if (target && byId[target]) return setCard(elementCard(byId[target], st, resume, setCard));
-  setCard({
-    title: `“${t}”想改哪一部分？`,
-    page: "1/2",
-    options: els.filter((e) => e.editable_by_model).map((e) => ({ label: KIND[e.kind] || e.kind, hint: e.text, value: e.id })),
-    onAnswer: (v) => (resume({ action: "edit", target: v, instruction: t }, t), null),
-  });
+  if (t) resume({ action: "instruct", text: t }, t);
 }
 
 // ---------------- 组件 ----------------
@@ -461,7 +451,8 @@ function AiMsg({ m, live, onPickElement, onCard, resume }) {
         {m.steps.filter((s) => s.node === "consolidate").map((s, i) => <div className="done-line" key={"c" + i}>{s.gap ? `整理时发现证据缺口，回去补查：${s.gap}` : `整理出 ${s.sections} 节、${s.claims} 条论断`}</div>)}
         {m.steps.filter((s) => s.node === "write").map((s) => <div className="done-line" key={s.version}>已生成第 {s.version} 版报告 · {s.note}</div>)}
         {m.steps.filter((s) => s.node === "export" && s.exported).map((s, i) => <div className="done-line" key={"e" + i}>已导出第 {s.exported.version} 版确认物包</div>)}
-        {st?.scenario !== "research" && m.steps.filter((s) => s.notes?.length).map((s, i) => <p key={i}>{s.notes.join("；")}</p>)}
+        {/* 调研的说明在报告下面单独列；跑着的时候还没有结果，按消息自己记的场景判断 */}
+        {!m.research && st?.scenario !== "research" && m.steps.filter((s) => s.notes?.length).map((s, i) => <p key={i}>{s.notes.join("；")}</p>)}
         {m.acts?.length > 0 && <ActLog acts={m.acts} live={!!m.stage} />}
         {m.stage && <div className="status"><span className="dots">{m.stage}</span><span className="sep">|</span><span>{st?.scenario === "research" || m.restored || !st ? "可以关掉页面，回来后从这一步继续" : "请稍候"}</span></div>}
         {st && !m.stage && (st.scenario === "research"
@@ -500,8 +491,8 @@ function ResultBody({ st, it, cur, setSel, elements, onPickElement }) {
                 </div>
               ))}
             </div>
-            {failed.length > 0 ? <div className="checks bad">自动校验未通过：{failed.map((c) => `${c.name} ${c.detail}`).join("；")}</div>
-              : it && <div className="checks">✓ 事实逐字一致 · ✓ 无违禁词 · ✓ 文案无数字 · ✓ 无溢出</div>}
+            {failed.length > 0 ? <div className="checks bad">自动校验未通过：{failed.map((c) => `${CHECK_NAME[c.name] || c.name}：${c.detail}`).join("；")}</div>
+              : it && <div className="checks">✓ 事实逐字一致 · ✓ 文案合规 · ✓ 无溢出</div>}
             {st.exported && (
               <div className="export-links">
                 <a href={st.exported.png_url} target="_blank" rel="noreferrer">final.png</a>

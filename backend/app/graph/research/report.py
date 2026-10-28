@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from app.graph.research.state import CheckResult, Claim, OutlineNode, Scope, SectionText, Source
 
-INFERENCE_PREFIX = "推断："
+INFERENCE_PREFIX = "推断："  # 推断句的标记：写句子时按论断类型由代码加上，模型不写
 
 
 def referenced_source_ids(sections: dict[str, SectionText], claims: dict[str, Claim]) -> list[str]:
@@ -16,6 +16,11 @@ def referenced_source_ids(sections: dict[str, SectionText], claims: dict[str, Cl
                     if sid not in seen:
                         seen.append(sid)
     return seen
+
+
+def source_label(sid: str) -> str:
+    """来源在报告里的标注就是它的 id（s16 → S16）：版本之间不变，和来源页上显示的一致，用户说“排除 S16”不会有歧义。"""
+    return sid.upper()
 
 
 def cited_claim_ids(sections: dict[str, SectionText], claims: list[Claim]) -> set[str]:
@@ -32,7 +37,7 @@ def source_status(sources: list[Source], sections: dict[str, SectionText], claim
             for s in sources]
 
 
-def assemble(
+def report_blocks(
     scope: Scope,
     outline: list[OutlineNode],
     sections: dict[str, SectionText],
@@ -42,41 +47,38 @@ def assemble(
     user_answers: list[str] = (),
     answered: bool = True,
     open_gap: str | None = None,
-) -> str:
+) -> list[dict]:
+    """报告的结构化内容：页面按它渲染，Markdown 也由它生成。每句是不是推断、挂哪些来源都来自论断，不看句子文字。"""
     by_claim = {c.id: c for c in claims}
     by_source = {s.id: s for s in sources}
     order = referenced_source_ids(sections, by_claim)
-    num = {sid: i + 1 for i, sid in enumerate(order)}
 
-    lines = [f"# {scope.question}", ""]
+    blocks: list[dict] = [{"type": "title", "text": scope.question}]
     if not answered:  # 没答完也照常交付，但报告自己要说清楚，下载出去的文件也一样
-        lines += ["> 注意：这份报告没有完全回答研究问题" + (f"，还缺：{open_gap}" if open_gap else "") + "。", ""]
+        blocks.append({"type": "notice", "text": "注意：这份报告没有完全回答研究问题" + (f"，还缺：{open_gap}" if open_gap else "") + "。"})
     bounds = [f"{label}：{val}" for label, val in (
         ("时间", scope.time_range), ("地域", scope.region), ("信源语言", scope.lang), ("不含", scope.exclude),
         ("补充", scope.extra),
     ) if val]
     if bounds:
-        lines += ["范围：" + "；".join(bounds), ""]
+        blocks.append({"type": "scope", "text": "范围：" + "；".join(bounds)})
     for node in outline:
         sec = sections.get(node.id)
         if sec is None:
             continue
-        lines += [f"## {node.title}", ""]
+        blocks.append({"type": "heading", "text": node.title})
         for s in sec.sentences:
-            text = s.text.strip()
             claim = by_claim.get(s.claim_id) if s.claim_id else None
-            if claim is not None:
-                if claim.kind == "inference" and not text.startswith(INFERENCE_PREFIX):
-                    text = INFERENCE_PREFIX + text
-                marks = "".join(f"[S{num[sid]}]" for sid in claim.source_ids if sid in num)
-                text = f"{text}{marks}"
-            lines.append(text)
-        lines.append("")
-    if user_answers:
-        lines += ["## 用户的回答", ""] + [f"- {a}" for a in user_answers] + [""]
-    if assumptions:
-        lines += ["## 假设与取舍", ""] + [f"- {a}" for a in assumptions] + [""]
-    lines += ["## 来源", ""]
+            blocks.append({
+                "type": "sentence", "text": s.text.strip(), "claim_id": claim.id if claim else None,
+                "inference": bool(claim and claim.kind == "inference"),
+                "marks": [source_label(sid) for sid in claim.source_ids if sid in by_source] if claim else [],
+            })
+    for title, items in (("用户的回答", user_answers), ("假设与取舍", assumptions)):
+        if items:
+            blocks.append({"type": "heading", "text": title})
+            blocks += [{"type": "item", "text": a} for a in items]
+    blocks.append({"type": "heading", "text": "来源"})
     for sid in order:
         src = by_source.get(sid)
         if src is None:
@@ -86,8 +88,35 @@ def assemble(
             meta.append(f"发布 {src.published_at[:10]}")
         if src.retrieved_at:
             meta.append(f"抓取 {src.retrieved_at[:10]}")
-        lines.append(f"[S{num[sid]}] {src.title or src.url} — {src.url}" + (f"（{'，'.join(meta)}）" if meta else ""))
-    return "\n".join(lines).rstrip() + "\n"
+        blocks.append({"type": "source", "label": source_label(sid), "source_id": sid, "title": src.title or src.url, "url": src.url, "meta": "，".join(meta)})
+    return blocks
+
+
+def to_markdown(blocks: list[dict]) -> str:
+    out: list[str] = []
+    for b in blocks:
+        t = b["type"]
+        if t == "title":
+            out += [f"# {b['text']}", ""]
+        elif t == "notice":
+            out += [f"> {b['text']}", ""]
+        elif t == "scope":
+            out += [b["text"], ""]
+        elif t == "heading":
+            if out and out[-1] != "":
+                out.append("")
+            out += [f"## {b['text']}", ""]
+        elif t == "sentence":
+            out.append(b["text"] + "".join(f"[{m}]" for m in b["marks"]))
+        elif t == "item":
+            out.append(f"- {b['text']}")
+        elif t == "source":
+            out.append(f"[{b['label']}] {b['title']} — {b['url']}" + (f"（{b['meta']}）" if b["meta"] else ""))
+    return "\n".join(out).rstrip() + "\n"
+
+
+def assemble(*args, **kwargs) -> str:
+    return to_markdown(report_blocks(*args, **kwargs))
 
 
 def answer_check(answer: str | None, how: str) -> CheckResult:
@@ -108,7 +137,7 @@ def report_check(sections: dict[str, SectionText], claims: list[Claim], answered
 
 
 def run_checks(
-    sections: dict[str, SectionText], claims: list[Claim], sources: list[Source], scope: Scope
+    sections: dict[str, SectionText], claims: list[Claim], sources: list[Source], time_issues: dict[str, str] | None = None
 ) -> list[CheckResult]:
     by_claim = {c.id: c for c in claims}
     by_source = {s.id: s for s in sources}
@@ -123,12 +152,6 @@ def run_checks(
     excluded = [c.id for c in used_claims if any(by_source.get(sid) and by_source[sid].status == "excluded" for sid in c.source_ids)]
     results.append(CheckResult(name="no_excluded_sources", passed=not excluded, detail=_join("引用了已排除来源", excluded)))
 
-    unmarked = [
-        s.claim_id for sec in sections.values() for s in sec.sentences
-        if s.claim_id in by_claim and by_claim[s.claim_id].kind == "inference" and not s.text.strip().startswith(INFERENCE_PREFIX)
-    ]
-    results.append(CheckResult(name="inference_marked", passed=not unmarked, detail=_join("推断未标记", unmarked)))
-
     incomplete = [sid for sid in referenced_source_ids(sections, by_claim)
                   if sid in by_source and not (by_source[sid].url and by_source[sid].title and by_source[sid].retrieved_at)]
     results.append(CheckResult(name="sources_complete", passed=not incomplete, detail=_join("来源信息不全", incomplete)))
@@ -136,21 +159,12 @@ def run_checks(
     orphaned = [c.id for c in used_claims if c.orphaned]
     results.append(CheckResult(name="no_orphaned_claims", passed=not orphaned, detail=_join("失去来源支撑", orphaned)))
 
-    year = _year(scope.time_range)
-    stale = [sid for sid in referenced_source_ids(sections, by_claim)
-             if year and sid in by_source and by_source[sid].published_at and _year(by_source[sid].published_at) and _year(by_source[sid].published_at) < year - 1]
-    results.append(CheckResult(name="scope_time", passed=not stale, detail=_join(f"发布时间早于范围（{year}）", stale)))
+    # 来源发布时间在不在用户要的时间范围里由整理步骤的模型判断（范围可能是“近三年”“2020 年以前”这类说法）；这里只看正文用到的
+    off = [sid for sid in referenced_source_ids(sections, by_claim) if sid in (time_issues or {})]
+    results.append(CheckResult(name="scope_time", passed=not off,
+                               detail="；".join(f"{sid}：{time_issues[sid]}" for sid in off) + ("；" if off else "")))
     return results
 
 
 def _join(label: str, ids: list[str]) -> str:
     return f"{label}：{', '.join(ids)}；" if ids else ""
-
-
-def _year(text: str | None) -> int | None:
-    if not text:
-        return None
-    import re
-
-    m = re.search(r"(20\d{2})", text)
-    return int(m.group(1)) if m else None

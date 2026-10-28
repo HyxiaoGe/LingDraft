@@ -46,9 +46,9 @@ def build_graph(planner: Planner, checkpointer: BaseCheckpointSaver, out_dir: Pa
     g.add_edge("plan_layout", "render")
     g.add_edge("render", "check")
     g.add_conditional_edges("check", N.route_after_check, ["plan_layout", "review"])
-    g.add_conditional_edges(
-        "review", N.route_after_review, ["export", "revise", "manual_edit", "confirm_facts", "ask_style", "gen_style_options"]
-    )
+    after_review = ["export", "revise", "manual_edit", "confirm_facts", "ask_style", "gen_style_options"]
+    g.add_conditional_edges("review", N.route_after_review, after_review + ["interpret"])
+    g.add_conditional_edges("interpret", N.route_after_interpret, after_review + ["review"])
     g.add_conditional_edges("revise", N.route_after_revise, ["render", "review"])
     g.add_conditional_edges("manual_edit", N.route_after_revise, ["render", "review"])
     g.add_edge("export", END)

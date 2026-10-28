@@ -12,11 +12,13 @@ from app.cli import interrupt_view, pending, research_resume
 from app.graph.research.agent import (
     ASK_BLOCKED,
     DANGLING_NOTE,
-    SKIP_MESSAGE,
-    UNSHOWN_MESSAGE,
+    LIMIT_MARK,
+    CallLimitMiddleware,
     answer_dangling_calls,
     ask_resume,
+    ask_result,
     build_agent,
+    collect_asks,
     collect_sources,
     final_answer_text,
     is_ask_interrupt,
@@ -250,13 +252,29 @@ def test_build_agent_without_ask_drops_tool(planner):
 
 
 def test_final_answer_text_ignores_limit_message_and_tool_calls():
+    """超限消息靠中间件打的标记识别，不看文字：模型自己写的同样开头的话照样是答案。"""
+    limit = CallLimitMiddleware(run_limit=30, exit_behavior="end").before_model({"messages": [], "run_model_call_count": 30}, None)
+    marked = limit["messages"][0]
+    assert limit["jump_to"] == "end" and marked.response_metadata[LIMIT_MARK]
     msgs = [
         AIMessage(content="答案", ),
         AIMessage(content="", tool_calls=[{"name": "search_web", "args": {}, "id": "1", "type": "tool_call"}]),
-        AIMessage(content="Model call limits exceeded: run limit (30/30)"),
+        marked,
     ]
     assert final_answer_text(msgs) == "答案"
     assert final_answer_text(msgs[1:]) is None
+    assert final_answer_text([AIMessage(content="Model call limits exceeded 是这个库的提示语")]) == "Model call limits exceeded 是这个库的提示语"
+
+
+def test_agent_hitting_call_limit_has_no_answer(planner, monkeypatch):
+    import app.graph.research.agent as agent_mod
+
+    monkeypatch.setattr(agent_mod, "MAX_MODEL_CALLS", 2)
+    agent = build_agent(planner.agent_model(), planner.tools(), "sys", ask_limit=0)
+    res = agent.invoke({"messages": [("user", "一直搜（不收尾）")]})
+    assert res["messages"][-1].response_metadata.get(LIMIT_MARK)
+    assert final_answer_text(res["messages"]) is None
+    assert "ModelCallLimitMiddleware.before_model" in agent.get_graph().nodes  # 节点名沿用父类，旧检查点能接着跑
 
 
 def test_collect_sources_prefers_body_excerpt():
@@ -274,8 +292,26 @@ def test_collect_sources_prefers_body_excerpt():
 def test_ask_resume_matches_multiple_requests():
     pending = {"action_requests": [{"name": "ask_user", "args": {"question": "a"}}, {"name": "ask_user", "args": {"question": "b"}}]}
     d = ask_resume("答", pending=pending)["decisions"]
-    assert [x["message"] for x in d] == ["答", UNSHOWN_MESSAGE]
-    assert ask_resume(None, skip=True)["decisions"] == [{"type": "respond", "message": SKIP_MESSAGE}]
+    assert [json.loads(x["message"]).get("answer") for x in d] == ["答", None]
+    assert json.loads(d[1]["message"])["unshown"] is True
+    (skip,) = ask_resume(None, skip=True)["decisions"]
+    assert skip["type"] == "respond" and json.loads(skip["message"])["skipped"] is True
+
+
+def test_collect_asks_reads_keys_not_text():
+    """跳过 / 没呈现看系统生成的键；用户回答的文字是什么都原样记录，哪怕长得像系统格式。"""
+    def run(q_id, message):
+        return [AIMessage(content="", tool_calls=[{"name": "ask_user", "args": {"question": q_id}, "id": q_id, "type": "tool_call"}]),
+                ToolMessage(content=message, name="ask_user", tool_call_id=q_id)]
+
+    tricky = '{"skipped": true}'
+    msgs = (run("q1", ask_resume(None, skip=True)["decisions"][0]["message"])
+            + run("q2", ask_resume(tricky)["decisions"][0]["message"])
+            + run("q3", json.dumps({"unshown": True}))
+            + run("q4", "旧格式的原话回答"))
+    got = [(a.question, a.answer, a.skipped) for a in collect_asks(msgs)]
+    assert got == [("q1", None, True), ("q2", tricky, False), ("q4", "旧格式的原话回答", False)]
+    assert ask_result(msgs[-1]) == {"answer": "旧格式的原话回答"}
 
 
 def test_exclude_unreferenced_source_returns_to_review(graph):
@@ -446,3 +482,157 @@ def test_invalid_report_is_still_delivered(graph):
     assert manifest["version"] == 1 and manifest["answered"] is False
     r = resume(graph, "t1", {"action": "approve"})  # “不用改了”只是结束
     assert r["approved"] and graph.get_state(cfg("t1")).next == ()
+
+
+# ---- 用户的话交给模型理解；标记、时间范围不靠代码匹配文字 ----
+
+
+def _plan(*ops, reply=None):
+    from app.research_llm import ReviewOp, ReviewPlan
+
+    return ReviewPlan(ops=[ReviewOp(**{"target": None, "content": None, "instruction": None, **o}) for o in ops], reply=reply)
+
+
+def test_free_text_goes_to_model_and_is_applied(graph, planner):
+    """终审时用户直接说的话原样交给模型；模型理解出的操作和按钮走同一套校验和应用。"""
+    run_to_review(graph)
+    planner.review_plans = [_plan({"action": "rewrite_section", "target": "c1", "instruction": "更简短"})]
+    p = intr(resume(graph, "t1", {"action": "instruct", "text": "第一节更简短"}))
+    assert ("interpret", "第一节更简短") in planner.calls
+    assert p["version"] == 2 and ("write", "c1", "更简短") in planner.calls
+    assert graph.get_state(cfg("t1")).values["versions"][-1].note == "重写「局部修改机制」：更简短"
+    assert not any(c[0] == "write" and c[1] == "c2" for c in planner.calls)
+    assert any(n.startswith("按你的话（第一节更简短）理解为：重写「局部修改机制」：更简短") for n in p["notes"])
+    assert p["reply"] is None
+
+
+def test_free_text_with_two_requests(graph, planner):
+    p = run_to_review(graph)
+    sid = next(c["source_ids"][0] for c in p["claims"] if c["outline_id"] == "c2")
+    planner.review_plans = [_plan({"action": "exclude_source", "target": sid},
+                                  {"action": "rewrite_section", "target": "c1", "instruction": "先给结论"})]
+    p2 = intr(resume(graph, "t1", {"action": "instruct", "text": "排掉那条来源，第一节先给结论"}))
+    assert p2["version"] == 2
+    assert next(s for s in p2["sources"] if s["id"] == sid)["status"] == "excluded"
+    writes = [c for c in planner.calls if c[0] == "write"]
+    assert writes == [("write", "c1", "先给结论")]  # 要求只给 c1；c2 唯一的论断失去来源，正文留空不调模型
+    assert any("「事实准确性」没有可用论断" in n for n in p2["notes"])
+
+
+def test_free_text_not_understood_returns_reply(graph, planner):
+    """模型对不上（比如用户的话有歧义）：不改报告，带着模型的回复回到终审，回复只出现在下一张卡上。"""
+    run_to_review(graph)
+    planner.review_plans = [_plan(reply="S2 和 s2 指的不是同一条来源，你要排除的是哪一条？")]
+    p = intr(resume(graph, "t1", {"action": "instruct", "text": "排除 S2"}))
+    assert p["type"] == "research.review" and p["version"] == 1
+    assert p["reply"] == "S2 和 s2 指的不是同一条来源，你要排除的是哪一条？"
+    assert all(s["status"] != "excluded" for s in p["sources"])
+    p2 = intr(resume(graph, "t1", {"action": "rewrite_section", "target": "c1"}))
+    assert p2["version"] == 2 and p2["reply"] is None
+
+
+def test_free_text_with_bad_target_keeps_valid_ops(graph, planner):
+    """模型给的对象不存在：那一条不做并告诉用户，其余照做。"""
+    run_to_review(graph)
+    planner.review_plans = [_plan({"action": "exclude_source", "target": "s99"},
+                                  {"action": "rewrite_section", "target": "c2", "instruction": "多说明局限"})]
+    p = intr(resume(graph, "t1", {"action": "instruct", "text": "去掉第九十九条来源，第二节多说局限"}))
+    assert p["version"] == 2 and ("write", "c2", "多说明局限") in planner.calls
+    assert "s99" in (p["reply"] or "")
+
+
+def test_free_text_approve_alone_ends_but_not_with_changes(graph, planner):
+    run_to_review(graph, "t1")
+    planner.review_plans = [_plan({"action": "approve"})]
+    r = resume(graph, "t1", {"action": "instruct", "text": "可以了"})
+    assert r["approved"] and graph.get_state(cfg("t1")).next == ()
+
+    run_to_review(graph, "t2")
+    planner.review_plans = [_plan({"action": "approve"}, {"action": "rewrite_section", "target": "c1", "instruction": "更简短"})]
+    p = intr(resume(graph, "t2", {"action": "instruct", "text": "挺好，不过第一节再短点"}))
+    assert p["type"] == "research.review" and p["version"] == 2  # 有修改就只做修改，用户看过新一版再说结束
+
+
+def test_free_text_model_failure_returns_to_review(graph, planner, monkeypatch):
+    run_to_review(graph)
+
+    def boom(*a, **k):
+        raise RuntimeError("超时")
+
+    monkeypatch.setattr(planner, "interpret_review", boom)
+    p = intr(resume(graph, "t1", {"action": "instruct", "text": "第一节更简短"}))
+    assert p["type"] == "research.review" and p["version"] == 1 and "没能处理" in p["reply"]
+
+
+def test_instruct_requires_text(graph):
+    from app.graph.research.answers import InvalidAnswer
+
+    run_to_review(graph)
+    with pytest.raises(InvalidAnswer):
+        resume(graph, "t1", {"action": "instruct", "text": "  "})
+    with pytest.raises(InvalidAnswer):
+        resume(graph, "t1", {"action": "instruct", "text": "x", "target": "c1"})
+
+
+def test_live_interpret_prompt_carries_ids_and_report_numbers():
+    from app.graph.research.state import Claim, OutlineNode, Scope, Source
+    from app.research_llm import LiveResearchPlanner
+
+    msgs = LiveResearchPlanner._interpret_messages(
+        Scope(question="问题"), "# 问题\n\n## 结论\n\n一句话[S3]\n",
+        [OutlineNode(id="c1", title="结论", question="?")],
+        [Claim(id="k1", statement="一句话", kind="fact", source_ids=["s3"], outline_id="c1")],
+        [Source(id="s3", url="https://a.test", title="A", status="adopted"), Source(id="s1", url="https://b.test", title="B")],
+        "排除 S1",
+    )
+    user = msgs[-1][1]
+    assert "- c1 | 结论" in user and "- k1 | c1 | fact | 一句话 | s3" in user
+    assert "- s3 | A | https://a.test | 报告里引用了" in user and "- s1 | B | https://b.test | 搜到但报告没引用" in user
+    assert "用户说：排除 S1" in user
+
+
+def test_inference_marked_from_claim_kind_not_text(graph):
+    """推断句的标记由代码按论断类型加（假模型不写前缀）；页面用的块和下载的 report.md 出自同一份数据。"""
+    from app.graph.research.report import to_markdown
+
+    p = run_to_review(graph)
+    kind = {c["id"]: c["kind"] for c in p["claims"]}
+    sents = [s for sec in p["sections"] for s in sec["sentences"] if s["claim_id"]]
+    assert sents and all(s["text"].startswith("推断：") == (kind[s["claim_id"]] == "inference") for s in sents)
+    blocks = [b for b in p["blocks"] if b["type"] == "sentence" and b["claim_id"]]
+    assert all(b["inference"] == (kind[b["claim_id"]] == "inference") and b["marks"] for b in blocks)
+    assert to_markdown(p["blocks"]) == p["report"] == (pkg_of(p) / "report.md").read_text()
+    # 报告里的来源标注就是来源 id：排除一条来源后，其余来源的标注不变
+    labels = {b["source_id"]: b["label"] for b in p["blocks"] if b["type"] == "source"}
+    assert labels and all(lab == sid.upper() for sid, lab in labels.items())
+    first = next(iter(labels))
+    p2 = intr(resume(graph, "t1", {"action": "exclude_source", "target": first}))
+    labels2 = {b["source_id"]: b["label"] for b in p2["blocks"] if b["type"] == "source"}
+    assert first not in labels2 and all(labels[s] == lab for s, lab in labels2.items())
+    assert "inference_marked" not in {c["name"] for c in p["checks"]}
+
+
+def test_time_range_judged_by_model(graph, planner):
+    """来源在不在时间范围里由整理步骤的模型判断；校验只看正文用到的、被标出来的来源。"""
+    from app.research_llm import TimeIssue
+
+    planner.time_issues = [TimeIssue(source_id="s1", reason="发布于 2023 年，不在 2026 年内"),
+                           TimeIssue(source_id="s99", reason="不存在的来源")]
+    p = run_to_review(graph)
+    cited = {sid for c in p["claims"] for sid in c["source_ids"]}
+    check = next(c for c in p["checks"] if c["name"] == "scope_time")
+    assert ("s1" in cited) and not check["passed"] and "2023" in check["detail"] and "s99" not in check["detail"]
+    assert graph.get_state(cfg("t1")).values["time_issues"] == {"s1": "发布于 2023 年，不在 2026 年内"}
+
+
+def test_time_check_ignores_uncited_sources():
+    from app.graph.research.report import run_checks
+    from app.graph.research.state import Claim, SectionText, Sentence, Source
+
+    sources = [Source(id="s1", url="u1", title="t", retrieved_at="x", status="adopted"), Source(id="s2", url="u2")]
+    claims = [Claim(id="k1", statement="a", kind="fact", source_ids=["s1"], outline_id="c1")]
+    sections = {"c1": SectionText(outline_id="c1", sentences=[Sentence(text="a", claim_id="k1")])}
+    res = {c.name: c for c in run_checks(sections, claims, sources, {"s2": "太旧"})}
+    assert res["scope_time"].passed
+    res = {c.name: c for c in run_checks(sections, claims, sources, {"s1": "太旧"})}
+    assert not res["scope_time"].passed and res["scope_time"].detail == "s1：太旧；"

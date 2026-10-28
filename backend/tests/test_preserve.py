@@ -43,7 +43,7 @@ def test_t2_edit_headline_changes_only_headline(graph, planner):
     assert last_compose[1] == ("headline",)
     # 像素层面：headline 框以外完全一致
     assert _diff_outside_bbox(v1.png_path, v2.png_path, v2.layout["headline"]["bbox"]) == 0
-    assert v2.note.startswith("修改 headline")
+    assert v2.note.startswith("修改主标题")
 
 
 def test_t4_manual_edit_is_never_overwritten(graph):

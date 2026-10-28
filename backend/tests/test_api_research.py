@@ -85,6 +85,31 @@ def test_research_flow_over_http(client):
     assert st["next"] == [] and st["package"]["version"] == 2 and st["interrupt"] is None
 
 
+def test_free_text_review_over_http(client):
+    """终审时直接说的话原样回传（instruct），后端交给模型理解；页面用的报告块在卡和线程状态里都有。"""
+    from app.research_llm import ReviewOp, ReviewPlan
+
+    runner = api_main.research()
+    ev = _events(client.post("/api/research/threads", json={"request": "AI 海报工具在局部修改上的现状（2026）"}))
+    ev = _events(_resume(client, _last(ev, "state"), {"answers": {"q1": "改文字"}}))
+    ev = _events(_resume(client, _last(ev, "state"), {"answer": "包含"}))
+    st = _last(ev, "state")
+    blocks = st["interrupt"]["blocks"]
+    assert blocks == st["report_blocks"] and blocks[0]["type"] == "title" and any(b["type"] == "sentence" for b in blocks)
+
+    runner.planner.review_plans = [ReviewPlan(ops=[], reply="你说的是哪一节？")]
+    ev = _events(_resume(client, st, {"action": "instruct", "text": "改短点"}))
+    st = _last(ev, "state")
+    assert any(e == "node" and d["node"] == "interpret" for e, d in ev)
+    assert st["interrupt"]["version"] == 1 and st["interrupt"]["reply"] == "你说的是哪一节？"
+
+    runner.planner.review_plans = [ReviewPlan(ops=[ReviewOp(action="rewrite_section", target="c1", content=None, instruction="更简短")],
+                                              reply=None)]
+    ev = _events(_resume(client, st, {"action": "instruct", "text": "第一节"}))
+    st = _last(ev, "state")
+    assert st["interrupt"]["version"] == 2 and st["interrupt"]["reply"] is None and st["package"]["version"] == 2
+
+
 def test_invalid_answer_rejected_before_graph(client):
     st = _last(_events(client.post("/api/research/threads", json={"request": "AI 海报工具在局部修改上的现状"})), "state")
     r = _resume(client, st, {"answers": {"nope": "x"}})

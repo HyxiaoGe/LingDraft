@@ -1,5 +1,5 @@
 // 调研场景：问题卡的构造 + 助手回复里的结果渲染。卡片结构与海报共用（见 App.jsx 的 QuestionCard）。
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 
 export const RESEARCH_DEFAULT = "AI 海报工具在局部修改和事实准确性上的现状（2026），只看中文信源";
 const CKIND = { fact: "事实", inference: "推断" };
@@ -68,7 +68,9 @@ export function retryCard(retry) {
 // ---- 终审：报告已经交付，这里只是可选的修改 ----
 function reviewCard(it, st, resume, setCard) {
   const failed = (name) => (it.checks || []).some((c) => c.name === name && !c.passed);
-  const title = failed("report_valid") ? `第 ${it.version} 版报告里没有带来源的论断`
+  // reply：上一句话模型没能完全对上时的回复，放在标题上让用户接着说
+  const title = it.reply ? it.reply
+    : failed("report_valid") ? `第 ${it.version} 版报告里没有带来源的论断`
     : failed("question_answered") ? `第 ${it.version} 版报告好了，但没有完全回答问题，有要改的吗？`
     : `第 ${it.version} 版报告好了，有要改的吗？`;
   return {
@@ -82,7 +84,7 @@ function reviewCard(it, st, resume, setCard) {
     ],
     customPlaceholder: "或直接说要改什么，例如：第一节更简短",
     onAnswer: (v, isCustom) => {
-      if (isCustom) return routeResearchText(v, st, resume, setCard), null;
+      if (isCustom) return routeResearchText(v, st, resume), null;
       if (v === "approve") return (resume({ action: "approve" }, "不用改了"), null);
       if (v === "source") return pickSourceCard(it, resume);
       if (v === "claim") return pickClaimCard(it, (c) => claimCard(c, it, resume));
@@ -151,9 +153,9 @@ export function sourceCard(s, resume) {
   };
 }
 
-function pickSectionCard(it, next, instruction) {
+function pickSectionCard(it, next) {
   return {
-    title: instruction ? `“${instruction}”是改哪一节？` : "重写哪一节？",
+    title: "重写哪一节？",
     page: "2/3",
     options: it.sections.map((s) => ({ label: s.title, hint: `${s.sentences.length} 句`, value: s.id })),
     onAnswer: (id) => next(it.sections.find((s) => s.id === id)),
@@ -174,16 +176,10 @@ function instructionCard(sec, resume) {
   };
 }
 
-// 终审阶段的自由文本：能对上节标题就重写那一节，否则反问改哪一节
-export function routeResearchText(text, st, resume, setCard) {
+// 终审阶段的自由文本：原话交给后端，由模型理解成要改什么；对不上时模型的回复会出现在下一张卡的标题上
+export function routeResearchText(text, st, resume) {
   const t = text.trim();
-  if (!t) return;
-  const it = st.interrupt;
-  const sec = it.sections.find((s) => t.includes(s.title));
-  if (sec) return resume({ action: "rewrite_section", target: sec.id, instruction: t }, t);
-  const m = t.match(/排除.*?(s\d+)/);
-  if (m) return resume({ action: "exclude_source", target: m[1] }, t);
-  setCard(pickSectionCard(it, (s) => (resume({ action: "rewrite_section", target: s.id, instruction: t }, t), null), t));
+  if (t) resume({ action: "instruct", text: t }, t);
 }
 
 // ---------------- 结果渲染 ----------------
@@ -217,20 +213,15 @@ const CHECK_LABEL = {
 
 function ReviewBody({ st, it, live, onCard, resume }) {
   const [tab, setTab] = useState("report");
-  const [finalText, setFinalText] = useState(null);
   const versions = st.versions || [];
   const last = versions[versions.length - 1];
-  useEffect(() => {
-    if (!it && last?.md_url) fetch(last.md_url).then((r) => r.text()).then(setFinalText).catch(() => {});
-  }, [it, last?.md_url]);
-  const report = it?.report || finalText;
+  const blocks = it?.blocks || st.report_blocks; // 旧的终审卡里没有 blocks，用线程当前状态现算的
   const claims = it?.claims || st.claims || [];
   const sources = it?.sources || st.sources || [];
   const sections = it?.sections || st.outline || [];
   const act = live && it ? it : null; // 能点着改的卡
   const checks = it?.checks || st.checks || [];
   const failed = checks.filter((c) => !c.passed);
-  const byId = Object.fromEntries(sources.map((s) => [s.id, s]));
   const notes = [...new Set(it?.notes || st.notes || [])];
   return (
     <>
@@ -242,7 +233,7 @@ function ReviewBody({ st, it, live, onCard, resume }) {
         ))}
         {versions.length > 1 && <span className="vnote">v{versions.length} · 共 {versions.length} 版</span>}
       </div>
-      {tab === "report" && (report ? <Report text={report} byId={byId} /> : last && <p><a href={last.md_url} target="_blank" rel="noreferrer">打开 report_v{last.n}.md</a></p>)}
+      {tab === "report" && (blocks?.length ? <Report blocks={blocks} /> : last && <p><a href={last.md_url} target="_blank" rel="noreferrer">打开 report_v{last.n}.md</a></p>)}
       {tab === "claims" && (
         <div className="claims">
           {sections.map((sec) => (
@@ -305,23 +296,18 @@ function ClaimRow({ c, onClick }) {
   );
 }
 
-// 极简 markdown：标题 / 列表 / 段落；[Sn] 变成角标并带来源标题
-function Report({ text, byId }) {
-  const lines = text.split("\n");
-  const out = [];
-  lines.forEach((line, i) => {
-    if (!line.trim()) return;
-    if (line.startsWith("# ")) return out.push(<h2 key={i}>{line.slice(2)}</h2>);
-    if (line.startsWith("## ")) return out.push(<h3 key={i}>{line.slice(3)}</h3>);
-    if (line.startsWith("> ")) return out.push(<p key={i} className="notice">{line.slice(2)}</p>);
-    if (line.startsWith("- ")) return out.push(<li key={i}>{line.slice(2)}</li>);
-    if (/^\[S\d+\]/.test(line)) return out.push(<div className="srcline" key={i}>{line}</div>);
-    out.push(<p key={i} className={line.startsWith("推断：") ? "inf" : ""}>{withMarks(line)}</p>);
+// 报告按后端给的结构化块渲染（和 report.md 出自同一份数据）：哪句是推断、挂哪些来源都由论断决定，不解析文字
+function Report({ blocks }) {
+  const out = blocks.map((b, i) => {
+    if (b.type === "title") return <h2 key={i}>{b.text}</h2>;
+    if (b.type === "heading") return <h3 key={i}>{b.text}</h3>;
+    if (b.type === "notice") return <p key={i} className="notice">{b.text}</p>;
+    if (b.type === "scope") return <p key={i}>{b.text}</p>;
+    if (b.type === "item") return <li key={i}>{b.text}</li>;
+    if (b.type === "source") return <div className="srcline" key={i}>[{b.label}] {b.title} — {b.url}{b.meta ? `（${b.meta}）` : ""}</div>;
+    if (b.type === "sentence")
+      return <p key={i} className={b.inference ? "inf" : ""}>{b.text}{b.marks.map((m) => <sup key={m} className="mark">{m}</sup>)}</p>;
+    return null;
   });
   return <div className="report">{out}</div>;
-}
-
-function withMarks(line) {
-  const parts = line.split(/(\[S\d+\])/);
-  return parts.map((p, i) => (/^\[S\d+\]$/.test(p) ? <sup key={i} className="mark">{p.slice(1, -1)}</sup> : p));
 }

@@ -1,25 +1,27 @@
-"""渲染后的确定性校验：事实逐字比对、违禁词、溢出。不调用模型。"""
+"""渲染后的校验：事实逐字比对、溢出是确定性的；文案合规（绝对化用语、数字承诺、和事实冲突）交给模型判断。"""
 from __future__ import annotations
-
-import re
-from pathlib import Path
 
 from app.graph.poster.state import TEXT_KINDS, CheckResult, Element, Fact
 
-_WORDS_FILE = Path(__file__).parent / "forbidden_words.txt"
+
+def free_copy(elements: list[Element], layout: dict) -> dict[str, str]:
+    """要做合规检查的文案：不绑定事实的文本槽位上实际渲染出的文字。"""
+    out = {}
+    for e in elements:
+        if e.kind in TEXT_KINDS and not e.bound_fact and e.slot in layout:
+            text = (layout[e.slot].get("text") or "").strip()
+            if text:
+                out[e.slot] = text
+    return out
 
 
-def load_forbidden_words() -> list[str]:
-    return [w.strip() for w in _WORDS_FILE.read_text(encoding="utf-8").splitlines() if w.strip()]
-
-
-def run_checks(elements: list[Element], facts: dict[str, Fact], layout: dict, forbidden: list[str] | None = None) -> list[CheckResult]:
-    forbidden = load_forbidden_words() if forbidden is None else forbidden
+def run_checks(elements: list[Element], facts: dict[str, Fact], layout: dict, copy_issues: list | None) -> list[CheckResult]:
+    """copy_issues 是模型合规检查报告的问题（slot, problem）；None 表示检查没能完成。"""
     by_slot = {e.slot: e for e in elements}
     results: list[CheckResult] = []
 
     # 1) 事实绑定元素：渲染出的文本必须与已确认事实逐字一致
-    mismatches = []
+    mismatches, bad = [], []
     for slot, info in layout.items():
         e = by_slot.get(slot)
         if not e or not e.bound_fact:
@@ -27,28 +29,21 @@ def run_checks(elements: list[Element], facts: dict[str, Fact], layout: dict, fo
         expected = (facts[e.bound_fact].value or "").strip()
         if info.get("text", "") != expected:
             mismatches.append(f"{e.id}: 渲染='{info.get('text')}' 事实='{expected}'")
-    results.append(CheckResult(name="fact_match", passed=not mismatches, detail="; ".join(mismatches)))
+            bad.append(slot)
+    results.append(CheckResult(name="fact_match", passed=not mismatches, detail="; ".join(mismatches), slots=bad))
 
-    # 2) 违禁词（广告法绝对化用语）
-    hits = []
-    for slot, info in layout.items():
-        text = info.get("text", "")
-        for w in forbidden:
-            if w and w in text:
-                hits.append(f"{slot} 含“{w}”")
-    results.append(CheckResult(name="forbidden_words", passed=not hits, detail="; ".join(hits)))
+    # 2) 文案合规：价格 / 折扣 / 日期只能从事实槽位展示，否则事实改了文案会留下旧数字；不能用绝对化用语
+    if copy_issues is None:
+        results.append(CheckResult(name="copy_compliance", passed=False, detail="合规检查没能完成，请自己看一下文案"))
+    else:
+        results.append(CheckResult(
+            name="copy_compliance", passed=not copy_issues,
+            detail="; ".join(f"{i.slot}：{i.problem}" for i in copy_issues), slots=[i.slot for i in copy_issues],
+        ))
 
-    # 3) 自由文案里不得出现数字：价格 / 折扣 / 日期只能从事实槽位展示，否则事实改了文案会留下旧数字
-    echoes = []
-    for slot, info in layout.items():
-        e = by_slot.get(slot)
-        if e and e.kind in TEXT_KINDS and not e.bound_fact and re.search(r"\d", info.get("text", "")):
-            echoes.append(f"{e.id}: '{info.get('text')}'")
-    results.append(CheckResult(name="no_numbers_in_copy", passed=not echoes, detail="; ".join(echoes)))
-
-    # 4) 溢出：自动缩字到下限后仍放不下
+    # 3) 溢出：自动缩字到下限后仍放不下
     overflow = [slot for slot, info in layout.items() if info.get("overflow")]
-    results.append(CheckResult(name="overflow", passed=not overflow, detail="溢出槽位: " + ", ".join(overflow) if overflow else ""))
+    results.append(CheckResult(name="overflow", passed=not overflow, detail="溢出槽位: " + ", ".join(overflow) if overflow else "", slots=overflow))
     return results
 
 
@@ -60,10 +55,8 @@ def constraints_from(results: list[CheckResult]) -> list[str]:
             continue
         if r.name == "overflow":
             out.append(f"文案过长导致溢出（{r.detail}），请明显缩短对应槽位的文案")
-        elif r.name == "forbidden_words":
-            out.append(f"存在违禁词（{r.detail}），请换用非绝对化表述")
-        elif r.name == "no_numbers_in_copy":
-            out.append(f"文案里出现了数字（{r.detail}），折扣 / 价格 / 日期已有独立槽位，请把数字从这些文案中去掉")
+        elif r.name == "copy_compliance" and r.slots:
+            out.append(f"文案不合规（{r.detail}），请改写对应槽位：不用绝对化用语，价格 / 折扣 / 日期已有独立槽位，不要写进文案")
         elif r.name == "fact_match":
             out.append(f"事实文本不一致（{r.detail}）")
     return out

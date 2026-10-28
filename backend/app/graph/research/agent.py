@@ -35,7 +35,7 @@ from app.graph.research.state import (
 )
 
 EXCERPT_CHARS = 400
-LIMIT_EXCEEDED_PREFIX = "Model call limits exceeded"
+LIMIT_MARK = "lingdraft_call_limit"  # 调用超限时中间件注入的那条消息带这个标记，不是模型的答案
 EXHAUSTED_NOTE = "（系统）以下工具的额度已用完，不再提供：{names}。请基于已有材料继续或直接作答。"
 ASK_BLOCKED = "ask_user_over_budget"  # 超额的 ask_user 调用改成这个名字，HITL 中间件就不会再把它变成问题卡
 DANGLING_NOTE = "（系统）这个工具调用没有被执行：工具已不可用或参数无法解析。"
@@ -66,7 +66,7 @@ class ToolBudgetMiddleware(AgentMiddleware):
     同一批里发多个调用也算额度（第 9 个搜索不会因为前 8 个还没执行就放过）。
     ask_user 由 HITL 中间件在执行前拦截、执行层拦不到，所以超额的提问在 after_model 里改名——
     本中间件排在 HITL 之后，after_model 反序执行，先于 HITL 看到这条消息。
-    提问只算呈现给了用户的：同一批里多出来的提问没呈现（UNSHOWN_MESSAGE），不占额度。
+    提问只算呈现给了用户的：同一批里多出来的提问没呈现（结果里标了 unshown），不占额度。
     """
 
     def __init__(self, limits: dict[str, int]) -> None:
@@ -132,6 +132,30 @@ class ToolBudgetMiddleware(AgentMiddleware):
         return handler(request)
 
 
+class CallLimitMiddleware(ModelCallLimitMiddleware):
+    """超限时父类会注入一条说明消息再结束；这里给它打上标记，识别时看标记，不看消息文字。"""
+
+    @property
+    def name(self) -> str:
+        return "ModelCallLimitMiddleware"  # 节点名沿用父类的，已有检查点里的 agent 子图才能接着跑
+
+    @hook_config(can_jump_to=["end"])
+    def before_model(self, state, runtime) -> dict[str, Any] | None:
+        out = super().before_model(state, runtime)
+        if out and out.get("messages"):
+            out["messages"] = [m.model_copy(update={"response_metadata": {**m.response_metadata, LIMIT_MARK: True}})
+                               for m in out["messages"]]
+        return out
+
+    @hook_config(can_jump_to=["end"])
+    async def abefore_model(self, state, runtime) -> dict[str, Any] | None:
+        return self.before_model(state, runtime)
+
+
+def is_limit_message(m: BaseMessage) -> bool:
+    return isinstance(m, AIMessage) and bool(m.response_metadata.get(LIMIT_MARK))
+
+
 class _RetryState(AgentState):
     invalid_retries: NotRequired[int]
 
@@ -169,7 +193,7 @@ def build_agent(model: BaseChatModel, tools: list, system_prompt: str, *, ask_li
         ToolProgressMiddleware(),
         ToolBudgetMiddleware(limits),
         InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
-        ModelCallLimitMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end"),
+        CallLimitMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end"),
     ]
     return create_agent(
         model=model,
@@ -191,7 +215,7 @@ def final_answer_text(messages: list[BaseMessage]) -> str | None:
             text = m.content if isinstance(m.content, str) else "".join(
                 b.get("text", "") for b in m.content if isinstance(b, dict)
             )
-            if m.tool_calls or m.invalid_tool_calls or not text.strip() or text.startswith(LIMIT_EXCEEDED_PREFIX):
+            if m.tool_calls or m.invalid_tool_calls or not text.strip() or is_limit_message(m):
                 continue
             return text.strip()
     return None
@@ -214,7 +238,7 @@ def answer_dangling_calls(messages: list[BaseMessage]) -> list[BaseMessage]:
 
 def close_out(model: BaseChatModel, messages: list[BaseMessage]) -> tuple[str | None, str]:
     """不带工具再要一次答案。返回 (文字或 None, 说明)。"""
-    convo = [m for m in messages if not (isinstance(m, AIMessage) and str(m.content).startswith(LIMIT_EXCEEDED_PREFIX))]
+    convo = [m for m in messages if not is_limit_message(m)]
     convo = answer_dangling_calls(convo) + [HumanMessage(prompts.CLOSE_PROMPT)]
     last_err = ""
     for i in range(CLOSE_RETRIES):
@@ -248,18 +272,29 @@ def ask_view(value: dict) -> dict:
     }
 
 
-SKIP_MESSAGE = "（用户跳过了这个问题。按你的最佳判断继续：关键条件未知就给条件式结论并写明假设，不要把猜测写成确定的推荐。）"
-UNSHOWN_MESSAGE = "（这个问题没有呈现给用户：一次只能问一个问题。按你的最佳判断处理，并在答案末尾写明假设。）"
+SKIP_NOTE = "用户跳过了这个问题。按你的最佳判断继续：关键条件未知就给条件式结论并写明假设，不要把猜测写成确定的推荐。"
+UNSHOWN_NOTE = "这个问题没有呈现给用户：一次只能问一个问题。按你的最佳判断处理，并在答案末尾写明假设。"
+
+
+def _reply(**fields) -> str:
+    """ask_user 的工具结果由系统生成：用户的回答、跳过、没呈现分别是不同的键，读回来时看键，不看文字。"""
+    return json.dumps(fields, ensure_ascii=False)
 
 
 def ask_resume(answer: str | None, skip: bool = False, pending: dict | None = None) -> dict:
     """用户的回答 → 中间件的 decisions。模型若违反“一次只问一个”在同一步发了多个 ask_user，
     只有第一个呈现给了用户，其余按未呈现处理（decisions 数量必须与 action_requests 一致）。"""
-    message = SKIP_MESSAGE if skip or not (answer or "").strip() else answer.strip()
+    message = _reply(skipped=True, note=SKIP_NOTE) if skip or not (answer or "").strip() else _reply(answer=answer.strip())
     n = len(pending.get("action_requests") or []) if pending else 1
     decisions = [{"type": "respond", "message": message}]
-    decisions += [{"type": "respond", "message": UNSHOWN_MESSAGE} for _ in range(max(n, 1) - 1)]
+    decisions += [{"type": "respond", "message": _reply(unshown=True, note=UNSHOWN_NOTE)} for _ in range(max(n, 1) - 1)]
     return {"decisions": decisions}
+
+
+def ask_result(m: ToolMessage) -> dict:
+    """读回 ask_user 的工具结果。不是系统生成的格式就按用户原话处理。"""
+    data = _parse(m)
+    return data if isinstance(data, dict) else {"answer": str(m.content).strip()}
 
 
 # ---- 从工具消息里解析候选来源 ----
@@ -324,17 +359,17 @@ def collect_asks(messages: list[BaseMessage]) -> list[AskRecord]:
             res = results.get(tc["id"])
             if tc["name"] != "ask_user" or res is None:
                 continue
-            content = str(res.content).strip()
-            if content == UNSHOWN_MESSAGE or res.status == "error":
+            data = ask_result(res)
+            if data.get("unshown") or res.status == "error":
                 continue
             q = str((tc.get("args") or {}).get("question") or "").strip()
             # 只有卡片上的“跳过”按钮算跳过（载荷里有明确标记）；自由文本原样记录，哪些条件算确认由整理步骤判断
-            if content == SKIP_MESSAGE:
+            if data.get("skipped"):
                 out.append(AskRecord(question=q, answer=None, skipped=True))
             else:
-                out.append(AskRecord(question=q, answer=content))
+                out.append(AskRecord(question=q, answer=str(data.get("answer") or "")))
     return out
 
 
 def _unshown(m: ToolMessage) -> bool:
-    return m.name == "ask_user" and str(m.content).strip() == UNSHOWN_MESSAGE
+    return m.name == "ask_user" and bool(ask_result(m).get("unshown"))

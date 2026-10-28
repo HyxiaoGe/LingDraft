@@ -13,6 +13,9 @@
              {"action": "approve"}（不用改了，结束） | {"action": "exclude_source", "target": "s2"}
              | {"action": "edit_claim", "target": "k1", "content": "..."}
              | {"action": "rewrite_section", "target": "c1", "instruction": "..."}
+             | {"action": "instruct", "text": "用户原话"}（交给模型理解成上面几种操作）
+
+海报终审除了按钮的几种操作，也可以 {"action": "instruct", "text": "用户原话"}，由模型理解成改文案 / 改事实 / 换风格 / 导出。
 """
 
 from __future__ import annotations

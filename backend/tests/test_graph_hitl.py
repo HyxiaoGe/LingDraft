@@ -120,10 +120,10 @@ def test_check_failure_retries_plan_layout_with_constraints(planner, out_dir, mo
     calls = {"n": 0}
     real = checks_mod.run_checks
 
-    def always_overflow(elements, facts, layout, forbidden=None):
+    def always_overflow(elements, facts, layout, copy_issues):
         calls["n"] += 1
-        res = real(elements, facts, layout, forbidden)
-        return [r.model_copy(update={"passed": False, "detail": "溢出槽位: headline"}) if r.name == "overflow" else r for r in res]
+        res = real(elements, facts, layout, copy_issues)
+        return [r.model_copy(update={"passed": False, "detail": "溢出槽位: headline", "slots": ["headline"]}) if r.name == "overflow" else r for r in res]
 
     monkeypatch.setattr(checks_mod, "run_checks", always_overflow)
     graph = build_graph(planner, memory_checkpointer(), out_dir)
@@ -168,3 +168,172 @@ def test_manual_edit_of_bound_element_is_refused_without_new_version(graph):
     payload = interrupt_of(r)
     assert payload["version"] == 1 and any("change_fact" in n for n in payload["notes"])
     assert _state(graph, "tmb")["facts"]["offer"].value == "5 折"
+
+
+def test_failure_only_in_slots_model_cannot_rewrite_is_not_retried(graph, planner):
+    """只有事实槽位或用户改过的文案出问题时，重写也改不到它们：不重试，直接如实给用户看。"""
+    from app.llm import CopyIssue
+
+    run_to_review(graph, "tnr")
+    planner.copy_issues = [[CopyIssue(slot="headline", problem="绝对化用语")]]
+    r = resume(graph, "tnr", {"action": "manual_edit", "target": "headline", "content": "全网最低"})
+    payload = interrupt_of(r)
+    assert payload["version"] == 2  # 没有为它重试
+    assert not {c["name"]: c for c in payload["checks"]}["copy_compliance"]["passed"]
+
+
+def test_compliance_issue_in_model_copy_retries_with_constraint(graph, planner):
+    from app.llm import CopyIssue
+
+    planner.copy_issues = [[CopyIssue(slot="headline", problem="含绝对化用语")]]
+    payload = run_to_review(graph, "tcc")
+    composes = [c for c in planner.calls if c[0] == "compose"]
+    assert len(composes) == 2 and "headline：含绝对化用语" in composes[1][3][0]
+    assert payload["version"] == 2 and all(c["passed"] for c in payload["checks"])
+    checked = [c[1] for c in planner.calls if c[0] == "check_copy"]
+    assert set(checked[0]) == {"headline", "subhead", "cta"}  # 只查不绑定事实的文案（这个需求没给行动号召，cta 由模型写）
+
+
+def test_compliance_check_failure_does_not_block(graph, planner, monkeypatch):
+    def boom(facts, copy):
+        raise RuntimeError("模型挂了")
+
+    monkeypatch.setattr(planner, "check_copy", boom)
+    payload = run_to_review(graph, "tcf")
+    assert payload["version"] == 1
+    c = {c["name"]: c for c in payload["checks"]}["copy_compliance"]
+    assert not c["passed"] and "没能完成" in c["detail"]
+
+
+# ---- 终审时用户直接说的话 ----
+
+
+def _plan(*ops, reply=None):
+    from app.llm import PosterOp, PosterPlan
+
+    full = [PosterOp(**{"target": None, "instruction": None, "content": None, **o}) for o in ops]
+    return PosterPlan(ops=full, reply=reply)
+
+
+def test_instruct_edits_several_elements_in_one_version(graph, planner):
+    run_to_review(graph, "ti1")
+    planner.review_plans = [_plan(
+        {"action": "edit", "target": "headline", "instruction": "更短"},
+        {"action": "manual_edit", "target": "subhead", "content": "限时好礼"},
+    )]
+    r = resume(graph, "ti1", {"action": "instruct", "text": "标题短一点，副标题就写限时好礼"})
+    payload = interrupt_of(r)
+    assert ("interpret", "标题短一点，副标题就写限时好礼") in planner.calls
+    assert payload["version"] == 2 and payload["reply"] is None
+    els = {e.id: e for e in _state(graph, "ti1")["elements"]}
+    assert els["headline"].content == "黑五来了"
+    assert els["subhead"].content == "限时好礼" and els["subhead"].status == "user_edited"
+    assert _state(graph, "ti1")["versions"][-1].note == "修改主标题：更短；副标题改成“限时好礼”"
+    # 模型收到的是终审卡上的元素视图和用户原话
+    assert [c for c in planner.calls if c[0] == "compose"][-1][2] == "更短"
+
+
+def test_instruct_fact_change_prefills_fact_card(graph, planner):
+    run_to_review(graph, "ti2")
+    planner.review_plans = [_plan({"action": "change_fact", "target": "offer", "content": "6 折"})]
+    r = resume(graph, "ti2", {"action": "instruct", "text": "折扣改成 6 折"})
+    payload = interrupt_of(r)
+    assert payload["type"] == "confirm_facts"
+    offer = {f["key"]: f for f in payload["fields"]}["offer"]
+    assert offer["value"] == "6 折" and offer["source"] == "proposed" and offer["previous"] == "5 折"
+    assert _state(graph, "ti2")["facts"]["offer"].value == "5 折"  # 还没确认，事实不变
+    values = {f["key"]: f["value"] for f in payload["fields"]}
+    r = resume(graph, "ti2", {"values": values})
+    payload = interrupt_of(r)
+    assert payload["type"] == "review" and _state(graph, "ti2")["facts"]["offer"].value == "6 折"
+    assert _state(graph, "ti2")["fact_proposals"] == {}
+
+
+def test_instruct_style_change_and_approve(graph, planner):
+    run_to_review(graph, "ti3")
+    planner.review_plans = [_plan({"action": "change_style", "instruction": "极简白底"}), _plan({"action": "approve"})]
+    before = {e.id: e.content for e in _state(graph, "ti3")["elements"]}
+    r = resume(graph, "ti3", {"action": "instruct", "text": "换成极简白底"})
+    payload = interrupt_of(r)
+    assert payload["type"] == "review" and payload["style"]["name"] == "极简白底"
+    assert {e.id: e.content for e in _state(graph, "ti3")["elements"]} == before
+    r = resume(graph, "ti3", {"action": "instruct", "text": "可以了"})
+    assert r["exported"] and not r.get("__interrupt__")
+
+
+def test_instruct_mixed_does_copy_first_and_says_what_was_left(graph, planner):
+    run_to_review(graph, "ti4")
+    planner.review_plans = [_plan(
+        {"action": "edit", "target": "headline", "instruction": "更有紧迫感"},
+        {"action": "change_fact", "target": "offer", "content": "6 折"},
+        {"action": "approve"},
+    )]
+    r = resume(graph, "ti4", {"action": "instruct", "text": "标题更紧迫，折扣改 6 折，然后就导出"})
+    payload = interrupt_of(r)
+    assert payload["type"] == "review" and payload["version"] == 2
+    assert "改事实这次没做" in payload["reply"]
+    assert _state(graph, "ti4")["facts"]["offer"].value == "5 折"
+
+
+def test_instruct_invalid_ops_are_reported_not_applied(graph, planner):
+    run_to_review(graph, "ti5")
+    planner.review_plans = [_plan(
+        {"action": "edit", "target": "offer", "instruction": "改成 6 折"},  # 事实元素
+        {"action": "edit", "target": "logo", "instruction": "大一点"},  # 不存在
+        {"action": "edit", "target": "headline"},  # 缺 instruction
+    )]
+    r = resume(graph, "ti5", {"action": "instruct", "text": "随便说的"})
+    payload = interrupt_of(r)
+    assert payload["type"] == "review" and payload["version"] == 1
+    assert "优惠显示的是事实" in payload["reply"] and "“logo”" in payload["reply"] and "没理解完整" in payload["reply"]
+    # 下一次回答后 reply 清空
+    planner.review_plans = [_plan({"action": "approve"})]
+    resume(graph, "ti5", {"action": "instruct", "text": "导出"})
+    assert _state(graph, "ti5")["review_reply"] is None
+
+
+def test_instruct_unmatched_or_question_returns_reply(graph, planner):
+    run_to_review(graph, "ti6")
+    planner.review_plans = [_plan(reply="这版标题用的是促销口吻。想改哪一处可以直接说。")]
+    r = resume(graph, "ti6", {"action": "instruct", "text": "标题为什么这么写"})
+    payload = interrupt_of(r)
+    assert payload["type"] == "review" and payload["version"] == 1
+    assert payload["reply"].startswith("这版标题")
+
+
+def test_instruct_model_failure_returns_to_review(graph, planner, monkeypatch):
+    run_to_review(graph, "ti7")
+
+    def boom(*a, **k):
+        raise RuntimeError("模型挂了")
+
+    monkeypatch.setattr(planner, "interpret_review", boom)
+    r = resume(graph, "ti7", {"action": "instruct", "text": "标题短一点"})
+    payload = interrupt_of(r)
+    assert payload["type"] == "review" and payload["version"] == 1 and "没能处理" in payload["reply"]
+
+
+def test_instruct_payload_is_validated(graph):
+    run_to_review(graph, "ti8")
+    with pytest.raises(ValueError):
+        resume(graph, "ti8", {"action": "instruct", "text": "  "})
+    with pytest.raises(ValueError):
+        resume(graph, "ti8", {"action": "instruct", "text": "改标题", "target": "headline"})
+    with pytest.raises(ValueError):
+        resume(graph, "ti8", {"action": "approve", "text": "好"})
+
+
+def test_retry_budget_restarts_after_each_user_action(graph, planner):
+    """不能重试的失败不消耗重试次数；用户每次操作后重新计数。"""
+    from app.llm import CopyIssue
+
+    run_to_review(graph, "trb")
+    resume(graph, "trb", {"action": "manual_edit", "target": "subhead", "content": "全网第一"})
+    planner.copy_issues = [[CopyIssue(slot="subhead", problem="绝对化")]] * 3
+    resume(graph, "trb", {"action": "manual_edit", "target": "subhead", "content": "全网第一好"})
+    assert _state(graph, "trb")["retry_count"] == 0  # subhead 是用户改的，不重试也不计数
+    planner.copy_issues = [[CopyIssue(slot="headline", problem="绝对化")]]
+    r = resume(graph, "trb", {"action": "edit", "target": "headline", "instruction": "更短"})
+    composes = [c for c in planner.calls if c[0] == "compose"]
+    assert any("headline：绝对化" in x for x in composes[-1][3])  # 模型写的 headline 出问题照样重试
+    assert interrupt_of(r)["type"] == "review"

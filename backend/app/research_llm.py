@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from typing import Any, Literal, Protocol
 
 import httpx
@@ -56,6 +57,12 @@ class SectionDraft(BaseModel):
     sentences: list[SentenceDraft]
 
 
+class TimeIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_id: str = Field(description="来源列表里的 id")
+    reason: str = Field(description="一句话：发布时间是什么、为什么不在用户要的时间范围里")
+
+
 class ConsolidateResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     sections: list[SectionDraft]
@@ -63,6 +70,7 @@ class ConsolidateResult(BaseModel):
     assumptions: list[str] = Field(description="候选答案里没有来源支撑的说法、自行采用的取舍")
     answered: bool = Field(description="候选答案是否已经回答了研究问题（哪怕不完美）；true 时 gap 必须为 null")
     gap: str | None = Field(description="缺少的关键证据，一句话；没有则 null")
+    time_issues: list[TimeIssue] = Field(description="论断引用的来源里，发布时间不在用户要的时间范围里的；用户没限定时间或都在范围内则为空")
 
 
 class RewriteDraft(BaseModel):
@@ -79,6 +87,22 @@ class SentenceDraftById(BaseModel):
 RewriteDraft.model_rebuild()
 
 
+class ReviewOp(BaseModel):
+    """终审时用户的话对应的一个操作，字段和按钮回传的一样，由同一套校验检查。"""
+
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["approve", "exclude_source", "edit_claim", "rewrite_section"]
+    target: str | None = Field(description="exclude_source 填来源 id（s 开头），edit_claim 填论断 id（k 开头），rewrite_section 填节 id（c 开头），approve 为 null")
+    content: str | None = Field(description="edit_claim 时论断的新表述，其余为 null")
+    instruction: str | None = Field(description="rewrite_section 时对这一节的要求，其余为 null")
+
+
+class ReviewPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ops: list[ReviewOp] = Field(description="用户这句话要做的操作，按用户说的顺序；对不上任何操作时为空")
+    reply: str | None = Field(description="ops 为空、或有部分要求做不到时，用一句话告诉用户哪里没对上、需要他补充什么；全部对上时为 null")
+
+
 # ---- 协议 ----
 
 
@@ -89,6 +113,9 @@ class ResearchPlanner(Protocol):
 
     def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
                       user_facts: list[str] = ()) -> SectionText: ...
+
+    def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
+                         text: str) -> ReviewPlan: ...
 
     def agent_model(self) -> BaseChatModel: ...
 
@@ -105,12 +132,15 @@ def _facts_block(user_facts: list[str]) -> str:
     return "用户的回答（原话；明确给出的条件不需要来源佐证，说不清楚的条件按假设处理）：\n" + "\n".join(f"- {f}" for f in user_facts) + "\n\n"
 
 
+_SOURCE_STATUS = {"adopted": "报告里引用了", "candidate": "搜到但报告没引用", "excluded": "用户已排除"}
+
+
 def _sources_block(sources: list[Source]) -> str:
     lines = []
     for s in sources:
         if s.status == "excluded":
             continue
-        lines.append(f"- {s.id} | {s.url} | {s.title or '（无标题）'} | {s.excerpt_kind} | {s.excerpt.replace(chr(10), ' ')[:300]}")
+        lines.append(f"- {s.id} | {s.url} | {s.title or '（无标题）'} | {s.published_at or '未知'} | {s.excerpt_kind} | {s.excerpt.replace(chr(10), ' ')[:300]}")
     return "\n".join(lines) or "（无）"
 
 
@@ -183,8 +213,9 @@ class LiveResearchPlanner:
     def _consolidate_messages(scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> list:
         facts = _facts_block(user_facts)
         user = (
+            f"今天的日期：{date.today().isoformat()}（判断“近一年”这类时间范围用）\n"
             f"研究问题：{scope.question}\n范围：{scope.model_dump_json(exclude_none=True)}\n\n{facts}"
-            f"候选答案：\n{answer}\n\n来源列表（id | 网址 | 标题 | 片段类型 | 片段）：\n{_sources_block(sources)}\n"
+            f"候选答案：\n{answer}\n\n来源列表（id | 网址 | 标题 | 发布时间 | 片段类型 | 片段）：\n{_sources_block(sources)}\n"
         )
         return [("system", prompts.CONSOLIDATE_SYSTEM), ("user", user)]
 
@@ -214,6 +245,27 @@ class LiveResearchPlanner:
                       user_facts: list[str] = ()) -> SectionText:
         draft = self._structured(self._fast, RewriteDraft).invoke(self._write_messages(scope, node, claims, instruction, user_facts))
         return SectionText(outline_id=node.id, sentences=[Sentence(text=s.text, claim_id=s.claim_id) for s in draft.sentences])
+
+    @staticmethod
+    def _interpret_messages(scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
+                            text: str) -> list:
+        """用户看到的报告原样给模型，再附上节、论断、来源的 id，模型才能把用户的说法对到具体对象上。"""
+        claim_lines = [f"- {c.id} | {c.outline_id} | {c.kind} | {c.statement} | {', '.join(c.source_ids) or '无'}"
+                       for c in claims if not c.orphaned]
+        source_lines = [f"- {s.id} | {s.title or '（无标题）'} | {s.url} | {_SOURCE_STATUS[s.status]}" for s in sources]
+        user = (
+            f"研究问题：{scope.question}\n\n用户看到的报告：\n{report}\n"
+            "节（id | 标题）：\n" + "\n".join(f"- {n.id} | {n.title}" for n in outline) + "\n\n"
+            "论断（id | 所在节 id | 类型 | 表述 | 来源 id）：\n" + ("\n".join(claim_lines) or "（无）") + "\n\n"
+            "来源（id | 标题 | 网址 | 状态）：\n" + ("\n".join(source_lines) or "（无）") + "\n\n"
+            f"用户说：{text}\n"
+        )
+        return [("system", prompts.INTERPRET_SYSTEM), ("user", user)]
+
+    def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
+                         text: str) -> ReviewPlan:
+        return self._structured(self._fast, ReviewPlan).invoke(
+            self._interpret_messages(scope, report, outline, claims, sources, text))
 
     def agent_model(self) -> BaseChatModel:
         return self._agent
@@ -373,6 +425,8 @@ class FakeResearchPlanner:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
         self.write_inputs: list[dict] = []  # 重写时拿到的范围和用户回答
+        self.time_issues: list[TimeIssue] = []  # 整理时要报告的时间范围问题（测试按需设）
+        self.review_plans: list[ReviewPlan] = []  # 终审时用户的话依次被理解成什么（测试按需设）；没有预设就是没对上
         self._gateway = fake_gateway_client()
         self._tools = make_research_tools(self._gateway)
         self._model = FakeToolModel()
@@ -407,14 +461,15 @@ class FakeResearchPlanner:
             sents = [SentenceDraft(text=f"{title}概述。", claim_ref=None)]
             for ref in refs:
                 c = next(x for x in claims if x.ref == ref)
-                sents.append(SentenceDraft(text=("推断：" if c.kind == "inference" else "") + c.statement, claim_ref=ref))
+                sents.append(SentenceDraft(text=c.statement, claim_ref=ref))
             sections.append(SectionDraft(title=title, question=q, sentences=sents))
         assumptions = ["候选答案里没有来源支撑的说法：稳定性仍是短板的程度"]
         first = sum(1 for c in self.calls if c[0] == "consolidate") == 1
         gap = "缺价格数据" if ("回补" in scope.question and first) else None
         if "没回答" in scope.question and first:
-            return ConsolidateResult(sections=sections, claims=claims, assumptions=assumptions, answered=False, gap=None)
-        return ConsolidateResult(sections=sections, claims=claims, assumptions=assumptions, answered=gap is None, gap=gap)
+            return ConsolidateResult(sections=sections, claims=claims, assumptions=assumptions, answered=False, gap=None, time_issues=[])
+        return ConsolidateResult(sections=sections, claims=claims, assumptions=assumptions, answered=gap is None, gap=gap,
+                                 time_issues=list(self.time_issues))
 
     def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
                       user_facts: list[str] = ()) -> SectionText:
@@ -422,12 +477,18 @@ class FakeResearchPlanner:
         self.write_inputs.append({"scope": scope, "user_facts": list(user_facts)})
         sentences = [Sentence(text=f"{node.title}概述。", claim_id=None)]
         for c in claims:
-            prefix = "推断：" if c.kind == "inference" else ""
-            text = f"{prefix}{c.statement}"
+            text = c.statement
             if instruction:
                 text += f"（{instruction}）"
             sentences.append(Sentence(text=text, claim_id=c.id))
         return SectionText(outline_id=node.id, sentences=sentences)
+
+    def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
+                         text: str) -> ReviewPlan:
+        self.calls.append(("interpret", text))
+        if self.review_plans:
+            return self.review_plans.pop(0)
+        return ReviewPlan(ops=[], reply="（假模型）没有预设怎么理解这句话")
 
     def agent_model(self) -> BaseChatModel:
         return self._model

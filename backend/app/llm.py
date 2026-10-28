@@ -6,13 +6,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import config
 from app.graph.poster import prompts
-from app.graph.poster.state import Element, Fact, StyleOption
+from app.graph.poster.state import KIND_LABELS, Element, Fact, StyleOption
 
 # ---- 结构化输出 schema（扁平、全部 required，符合方舟 strict 模式建议） ----
 
@@ -43,6 +43,33 @@ class ComposeResult(BaseModel):
     updates: list[ElementUpdate]
 
 
+class PosterOp(BaseModel):
+    """终审时用户的话对应的一个操作，字段和按钮回传的一样，由同一套校验检查。"""
+
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["approve", "edit", "manual_edit", "change_fact", "change_style"]
+    target: str | None = Field(description="edit / manual_edit 填元素 id；change_fact 填事实 key；其余为 null")
+    instruction: str | None = Field(description="edit 时怎么改；change_style 时用户描述的新风格；其余为 null")
+    content: str | None = Field(description="manual_edit 时的新文字；change_fact 时用户说的新值（没说为 null）；其余为 null")
+
+
+class PosterPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ops: list[PosterOp] = Field(description="用户这句话要做的操作，按用户说的顺序；对不上任何操作时为空")
+    reply: str | None = Field(description="ops 为空、或用户的话有对不上的部分时，一两句话告诉用户；操作已覆盖用户的话时为 null")
+
+
+class CopyIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    slot: str = Field(description="有问题的文案的槽位 id")
+    problem: str = Field(description="一句话：哪里不合规")
+
+
+class CopyCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    issues: list[CopyIssue] = Field(description="有问题的文案；都合规时为空")
+
+
 # ---- 协议 ------------------------------------------------------------------
 
 
@@ -65,12 +92,30 @@ class Planner(Protocol):
         """生成一张无文字的背景图写到 out_path。只画氛围，不画任何文字和数字。"""
         ...
 
+    def interpret_review(self, facts: dict[str, Fact], style: StyleOption, elements: list[dict], text: str) -> PosterPlan:
+        """终审时用户直接说的话 → 操作。elements 是终审卡上的元素视图（id、类型、文字、能不能让模型改）。"""
+        ...
+
+    def check_copy(self, facts: dict[str, Fact], copy: dict[str, str]) -> list[CopyIssue]:
+        """模型写的文案（槽位 id → 文字）是否合规：绝对化用语、数字承诺、和事实冲突。"""
+        ...
+
 
 def _facts_text(facts: dict[str, Fact]) -> str:
     lines = []
     for f in facts.values():
         if f.value:
             lines.append(f"- {f.label}（{f.key}）：{f.value}")
+    return "\n".join(lines) or "（无）"
+
+
+def _review_elements_text(elements: list[dict]) -> str:
+    lines = []
+    for e in elements:
+        if e["kind"] in ("product_image", "background"):
+            continue
+        how = "事实" if e.get("bound_fact") else ("模型可改" if e.get("editable_by_model") else "用户改过")
+        lines.append(f"- {e['id']} | {KIND_LABELS.get(e['kind'], e['kind'])} | {e.get('text') or '（空）'} | {how}")
     return "\n".join(lines) or "（无）"
 
 
@@ -144,6 +189,21 @@ class ArkPlanner:
         res = chain.invoke([("system", prompts.COMPOSE_SYSTEM), ("user", "\n\n".join(parts))])
         return [u for u in res.updates if u.id in targets]
 
+    def interpret_review(self, facts, style, elements, text) -> PosterPlan:
+        chain = self._structured(self._pro, PosterPlan)
+        user = (f"已确认事实：\n{_facts_text(facts)}\n\n当前风格：{style.name}（{style.description}）\n\n"
+                f"海报上的元素（id | 类型 | 当前文字 | 能怎么改）：\n{_review_elements_text(elements)}\n\n用户说：{text}")
+        return chain.invoke([("system", prompts.INTERPRET_SYSTEM), ("user", user)])
+
+    def check_copy(self, facts, copy) -> list[CopyIssue]:
+        if not copy:
+            return []
+        chain = self._structured(self._pro, CopyCheck)
+        lines = "\n".join(f"- {slot}：{text}" for slot, text in copy.items())
+        res = chain.invoke([("system", prompts.COMPLIANCE_SYSTEM),
+                            ("user", f"已确认事实：\n{_facts_text(facts)}\n\n要检查的文案（槽位 id：文字）：\n{lines}")])
+        return [i for i in res.issues if i.slot in copy]
+
     def background(self, style: StyleOption, facts: dict[str, Fact], out_path: Path) -> Path:
         import httpx
         from openai import OpenAI
@@ -174,6 +234,8 @@ class FakePlanner:
 
     def __init__(self):
         self.calls: list[tuple] = []
+        self.review_plans: list[PosterPlan] = []  # 终审时用户的话依次被理解成什么（测试按需设）；没有预设就是没对上
+        self.copy_issues: list[list[CopyIssue]] = []  # 每次合规检查报告的问题（测试按需设）；没有预设就是都合规
 
     def intake(self, request: str) -> IntakeResult:
         self.calls.append(("intake", request))
@@ -212,6 +274,16 @@ class FakePlanner:
             defaults["headline"] = "黑五预热"
             defaults["subhead"] = "限时放送"
         return [ElementUpdate(id=t, content=defaults[t]) for t in targets if t in defaults]
+
+    def interpret_review(self, facts, style, elements, text) -> PosterPlan:
+        self.calls.append(("interpret", text))
+        if self.review_plans:
+            return self.review_plans.pop(0)
+        return PosterPlan(ops=[], reply="（假模型）没有预设怎么理解这句话")
+
+    def check_copy(self, facts, copy) -> list[CopyIssue]:
+        self.calls.append(("check_copy", dict(copy)))
+        return [i for i in (self.copy_issues.pop(0) if self.copy_issues else []) if i.slot in copy]
 
     def background(self, style: StyleOption, facts: dict[str, Fact], out_path: Path) -> Path:
         """用 Pillow 画一张纵向渐变 + 圆形光斑，模拟生成结果。"""

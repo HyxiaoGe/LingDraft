@@ -144,22 +144,24 @@ class ClarifyForm(BaseModel):
         return self
 
 
-# 终审每种操作带哪些字段：必填的，和允许出现的
-_REVIEW_REQUIRED = {"approve": (), "exclude_source": ("target",), "edit_claim": ("target", "content"), "rewrite_section": ("target",)}
+# 终审每种操作带哪些字段：必填的，和允许出现的。instruct 是用户直接说的话，由模型理解成上面几种操作
+_REVIEW_REQUIRED = {"approve": (), "exclude_source": ("target",), "edit_claim": ("target", "content"), "rewrite_section": ("target",),
+                    "instruct": ("text",)}
 _REVIEW_ALLOWED = {"approve": (), "exclude_source": ("target",), "edit_claim": ("target", "content"),
-                   "rewrite_section": ("target", "instruction")}
+                   "rewrite_section": ("target", "instruction"), "instruct": ("text",)}
 
 
 class ReviewDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    action: Literal["approve", "exclude_source", "edit_claim", "rewrite_section"]
+    action: Literal["approve", "exclude_source", "edit_claim", "rewrite_section", "instruct"]
     target: str | None = None
     content: str | None = None
     instruction: str | None = None
+    text: str | None = None
 
     @model_validator(mode="after")
     def _fields(self):
-        extra = [f for f in ("target", "content", "instruction") if getattr(self, f) is not None and f not in _REVIEW_ALLOWED[self.action]]
+        extra = [f for f in ("target", "content", "instruction", "text") if getattr(self, f) is not None and f not in _REVIEW_ALLOWED[self.action]]
         if extra:
             raise ValueError(f"{self.action} 不接受：{', '.join(extra)}")
         missing = [f for f in _REVIEW_REQUIRED[self.action] if not (getattr(self, f) or "").strip()]
@@ -197,13 +199,16 @@ class ResearchState(TypedDict, total=False):
     gap_rounds: int
     outline: list[OutlineNode]
     sources: list[Source]
+    time_issues: dict[str, str]  # 整理步骤判断发布时间不在用户要的时间范围里的来源：{来源 id: 理由}
     claims: list[Claim]
     assumptions: list[str]
     asks: list[AskRecord]  # 途中提问的记录；回答是用户原话，不需要来源佐证，说不清楚的部分由整理步骤按假设处理
     asks_used: int
     sections: dict[str, SectionText]
     rewrite_targets: list[str]
-    rewrite_instruction: str | None
+    rewrite_instructions: dict[str, str]  # 重写某节时用户的要求：{节 id: 要求}
+    review_text: str | None  # 终审时用户直接说的话，交给模型理解
+    review_reply: str | None  # 模型没能把用户的话对上具体操作时的回复，显示在下一张终审卡上
     versions: list[ReportVersion]
     check_results: list[CheckResult]
     notes: list[str]

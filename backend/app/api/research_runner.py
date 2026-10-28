@@ -12,6 +12,7 @@ from langgraph.types import Command
 from app import config
 from app.api.runner import BaseRunner, Executor, jsonable
 from app.graph.research.agent import ask_view, is_ask_interrupt
+from app.graph.research.nodes import blocks_of
 from app.graph.research.answers import resume_value
 from app.graph.research.graph import build_graph, open_sqlite_checkpointer
 from app.research_llm import FakeResearchPlanner, LiveResearchPlanner
@@ -148,6 +149,8 @@ class ResearchRunner(BaseRunner):
             "asks": jsonable(v.get("asks", [])),
             "asks_used": v.get("asks_used", 0),
             "sections": jsonable(v.get("sections", {})),
+            "report_blocks": blocks_of(v),  # 当前这版报告的结构化内容，页面按它渲染
+            "time_issues": v.get("time_issues") or {},
             "versions": self._versions(thread_id, v.get("versions", [])),
             "checks": jsonable(v.get("check_results", [])),
             "notes": v.get("notes", []),
