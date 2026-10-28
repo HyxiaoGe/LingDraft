@@ -75,6 +75,17 @@ def blocks_of(state: ResearchState) -> list[dict]:
                                 _answered(state), state.get("open_gap"))
 
 
+def research_system(scope: Scope, *, allow_ask: bool) -> str:
+    return prompts.render("agent.system", scope=scope.model_dump_json(indent=1, exclude_none=True),
+                          max_searches=MAX_SEARCHES, max_reads=MAX_READS,
+                          ask_note="" if allow_ask else prompts.render("agent.ask_exhausted"))
+
+
+def research_user(scope: Scope, gap: str | None, answer: str | None) -> str:
+    """补查那一轮带上缺口和上一轮的答案。"""
+    return prompts.render("agent.gap_user", question=scope.question, gap=gap, answer=answer or "") if gap else scope.question
+
+
 def _mark(text: str, claim: Claim | None) -> str:
     """推断句的标记由代码按论断类型加上；提示词要求模型不要自己写。"""
     text = text.strip()
@@ -128,13 +139,8 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         _stage("补查证据：" + gap if gap else "正在调研")
         asks_used = state.get("asks_used", 0)
         ask_limit = max(MAX_ASKS - asks_used, 0)
-        allow_ask = ask_limit > 0
-        system = prompts.RESEARCH_SYSTEM.format(
-            scope=scope.model_dump_json(indent=1, exclude_none=True),
-            max_searches=MAX_SEARCHES, max_reads=MAX_READS,
-            ask_note="" if allow_ask else "（提问额度已用完，不要调用 ask_user，自行判断并在答案里写明假设。）",
-        )
-        user = scope.question if not gap else scope.question + prompts.GAP_FILL_NOTE.format(gap=gap, answer=state.get("answer") or "")
+        system = research_system(scope, allow_ask=ask_limit > 0)
+        user = research_user(scope, gap, state.get("answer"))
         agent = build_agent(planner.agent_model(), planner.tools(), system, ask_limit=ask_limit)
         result = agent.invoke({"messages": [("user", user)]}, config)
         messages = result.get("messages", [])

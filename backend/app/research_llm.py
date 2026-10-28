@@ -127,9 +127,7 @@ def _claims_block(claims: list[Claim]) -> str:
 
 
 def _facts_block(user_facts: list[str]) -> str:
-    if not user_facts:
-        return ""
-    return "用户的回答（原话；明确给出的条件不需要来源佐证，说不清楚的条件按假设处理）：\n" + "\n".join(f"- {f}" for f in user_facts) + "\n\n"
+    return prompts.render("shared.user_facts", facts=list(user_facts)) if user_facts else ""
 
 
 _SOURCE_STATUS = {"adopted": "报告里引用了", "candidate": "搜到但报告没引用", "excluded": "用户已排除"}
@@ -204,20 +202,19 @@ class LiveResearchPlanner:
     def _structured(self, llm, schema):
         return llm.with_structured_output(schema, method="json_schema", strict=True)
 
+    @staticmethod
+    def _intake_messages(request: str) -> list:
+        return [("system", prompts.render("intake.system")), ("user", prompts.render("intake.user", request=request))]
+
     def intake(self, request: str) -> IntakeResult:
-        return self._structured(self._fast, IntakeResult).invoke(
-            [("system", prompts.INTAKE_SYSTEM), ("user", f"用户需求：{request}")]
-        )
+        return self._structured(self._fast, IntakeResult).invoke(self._intake_messages(request))
 
     @staticmethod
     def _consolidate_messages(scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> list:
-        facts = _facts_block(user_facts)
-        user = (
-            f"今天的日期：{date.today().isoformat()}（判断“近一年”这类时间范围用）\n"
-            f"研究问题：{scope.question}\n范围：{scope.model_dump_json(exclude_none=True)}\n\n{facts}"
-            f"候选答案：\n{answer}\n\n来源列表（id | 网址 | 标题 | 发布时间 | 片段类型 | 片段）：\n{_sources_block(sources)}\n"
-        )
-        return [("system", prompts.CONSOLIDATE_SYSTEM), ("user", user)]
+        user = prompts.render("consolidate.user", today=date.today().isoformat(), question=scope.question,
+                              scope=scope.model_dump_json(exclude_none=True), user_facts=_facts_block(user_facts), answer=answer,
+                              sources=_sources_block(sources))
+        return [("system", prompts.render("consolidate.system")), ("user", user)]
 
     def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> ConsolidateResult:
         chain = self._structured(self._fast, ConsolidateResult)
@@ -233,13 +230,10 @@ class LiveResearchPlanner:
     def _write_messages(scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
                         user_facts: list[str] = ()) -> list:
         """范围（含澄清卡的回答）和用户途中的回答也带上：重写不能写出和用户已确认的前提冲突的内容。"""
-        user = (
-            f"研究问题：{scope.question}\n范围：{scope.model_dump_json(exclude_none=True)}\n\n{_facts_block(user_facts)}"
-            f"章节：{node.title}\n这一节要回答：{node.question}\n可用论断：\n{_claims_block(claims)}\n"
-        )
-        if instruction:
-            user += f"用户对这一节的要求：{instruction}\n"
-        return [("system", prompts.WRITE_SYSTEM), ("user", user)]
+        user = prompts.render("write.user", question=scope.question, scope=scope.model_dump_json(exclude_none=True),
+                              user_facts=_facts_block(user_facts), title=node.title, section_question=node.question,
+                              claims=_claims_block(claims), instruction=instruction)
+        return [("system", prompts.render("write.system")), ("user", user)]
 
     def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
                       user_facts: list[str] = ()) -> SectionText:
@@ -253,14 +247,10 @@ class LiveResearchPlanner:
         claim_lines = [f"- {c.id} | {c.outline_id} | {c.kind} | {c.statement} | {', '.join(c.source_ids) or '无'}"
                        for c in claims if not c.orphaned]
         source_lines = [f"- {s.id} | {s.title or '（无标题）'} | {s.url} | {_SOURCE_STATUS[s.status]}" for s in sources]
-        user = (
-            f"研究问题：{scope.question}\n\n用户看到的报告：\n{report}\n"
-            "节（id | 标题）：\n" + "\n".join(f"- {n.id} | {n.title}" for n in outline) + "\n\n"
-            "论断（id | 所在节 id | 类型 | 表述 | 来源 id）：\n" + ("\n".join(claim_lines) or "（无）") + "\n\n"
-            "来源（id | 标题 | 网址 | 状态）：\n" + ("\n".join(source_lines) or "（无）") + "\n\n"
-            f"用户说：{text}\n"
-        )
-        return [("system", prompts.INTERPRET_SYSTEM), ("user", user)]
+        user = prompts.render("interpret.user", question=scope.question, report=report,
+                              outline="\n".join(f"- {n.id} | {n.title}" for n in outline),
+                              claims="\n".join(claim_lines) or "（无）", sources="\n".join(source_lines) or "（无）", text=text)
+        return [("system", prompts.render("interpret.system")), ("user", user)]
 
     def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
                          text: str) -> ReviewPlan:
@@ -331,9 +321,9 @@ class FakeToolModel(BaseChatModel):
         req = _request_of(messages)
         n = len(messages)
         n_ai = sum(1 for m in messages if isinstance(m, AIMessage))
-        if "补查失败" in req and "上一轮你已经给过" in req:
+        if "补查失败" in req and "[c1|" in req:  # 回补那一轮：用户消息里带着上一轮的假答案
             msg = AIMessage(content="")
-        elif isinstance(last, HumanMessage) and str(last.content).startswith("（系统）工具已不可用"):
+        elif isinstance(last, HumanMessage) and last.content == prompts.render("agent.close"):
             msg = AIMessage(content=_answer_text(req, _hits(messages), _answer(messages), how="收尾"))
         elif "连发" in req and not n_ai:
             calls = [{"name": "search_web", "args": {"query": f"{req} {i}", "count": 3}, "id": f"call_batch_{i}", "type": "tool_call"}

@@ -39,9 +39,8 @@ from app.graph.research.state import (
 
 EXCERPT_CHARS = 400
 LIMIT_MARK = "lingdraft_call_limit"  # 调用超限时中间件注入的那条消息带这个标记，不是模型的答案
-EXHAUSTED_NOTE = "（系统）以下工具的额度已用完，不再提供：{names}。请基于已有材料继续或直接作答。"
 ASK_BLOCKED = "ask_user_over_budget"  # 超额的 ask_user 调用改成这个名字，HITL 中间件就不会再把它变成问题卡
-DANGLING_NOTE = "（系统）这个工具调用没有被执行：工具已不可用或参数无法解析。"
+DANGLING_NOTE = prompts.render("agent.dangling_call")
 
 
 class ToolProgressMiddleware(AgentMiddleware):
@@ -119,7 +118,7 @@ class ToolBudgetMiddleware(AgentMiddleware):
         if not exhausted:
             return handler(request)
         tools = [t for t in request.tools if getattr(t, "name", None) not in exhausted]
-        note = EXHAUSTED_NOTE.format(names="、".join(sorted(exhausted)))
+        note = prompts.render("agent.tools_exhausted", names="、".join(sorted(exhausted)))
         base = request.system_message.content if request.system_message else ""
         base = base if isinstance(base, str) else str(base)
         return handler(request.override(tools=tools, system_message=SystemMessage(f"{base}\n\n{note}")))
@@ -127,10 +126,10 @@ class ToolBudgetMiddleware(AgentMiddleware):
     def wrap_tool_call(self, request, handler):
         name = request.tool_call["name"]
         if name == ASK_BLOCKED:
-            return ToolMessage(content="提问额度已用完，这个问题没有呈现给用户。自行判断并在答案里写明假设。",
+            return ToolMessage(content=prompts.render("agent.ask_over_budget"),
                                name=ASK_BLOCKED, tool_call_id=request.tool_call["id"], status="error")
         if name in self.limits and self._over_budget(request.state.get("messages", []), request.tool_call["id"]):
-            return ToolMessage(content=f"工具 {name} 的额度已用完，不要再调用它。", name=name,
+            return ToolMessage(content=prompts.render("agent.tool_over_budget", name=name), name=name,
                                tool_call_id=request.tool_call["id"], status="error")
         return handler(request)
 
@@ -242,7 +241,7 @@ def answer_dangling_calls(messages: list[BaseMessage]) -> list[BaseMessage]:
 def close_out(model: BaseChatModel, messages: list[BaseMessage]) -> tuple[str | None, str]:
     """不带工具再要一次答案。返回 (文字或 None, 说明)。"""
     convo = [m for m in messages if not is_limit_message(m)]
-    convo = answer_dangling_calls(convo) + [HumanMessage(prompts.CLOSE_PROMPT)]
+    convo = answer_dangling_calls(convo) + [HumanMessage(prompts.render("agent.close"))]
     last_err = ""
     for i in range(CLOSE_RETRIES):
         try:
@@ -275,8 +274,8 @@ def ask_view(value: dict) -> dict:
     }
 
 
-SKIP_NOTE = "用户跳过了这个问题。按你的最佳判断继续：关键条件未知就给条件式结论并写明假设，不要把猜测写成确定的推荐。"
-UNSHOWN_NOTE = "这个问题没有呈现给用户：一次只能问一个问题。按你的最佳判断处理，并在答案末尾写明假设。"
+SKIP_NOTE = prompts.render("agent.ask_skipped")
+UNSHOWN_NOTE = prompts.render("agent.ask_unshown")
 
 
 def _reply(**fields) -> str:
