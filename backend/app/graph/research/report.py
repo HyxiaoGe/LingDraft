@@ -25,7 +25,7 @@ def assemble(
     claims: list[Claim],
     sources: list[Source],
     assumptions: list[str],
-    user_facts: list[str] = (),
+    user_answers: list[str] = (),
 ) -> str:
     by_claim = {c.id: c for c in claims}
     by_source = {s.id: s for s in sources}
@@ -54,8 +54,8 @@ def assemble(
                 text = f"{text}{marks}"
             lines.append(text)
         lines.append("")
-    if user_facts:
-        lines += ["## 用户确认的前提", ""] + [f"- {f}" for f in user_facts] + [""]
+    if user_answers:
+        lines += ["## 用户的回答", ""] + [f"- {a}" for a in user_answers] + [""]
     if assumptions:
         lines += ["## 假设与取舍", ""] + [f"- {a}" for a in assumptions] + [""]
     lines += ["## 来源", ""]

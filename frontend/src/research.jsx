@@ -49,9 +49,9 @@ function askCard(it, resume) {
     page: "1/1",
     options: it.options.map((o) => ({ label: o, value: o })),
     customPlaceholder: "或者直接回答…",
-    skip: "跳过，让模型自己判断",
+    skip: "说不清楚，按假设处理",
     onAnswer: (v) => (resume({ answer: v }, null, [{ q: it.title, a: v }]), null),
-    onSkip: () => (resume({ skip: true }, null, [{ q: it.title, a: "（跳过，模型自行判断并记录假设）" }]), null),
+    onSkip: () => (resume({ skip: true }, null, [{ q: it.title, a: "（说不清楚，模型按标注的假设处理）" }]), null),
   };
 }
 

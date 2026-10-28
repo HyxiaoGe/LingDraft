@@ -90,8 +90,8 @@ def test_full_flow_traceable_and_exported(graph, tmp_path):
     # 报告里推断句带标记并带引用标号；来源表完整
     report = p["report"]
     assert "推断：" in report and "[S1]" in report and "## 来源" in report
-    # 动态提问的回答是用户确认的前提，进报告单独一节、不进假设；澄清的回答进了范围
-    assert "## 用户确认的前提" in report and "范围是否包含 PPT 工具？ → 包含" in report
+    # 动态提问的回答原样进报告单独一节、不进假设；澄清的回答进了范围
+    assert "## 用户的回答" in report and "范围是否包含 PPT 工具？ → 包含" in report
     assert not any("包含" in a for a in p["assumptions"])
     assert "改文字" in report
 
@@ -155,16 +155,17 @@ def test_rewrite_section_with_instruction(graph, planner):
     assert len(writes) == 1
 
 
-def test_unclear_answer_is_not_a_confirmed_premise(graph):
-    p = run_to_review(graph, answer={"answer": "尚不清楚，先按标注的假设给建议"})
-    assert any("尚不清楚" in a and "按模型假设处理" in a for a in p["assumptions"])
-    assert "## 用户确认的前提" not in p["report"]
+def test_free_text_answer_kept_verbatim(graph):
+    # 自由文本不做关键词判断：原样记录，“不确定预算，但禁止出网”这种混合回答不会被当成跳过
+    p = run_to_review(graph, answer={"answer": "不确定预算，但公司明确禁止合同内容出网"})
+    assert "范围是否包含 PPT 工具？ → 不确定预算，但公司明确禁止合同内容出网" in p["report"]
+    assert not any("跳过" in a for a in p["assumptions"])
 
 
 def test_skip_ask_records_assumption(graph):
     p = run_to_review(graph, answer={"skip": True})
     assert any("用户跳过了" in a and "PPT" in a for a in p["assumptions"])
-    assert "## 用户确认的前提" not in p["report"]
+    assert "## 用户的回答" not in p["report"]
 
 
 def test_invalid_scope_rejected(graph):

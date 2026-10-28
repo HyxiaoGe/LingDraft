@@ -163,7 +163,7 @@ class ResearchState(TypedDict, total=False):
     sources: list[Source]
     claims: list[Claim]
     assumptions: list[str]
-    asks: list[AskRecord]  # 途中提问的记录；有回答的是用户确认的前提，不需要来源佐证
+    asks: list[AskRecord]  # 途中提问的记录；回答是用户原话，不需要来源佐证，说不清楚的部分由整理步骤按假设处理
     asks_used: int
     sections: dict[str, SectionText]
     rewrite_targets: list[str]

@@ -323,20 +323,12 @@ def collect_asks(messages: list[BaseMessage]) -> list[AskRecord]:
             if content == UNSHOWN_MESSAGE or res.status == "error":
                 continue
             q = str((tc.get("args") or {}).get("question") or "").strip()
+            # 只有卡片上的“跳过”按钮算跳过（载荷里有明确标记）；自由文本原样记录，哪些条件算确认由整理步骤判断
             if content == SKIP_MESSAGE:
                 out.append(AskRecord(question=q, answer=None, skipped=True))
             else:
-                # 选了“尚不清楚…”这类选项等同跳过：不是用户确认的前提，结论按标注的假设给
-                out.append(AskRecord(question=q, answer=content, skipped=is_unclear_answer(content)))
+                out.append(AskRecord(question=q, answer=content))
     return out
-
-
-UNCLEAR_PREFIXES = ("尚不清楚", "不清楚", "不确定", "拿不准", "我不知道", "不知道")
-
-
-def is_unclear_answer(text: str) -> bool:
-    t = text.strip().lstrip("（(「\"'“")
-    return t.startswith(UNCLEAR_PREFIXES)
 
 
 def count_asks(messages: list[BaseMessage]) -> int:

@@ -174,7 +174,7 @@ class LiveResearchPlanner:
 
     @staticmethod
     def _consolidate_messages(scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> list:
-        facts = ("用户确认的前提（用户亲口回答，不需要来源佐证）：\n" + "\n".join(f"- {f}" for f in user_facts) + "\n\n") if user_facts else ""
+        facts = ("用户的回答（原话；明确给出的条件不需要来源佐证，说不清楚的条件按假设处理）：\n" + "\n".join(f"- {f}" for f in user_facts) + "\n\n") if user_facts else ""
         user = (
             f"研究问题：{scope.question}\n范围：{scope.model_dump_json(exclude_none=True)}\n\n{facts}"
             f"候选答案：\n{answer}\n\n来源列表（id | 网址 | 标题 | 片段类型 | 片段）：\n{_sources_block(sources)}\n"
