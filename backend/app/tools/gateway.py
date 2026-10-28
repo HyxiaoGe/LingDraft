@@ -124,10 +124,14 @@ class GatewayClient:
     def close(self) -> None:
         self._client.close()
 
-    def search(self, query: str, *, count: int = 5, kind: str = "web", freshness: str | None = None) -> list[SearchHit]:
+    def search(self, query: str, *, count: int = 5, kind: str = "web", freshness: str | None = None,
+               domains: list[str] | None = None) -> list[SearchHit]:
+        """freshness 是 pd / pw / pm / py（近一天、周、月、年）；domains 限定站点。"""
         payload: dict[str, Any] = {"query": query, "type": kind, "count": max(1, min(count, 20))}
         if freshness:
             payload["freshness"] = freshness
+        if domains:
+            payload["domain_filters"] = list(domains)
         try:
             resp = self._client.post("/search/search", json=payload)
         except httpx.TimeoutException as e:

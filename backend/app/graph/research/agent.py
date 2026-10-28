@@ -51,7 +51,8 @@ class ToolProgressMiddleware(AgentMiddleware):
         args = request.tool_call.get("args") or {}
         text = None
         if name == "search_web":
-            text, kind = f"搜索：{args.get('query', '')}", "search"
+            limits = ([f"近 {args['recency_days']} 天"] if args.get("recency_days") else []) + list(args.get("domains") or [])
+            text, kind = f"搜索：{args.get('query', '')}" + (f"（{'，'.join(map(str, limits))}）" if limits else ""), "search"
         elif name == "read_page":
             text, kind = f"读取：{args.get('url', '')}", "read"
         if text:

@@ -46,6 +46,25 @@ def test_search_sends_auth_and_parses():
     }
 
 
+def test_search_tool_passes_time_and_site_limits():
+    """recency_days 按搜索服务的四档向上取整；超出范围的数收进范围；没填就不传。"""
+    bodies = []
+
+    def handler(req: httpx.Request):
+        bodies.append(json.loads(req.content))
+        return httpx.Response(200, json={"results": []})
+
+    search = next(t for t in make_research_tools(_client(handler)) if t.name == "search_web")
+    search.invoke({"query": "q", "recency_days": 30, "domains": ["sqlite.org", " ", "a.org", "b", "c", "d", "e"]})
+    search.invoke({"query": "q", "count": 50, "recency_days": 90})
+    search.invoke({"query": "q", "recency_days": 0})
+    search.invoke({"query": "q"})
+    assert bodies[0] == {"query": "q", "type": "web", "count": 5, "freshness": "pm", "domain_filters": ["sqlite.org", "a.org", "b", "c", "d"]}
+    assert bodies[1] == {"query": "q", "type": "web", "count": 10, "freshness": "py"}
+    assert bodies[2]["freshness"] == "pd"
+    assert bodies[3] == {"query": "q", "type": "web", "count": 5}
+
+
 def test_search_error_raises():
     c = _client(lambda req: httpx.Response(401, json={"error": "unauthorized"}))
     with pytest.raises(GatewayError):

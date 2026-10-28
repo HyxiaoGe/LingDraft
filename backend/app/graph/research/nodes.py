@@ -6,6 +6,7 @@ research 把 agent 子图当函数调用，子图里的 ask_user 中断会冒到
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from langchain_core.runnables import RunnableConfig
@@ -76,7 +77,7 @@ def blocks_of(state: ResearchState) -> list[dict]:
 
 
 def research_system(scope: Scope, *, allow_ask: bool) -> str:
-    return prompts.render("agent.system", scope=scope.model_dump_json(indent=1, exclude_none=True),
+    return prompts.render("agent.system", today=date.today().isoformat(), scope=scope.model_dump_json(indent=1, exclude_none=True),
                           max_searches=MAX_SEARCHES, max_reads=MAX_READS,
                           ask_note="" if allow_ask else prompts.render("agent.ask_exhausted"))
 
