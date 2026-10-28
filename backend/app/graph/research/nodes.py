@@ -14,8 +14,16 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END
 from langgraph.types import interrupt
 
-from app.graph.research import prompts, report
-from app.graph.research.agent import build_agent, close_out, collect_asks, collect_sources, final_answer_text, search_failures
+from app.graph.research import prompts, report, skills
+from app.graph.research.agent import (
+    build_agent,
+    close_out,
+    collect_asks,
+    collect_skills,
+    collect_sources,
+    final_answer_text,
+    search_failures,
+)
 from app.graph.research.answers import InvalidAnswer, card_schema, resume_value
 from app.graph.research.state import (
     MAX_ASKS,
@@ -76,9 +84,25 @@ def blocks_of(state: ResearchState) -> list[dict]:
                                 _answered(state), state.get("open_gap"))
 
 
-def research_system(scope: Scope, *, allow_ask: bool) -> str:
+def _skills(state: ResearchState) -> list[str]:
+    """这次调研选用的调研方法；后来从目录里删掉的不算。"""
+    return [n for n in state.get("skills", []) if n in skills.catalog()]
+
+
+def _report(state: ResearchState) -> str | None:
+    """所选调研方法的报告结构，给整理和重写用；没选方法时为 None，按候选答案的内容分节。"""
+    reports = [skills.catalog()[n].report.strip() for n in _skills(state)]
+    return "\n\n".join(reports) or None
+
+
+def research_system(scope: Scope, *, allow_ask: bool, loaded: list[str] = ()) -> str:
+    """还没选方法时列出技能目录，由模型决定读不读；补查那一轮直接给出已经选定的方法。"""
+    if loaded:
+        method = prompts.render("agent.skill_loaded", content="\n\n".join(skills.catalog()[n].content() for n in loaded))
+    else:
+        method = prompts.render("agent.skill_catalog", catalog=skills.catalog_text()) if skills.catalog() else ""
     return prompts.render("agent.system", today=date.today().isoformat(), scope=scope.model_dump_json(indent=1, exclude_none=True),
-                          max_searches=MAX_SEARCHES, max_reads=MAX_READS,
+                          max_searches=MAX_SEARCHES, max_reads=MAX_READS, method=method,
                           ask_note="" if allow_ask else prompts.render("agent.ask_exhausted"))
 
 
@@ -104,7 +128,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         return {
             "scope": res.scope, "clarify": res.questions[:2], "scope_confirmed": False,
             "answer": None, "answer_how": "none", "answered": False, "gap": None, "open_gap": None, "gap_rounds": 0, "outline": [],
-            "sources": [], "time_issues": {}, "claims": [], "assumptions": [], "asks": [], "asks_used": 0, "sections": {},
+            "sources": [], "time_issues": {}, "claims": [], "assumptions": [], "asks": [], "asks_used": 0, "skills": [], "sections": {},
             "rewrite_targets": [], "rewrite_instructions": {}, "review_text": None, "review_reply": None,
             "versions": [], "check_results": [], "notes": [], "approved": False,
         }
@@ -140,9 +164,11 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         _stage("补查证据：" + gap if gap else "正在调研")
         asks_used = state.get("asks_used", 0)
         ask_limit = max(MAX_ASKS - asks_used, 0)
-        system = research_system(scope, allow_ask=ask_limit > 0)
+        loaded = _skills(state)
+        system = research_system(scope, allow_ask=ask_limit > 0, loaded=loaded)
         user = research_user(scope, gap, state.get("answer"))
-        agent = build_agent(planner.agent_model(), planner.tools(), system, ask_limit=ask_limit)
+        tools = [t for t in planner.tools() if not (loaded and t.name == "load_skill")]  # 方法已经在系统提示词里
+        agent = build_agent(planner.agent_model(), tools, system, ask_limit=ask_limit)
         result = agent.invoke({"messages": [("user", user)]}, config)
         messages = result.get("messages", [])
 
@@ -151,6 +177,8 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         sources += new_sources
 
         notes = list(state.get("notes", []))
+        picked = loaded + [n for n in collect_skills(messages) if n not in loaded]
+        notes += [f"调研方法：{skills.catalog()[n].title}" for n in picked if n not in loaded]
         failed = search_failures(messages)
         if failed:
             notes.append(f"搜索服务出错 {len(failed)} 次（{failed[0]}），agent 换了搜索或基于已有材料继续")
@@ -164,7 +192,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         new_asks = collect_asks(messages)
         asks = list(state.get("asks", [])) + new_asks
         assumptions = list(state.get("assumptions", [])) + [f"「{a.question}」用户跳过了，按模型假设处理" for a in new_asks if a.skipped]
-        out = {"sources": sources, "asks": asks, "assumptions": assumptions,
+        out = {"sources": sources, "asks": asks, "assumptions": assumptions, "skills": picked,
                "asks_used": asks_used + len(new_asks), "notes": notes}  # 只算呈现给用户的提问（含跳过的）
         if answer is None and gap and state.get("answer"):
             # 补查没拿到新答案：上一轮的答案和整理结果都留着，不拿空答案冲掉，也不把同一份答案再整理一遍（结论可能碰巧翻过来）
@@ -189,7 +217,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             return {**kept, "notes": notes}
         _stage("整理论断与来源")
         try:
-            res = planner.consolidate(state["scope"], answer, sources, _user_answers(state))
+            res = planner.consolidate(state["scope"], answer, sources, _user_answers(state), _report(state))
         except Exception as e:  # noqa: BLE001
             notes.append(f"整理失败：{e}" + ("；保留上一轮的整理结果" if kept["claims"] else ""))
             return {**kept, "notes": notes}
@@ -268,7 +296,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
                 sections[node.id] = SectionText(outline_id=node.id, sentences=[])
                 notes.append(f"「{node.title}」没有可用论断，正文留空")
                 continue
-            sec = planner.write_section(state["scope"], node, usable, instructions.get(node.id), _user_answers(state))
+            sec = planner.write_section(state["scope"], node, usable, instructions.get(node.id), _user_answers(state), _report(state))
             by_id = {c.id: c for c in usable}
             sents = []
             for s in sec.sentences:

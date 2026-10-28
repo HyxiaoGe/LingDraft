@@ -25,7 +25,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.config import get_stream_writer
 
-from app.graph.research import prompts
+from app.graph.research import prompts, skills
 from app.graph.research.state import (
     CLOSE_RETRIES,
     INVALID_TOOL_CALL_RETRIES,
@@ -33,6 +33,7 @@ from app.graph.research.state import (
     MAX_MODEL_CALLS,
     MAX_READS,
     MAX_SEARCHES,
+    MAX_SKILL_LOADS,
     AskRecord,
     Source,
 )
@@ -55,6 +56,8 @@ class ToolProgressMiddleware(AgentMiddleware):
             text, kind = f"搜索：{args.get('query', '')}" + (f"（{'，'.join(map(str, limits))}）" if limits else ""), "search"
         elif name == "read_page":
             text, kind = f"读取：{args.get('url', '')}", "read"
+        elif name == "load_skill" and (skill := skills.catalog().get(str(args.get("name", "")).strip())):
+            text, kind = f"按「{skill.title}」的方法调研", "skill"
         if text:
             try:
                 get_stream_writer()({"stage": text[:160], "kind": kind})
@@ -187,7 +190,7 @@ def build_agent(model: BaseChatModel, tools: list, system_prompt: str, *, ask_li
     """ask_limit 是本次运行还能问的次数（整线程上限减去已问过的）；0 就不绑 ask_user、不装 HITL。"""
     allow_ask = ask_limit > 0
     tools = [t for t in tools if allow_ask or t.name != "ask_user"]
-    limits = {"search_web": MAX_SEARCHES, "read_page": MAX_READS}
+    limits = {"search_web": MAX_SEARCHES, "read_page": MAX_READS, "load_skill": MAX_SKILL_LOADS}
     middleware: list = []
     if allow_ask:
         middleware.append(HumanInTheLoopMiddleware(interrupt_on={"ask_user": {"allowed_decisions": ["respond"]}}))
@@ -395,6 +398,20 @@ def search_failures(messages: list[BaseMessage]) -> list[str]:
             data = _parse(m)
             if isinstance(data, dict) and data.get("ok") is False:
                 out.append(str(data.get("message") or data.get("kind") or ""))
+    return out
+
+
+def collect_skills(messages: list[BaseMessage]) -> list[str]:
+    """这次运行里读取成功的调研方法，按读取顺序、去重。"""
+    ok = {m.tool_call_id for m in messages if isinstance(m, ToolMessage) and m.name == "load_skill" and m.status != "error"}
+    out: list[str] = []
+    for m in messages:
+        if not isinstance(m, AIMessage):
+            continue
+        for tc in m.tool_calls:
+            name = str((tc.get("args") or {}).get("name") or "").strip()
+            if tc["name"] == "load_skill" and tc["id"] in ok and name in skills.catalog() and name not in out:
+                out.append(name)
     return out
 
 

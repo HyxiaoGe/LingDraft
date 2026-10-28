@@ -19,6 +19,7 @@ Confidence = Literal["high", "medium", "low"]
 MAX_SEARCHES = 8
 MAX_READS = 6
 MAX_ASKS = 2  # 整个线程的提问上限
+MAX_SKILL_LOADS = 2  # 一次运行里读取调研方法的次数
 MAX_MODEL_CALLS = 30
 INVALID_TOOL_CALL_RETRIES = 2  # 模型返回无法解析的工具调用时，让它重发的次数
 CLOSE_RETRIES = 2  # 受控收尾（无工具，基于已有材料作答）的尝试次数
@@ -204,6 +205,7 @@ class ResearchState(TypedDict, total=False):
     assumptions: list[str]
     asks: list[AskRecord]  # 途中提问的记录；回答是用户原话，不需要来源佐证，说不清楚的部分由整理步骤按假设处理
     asks_used: int
+    skills: list[str]  # 这次调研选用的调研方法（技能名），整理和重写按它的报告结构
     sections: dict[str, SectionText]
     rewrite_targets: list[str]
     rewrite_instructions: dict[str, str]  # 重写某节时用户的要求：{节 id: 要求}

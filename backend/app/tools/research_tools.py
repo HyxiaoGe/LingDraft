@@ -1,4 +1,4 @@
-"""调研 agent 的工具：搜索、读网页、问用户。工具描述在 app/graph/research/prompts.toml 的 [tools.*]。
+"""调研 agent 的工具：搜索、读网页、问用户、读取调研方法。工具描述在 app/graph/research/prompts.toml 的 [tools.*]。
 
 ask_user 的函数体不会被执行，由 HumanInTheLoopMiddleware 在执行前拦截，用户的回答直接作为工具结果。
 """
@@ -10,7 +10,7 @@ import json
 from langchain_core.tools import ToolException, tool
 from pydantic import BaseModel, Field
 
-from app.graph.research import prompts
+from app.graph.research import prompts, skills
 from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError
 
 MAX_COUNT = 10
@@ -32,6 +32,10 @@ class ReadArgs(BaseModel):
     url: str = Field(description=_arg("read_page", "url"))
 
 
+class SkillArgs(BaseModel):
+    name: str = Field(description=_arg("load_skill", "name"))
+
+
 def freshness(recency_days: int | None) -> str | None:
     """搜索服务只认 Brave 风格的四档（天、周、月、年），向上取整。"""
     if recency_days is None:
@@ -45,6 +49,17 @@ def freshness(recency_days: int | None) -> str | None:
 @tool("ask_user", description=prompts.render("tools.ask_user.description"))
 def ask_user(question: str, options: list[str], why: str) -> str:
     return "（由中间件拦截，不会执行）"
+
+
+@tool("load_skill", description=prompts.render("tools.load_skill.description"), args_schema=SkillArgs)
+def load_skill(name: str) -> str:
+    skill = skills.catalog().get(name.strip())
+    if skill is None:
+        raise ToolException(prompts.render("tools.load_skill.unknown", name=name, names="、".join(skills.catalog())))
+    return skill.content()
+
+
+load_skill.handle_tool_error = True
 
 
 def make_research_tools(client: GatewayClient) -> list:
@@ -70,4 +85,4 @@ def make_research_tools(client: GatewayClient) -> list:
     def read_page(url: str) -> str:
         return json.dumps(client.read(url).to_dict(), ensure_ascii=False)
 
-    return [search_web, read_page, ask_user]
+    return [search_web, read_page, ask_user, load_skill]

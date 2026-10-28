@@ -103,7 +103,7 @@ def test_tools_wrap_client():
         return httpx.Response(200, json={"title": "T", "content": "body", "provider": "direct"})
 
     tools = {t.name: t for t in make_research_tools(_client(handler))}
-    assert set(tools) == {"search_web", "read_page", "ask_user"}
+    assert set(tools) == {"search_web", "read_page", "ask_user", "load_skill"}
     assert json.loads(tools["search_web"].invoke({"query": "q"}))[0]["url"] == "https://a"
     assert json.loads(tools["read_page"].invoke({"url": "https://a"}))["content"] == "body"
     assert "拦截" in tools["ask_user"].invoke({"question": "?", "options": ["a"], "why": "w"})

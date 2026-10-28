@@ -109,10 +109,11 @@ class ReviewPlan(BaseModel):
 class ResearchPlanner(Protocol):
     def intake(self, request: str) -> IntakeResult: ...
 
-    def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> ConsolidateResult: ...
+    def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = (),
+                    report: str | None = None) -> ConsolidateResult: ...
 
     def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
-                      user_facts: list[str] = ()) -> SectionText: ...
+                      user_facts: list[str] = (), report: str | None = None) -> SectionText: ...
 
     def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
                          text: str) -> ReviewPlan: ...
@@ -128,6 +129,11 @@ def _claims_block(claims: list[Claim]) -> str:
 
 def _facts_block(user_facts: list[str]) -> str:
     return prompts.render("shared.user_facts", facts=list(user_facts)) if user_facts else ""
+
+
+def _report_block(report: str | None) -> str:
+    """所选调研方法的报告结构；没选方法时整段不出现。"""
+    return prompts.render("shared.report_guide", report=report) if report else ""
 
 
 _SOURCE_STATUS = {"adopted": "报告里引用了", "candidate": "搜到但报告没引用", "excluded": "用户已排除"}
@@ -210,34 +216,38 @@ class LiveResearchPlanner:
         return self._structured(self._fast, IntakeResult).invoke(self._intake_messages(request))
 
     @staticmethod
-    def _consolidate_messages(scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> list:
+    def _consolidate_messages(scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = (),
+                              report: str | None = None) -> list:
         user = prompts.render("consolidate.user", today=date.today().isoformat(), question=scope.question,
-                              scope=scope.model_dump_json(exclude_none=True), user_facts=_facts_block(user_facts), answer=answer,
-                              sources=_sources_block(sources))
+                              scope=scope.model_dump_json(exclude_none=True), user_facts=_facts_block(user_facts),
+                              guide=_report_block(report), answer=answer, sources=_sources_block(sources))
         return [("system", prompts.render("consolidate.system")), ("user", user)]
 
-    def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> ConsolidateResult:
+    def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = (),
+                    report: str | None = None) -> ConsolidateResult:
         chain = self._structured(self._fast, ConsolidateResult)
         last: Exception | None = None
         for _ in range(CONSOLIDATE_RETRIES):
             try:
-                return chain.invoke(self._consolidate_messages(scope, answer, sources, user_facts))
+                return chain.invoke(self._consolidate_messages(scope, answer, sources, user_facts, report))
             except Exception as e:  # noqa: BLE001
                 last = e
         raise RuntimeError(f"整理失败：{last}")
 
     @staticmethod
     def _write_messages(scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
-                        user_facts: list[str] = ()) -> list:
+                        user_facts: list[str] = (), report: str | None = None) -> list:
         """范围（含澄清卡的回答）和用户途中的回答也带上：重写不能写出和用户已确认的前提冲突的内容。"""
         user = prompts.render("write.user", question=scope.question, scope=scope.model_dump_json(exclude_none=True),
-                              user_facts=_facts_block(user_facts), title=node.title, section_question=node.question,
+                              user_facts=_facts_block(user_facts), guide=_report_block(report), title=node.title,
+                              section_question=node.question,
                               claims=_claims_block(claims), instruction=instruction)
         return [("system", prompts.render("write.system")), ("user", user)]
 
     def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
-                      user_facts: list[str] = ()) -> SectionText:
-        draft = self._structured(self._fast, RewriteDraft).invoke(self._write_messages(scope, node, claims, instruction, user_facts))
+                      user_facts: list[str] = (), report: str | None = None) -> SectionText:
+        draft = self._structured(self._fast, RewriteDraft).invoke(
+            self._write_messages(scope, node, claims, instruction, user_facts, report))
         return SectionText(outline_id=node.id, sentences=[Sentence(text=s.text, claim_id=s.claim_id) for s in draft.sentences])
 
     @staticmethod
@@ -305,6 +315,7 @@ class FakeToolModel(BaseChatModel):
     - “连发”：第一步同一批发 10 个搜索（“连发带问”再夹一个提问），看同批调用的额度；
     - “双问”：第一步同一批发两个提问（只有第一个呈现给用户），之后再问一个，看没呈现的提问占不占额度；
     - “补查失败”：回补那一轮既不调工具也不给文字，收尾也失败，看补查失败时第一轮的结果还在不在。
+    - “选型”：第一步先读 comparison 这个调研方法；“错方法”：先读一个不存在的方法。
     """
 
     bound: list[str] = Field(default_factory=list)
@@ -343,6 +354,10 @@ class FakeToolModel(BaseChatModel):
                 msg = _call("ask_user", {"question": "后来又问一个？", "options": ["A", "B"], "why": "测试"}, n)
             else:
                 msg = AIMessage(content=_answer_text(req, _hits(messages), _answer(messages)))
+        elif ("选型" in req or "错方法" in req) and not n_ai and "load_skill" in self.bound:
+            msg = _call("load_skill", {"name": "comparison" if "选型" in req else "nope"}, n)
+        elif isinstance(last, ToolMessage) and last.name == "load_skill" and last.status != "error":
+            msg = _call("search_web", {"query": f"{req} 对比", "count": 3}, n)
         elif "多问" in req and n_ai < 4:
             # 无视绑定列表，每轮都问：看提问额度能不能在产生问题卡之前拦住
             msg = _call("ask_user", {"question": f"第 {n_ai + 1} 个问题？", "options": ["A", "B"], "why": "测试"}, n)
@@ -414,7 +429,8 @@ def _answer_text(req: str, hits: list[dict], answer: str | None, how: str = "") 
 class FakeResearchPlanner:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
-        self.write_inputs: list[dict] = []  # 重写时拿到的范围和用户回答
+        self.write_inputs: list[dict] = []  # 重写时拿到的范围、用户回答和报告结构
+        self.consolidate_reports: list[str | None] = []  # 整理时拿到的报告结构
         self.time_issues: list[TimeIssue] = []  # 整理时要报告的时间范围问题（测试按需设）
         self.review_plans: list[ReviewPlan] = []  # 终审时用户的话依次被理解成什么（测试按需设）；没有预设就是没对上
         self._gateway = fake_gateway_client()
@@ -430,7 +446,9 @@ class FakeResearchPlanner:
             questions.append(ClarifyQuestion(id="q1", title="局部修改指的是哪种？", options=["改文字", "换图"], why="两种方向的检索词和评测标准不同"))
         return IntakeResult(scope=scope, questions=questions)
 
-    def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> ConsolidateResult:
+    def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = (),
+                    report: str | None = None) -> ConsolidateResult:
+        self.consolidate_reports.append(report)
         again = any(c[0] == "consolidate" for c in self.calls)
         if "整理失败" in scope.question and (again or "二次整理失败" not in scope.question):
             self.calls.append(("consolidate", scope.question))
@@ -462,9 +480,9 @@ class FakeResearchPlanner:
                                  time_issues=list(self.time_issues))
 
     def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
-                      user_facts: list[str] = ()) -> SectionText:
+                      user_facts: list[str] = (), report: str | None = None) -> SectionText:
         self.calls.append(("write", node.id, instruction))
-        self.write_inputs.append({"scope": scope, "user_facts": list(user_facts)})
+        self.write_inputs.append({"scope": scope, "user_facts": list(user_facts), "report": report})
         sentences = [Sentence(text=f"{node.title}概述。", claim_id=None)]
         for c in claims:
             text = c.statement
