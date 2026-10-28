@@ -7,10 +7,10 @@
 每次运行到 interrupt 时打印确认点载荷；用 resume 回传答案继续。
 
 调研场景的回传格式：
-  研究范围   {"values": {"question": "...", "time_range": "2026", ...}}
+  澄清问题   {"answers": {"q1": "..."}}（未回答的记为假设）
   动态提问   {"answer": "..."} 或 {"skip": true}
-  大纲       {"action": "approve"} 或 {"action": "edit", "nodes": [{"id": "c1", "title": "...", "question": "..."}, ...]}
-  终审       {"action": "approve"} | {"action": "exclude_source", "target": "s2"}
+  终审       报告校验过就已经导出；这里是可选的修改，改完会重新导出覆盖
+             {"action": "approve"}（不用改了，结束） | {"action": "exclude_source", "target": "s2"}
              | {"action": "edit_claim", "target": "k1", "content": "..."}
              | {"action": "rewrite_section", "target": "c1", "instruction": "..."}
 """

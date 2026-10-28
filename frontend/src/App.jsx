@@ -76,7 +76,7 @@ export default function App() {
 
   // 底部输入框：没开始 → 新建；review 中 → 自由文本按关键词路由；其他中断 → 禁用
   const interruptType = state?.interrupt?.type;
-  const inputMode = !state || state.exported ? "new"
+  const inputMode = !state || (state.exported && !interruptType) ? "new"
     : interruptType === "review" || interruptType === "research.review" ? "review"
     : interruptType === "research.ask" ? "ask" : "locked";
   const onSend = (text) => {
@@ -344,6 +344,7 @@ function AiMsg({ m, onPickElement, onCard, resume }) {
         {m.steps.filter((s) => s.node === "research").map((s, i) => <div className="done-line" key={"r" + i}>{s.answer_how === "close" ? "调研没有自己收尾，基于已有材料补了答案" : "调研完了"} · 共 {s.sources} 条候选来源</div>)}
         {m.steps.filter((s) => s.node === "consolidate").map((s, i) => <div className="done-line" key={"c" + i}>{s.gap ? `整理时发现证据缺口，回去补查：${s.gap}` : `整理出 ${s.sections} 节、${s.claims} 条论断`}</div>)}
         {m.steps.filter((s) => s.node === "write").map((s) => <div className="done-line" key={s.version}>已生成第 {s.version} 版报告 · {s.note}</div>)}
+        {m.steps.filter((s) => s.node === "export" && s.exported).map((s, i) => <div className="done-line" key={"e" + i}>已导出第 {s.exported.version} 版确认物包</div>)}
         {st?.scenario !== "research" && m.steps.filter((s) => s.notes?.length).map((s, i) => <p key={i}>{s.notes.join("；")}</p>)}
         {m.stage && <div className="status"><span className="dots">{m.stage}</span><span className="sep">|</span><span>你可以随时关掉页面，回来后从这一步继续</span></div>}
         {st && !m.stage && (st.scenario === "research"

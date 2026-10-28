@@ -94,14 +94,17 @@ def test_full_flow_traceable_and_exported(graph, tmp_path):
     assert any("包含" in a for a in p["assumptions"])
     assert "改文字" in report
 
-    r = resume(graph, "t1", {"action": "approve"})
-    exp = r["exported"]
+    # 校验过就已经导出，不等批准；论断状态照实导出（系统交付不等于人工确认）
+    exp = p["exported"]
+    assert exp and exp["version"] == 1
     pkg = Path(exp["dir"])
     assert {f.name for f in pkg.iterdir()} == {"manifest.json", "report.md", "items.json", "sources.json"}
     items = json.loads((pkg / "items.json").read_text())
     kinds = {i["kind"] for i in items}
     assert {"scope", "outline", "claim.fact", "claim.inference"} <= kinds
-    assert all(i["status"] == "confirmed" for i in items if i["kind"].startswith("claim."))
+    assert all(i["status"] == "draft" for i in items if i["kind"].startswith("claim."))
+    r = resume(graph, "t1", {"action": "approve"})
+    assert r["approved"] and r["exported"]["version"] == 1 and graph.get_state(cfg("t1")).next == ()
     adopted = json.loads((pkg / "sources.json").read_text())
     assert adopted and all(s["status"] == "adopted" for s in adopted)
     manifest = json.loads((pkg / "manifest.json").read_text())
@@ -123,8 +126,9 @@ def test_exclude_source_orphans_dependent_claim(graph):
     # 报告里不再出现这条论断，校验仍全部通过；只重写了受影响的节
     assert fact["statement"] not in p2["report"]
     assert all(c["passed"] for c in p2["checks"]), p2["checks"]
-    r = resume(graph, "t1", {"action": "approve"})
-    items = json.loads(Path(r["exported"]["items"]).read_text())
+    # 改完立刻重新导出，第 2 版覆盖第 1 版
+    assert p2["exported"]["version"] == 2
+    items = json.loads(Path(p2["exported"]["items"]).read_text())
     assert fact["id"] not in {i["id"] for i in items}
 
 
@@ -270,8 +274,9 @@ def test_exclude_unreferenced_source_returns_to_review(graph):
     assert p2["type"] == "research.review" and p2["version"] == 1
     assert next(s for s in p2["sources"] if s["id"] == unused)["status"] == "excluded"
     assert any("没有被任何论断引用" in n for n in p2["notes"])
+    assert p2["exported"]["version"] == 1  # 没重写就没重新导出
     r = resume(graph, "t1", {"action": "approve"})
-    assert r["exported"]
+    assert r["exported"]["version"] == 1
 
 
 def test_batch_tool_calls_count_toward_budget(planner):
@@ -307,8 +312,10 @@ def test_consolidate_failure_cannot_be_exported(graph):
     failed = {c["name"] for c in p["checks"] if not c["passed"]}
     assert {"report_valid", "question_answered"} <= failed
     assert any("整理失败" in n for n in p["notes"])
-    with pytest.raises(ValueError, match="不能当作成功结果导出"):
-        resume(graph, "t1", {"action": "approve"})
+    # 无效报告不导出确认物包；“不用改了”只是结束
+    assert p["exported"] is None
+    r = resume(graph, "t1", {"action": "approve"})
+    assert r.get("exported") is None
 
 
 def test_unanswered_without_gap_text_still_refills(graph, planner):

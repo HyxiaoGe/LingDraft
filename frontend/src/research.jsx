@@ -59,18 +59,18 @@ function askCard(it, resume) {
 function reviewCard(it, st, resume, setCard) {
   const invalid = (it.checks || []).some((c) => c.name === "report_valid" && !c.passed);
   return {
-    title: invalid ? `第 ${it.version} 版报告没有带来源的论断，不能导出` : `第 ${it.version} 版报告怎么样？`,
+    title: invalid ? `第 ${it.version} 版报告没有带来源的论断，没有导出` : `第 ${it.version} 版已导出，有要改的吗？`,
     page: "1/1",
     options: [
-      ...(invalid ? [] : [{ label: "就这版，导出", hint: "报告 + 论断清单 + 来源清单", value: "approve" }]),
-      { label: "排除某条来源", hint: "只靠它的论断会退回草稿并移出报告", value: "source" },
-      { label: "改某条论断", hint: "改过的表述模型不再碰", value: "claim" },
-      { label: "重写某一节", hint: "只按已确认的论断重写这一节", value: "section" },
+      { label: "不用改了", hint: invalid ? "结束这次调研" : "就用已导出的这版", value: "approve" },
+      { label: "排除某条来源", hint: "只靠它的论断会退回草稿并移出报告，改完重新导出", value: "source" },
+      { label: "改某条论断", hint: "改过的表述模型不再碰，改完重新导出", value: "claim" },
+      { label: "重写某一节", hint: "只按已确认的论断重写这一节，改完重新导出", value: "section" },
     ],
     customPlaceholder: "或直接说要改什么，例如：第一节更简短",
     onAnswer: (v, isCustom) => {
       if (isCustom) return routeResearchText(v, st, resume, setCard), null;
-      if (v === "approve") return (resume({ action: "approve" }, "就这版，导出"), null);
+      if (v === "approve") return (resume({ action: "approve" }, "不用改了"), null);
       if (v === "source") return pickSourceCard(it, resume);
       if (v === "claim") return pickClaimCard(it, (c) => claimCard(c, it, resume));
       if (v === "section") return pickSectionCard(it, (sec) => instructionCard(sec, resume));
@@ -199,23 +199,24 @@ function ReviewBody({ st, it, onCard, resume }) {
     if (!it && st.exported?.report_url) fetch(st.exported.report_url).then((r) => r.text()).then(setFinalText).catch(() => {});
   }, [it, st.exported?.report_url]);
   const report = it?.report || finalText;
-  const claims = it?.claims || st.claims;
-  const sources = it?.sources || st.sources;
+  const claims = it?.claims || st.claims || [];
+  const sources = it?.sources || st.sources || [];
   const sections = it?.sections || [];
   const checks = it?.checks || st.checks || [];
   const failed = checks.filter((c) => !c.passed);
-  const last = st.versions[st.versions.length - 1];
+  const versions = st.versions || [];
+  const last = versions[versions.length - 1];
   const byId = Object.fromEntries(sources.map((s) => [s.id, s]));
   const notes = [...new Set(it?.notes || st.notes || [])];
   return (
     <>
-      {it ? <p>第 {it.version} 版好了（{last?.note}）。每句话都挂着论断，推断句有标记；点论断或来源可以单独处理。{it.answer_how === "close" ? " 这次调研没有自己收尾，答案是基于已查到的材料补的，请多留意。" : ""}</p>
-          : <p>已导出第 {st.exported.version} 版的确认物包。</p>}
+      {it ? <p>第 {it.version} 版{st.exported?.version === it.version ? "已导出" : "好了，但没有带来源的论断，没有导出"}（{last?.note}）。每句话都挂着论断，推断句有标记；觉得不合适，点论断或来源可以单独处理。{it.answer_how === "close" ? " 这次调研没有自己收尾，答案是基于已查到的材料补的，请多留意。" : ""}</p>
+          : <p>已结束，用的是第 {st.exported?.version} 版。</p>}
       <div className="rtabs">
         {[["report", "报告"], ["claims", `论断 ${claims.filter((c) => !c.orphaned).length}`], ["sources", `来源 ${sources.length}`]].map(([k, l]) => (
           <button key={k} className={tab === k ? "sel" : ""} onClick={() => setTab(k)}>{l}</button>
         ))}
-        {st.versions.length > 1 && <span className="vnote">v{st.versions.length} · 共 {st.versions.length} 版</span>}
+        {versions.length > 1 && <span className="vnote">v{versions.length} · 共 {versions.length} 版</span>}
       </div>
       {tab === "report" && (report ? <Report text={report} byId={byId} /> : last && <p><a href={last.md_url} target="_blank" rel="noreferrer">打开 report_v{last.n}.md</a></p>)}
       {tab === "claims" && (

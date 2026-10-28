@@ -3,7 +3,7 @@
 黑五海报单场景的 LangGraph 实现：`intake → confirm_facts(中断) → 风格 → plan_layout → render → check → review(中断) → revise / manual_edit / change_fact / export`。
 设计见 `../docs/黑五海报PoC技术方案.md`。
 
-调研场景（图 + CLI + 接口 + 前端）：`intake → confirm_scope(只在需要澄清时中断) → research（全局 create_agent，`ask_user` 会中断；无文字答案时无工具受控收尾）→ consolidate（无工具结构化整理，关键缺口回 research 补一轮）→ write → check → review(中断：approve / exclude_source / edit_claim / rewrite_section) → export`。模型默认 DeepSeek V4 Pro（调研 agent 开思考，结构化步骤不开）。设计见 `../docs/调研场景与多场景架构设计.md` 第 17 节。
+调研场景（图 + CLI + 接口 + 前端）：`intake → confirm_scope(只在需要澄清时中断) → research（全局 create_agent，`ask_user` 会中断；无文字答案时无工具受控收尾）→ consolidate（无工具结构化整理，关键缺口回 research 补一轮）→ write → check → export（校验过就导出）→ review(可选修改：exclude_source / edit_claim / rewrite_section 改完重新导出；approve 只是结束)`。模型默认 DeepSeek V4 Pro（调研 agent 开思考，结构化步骤不开）。设计见 `../docs/调研场景与多场景架构设计.md` 第 17 节。
 
 ## 运行
 

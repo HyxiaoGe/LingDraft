@@ -11,6 +11,7 @@ from pathlib import Path
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.config import get_stream_writer
+from langgraph.graph import END
 from langgraph.types import interrupt
 
 from app.graph.research import prompts, report
@@ -278,15 +279,12 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             "assumptions": state.get("assumptions", []),
             "notes": state.get("notes", []),
             "answer_how": state.get("answer_how", "none"),
+            "exported": state.get("exported"),
         }
         d = _validated(interrupt(payload, response_schema=ReviewDecision), ReviewDecision)
         if d.action == "approve":
-            invalid = [c for c in state.get("check_results", []) if c.name == "report_valid" and not c.passed]
-            if invalid:
-                raise ValueError("报告里没有任何带来源的论断，不能当作成功结果导出；请换个问法重新发起")
-            return {"approved": True,
-                    "claims": [c.model_copy(update={"status": "confirmed"}) if c.status == "draft" and not c.orphaned else c
-                               for c in claims]}
+            # “不用改了”：结束线程。确认物包在校验过的那一刻已经导出，这里不再动论断状态——系统交付不等于人工确认
+            return {"approved": True}
         if d.action == "exclude_source":
             if not d.target or d.target not in {s.id for s in sources}:
                 raise ValueError(f"来源不存在：{d.target}")
@@ -323,6 +321,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         return {"approved": False, "rewrite_targets": [d.target], "rewrite_instruction": d.instruction}
 
     def export(state: ResearchState, config: RunnableConfig) -> dict:
+        """校验过就导出，不等人批准；终审改过再跑到这里会用新版本覆盖。"""
         _stage("导出确认物包")
         tdir = _thread_dir(out_dir, config)
         pkg = tdir / "package"
@@ -335,7 +334,8 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
                    "status": "confirmed", "provenance": "research.consolidate"} for n in state["outline"]]
         items += [{"id": c.id, "kind": f"claim.{c.kind}", "content": c.statement, "status": c.status,
                    "source_ids": c.source_ids, "outline_id": c.outline_id, "confidence": c.confidence,
-                   "provenance": "research.review"} for c in state["claims"] if not c.orphaned and c.status != "draft"]
+                   "provenance": "research.consolidate" if c.status == "draft" else "research.review"}
+                  for c in state["claims"] if not c.orphaned]
         (pkg / "items.json").write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
         (pkg / "sources.json").write_text(
             json.dumps([s.model_dump() for s in state["sources"] if s.status == "adopted"], ensure_ascii=False, indent=2),
@@ -361,9 +361,15 @@ def route_after_consolidate(state: ResearchState) -> str:
     return "research" if state.get("gap") else "write"
 
 
+def route_after_check(state: ResearchState) -> str:
+    """报告有效才导出；无效的（整理失败、没有带来源的论断）只进终审，不产出确认物包。"""
+    ok = all(c.passed for c in state.get("check_results", []) if c.name == "report_valid")
+    return "export" if ok else "review"
+
+
 def route_after_review(state: ResearchState) -> str:
     if state.get("rewrite_targets"):
         return "write"
     if state.get("approved"):
-        return "export"
+        return END
     return "review"  # 例如排除了一个没被引用的来源：没有要重写的节，回到终审
