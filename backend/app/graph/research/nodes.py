@@ -14,7 +14,7 @@ from langgraph.graph import END
 from langgraph.types import interrupt
 
 from app.graph.research import prompts, report
-from app.graph.research.agent import build_agent, close_out, collect_asks, collect_sources, final_answer_text
+from app.graph.research.agent import build_agent, close_out, collect_asks, collect_sources, final_answer_text, search_failures
 from app.graph.research.answers import InvalidAnswer, card_schema, resume_value
 from app.graph.research.state import (
     MAX_ASKS,
@@ -67,7 +67,7 @@ def _answered(state: ResearchState) -> bool:
 
 
 def blocks_of(state: ResearchState) -> list[dict]:
-    """当前这版报告的结构化内容（页面按它渲染）。和写出的 report.md 出自同一份 state。"""
+    """当前这版报告的结构化内容（页面按它渲染，终审卡和理解用户的话用的 Markdown 也由它生成）。"""
     if not state.get("versions"):
         return []
     return report.report_blocks(state["scope"], state.get("outline", []), state.get("sections", {}), state.get("claims", []),
@@ -144,6 +144,9 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         sources += new_sources
 
         notes = list(state.get("notes", []))
+        failed = search_failures(messages)
+        if failed:
+            notes.append(f"搜索服务出错 {len(failed)} 次（{failed[0]}），agent 换了搜索或基于已有材料继续")
         answer = final_answer_text(messages)
         how = "agent"
         if answer is None:
@@ -294,14 +297,16 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         return {"check_results": results}
 
     def _review_payload(state: ResearchState) -> dict:
+        """报告从检查点里的数据生成，不读磁盘上的 report_vN.md：换了存储或文件丢了，线程照样能接着改。"""
         v = state["versions"][-1]
+        blocks = blocks_of(state)
         return {
             "type": "research.review",
             "title": f"第 {v.n} 版报告",
             "version": v.n,
             "report_path": v.path,
-            "report": Path(v.path).read_text(encoding="utf-8"),
-            "blocks": blocks_of(state),
+            "report": report.to_markdown(blocks),
+            "blocks": blocks,
             "sections": [
                 {"id": n.id, "title": n.title,
                  "sentences": [s.model_dump() for s in state["sections"].get(n.id, SectionText(outline_id=n.id, sentences=[])).sentences]}

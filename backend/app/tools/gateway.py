@@ -61,7 +61,16 @@ class ReadResult:
 
 
 class GatewayError(RuntimeError):
-    pass
+    """kind 是失败类型（timeout、http_502…），retryable 表示再试一次可能就好。"""
+
+    def __init__(self, message: str, *, kind: str = "error", retryable: bool = False) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.retryable = retryable
+
+
+class GatewayAuthError(GatewayError):
+    """密钥不对或没有权限：配置问题，再试也不会好。"""
 
 
 class GatewayClient:
@@ -91,13 +100,24 @@ class GatewayClient:
             payload["freshness"] = freshness
         try:
             resp = self._client.post("/search/search", json=payload)
+        except httpx.TimeoutException as e:
+            raise GatewayError(f"搜索超时：{e}", kind="timeout", retryable=True) from e
         except httpx.HTTPError as e:
-            raise GatewayError(f"搜索请求失败：{e}") from e
+            raise GatewayError(f"搜索请求失败：{e}", kind="request_error", retryable=True) from e
+        if resp.status_code in (401, 403):
+            raise GatewayAuthError(f"搜索失败：HTTP {resp.status_code} {resp.text[:200]}", kind=f"http_{resp.status_code}")
         if resp.status_code != 200:
-            raise GatewayError(f"搜索失败：HTTP {resp.status_code} {resp.text[:200]}")
-        data = resp.json()
+            raise GatewayError(f"搜索失败：HTTP {resp.status_code} {resp.text[:200]}", kind=f"http_{resp.status_code}",
+                               retryable=resp.status_code in (429, 502, 503, 504))
+        try:
+            data = resp.json()
+        except ValueError as e:
+            raise GatewayError("搜索服务返回的不是 JSON", kind="bad_response", retryable=True) from e
+        results = data.get("results") if isinstance(data, dict) else None
         hits = []
-        for r in data.get("results") or []:
+        for r in results or []:
+            if not isinstance(r, dict):
+                continue
             hits.append(
                 SearchHit(
                     title=r.get("title") or "",
@@ -120,7 +140,12 @@ class GatewayClient:
         except httpx.HTTPError as e:
             return ReadResult(ok=False, url=url, kind="request_error", message=str(e), retryable=True)
         if resp.status_code == 200:
-            data = resp.json()
+            try:
+                data = resp.json()
+            except ValueError:
+                data = None
+            if not isinstance(data, dict):
+                return ReadResult(ok=False, url=url, kind="bad_response", message="读取服务返回的不是 JSON 对象", retryable=True)
             content = data.get("content") or ""
             truncated = len(content) > max_chars
             return ReadResult(

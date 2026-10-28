@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import json
 
-from langchain_core.tools import tool
+from langchain_core.tools import ToolException, tool
 
-from app.tools.gateway import GatewayClient
+from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError
 
 
 @tool
@@ -29,9 +29,19 @@ def make_research_tools(client: GatewayClient) -> list:
     @tool
     def search_web(query: str, count: int = 5) -> str:
         """搜索公开网页，返回候选来源列表（title、url、description、content 长摘要、published_at）。
-        一次只搜一个明确的问题；count 1～10。"""
-        hits = client.search(query, count=count)
+        一次只搜一个明确的问题；count 1～10。搜索服务出错时返回 ok=false 和原因：retryable=true 可以再搜一次，
+        否则换个说法，或基于已有材料继续。"""
+        try:
+            hits = client.search(query, count=count)
+        except GatewayAuthError:
+            raise  # 密钥配置问题：让这次运行失败、把错误亮出来，改好配置再重试
+        except GatewayError as e:
+            # 服务偶发出错交给 agent 处理，不让整次调研失败；出错的搜索也占额度，服务一直不好时不会无限重试
+            raise ToolException(json.dumps({"ok": False, "kind": e.kind, "message": str(e), "retryable": e.retryable},
+                                           ensure_ascii=False)) from e
         return json.dumps([h.to_dict() for h in hits], ensure_ascii=False)
+
+    search_web.handle_tool_error = True  # ToolException 变成 status=error 的工具结果，其他异常照常抛出
 
     @tool
     def read_page(url: str) -> str:

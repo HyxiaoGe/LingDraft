@@ -8,6 +8,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _flag(name: str, default: bool) -> bool:
+    """开关型环境变量：不设或留空用默认值；认不出的值直接报错，免得写错了悄悄按反的跑（比如误开付费模型）。"""
+    raw = (os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return default
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"环境变量 {name}={os.environ[name]!r} 不是开关值，请用 1/0、true/false、yes/no、on/off")
+
+
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("LINGDRAFT_DATA_DIR", BACKEND_DIR / "data"))
 OUTPUT_DIR = Path(os.environ.get("LINGDRAFT_OUTPUT_DIR", BACKEND_DIR / "output"))
@@ -24,13 +37,13 @@ DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")
 # 调研场景的模型：探针对照后定为 DeepSeek V4 Pro 思考 high（docs/probe/autonomy）；设 RESEARCH_PROVIDER=ark 可切回豆包
 RESEARCH_PROVIDER = os.environ.get("RESEARCH_PROVIDER", "deepseek")
 RESEARCH_MODEL = os.environ.get("RESEARCH_MODEL", "")  # 空则按提供方默认
-RESEARCH_THINKING = os.environ.get("RESEARCH_THINKING", "1") not in ("0", "false", "")
+RESEARCH_THINKING = _flag("RESEARCH_THINKING", True)
 RESEARCH_EFFORT = os.environ.get("RESEARCH_EFFORT", "high")
 
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-flash-260915")
 # 背景图生成开关（M2 起默认开）；关闭时背景为模板渐变
-BACKGROUND_ENABLED = os.environ.get("LINGDRAFT_BACKGROUND", "1") not in ("0", "false", "")
-USE_FAKE_PLANNER = os.environ.get("LINGDRAFT_FAKE", "0") in ("1", "true")
+BACKGROUND_ENABLED = _flag("LINGDRAFT_BACKGROUND", True)
+USE_FAKE_PLANNER = _flag("LINGDRAFT_FAKE", False)
 RESEARCH_WORKERS = int(os.environ.get("LINGDRAFT_RESEARCH_WORKERS", "4"))  # 同时跑几个调研线程，多出来的排队
 
 MAX_CHECK_RETRIES = 2

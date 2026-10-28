@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
@@ -22,10 +23,13 @@ from app.graph.research.agent import (
     collect_sources,
     final_answer_text,
     is_ask_interrupt,
+    url_key,
 )
 from app.graph.research.graph import build_graph, memory_checkpointer, open_sqlite_checkpointer
 from app.graph.research.state import MAX_ASKS, MAX_SEARCHES
 from app.research_llm import FakeResearchPlanner
+from app.tools.gateway import GatewayAuthError, GatewayClient
+from app.tools.research_tools import make_research_tools
 
 REQUEST = "AI 海报工具在局部修改上的现状（2026）"
 
@@ -617,3 +621,78 @@ def test_time_check_ignores_uncited_sources():
     assert res["scope_time"].passed
     res = {c.name: c for c in run_checks(sections, claims, sources, {"s1": "太旧"})}
     assert not res["scope_time"].passed and res["scope_time"].detail == "s1：太旧；"
+
+
+# ---- 后端流程：搜索服务出错、来源去重、报告不依赖磁盘文件 ----
+
+
+def _with_gateway(planner: FakeResearchPlanner, handler) -> FakeResearchPlanner:
+    gw = GatewayClient("http://gw", "k", scene="research", transport=httpx.MockTransport(handler))
+    planner._gateway, planner._tools = gw, make_research_tools(gw)
+    return planner
+
+
+def _search_hits(req: httpx.Request, tag: str) -> httpx.Response:
+    return httpx.Response(200, json={"results": [
+        {"title": f"{tag} {i}", "url": f"https://x.test/{tag}/{i}", "description": "d", "content": "c", "published_at": None}
+        for i in (1, 2)]})
+
+
+def test_search_outage_does_not_fail_research(planner, tmp_path):
+    """第一次搜索返回 502：agent 拿到出错的工具结果后换个搜索继续，照常出报告，并记下搜索出过错。"""
+    calls = {"n": 0}
+
+    def handler(req):
+        if req.url.path == "/search/search":
+            calls["n"] += 1
+            return httpx.Response(502, text="bad gateway") if calls["n"] == 1 else _search_hits(req, f"q{calls['n']}")
+        return httpx.Response(200, json={"title": "正文", "content": "正文内容"})
+
+    g = build_graph(_with_gateway(planner, handler), memory_checkpointer(), tmp_path / "out")
+    p = intr(g.invoke({"request": "比较两款笔记软件的同步能力"}, cfg("t1")))
+    assert p["type"] == "research.review" and calls["n"] == 2
+    assert any("搜索服务出错 1 次" in n and "502" in n for n in p["notes"])
+    assert p["claims"] and all(s["url"].startswith("https://x.test/q2/") for s in p["sources"])
+
+
+def test_search_auth_error_fails_the_run(planner, tmp_path):
+    """密钥问题不交给 agent：这次运行失败、错误记在检查点里，改好配置后可以重试。"""
+    g = build_graph(_with_gateway(planner, lambda req: httpx.Response(401, json={"error": "unauthorized"})),
+                    memory_checkpointer(), tmp_path / "out")
+    with pytest.raises(GatewayAuthError):
+        g.invoke({"request": "比较两款笔记软件的同步能力"}, cfg("t1"))
+    snap = g.get_state(cfg("t1"))
+    assert snap.next == ("research",) and any("401" in str(t.error) for t in snap.tasks if t.error)
+
+
+def test_url_variants_are_one_source():
+    """读页时网址写法和搜索结果不同（http、www、大小写、结尾斜杠、锚点）：还是搜到的那个来源，发布时间保留。"""
+    hits = [{"url": "https://www.Example.test/a/", "title": "A", "description": "摘要", "published_at": "2026-01-01"},
+            {"url": "https://example.test/a", "title": "A 重复", "description": "摘要"}]
+    msgs = [
+        ToolMessage(content=json.dumps(hits), name="search_web", tool_call_id="1"),
+        ToolMessage(content=json.dumps({"ok": True, "url": "http://example.test/a#top", "title": "A", "content": "正文"}),
+                    name="read_page", tool_call_id="2"),
+    ]
+    new, mapping = collect_sources(msgs, [], 1)
+    assert [(s.id, s.url, s.excerpt_kind, s.published_at) for s in new] == [("s1", "https://www.Example.test/a/", "body", "2026-01-01")]
+    assert mapping == {"https://www.Example.test/a/": "s1"}
+    # 上一轮已有的来源也一样：补查时换个写法读同一页，不新增来源
+    again, _ = collect_sources([ToolMessage(content=json.dumps({"ok": True, "url": "https://example.test/a?", "content": "新正文"}),
+                                            name="read_page", tool_call_id="3")], new, 2)
+    assert again == [] and new[0].excerpt == "新正文"
+    assert url_key("https://example.test/b") != url_key("https://example.test/a") != url_key("https://other.test/a")
+    assert url_key("https://example.test/a?x=1") != url_key("https://example.test/a?x=2")
+
+
+def test_review_does_not_depend_on_report_file(graph):
+    """终审卡和理解用户的话用的报告从检查点里的数据生成：磁盘上的 report_vN.md 没了，线程照样能接着改。"""
+    from app.graph.research.report import to_markdown
+
+    p = run_to_review(graph)
+    Path(p["report_path"]).unlink()
+    p2 = intr(resume(graph, "t1", {"action": "instruct", "text": "第一节写短一点"}))  # 假模型没预设理解结果：带着回复回到终审
+    assert p2["type"] == "research.review" and p2["reply"] and p2["report"] == p["report"] == to_markdown(p2["blocks"])
+    sec = p["sections"][0]["id"]
+    p3 = intr(resume(graph, "t1", {"action": "rewrite_section", "target": sec, "instruction": "短一点"}))
+    assert p3["version"] == 2 and p3["report"] == to_markdown(p3["blocks"])

@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from app.tools.gateway import GatewayClient, GatewayError
+from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError
 from app.tools.research_tools import make_research_tools
 
 
@@ -93,3 +93,42 @@ def test_tools_wrap_client():
 def test_missing_key():
     with pytest.raises(GatewayError):
         GatewayClient("http://gw", "")
+
+
+def test_search_failures_are_typed():
+    """搜索失败带类型和能不能重试；密钥问题单独一类。"""
+    cases = [
+        (lambda req: httpx.Response(502, text="bad gateway"), GatewayError, "http_502", True),
+        (lambda req: httpx.Response(400, json={"error": "bad query"}), GatewayError, "http_400", False),
+        (lambda req: httpx.Response(200, text="<html>"), GatewayError, "bad_response", True),
+        (lambda req: httpx.Response(403, json={"error": "forbidden"}), GatewayAuthError, "http_403", False),
+    ]
+    for handler, exc, kind, retryable in cases:
+        with pytest.raises(exc) as e:
+            _client(handler).search("q")
+        assert e.value.kind == kind and e.value.retryable is retryable
+
+    def timeout(req):
+        raise httpx.ReadTimeout("slow", request=req)
+
+    with pytest.raises(GatewayError) as e:
+        _client(timeout).search("q")
+    assert e.value.kind == "timeout" and e.value.retryable
+
+
+def test_read_non_json_is_a_failed_read():
+    r = _client(lambda req: httpx.Response(200, text="<html>")).read("https://a")
+    assert not r.ok and r.kind == "bad_response" and r.retryable
+
+
+def test_search_tool_hands_service_errors_to_agent():
+    """搜索服务出错变成给 agent 的工具结果（status=error），不让整次调研失败；密钥问题照常抛出。"""
+    call = {"name": "search_web", "args": {"query": "q"}, "id": "c1", "type": "tool_call"}
+    tools = {t.name: t for t in make_research_tools(_client(lambda req: httpx.Response(503, text="down")))}
+    msg = tools["search_web"].invoke(call)
+    assert msg.status == "error"
+    data = json.loads(msg.content)
+    assert data["ok"] is False and data["kind"] == "http_503" and data["retryable"] is True
+    tools = {t.name: t for t in make_research_tools(_client(lambda req: httpx.Response(401, json={"error": "unauthorized"})))}
+    with pytest.raises(GatewayAuthError):
+        tools["search_web"].invoke(call)

@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from typing import Any, NotRequired
+from urllib.parse import unquote, urlsplit
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, ModelCallLimitMiddleware
@@ -307,9 +308,27 @@ def _parse(msg: ToolMessage) -> Any:
         return None
 
 
+def url_key(url: str) -> str:
+    """去重用：同一个网页的不同写法（http / https、www、域名大小写、默认端口、结尾斜杠、#锚点、百分号编码）归成一个来源。"""
+    url = url.strip()
+    try:
+        p = urlsplit(url)
+        host, port = (p.hostname or "").lower(), p.port
+    except ValueError:  # 端口之类写坏了：按原样比较
+        return url
+    if not host:
+        return url
+    host = host.removeprefix("www.") + (f":{port}" if port and port not in (80, 443) else "")
+    query = unquote(p.query)
+    return host + (unquote(p.path).rstrip("/") or "/") + (f"?{query}" if query else "")
+
+
 def collect_sources(messages: list[BaseMessage], existing: list[Source], next_index: int) -> tuple[list[Source], dict[str, str]]:
-    """返回新增的来源和 url→id 映射（含已有的）。读到正文的来源用正文片段替换搜索摘要。"""
-    by_url = {s.url: s for s in existing}
+    """返回新增的来源和 url→id 映射（含已有的）。读到正文的来源用正文片段替换搜索摘要。
+
+    同一个网页按 url_key 算一个来源，网址保留第一次见到的写法：读页时网址写法和搜索结果略有不同，也落在搜到的那个来源上。
+    """
+    by_url = {url_key(s.url): s for s in existing}
     new: list[Source] = []
     now = datetime.now(UTC).isoformat(timespec="seconds")
     for m in messages:
@@ -319,7 +338,7 @@ def collect_sources(messages: list[BaseMessage], existing: list[Source], next_in
         if m.name == "search_web" and isinstance(data, list):
             for hit in data:
                 url = (hit.get("url") or "").strip()
-                if not url or url in by_url:
+                if not url or url_key(url) in by_url:
                     continue
                 src = Source(
                     id=f"s{next_index}",
@@ -331,21 +350,32 @@ def collect_sources(messages: list[BaseMessage], existing: list[Source], next_in
                     excerpt_kind="summary",
                 )
                 next_index += 1
-                by_url[url] = src
+                by_url[url_key(url)] = src
                 new.append(src)
         elif m.name == "read_page" and isinstance(data, dict) and data.get("ok"):
-            url = data.get("url") or ""
-            src = by_url.get(url)
+            url = (data.get("url") or "").strip()
+            src = by_url.get(url_key(url))
             if src is None:
                 src = Source(id=f"s{next_index}", url=url, title=data.get("title") or "", retrieved_at=now)
                 next_index += 1
-                by_url[url] = src
+                by_url[url_key(url)] = src
                 new.append(src)
             src.excerpt = (data.get("content") or "")[:EXCERPT_CHARS]
             src.excerpt_kind = "body"
             if data.get("title") and not src.title:
                 src.title = data["title"]
-    return new, {u: s.id for u, s in by_url.items()}
+    return new, {s.url: s.id for s in by_url.values()}
+
+
+def search_failures(messages: list[BaseMessage]) -> list[str]:
+    """这次运行里搜索服务出错的搜索（工具结果是 ok=false 的 JSON；额度用完被拦下的不算）。"""
+    out = []
+    for m in messages:
+        if isinstance(m, ToolMessage) and m.name == "search_web" and m.status == "error":
+            data = _parse(m)
+            if isinstance(data, dict) and data.get("ok") is False:
+                out.append(str(data.get("message") or data.get("kind") or ""))
+    return out
 
 
 def collect_asks(messages: list[BaseMessage]) -> list[AskRecord]:
