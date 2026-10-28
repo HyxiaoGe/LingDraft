@@ -210,7 +210,8 @@ async def research_package_file(thread_id: str, name: str):
 
 @app.get("/api/research/threads/{thread_id}/export")
 async def research_export(thread_id: str):
-    if not _view(research(), thread_id)["exported"]:
-        raise HTTPException(404, "尚未导出，请先在终审中确认")
+    """把最新一版的报告、论断、来源打包下载。每一版写出来就能下，不用先确认。"""
+    if not _view(research(), thread_id)["package"]:
+        raise HTTPException(404, "这个线程还没有可下载的报告")
     tdir = _dir(research(), thread_id)
     return _zip(tdir, tdir / "package", f"research-{thread_id}.zip")

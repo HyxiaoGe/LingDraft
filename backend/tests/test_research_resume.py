@@ -135,7 +135,10 @@ def test_downloads_stay_inside_thread_dir_despite_links(client, rr, tmp_path):
     pkg.symlink_to(outside, target_is_directory=True)  # 整个包目录换成指向外面的链接
     r = client.get(f"/api/research/threads/{tid}/package/report.md")
     assert r.status_code == 404 and "SECRET" not in r.text
-    assert zipfile.ZipFile(io.BytesIO(client.get(f"/api/research/threads/{tid}/export").content)).namelist() == []
+    (outside / "manifest.json").write_text('{"version": 1}')  # 外面放一个对得上的 manifest 也不认
+    assert _state(client, tid)["package"] is None
+    r = client.get(f"/api/research/threads/{tid}/export")
+    assert r.status_code == 404 and "SECRET" not in r.text
 
 
 # ---- 严格载荷 ----

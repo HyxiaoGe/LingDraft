@@ -65,8 +65,9 @@ def test_research_flow_over_http(client):
     cons = next(d for e, d in ev if e == "node" and d["node"] == "consolidate")
     assert cons["sections"] == 2 and cons["claims"] == 3 and cons["gap"] is None
     assert any(e == "node" and d["node"] == "write" and d["version"] == 1 for e, d in ev)
-    exp = next(d for e, d in ev if e == "node" and d["node"] == "export")["exported"]
-    assert exp["version"] == 1 and client.get(exp["zip_url"]).headers["content-type"] == "application/zip"
+    assert not any(e == "node" and d["node"] == "export" for e, d in ev)  # 没有单独的“导出”步骤
+    pkg = _last(ev, "state")["package"]
+    assert pkg["version"] == 1 and client.get(pkg["zip_url"]).headers["content-type"] == "application/zip"
     md = client.get(review["md_url"])
     assert md.status_code == 200 and md.text.startswith("# ")
 
@@ -76,12 +77,12 @@ def test_research_flow_over_http(client):
     st = client.get(f"/api/research/threads/{tid}/state").json()
     assert st["next"] == ["review"] and len(st["versions"]) == 2
 
-    exported = st["exported"]
-    assert exported["version"] == 2 and st["interrupt"]["type"] == "research.review"
-    assert client.get(exported["items_url"]).json()[0]["kind"] == "scope"
+    pkg = st["package"]
+    assert pkg["version"] == 2 and st["interrupt"]["type"] == "research.review"
+    assert client.get(pkg["items_url"]).json()[0]["kind"] == "scope"
     ev = _events(_resume(client, st, {"action": "approve"}))
     st = _last(ev, "state")
-    assert st["next"] == [] and st["exported"]["version"] == 2 and st["interrupt"] is None
+    assert st["next"] == [] and st["package"]["version"] == 2 and st["interrupt"] is None
 
 
 def test_invalid_answer_rejected_before_graph(client):

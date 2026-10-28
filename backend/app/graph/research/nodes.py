@@ -1,4 +1,4 @@
-"""调研图的节点。约定与海报图一致：interrupt 节点不调模型；调模型的节点只写 state；拼装 / 校验 / 导出是纯确定性节点。
+"""调研图的节点。约定与海报图一致：interrupt 节点不调模型；调模型的节点只写 state；拼装 / 校验是纯确定性节点。
 
 research 把 agent 子图当函数调用，子图里的 ask_user 中断会冒到外层；恢复时本节点重跑，子图从自己的检查点接着跑。
 """
@@ -6,7 +6,6 @@ research 把 agent 子图当函数调用，子图里的 ask_user 中断会冒到
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
 from langchain_core.runnables import RunnableConfig
@@ -15,7 +14,7 @@ from langgraph.graph import END
 from langgraph.types import interrupt
 
 from app.graph.research import prompts, report
-from app.graph.research.agent import build_agent, close_out, collect_asks, collect_sources, count_asks, final_answer_text
+from app.graph.research.agent import build_agent, close_out, collect_asks, collect_sources, final_answer_text
 from app.graph.research.answers import card_schema
 from app.graph.research.state import (
     MAX_ASKS,
@@ -72,9 +71,9 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         res = planner.intake(state["request"])
         return {
             "scope": res.scope, "clarify": res.questions[:2], "scope_confirmed": False,
-            "answer": None, "answer_how": "none", "answered": False, "gap": None, "gap_rounds": 0, "outline": [],
+            "answer": None, "answer_how": "none", "answered": False, "gap": None, "open_gap": None, "gap_rounds": 0, "outline": [],
             "sources": [], "claims": [], "assumptions": [], "asks": [], "asks_used": 0, "sections": {}, "rewrite_targets": [],
-            "rewrite_instruction": None, "versions": [], "check_results": [], "notes": [], "exported": None, "approved": False,
+            "rewrite_instruction": None, "versions": [], "check_results": [], "notes": [], "approved": False,
         }
 
     def confirm_scope(state: ResearchState) -> dict:
@@ -134,25 +133,34 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         new_asks = collect_asks(messages)
         asks = list(state.get("asks", [])) + new_asks
         assumptions = list(state.get("assumptions", [])) + [f"「{a.question}」用户跳过了，按模型假设处理" for a in new_asks if a.skipped]
-        return {
-            "sources": sources, "answer": answer, "answer_how": how, "gap": None, "asks": asks, "assumptions": assumptions,
-            "asks_used": asks_used + count_asks(messages), "notes": notes,
-        }
+        out = {"sources": sources, "asks": asks, "assumptions": assumptions,
+               "asks_used": asks_used + len(new_asks), "notes": notes}  # 只算呈现给用户的提问（含跳过的）
+        if answer is None and gap and state.get("answer"):
+            # 补查没拿到新答案：上一轮的答案和整理结果都留着，不拿空答案冲掉，也不把同一份答案再整理一遍（结论可能碰巧翻过来）
+            notes.append("补查没有给出新答案，沿用上一轮的答案和整理结果")
+            return {**out, "gap": None, "open_gap": gap, "answered": False}
+        # gap 留着给整理用：回补后整理不出来时，要说明还缺什么
+        return {**out, "answer": answer, "answer_how": how}
 
     def consolidate(state: ResearchState) -> dict:
-        """无工具的结构化整理：候选答案 + 已存来源 → 节、论断、来源关联。不新增事实。"""
+        """无工具的结构化整理：候选答案 + 已存来源 → 节、论断、来源关联。不新增事实。
+
+        回补那一轮整理不出来时，保留上一轮的整理结果（第一轮整理不出来就是空的），标明仍没答完。
+        """
         answer = state.get("answer")
         notes = list(state.get("notes", []))
         sources = list(state.get("sources", []))
+        kept = {"outline": state.get("outline", []), "sections": state.get("sections", {}), "claims": state.get("claims", []),
+                "answered": False, "gap": None, "open_gap": state.get("gap"), "rewrite_targets": []}
         if not answer:
             notes.append("没有候选答案，无法整理；报告为空")
-            return {"outline": [], "sections": {}, "claims": [], "answered": False, "notes": notes, "rewrite_targets": []}
+            return {**kept, "notes": notes}
         _stage("整理论断与来源")
         try:
             res = planner.consolidate(state["scope"], answer, sources, _user_answers(state))
         except Exception as e:  # noqa: BLE001
-            notes.append(f"整理失败：{e}")
-            return {"outline": [], "sections": {}, "claims": [], "answered": False, "notes": notes, "rewrite_targets": []}
+            notes.append(f"整理失败：{e}" + ("；保留上一轮的整理结果" if kept["claims"] else ""))
+            return {**kept, "notes": notes}
 
         known = {s.id for s in sources if s.status != "excluded"}
         claims: list[Claim] = []
@@ -198,8 +206,6 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             notes.append("随无来源论断一起从正文移除的句子：" + "；".join(dropped_sents))
         if "c1" not in sections:
             sections["c1"] = SectionText(outline_id="c1", sentences=[])
-        used = {sid for c in claims for sid in c.source_ids}
-        sources = [s.model_copy(update={"status": "adopted"}) if s.id in used and s.status != "excluded" else s for s in sources]
         assumptions = list(state.get("assumptions", [])) + [a.strip() for a in res.assumptions if a.strip() and a.strip() not in state.get("assumptions", [])]
 
         answered = bool(res.answered)
@@ -207,12 +213,12 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         rounds = state.get("gap_rounds", 0)
         if gap and rounds < MAX_GAP_ROUNDS:
             notes.append(f"整理判断问题还没回答，回研究环节补一轮：{gap}")
-            return {"outline": outline, "sections": sections, "claims": claims, "sources": sources, "assumptions": assumptions,
-                    "notes": notes, "answered": False, "gap": gap, "gap_rounds": rounds + 1, "rewrite_targets": []}
+            return {"outline": outline, "sections": sections, "claims": claims, "assumptions": assumptions,
+                    "notes": notes, "answered": False, "gap": gap, "open_gap": None, "gap_rounds": rounds + 1, "rewrite_targets": []}
         if gap:
             notes.append(f"补了一轮仍没回答研究问题：{gap}")
-        return {"outline": outline, "sections": sections, "claims": claims, "sources": sources, "assumptions": assumptions,
-                "notes": notes, "answered": answered, "gap": None, "rewrite_targets": []}
+        return {"outline": outline, "sections": sections, "claims": claims, "assumptions": assumptions,
+                "notes": notes, "answered": answered, "gap": None, "open_gap": gap, "rewrite_targets": []}
 
     # ---- 写作、校验、终审 ----
 
@@ -232,7 +238,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
                 sections[node.id] = SectionText(outline_id=node.id, sentences=[])
                 notes.append(f"「{node.title}」没有可用论断，正文留空")
                 continue
-            sec = planner.write_section(state["scope"], node, usable, instruction)
+            sec = planner.write_section(state["scope"], node, usable, instruction, _user_answers(state))
             kind_of = {c.id: c.kind for c in usable}
             sents = []
             for s in sec.sentences:
@@ -246,16 +252,19 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
                 sents.append(Sentence(text=text, claim_id=claim_id))
             sections[node.id] = SectionText(outline_id=node.id, sentences=sents)
         _stage("拼装报告")
-        text = report.assemble(state["scope"], state["outline"], sections, claims, state.get("sources", []),
-                               state.get("assumptions", []), _user_answers(state))
+        sources = report.source_status(state.get("sources", []), sections, claims)
+        answered, open_gap = state.get("answered", False), state.get("open_gap")
+        text = report.assemble(state["scope"], state["outline"], sections, claims, sources,
+                               state.get("assumptions", []), _user_answers(state), answered, open_gap)
         tdir = _thread_dir(out_dir, config)
         tdir.mkdir(parents=True, exist_ok=True)
         n = len(state.get("versions", [])) + 1
         path = tdir / f"report_v{n}.md"
         path.write_text(text, encoding="utf-8")
+        _write_package(tdir / "package", config["configurable"]["thread_id"], n, text, state, sections, claims, sources)
         note = "初稿" if n == 1 else (f"重写 {', '.join(targets)}" + (f"：{instruction}" if instruction else ""))
         return {
-            "sections": sections,
+            "sections": sections, "sources": sources,
             "versions": state.get("versions", []) + [ReportVersion(n=n, path=str(path), note=note)],
             "rewrite_targets": [], "rewrite_instruction": None, "notes": notes,
         }
@@ -264,7 +273,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         _stage("校验引用与标记")
         results = report.run_checks(state["sections"], state["claims"], state["sources"], state["scope"])
         results = [report.answer_check(state.get("answer"), state.get("answer_how", "none"))] + results
-        results += report.report_check(state["sections"], state["claims"], state.get("answered", False))
+        results += report.report_check(state["sections"], state["claims"], state.get("answered", False), state.get("open_gap"))
         return {"check_results": results}
 
     def review(state: ResearchState) -> dict:
@@ -288,11 +297,10 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
             "assumptions": state.get("assumptions", []),
             "notes": state.get("notes", []),
             "answer_how": state.get("answer_how", "none"),
-            "exported": state.get("exported"),
         }
         d = _validated(interrupt(payload, response_schema=card_schema(payload)), ReviewDecision)  # 目标存在、字段齐全由 schema 保证
         if d.action == "approve":
-            # “不用改了”：结束线程。确认物包在校验过的那一刻已经导出，这里不再动论断状态——系统交付不等于人工确认
+            # “不用改了”：结束线程。每一版写出来就是交付物（下载包也已经写好），这里不再动论断状态——系统交付不等于人工确认
             return {"approved": True}
         if d.action == "exclude_source":
             new_sources = [s.model_copy(update={"status": "excluded"}) if s.id == d.target else s for s in sources]
@@ -323,53 +331,46 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         # rewrite_section
         return {"approved": False, "rewrite_targets": [d.target], "rewrite_instruction": d.instruction}
 
-    def export(state: ResearchState, config: RunnableConfig) -> dict:
-        """校验过就导出，不等人批准；终审改过再跑到这里会用新版本覆盖。"""
-        _stage("导出确认物包")
-        tdir = _thread_dir(out_dir, config)
-        pkg = tdir / "package"
-        pkg.mkdir(parents=True, exist_ok=True)
-        v = state["versions"][-1]
-        shutil.copyfile(v.path, pkg / "report.md")
-        scope = state["scope"]
-        items = [{"id": "scope", "kind": "scope", "content": scope.model_dump(), "status": "confirmed", "provenance": "research.scope"}]
-        items += [{"id": n.id, "kind": "outline", "content": {"title": n.title, "question": n.question},
-                   "status": "confirmed", "provenance": "research.consolidate"} for n in state["outline"]]
-        items += [{"id": f"u{i + 1}", "kind": "user_answer", "content": f, "status": "confirmed", "provenance": "research.ask"}
-                  for i, f in enumerate(_user_answers(state))]
-        items += [{"id": c.id, "kind": f"claim.{c.kind}", "content": c.statement, "status": c.status,
-                   "source_ids": c.source_ids, "outline_id": c.outline_id, "confidence": c.confidence,
-                   "provenance": "research.consolidate" if c.status == "draft" else "research.review"}
-                  for c in state["claims"] if not c.orphaned]
-        (pkg / "items.json").write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
-        (pkg / "sources.json").write_text(
-            json.dumps([s.model_dump() for s in state["sources"] if s.status == "adopted"], ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        manifest = {"scenario": "research", "thread_id": config["configurable"]["thread_id"], "version": v.n,
-                    "question": scope.question, "files": ["report.md", "items.json", "sources.json"]}
-        (pkg / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-        return {"exported": {"version": v.n, "dir": str(pkg), "report": str(pkg / "report.md"),
-                             "items": str(pkg / "items.json"), "sources": str(pkg / "sources.json"),
-                             "manifest": str(pkg / "manifest.json")}}
-
     return {
         "intake": intake, "confirm_scope": confirm_scope, "research": research, "consolidate": consolidate,
-        "write": write, "check": check, "review": review, "export": export,
+        "write": write, "check": check, "review": review,
     }
+
+
+def _write_package(pkg: Path, thread_id: str, n: int, text: str, state: ResearchState,
+                   sections: dict[str, SectionText], claims: list[Claim], sources: list) -> None:
+    """这一版的下载包：报告、正文用到的论断、它们引用的来源。每版都写，覆盖上一版；下载就是把它打包。"""
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "report.md").write_text(text, encoding="utf-8")
+    scope = state["scope"]
+    cited = report.cited_claim_ids(sections, claims)
+    items = [{"id": "scope", "kind": "scope", "content": scope.model_dump(), "status": "confirmed", "provenance": "research.scope"}]
+    items += [{"id": o.id, "kind": "outline", "content": {"title": o.title, "question": o.question},
+               "status": "confirmed", "provenance": "research.consolidate"} for o in state["outline"]]
+    items += [{"id": f"u{i + 1}", "kind": "user_answer", "content": f, "status": "confirmed", "provenance": "research.ask"}
+              for i, f in enumerate(_user_answers(state))]
+    items += [{"id": c.id, "kind": f"claim.{c.kind}", "content": c.statement, "status": c.status,
+               "source_ids": c.source_ids, "outline_id": c.outline_id, "confidence": c.confidence,
+               "provenance": "research.consolidate" if c.status == "draft" else "research.review"}
+              for c in claims if c.id in cited]
+    (pkg / "items.json").write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    (pkg / "sources.json").write_text(
+        json.dumps([s.model_dump() for s in sources if s.status == "adopted"], ensure_ascii=False, indent=2), encoding="utf-8")
+    manifest = {"scenario": "research", "thread_id": thread_id, "version": n, "question": scope.question,
+                "answered": state.get("answered", False), "files": ["report.md", "items.json", "sources.json"]}
+    (pkg / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 # ---- 路由 ----
 
 
+def route_after_research(state: ResearchState) -> str:
+    """回补那一轮没拿到新答案（research 记下了 open_gap）就直接用上一轮的整理结果出报告。"""
+    return "write" if state.get("open_gap") else "consolidate"
+
+
 def route_after_consolidate(state: ResearchState) -> str:
     return "research" if state.get("gap") else "write"
-
-
-def route_after_check(state: ResearchState) -> str:
-    """报告有效才导出；无效的（整理失败、没有带来源的论断）只进终审，不产出确认物包。"""
-    ok = all(c.passed for c in state.get("check_results", []) if c.name == "report_valid")
-    return "export" if ok else "review"
 
 
 def route_after_review(state: ResearchState) -> str:

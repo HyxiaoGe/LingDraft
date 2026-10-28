@@ -193,6 +193,7 @@ class ResearchState(TypedDict, total=False):
     answer_how: str  # 怎么得到的：agent / close / none
     answered: bool  # 整理步骤判断候选答案是否回答了研究问题
     gap: str | None  # 整理时发现的关键证据缺口，回研究环节补
+    open_gap: str | None  # 补过之后仍缺的证据：报告照常给出，并写明还没答完的地方
     gap_rounds: int
     outline: list[OutlineNode]
     sources: list[Source]
@@ -206,5 +207,4 @@ class ResearchState(TypedDict, total=False):
     versions: list[ReportVersion]
     check_results: list[CheckResult]
     notes: list[str]
-    exported: dict | None
     approved: bool

@@ -52,6 +52,11 @@ def resume(graph, tid: str, payload: dict) -> dict:
     return graph.invoke(research_resume(graph, cfg(tid), payload), cfg(tid))
 
 
+def pkg_of(p: dict) -> Path:
+    """终审卡对应的下载包目录（每版写报告时一起写好）。"""
+    return Path(p["report_path"]).parent / "package"
+
+
 def run_to_review(graph, tid: str = "t1", answer: dict | None = None) -> dict:
     r = graph.invoke({"request": REQUEST}, cfg(tid))
     p = intr(r)
@@ -68,7 +73,7 @@ def run_to_review(graph, tid: str = "t1", answer: dict | None = None) -> dict:
     return p
 
 
-def test_full_flow_traceable_and_exported(graph, tmp_path):
+def test_full_flow_traceable_and_delivered(graph, tmp_path):
     p = run_to_review(graph)
     assert p["version"] == 1 and p["answer_how"] == "agent"
     assert all(c["passed"] for c in p["checks"]), p["checks"]
@@ -93,21 +98,20 @@ def test_full_flow_traceable_and_exported(graph, tmp_path):
     assert not any("包含" in a for a in p["assumptions"])
     assert "改文字" in report
 
-    # 校验过就已经导出，不等批准；论断状态照实导出（系统交付不等于人工确认）
-    exp = p["exported"]
-    assert exp and exp["version"] == 1
-    pkg = Path(exp["dir"])
+    # 这一版写出来就有下载包，不等批准；论断状态照实写（系统交付不等于人工确认）
+    pkg = pkg_of(p)
     assert {f.name for f in pkg.iterdir()} == {"manifest.json", "report.md", "items.json", "sources.json"}
+    assert (pkg / "report.md").read_text() == p["report"]
     items = json.loads((pkg / "items.json").read_text())
     kinds = {i["kind"] for i in items}
     assert {"scope", "outline", "claim.fact", "claim.inference"} <= kinds
     assert all(i["status"] == "draft" for i in items if i["kind"].startswith("claim."))
     r = resume(graph, "t1", {"action": "approve"})
-    assert r["approved"] and r["exported"]["version"] == 1 and graph.get_state(cfg("t1")).next == ()
+    assert r["approved"] and graph.get_state(cfg("t1")).next == ()
     adopted = json.loads((pkg / "sources.json").read_text())
     assert adopted and all(s["status"] == "adopted" for s in adopted)
     manifest = json.loads((pkg / "manifest.json").read_text())
-    assert manifest["scenario"] == "research" and manifest["thread_id"] == "t1"
+    assert manifest["scenario"] == "research" and manifest["thread_id"] == "t1" and manifest["version"] == 1 and manifest["answered"]
 
 
 def test_exclude_source_orphans_dependent_claim(graph):
@@ -125,10 +129,11 @@ def test_exclude_source_orphans_dependent_claim(graph):
     # 报告里不再出现这条论断，校验仍全部通过；只重写了受影响的节
     assert fact["statement"] not in p2["report"]
     assert all(c["passed"] for c in p2["checks"]), p2["checks"]
-    # 改完立刻重新导出，第 2 版覆盖第 1 版
-    assert p2["exported"]["version"] == 2
-    items = json.loads(Path(p2["exported"]["items"]).read_text())
-    assert fact["id"] not in {i["id"] for i in items}
+    # 改完出第 2 版，下载包跟着换成第 2 版；被排除的来源不在包里
+    pkg = pkg_of(p2)
+    assert json.loads((pkg / "manifest.json").read_text())["version"] == 2
+    assert fact["id"] not in {i["id"] for i in json.loads((pkg / "items.json").read_text())}
+    assert sid not in {s["id"] for s in json.loads((pkg / "sources.json").read_text())}
 
 
 def test_edit_claim_marks_user_edited_and_rewrites(graph, planner):
@@ -282,9 +287,7 @@ def test_exclude_unreferenced_source_returns_to_review(graph):
     assert p2["type"] == "research.review" and p2["version"] == 1
     assert next(s for s in p2["sources"] if s["id"] == unused)["status"] == "excluded"
     assert any("没有被任何论断引用" in n for n in p2["notes"])
-    assert p2["exported"]["version"] == 1  # 没重写就没重新导出
-    r = resume(graph, "t1", {"action": "approve"})
-    assert r["exported"]["version"] == 1
+    assert json.loads((pkg_of(p2) / "manifest.json").read_text())["version"] == 1  # 没重写就没有新的一版
 
 
 def test_batch_tool_calls_count_toward_budget(planner):
@@ -313,19 +316,6 @@ def test_ask_budget_enforced_before_card(graph):
     assert all(c["passed"] for c in p["checks"]), p["checks"]
 
 
-def test_consolidate_failure_cannot_be_exported(graph):
-    r = graph.invoke({"request": "题（整理失败）"}, cfg("t1"))
-    p = intr(r)
-    assert p["type"] == "research.review" and p["claims"] == []
-    failed = {c["name"] for c in p["checks"] if not c["passed"]}
-    assert {"report_valid", "question_answered"} <= failed
-    assert any("整理失败" in n for n in p["notes"])
-    # 无效报告不导出确认物包；“不用改了”只是结束
-    assert p["exported"] is None
-    r = resume(graph, "t1", {"action": "approve"})
-    assert r.get("exported") is None
-
-
 def test_unanswered_without_gap_text_still_refills(graph, planner):
     r = graph.invoke({"request": "题（没回答）"}, cfg("t1"))
     p = intr(r)
@@ -347,3 +337,112 @@ def test_close_out_history_answers_dangling_tool_calls():
     assert len(out) == 5 and isinstance(out[-1], ToolMessage) and out[-1].tool_call_id == "bad1" and out[-1].content == DANGLING_NOTE
     assert answer_dangling_calls(msgs[:3]) == msgs[:3]
     assert ASK_BLOCKED != "ask_user"
+
+
+# ---- 第 3 批：预算、回补、重写、提问计数、来源状态、交付 ----
+
+
+def test_batch_with_ask_still_counts_toward_budget(graph):
+    """同一批 10 个搜索里夹一个提问：回答提问后执行剩下的调用，额度照样按批算，不会因为提问而全放过。"""
+    r = graph.invoke({"request": "题（连发带问）"}, cfg("t1"))
+    assert is_ask_interrupt(intr(r))
+    p = intr(resume(graph, "t1", {"answer": "包含"}))
+    assert p["type"] == "research.review"
+    v = graph.get_state(cfg("t1")).values
+    assert len(v["sources"]) == 3 * MAX_SEARCHES  # 每次成功的搜索带回 3 条候选
+
+
+def test_unshown_ask_does_not_use_budget(graph):
+    """模型同一批发两个提问，只有第一个呈现给用户；没呈现的不占额度，之后还能再问一次。"""
+    r = graph.invoke({"request": "题（双问）"}, cfg("t1"))
+    titles = []
+    while is_ask_interrupt(intr(r)):
+        titles.append(interrupt_view(intr(r))["title"])
+        assert len(titles) <= MAX_ASKS
+        r = resume(graph, "t1", {"answer": f"答 {len(titles)}"})
+    assert titles == ["同批第 1 问？", "后来又问一个？"]
+    v = graph.get_state(cfg("t1")).values
+    assert v["asks_used"] == 2 and [a.question for a in v["asks"]] == titles
+
+
+def test_gap_round_without_answer_keeps_first_result(graph):
+    """回补那一轮没拿到答案：第一轮的答案和论断都留着，报告照常给出，并写明还缺什么。"""
+    r = graph.invoke({"request": "某题（回补，补查失败）"}, cfg("t1"))
+    p = intr(r)
+    assert p["type"] == "research.review" and p["claims"]
+    v = graph.get_state(cfg("t1")).values
+    assert v["answer"] and "补查失败" in v["answer"] and v["answered"] is False
+    assert any("沿用上一轮" in n for n in p["notes"])
+    check = next(c for c in p["checks"] if c["name"] == "question_answered")
+    assert not check["passed"] and "缺价格数据" in check["detail"]
+    assert "没有完全回答" in p["report"] and "缺价格数据" in p["report"]
+    assert (pkg_of(p) / "report.md").read_text() == p["report"]
+
+
+def test_gap_round_consolidate_failure_keeps_first_result(graph, planner):
+    r = graph.invoke({"request": "某题（回补，二次整理失败）"}, cfg("t1"))
+    p = intr(r)
+    assert sum(1 for c in planner.calls if c[0] == "consolidate") == 2
+    assert p["type"] == "research.review" and p["claims"] and p["sections"]
+    assert any("保留上一轮" in n for n in p["notes"])
+    assert graph.get_state(cfg("t1")).values["answered"] is False
+    assert "缺价格数据" in p["report"]
+
+
+def test_source_status_follows_current_report(graph):
+    """回补后重新整理：只有现在报告里引用的来源算系统选用，第一轮引用、这一轮没用上的退回候选。"""
+    p = intr(graph.invoke({"request": "某题（回补）"}, cfg("t1")))
+    cited = {sid for c in p["claims"] if not c["orphaned"] for sid in c["source_ids"]}
+    adopted = {s["id"] for s in p["sources"] if s["status"] == "adopted"}
+    assert cited and adopted == cited
+    assert {s["id"] for s in json.loads((pkg_of(p) / "sources.json").read_text())} == cited
+
+
+def test_source_status_recomputed_from_sections():
+    from app.graph.research.report import source_status
+    from app.graph.research.state import Claim, SectionText, Sentence, Source
+
+    sources = [Source(id="s1", url="u1", status="adopted"), Source(id="s2", url="u2", status="adopted"),
+               Source(id="s3", url="u3", status="excluded"), Source(id="s4", url="u4")]
+    claims = [Claim(id="k1", statement="a", kind="fact", source_ids=["s1"], outline_id="c1"),
+              Claim(id="k2", statement="b", kind="fact", source_ids=["s2"], outline_id="c1")]
+    sections = {"c1": SectionText(outline_id="c1", sentences=[Sentence(text="a", claim_id="k1")])}  # 重写后 k2 不在正文里了
+    assert [s.status for s in source_status(sources, sections, claims)] == ["adopted", "candidate", "excluded", "candidate"]
+
+
+def test_rewrite_gets_user_constraints(graph, planner):
+    """重写某一节时带上范围和用户的回答，不会写出和用户已确认的前提冲突的内容。"""
+    run_to_review(graph)
+    resume(graph, "t1", {"action": "rewrite_section", "target": "c1", "instruction": "更简短"})
+    got = planner.write_inputs[-1]
+    assert "改文字" in (got["scope"].extra or "")
+    assert got["user_facts"] == ["范围是否包含 PPT 工具？ → 包含"]
+
+
+def test_live_rewrite_prompt_carries_scope_and_user_facts():
+    from app.graph.research.state import Claim, OutlineNode, Scope
+    from app.research_llm import LiveResearchPlanner
+
+    scope = Scope(question="选哪个向量库？", time_range="2026", extra="部署方式：只能私有化")
+    msgs = LiveResearchPlanner._write_messages(
+        scope, OutlineNode(id="c1", title="结论", question="选哪个？"),
+        [Claim(id="k1", statement="A 支持私有化", kind="fact", source_ids=["s1"], outline_id="c1")],
+        "更简短", ["数据能不能出网？ → 不能出网"],
+    )
+    user = msgs[-1][1]
+    assert "只能私有化" in user and "2026" in user and "不能出网" in user and "更简短" in user and "k1" in user
+
+
+def test_invalid_report_is_still_delivered(graph):
+    """整理失败、报告里没有带来源的论断：照样给出这一版和下载包，校验结果只是说明。"""
+    p = intr(graph.invoke({"request": "题（整理失败）"}, cfg("t1")))
+    assert p["type"] == "research.review" and p["version"] == 1 and p["claims"] == []
+    failed = {c["name"] for c in p["checks"] if not c["passed"]}
+    assert {"report_valid", "question_answered"} <= failed
+    assert any("整理失败" in n for n in p["notes"]) and "没有完全回答" in p["report"]
+    pkg = pkg_of(p)
+    assert {f.name for f in pkg.iterdir()} == {"manifest.json", "report.md", "items.json", "sources.json"}
+    manifest = json.loads((pkg / "manifest.json").read_text())
+    assert manifest["version"] == 1 and manifest["answered"] is False
+    r = resume(graph, "t1", {"action": "approve"})  # “不用改了”只是结束
+    assert r["approved"] and graph.get_state(cfg("t1")).next == ()

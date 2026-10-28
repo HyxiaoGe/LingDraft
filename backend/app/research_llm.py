@@ -87,7 +87,8 @@ class ResearchPlanner(Protocol):
 
     def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> ConsolidateResult: ...
 
-    def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None) -> SectionText: ...
+    def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
+                      user_facts: list[str] = ()) -> SectionText: ...
 
     def agent_model(self) -> BaseChatModel: ...
 
@@ -96,6 +97,12 @@ class ResearchPlanner(Protocol):
 
 def _claims_block(claims: list[Claim]) -> str:
     return "\n".join(f"- {c.id} [{c.kind}] {c.statement}" for c in claims) or "（无）"
+
+
+def _facts_block(user_facts: list[str]) -> str:
+    if not user_facts:
+        return ""
+    return "用户的回答（原话；明确给出的条件不需要来源佐证，说不清楚的条件按假设处理）：\n" + "\n".join(f"- {f}" for f in user_facts) + "\n\n"
 
 
 def _sources_block(sources: list[Source]) -> str:
@@ -174,7 +181,7 @@ class LiveResearchPlanner:
 
     @staticmethod
     def _consolidate_messages(scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> list:
-        facts = ("用户的回答（原话；明确给出的条件不需要来源佐证，说不清楚的条件按假设处理）：\n" + "\n".join(f"- {f}" for f in user_facts) + "\n\n") if user_facts else ""
+        facts = _facts_block(user_facts)
         user = (
             f"研究问题：{scope.question}\n范围：{scope.model_dump_json(exclude_none=True)}\n\n{facts}"
             f"候选答案：\n{answer}\n\n来源列表（id | 网址 | 标题 | 片段类型 | 片段）：\n{_sources_block(sources)}\n"
@@ -191,14 +198,21 @@ class LiveResearchPlanner:
                 last = e
         raise RuntimeError(f"整理失败：{last}")
 
-    def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None) -> SectionText:
+    @staticmethod
+    def _write_messages(scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
+                        user_facts: list[str] = ()) -> list:
+        """范围（含澄清卡的回答）和用户途中的回答也带上：重写不能写出和用户已确认的前提冲突的内容。"""
         user = (
-            f"研究问题：{scope.question}\n章节：{node.title}\n这一节要回答：{node.question}\n"
-            f"可用论断：\n{_claims_block(claims)}\n"
+            f"研究问题：{scope.question}\n范围：{scope.model_dump_json(exclude_none=True)}\n\n{_facts_block(user_facts)}"
+            f"章节：{node.title}\n这一节要回答：{node.question}\n可用论断：\n{_claims_block(claims)}\n"
         )
         if instruction:
             user += f"用户对这一节的要求：{instruction}\n"
-        draft = self._structured(self._fast, RewriteDraft).invoke([("system", prompts.WRITE_SYSTEM), ("user", user)])
+        return [("system", prompts.WRITE_SYSTEM), ("user", user)]
+
+    def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
+                      user_facts: list[str] = ()) -> SectionText:
+        draft = self._structured(self._fast, RewriteDraft).invoke(self._write_messages(scope, node, claims, instruction, user_facts))
         return SectionText(outline_id=node.id, sentences=[Sentence(text=s.text, claim_id=s.claim_id) for s in draft.sentences])
 
     def agent_model(self) -> BaseChatModel:
@@ -246,6 +260,9 @@ class FakeToolModel(BaseChatModel):
     - “坏JSON”：第一步先发一个参数无法解析的工具调用，看重试中间件；
     - “不收尾”：有搜索额度就一直搜，看额度用尽后工具被摘掉；
     - “无答案”：工具被摘掉后也不给文字，看受控收尾。
+    - “连发”：第一步同一批发 10 个搜索（“连发带问”再夹一个提问），看同批调用的额度；
+    - “双问”：第一步同一批发两个提问（只有第一个呈现给用户），之后再问一个，看没呈现的提问占不占额度；
+    - “补查失败”：回补那一轮既不调工具也不给文字，收尾也失败，看补查失败时第一轮的结果还在不在。
     """
 
     bound: list[str] = Field(default_factory=list)
@@ -261,17 +278,34 @@ class FakeToolModel(BaseChatModel):
         last = messages[-1]
         req = _request_of(messages)
         n = len(messages)
-        if isinstance(last, HumanMessage) and str(last.content).startswith("（系统）工具已不可用"):
+        n_ai = sum(1 for m in messages if isinstance(m, AIMessage))
+        if "补查失败" in req and "上一轮你已经给过" in req:
+            msg = AIMessage(content="")
+        elif isinstance(last, HumanMessage) and str(last.content).startswith("（系统）工具已不可用"):
             msg = AIMessage(content=_answer_text(req, _hits(messages), _answer(messages), how="收尾"))
-        elif "连发" in req and not any(isinstance(m, AIMessage) for m in messages):
-            msg = AIMessage(content="", tool_calls=[{"name": "search_web", "args": {"query": f"{req} {i}", "count": 3},
-                                                     "id": f"call_batch_{i}", "type": "tool_call"} for i in range(10)])
-        elif "多问" in req and sum(1 for m in messages if isinstance(m, AIMessage)) < 4:
+        elif "连发" in req and not n_ai:
+            calls = [{"name": "search_web", "args": {"query": f"{req} {i}", "count": 3}, "id": f"call_batch_{i}", "type": "tool_call"}
+                     for i in range(10)]
+            if "带问" in req:
+                calls.append({"name": "ask_user", "args": {"question": "范围是否包含 PPT 工具？", "options": ["包含", "不包含"], "why": "测试"},
+                              "id": "call_batch_ask", "type": "tool_call"})
+            msg = AIMessage(content="", tool_calls=calls)
+        elif "连发带问" in req:
+            msg = AIMessage(content=_answer_text(req, _hits(messages), _answer(messages)))
+        elif "双问" in req:
+            if not n_ai:
+                msg = AIMessage(content="", tool_calls=[
+                    {"name": "ask_user", "args": {"question": f"同批第 {i} 问？", "options": ["A", "B"], "why": "测试"},
+                     "id": f"call_pair_{i}", "type": "tool_call"} for i in (1, 2)])
+            elif n_ai == 1 and "ask_user" in self.bound:
+                msg = _call("ask_user", {"question": "后来又问一个？", "options": ["A", "B"], "why": "测试"}, n)
+            else:
+                msg = AIMessage(content=_answer_text(req, _hits(messages), _answer(messages)))
+        elif "多问" in req and n_ai < 4:
             # 无视绑定列表，每轮都问：看提问额度能不能在产生问题卡之前拦住
-            n_ai = sum(1 for m in messages if isinstance(m, AIMessage))
             msg = _call("ask_user", {"question": f"第 {n_ai + 1} 个问题？", "options": ["A", "B"], "why": "测试"}, n)
         elif isinstance(last, HumanMessage):
-            if "坏JSON" in req and not any(isinstance(m, AIMessage) for m in messages):
+            if "坏JSON" in req and not n_ai:
                 msg = AIMessage(content="", invalid_tool_calls=[{"name": "search_web", "args": '{"query": "坏', "id": f"bad_{n}",
                                                                    "error": "Expecting ',' delimiter", "type": "invalid_tool_call"}])
             else:
@@ -323,7 +357,8 @@ def _hits(messages: list[BaseMessage]) -> list[dict]:
 def _answer_text(req: str, hits: list[dict], answer: str | None, how: str = "") -> str:
     """假的候选答案：每条带 [节|类别|网址] 标记，FakeResearchPlanner.consolidate 按它整理。"""
     u = [h["url"] for h in hits] + ["https://nowhere.test/x"] * 3
-    lines = [f"结论：{req} 已经可用但不稳定。{how}"]
+    # 只取需求第一行：回补时 req 里带着上一轮答案，原样嵌进来就会连上一轮的引用一起继承
+    lines = [f"结论：{(req.splitlines() or [''])[0]} 已经可用但不稳定。{how}"]
     lines.append(f"- [c1|fact|{u[0]}] 来源 1 明确写了局部修改要多轮。")
     lines.append(f"- [c1|inference|{u[1]}] 按来源 2 推测稳定性仍是短板。")
     if "事实准确性" in req or "海报" in req:
@@ -337,6 +372,7 @@ def _answer_text(req: str, hits: list[dict], answer: str | None, how: str = "") 
 class FakeResearchPlanner:
     def __init__(self) -> None:
         self.calls: list[tuple[str, Any]] = []
+        self.write_inputs: list[dict] = []  # 重写时拿到的范围和用户回答
         self._gateway = fake_gateway_client()
         self._tools = make_research_tools(self._gateway)
         self._model = FakeToolModel()
@@ -351,7 +387,8 @@ class FakeResearchPlanner:
         return IntakeResult(scope=scope, questions=questions)
 
     def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = ()) -> ConsolidateResult:
-        if "整理失败" in scope.question:
+        again = any(c[0] == "consolidate" for c in self.calls)
+        if "整理失败" in scope.question and (again or "二次整理失败" not in scope.question):
             self.calls.append(("consolidate", scope.question))
             raise RuntimeError("假模型：整理失败")
         self.calls.append(("consolidate", answer))
@@ -379,8 +416,10 @@ class FakeResearchPlanner:
             return ConsolidateResult(sections=sections, claims=claims, assumptions=assumptions, answered=False, gap=None)
         return ConsolidateResult(sections=sections, claims=claims, assumptions=assumptions, answered=gap is None, gap=gap)
 
-    def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None) -> SectionText:
+    def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
+                      user_facts: list[str] = ()) -> SectionText:
         self.calls.append(("write", node.id, instruction))
+        self.write_inputs.append({"scope": scope, "user_facts": list(user_facts)})
         sentences = [Sentence(text=f"{node.title}概述。", claim_id=None)]
         for c in claims:
             prefix = "推断：" if c.kind == "inference" else ""

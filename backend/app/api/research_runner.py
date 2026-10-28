@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -94,12 +95,23 @@ class ResearchRunner(BaseRunner):
     def _versions(self, thread_id: str, versions: list) -> list[dict]:
         return [{"n": v.n, "note": v.note, "md_url": self.file_url(thread_id, v.path)} for v in versions]
 
-    def _export_view(self, thread_id: str, exported: dict | None) -> dict | None:
-        if not exported:
+    def package_view(self, thread_id: str, versions: list) -> dict | None:
+        """最新一版的下载包。每版写报告时一起写好；对不上最新版本的（改动前没出包的旧线程）不给，免得下载到旧版。"""
+        if not versions:
+            return None
+        tdir = self.thread_dir(thread_id)
+        manifest = tdir / "package" / "manifest.json"
+        if not manifest.resolve().is_relative_to(tdir.resolve()):  # 包目录被换成指向外面的链接
+            return None
+        try:
+            got = json.loads(manifest.read_text(encoding="utf-8")).get("version")
+        except (OSError, ValueError):
+            return None
+        if got != versions[-1].n:
             return None
         base = f"{self.api_prefix}/{thread_id}/package"
         return {
-            "version": exported["version"],
+            "version": got,
             "report_url": f"{base}/report.md",
             "items_url": f"{base}/items.json",
             "sources_url": f"{base}/sources.json",
@@ -139,7 +151,7 @@ class ResearchRunner(BaseRunner):
             "versions": self._versions(thread_id, v.get("versions", [])),
             "checks": jsonable(v.get("check_results", [])),
             "notes": v.get("notes", []),
-            "exported": self._export_view(thread_id, v.get("exported")),
+            "package": self.package_view(thread_id, v.get("versions", [])),
             # 跑着的时候检查点里可能还是上一张卡，不给出去
             "interrupt": self._interrupt_view(thread_id, pending) if pending and run is None else None,
         }
@@ -193,6 +205,4 @@ class ResearchRunner(BaseRunner):
             out["checks"] = jsonable(update.get("check_results", []))
         if update.get("notes"):
             out["notes"] = update["notes"]
-        if node == "export":
-            out["exported"] = self._export_view(thread_id, update.get("exported"))
         return out

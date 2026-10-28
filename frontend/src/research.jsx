@@ -65,17 +65,20 @@ export function retryCard(retry) {
   };
 }
 
-// ---- 终审 ----
+// ---- 终审：报告已经交付，这里只是可选的修改 ----
 function reviewCard(it, st, resume, setCard) {
-  const invalid = (it.checks || []).some((c) => c.name === "report_valid" && !c.passed);
+  const failed = (name) => (it.checks || []).some((c) => c.name === name && !c.passed);
+  const title = failed("report_valid") ? `第 ${it.version} 版报告里没有带来源的论断`
+    : failed("question_answered") ? `第 ${it.version} 版报告好了，但没有完全回答问题，有要改的吗？`
+    : `第 ${it.version} 版报告好了，有要改的吗？`;
   return {
-    title: invalid ? `第 ${it.version} 版报告没有带来源的论断，没有导出` : `第 ${it.version} 版已导出，有要改的吗？`,
+    title,
     page: "1/1",
     options: [
-      { label: "不用改了", hint: invalid ? "结束这次调研" : "就用已导出的这版", value: "approve" },
-      { label: "排除某条来源", hint: "只靠它的论断会退回草稿并移出报告，改完重新导出", value: "source" },
-      { label: "改某条论断", hint: "改过的表述模型不再碰，改完重新导出", value: "claim" },
-      { label: "重写某一节", hint: "只按已确认的论断重写这一节，改完重新导出", value: "section" },
+      { label: "不用改了", hint: "就用这版，结束这次调研", value: "approve" },
+      { label: "排除某条来源", hint: "只靠它的论断会退回草稿并移出报告，改完出新一版", value: "source" },
+      { label: "改某条论断", hint: "改过的表述模型不再碰，改完出新一版", value: "claim" },
+      { label: "重写某一节", hint: "只按已确认的论断重写这一节，改完出新一版", value: "section" },
     ],
     customPlaceholder: "或直接说要改什么，例如：第一节更简短",
     onAnswer: (v, isCustom) => {
@@ -191,7 +194,7 @@ export function ResearchBody({ st, it, live, onCard, resume }) {
     return (
       <>
         <p>这一步没跑完：{st.error}。已有的内容都还在，可以从断开的地方重试。</p>
-        {st.versions?.length > 0 && <ReviewBody st={st} it={null} onCard={onCard} resume={resume} />}
+        {st.versions?.length > 0 && <ReviewBody st={st} it={null} live={live} onCard={onCard} resume={resume} />}
       </>
     );
   }
@@ -201,7 +204,7 @@ export function ResearchBody({ st, it, live, onCard, resume }) {
   if (it?.type === "research.ask") {
     return <p>调研到一半有个只有你能回答的问题。</p>;
   }
-  // 没导出就结束的（报告没通过校验，用户选了不用改）也要把草稿、校验结果和说明摆出来
+  // 有一版报告就摆出来：校验没过的项、没答完的地方只是说明，不扣住结果
   if (it?.type === "research.review" || st.versions?.length > 0) return <ReviewBody st={st} it={it} live={live} onCard={onCard} resume={resume} />;
   return null;
 }
@@ -215,9 +218,11 @@ const CHECK_LABEL = {
 function ReviewBody({ st, it, live, onCard, resume }) {
   const [tab, setTab] = useState("report");
   const [finalText, setFinalText] = useState(null);
+  const versions = st.versions || [];
+  const last = versions[versions.length - 1];
   useEffect(() => {
-    if (!it && st.exported?.report_url) fetch(st.exported.report_url).then((r) => r.text()).then(setFinalText).catch(() => {});
-  }, [it, st.exported?.report_url]);
+    if (!it && last?.md_url) fetch(last.md_url).then((r) => r.text()).then(setFinalText).catch(() => {});
+  }, [it, last?.md_url]);
   const report = it?.report || finalText;
   const claims = it?.claims || st.claims || [];
   const sources = it?.sources || st.sources || [];
@@ -225,14 +230,12 @@ function ReviewBody({ st, it, live, onCard, resume }) {
   const act = live && it ? it : null; // 能点着改的卡
   const checks = it?.checks || st.checks || [];
   const failed = checks.filter((c) => !c.passed);
-  const versions = st.versions || [];
-  const last = versions[versions.length - 1];
   const byId = Object.fromEntries(sources.map((s) => [s.id, s]));
   const notes = [...new Set(it?.notes || st.notes || [])];
   return (
     <>
-      {it ? <p>第 {it.version} 版{st.exported?.version === it.version ? "已导出" : "好了，但没有带来源的论断，没有导出"}（{last?.note}）。每句话都挂着论断，推断句有标记{act ? "；觉得不合适，点论断或来源可以单独处理" : ""}。{it.answer_how === "close" ? " 这次调研没有自己收尾，答案是基于已查到的材料补的，请多留意。" : ""}</p>
-          : st.status !== "failed" && <p>{st.exported ? `已结束，用的是第 ${st.exported.version} 版。` : `已结束，第 ${last?.n} 版没有导出（自动校验没通过，见下方）。`}</p>}
+      {it ? <p>第 {it.version} 版报告好了（{last?.note}）。{claims.some((c) => !c.orphaned) && <>每句话都挂着论断，推断句有标记{act ? "；觉得不合适，点论断或来源可以单独处理" : ""}。</>}{it.answer_how === "close" ? " 这次调研没有自己收尾，答案是基于已查到的材料补的，请多留意。" : ""}</p>
+          : st.status !== "failed" && last && <p>已结束，用的是第 {last.n} 版。</p>}
       <div className="rtabs">
         {[["report", "报告"], ["claims", `论断 ${claims.filter((c) => !c.orphaned).length}`], ["sources", `来源 ${sources.filter((s) => s.status === "adopted").length}`]].map(([k, l]) => (
           <button key={k} className={tab === k ? "sel" : ""} onClick={() => setTab(k)}>{l}</button>
@@ -253,15 +256,17 @@ function ReviewBody({ st, it, live, onCard, resume }) {
         </div>
       )}
       {tab === "sources" && <SourceList sources={sources} it={act} onCard={onCard} resume={resume} />}
-      {failed.length > 0 ? <div className="checks bad">自动校验未通过：{failed.map((c) => `${CHECK_LABEL[c.name] || c.name} ${c.detail}`).join("；")}</div>
+      {failed.length > 0 ? <div className="checks bad">需要留意：{failed.map((c) => `「${CHECK_LABEL[c.name] || c.name}」没通过` + (c.detail ? `（${c.detail.replace(/；$/, "")}）` : "")).join("；")}</div>
         : checks.length > 0 && <div className="checks">{checks.map((c) => "✓ " + (CHECK_LABEL[c.name] || c.name) + (c.detail ? `（${c.detail.replace(/；$/, "")}）` : "")).join(" · ")}</div>}
       {notes.length > 0 && <div className="notes">{notes.map((n, i) => <div key={i}>· {n}</div>)}</div>}
-      {st.exported && (
+      {/* 下载的是最新一版：历史消息里不给，免得点开拿到的不是那时候的版本 */}
+      {live && st.package && (
         <div className="export-links">
-          <a href={st.exported.report_url} target="_blank" rel="noreferrer">report.md</a>
-          <a href={st.exported.items_url} target="_blank" rel="noreferrer">items.json</a>
-          <a href={st.exported.sources_url} target="_blank" rel="noreferrer">sources.json</a>
-          <a href={st.exported.zip_url}>打包下载</a>
+          <span>下载第 {st.package.version} 版：</span>
+          <a href={st.package.report_url} target="_blank" rel="noreferrer">report.md</a>
+          <a href={st.package.items_url} target="_blank" rel="noreferrer">items.json</a>
+          <a href={st.package.sources_url} target="_blank" rel="noreferrer">sources.json</a>
+          <a href={st.package.zip_url}>全部打包</a>
         </div>
       )}
     </>
@@ -308,6 +313,7 @@ function Report({ text, byId }) {
     if (!line.trim()) return;
     if (line.startsWith("# ")) return out.push(<h2 key={i}>{line.slice(2)}</h2>);
     if (line.startsWith("## ")) return out.push(<h3 key={i}>{line.slice(3)}</h3>);
+    if (line.startsWith("> ")) return out.push(<p key={i} className="notice">{line.slice(2)}</p>);
     if (line.startsWith("- ")) return out.push(<li key={i}>{line.slice(2)}</li>);
     if (/^\[S\d+\]/.test(line)) return out.push(<div className="srcline" key={i}>{line}</div>);
     out.push(<p key={i} className={line.startsWith("推断：") ? "inf" : ""}>{withMarks(line)}</p>);

@@ -66,6 +66,7 @@ class ToolBudgetMiddleware(AgentMiddleware):
     同一批里发多个调用也算额度（第 9 个搜索不会因为前 8 个还没执行就放过）。
     ask_user 由 HITL 中间件在执行前拦截、执行层拦不到，所以超额的提问在 after_model 里改名——
     本中间件排在 HITL 之后，after_model 反序执行，先于 HITL 看到这条消息。
+    提问只算呈现给了用户的：同一批里多出来的提问没呈现（UNSHOWN_MESSAGE），不占额度。
     """
 
     def __init__(self, limits: dict[str, int]) -> None:
@@ -75,17 +76,21 @@ class ToolBudgetMiddleware(AgentMiddleware):
     def _used(self, messages: list[BaseMessage]) -> dict[str, int]:
         used: dict[str, int] = {}
         for m in messages:
-            if isinstance(m, ToolMessage) and m.name in self.limits:
+            if isinstance(m, ToolMessage) and m.name in self.limits and not _unshown(m):
                 used[m.name] = used.get(m.name, 0) + 1
         return used
 
     def _over_budget(self, messages: list[BaseMessage], tool_call_id: str) -> bool:
-        """这条调用（算上同一批里排在它前面的同名调用）是否超额。"""
-        last = messages[-1] if messages else None
-        if not isinstance(last, AIMessage):
+        """这条调用（算上同一批里排在它前面的同名调用）是否超额。
+
+        这一批不一定是最后一条消息：提问回答后，HITL 会在它后面追加提问的工具结果，再执行同批其余的调用。
+        """
+        i = next((i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], AIMessage)
+                  and any(tc["id"] == tool_call_id for tc in messages[i].tool_calls)), None)
+        if i is None:
             return False
-        used = self._used(messages[:-1])
-        for tc in last.tool_calls:
+        used = self._used(messages[:i])
+        for tc in messages[i].tool_calls:
             name = tc["name"]
             lim = self.limits.get(name)
             if tc["id"] == tool_call_id:
@@ -331,5 +336,5 @@ def collect_asks(messages: list[BaseMessage]) -> list[AskRecord]:
     return out
 
 
-def count_asks(messages: list[BaseMessage]) -> int:
-    return sum(1 for m in messages if isinstance(m, ToolMessage) and m.name == "ask_user")
+def _unshown(m: ToolMessage) -> bool:
+    return m.name == "ask_user" and str(m.content).strip() == UNSHOWN_MESSAGE

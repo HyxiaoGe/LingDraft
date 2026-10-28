@@ -140,6 +140,7 @@ body { background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, 
 .report h3 { font-size: 14px; margin: 14px 0 4px; }
 .report p { margin: 4px 0; }
 .report p.inf { color: #5b3f80; }
+.report p.notice { color: #8a5a00; background: #fff7e6; border-radius: 6px; padding: 6px 10px; }
 .report li { margin: 2px 0 2px 18px; color: #555; font-size: 13px; }
 .report .mark { color: var(--fact); font-size: 10px; margin-left: 1px; }
 .report .srcline { color: #555; font-size: 12px; margin: 2px 0; word-break: break-all; }

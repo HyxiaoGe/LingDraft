@@ -3,7 +3,7 @@
 黑五海报单场景的 LangGraph 实现：`intake → confirm_facts(中断) → 风格 → plan_layout → render → check → review(中断) → revise / manual_edit / change_fact / export`。
 设计见 `../docs/黑五海报PoC技术方案.md`。
 
-调研场景（图 + CLI + 接口 + 前端）：`intake → confirm_scope(只在需要澄清时中断) → research（全局 create_agent，`ask_user` 会中断；无文字答案时无工具受控收尾）→ consolidate（无工具结构化整理，关键缺口回 research 补一轮）→ write → check → export（校验过就导出）→ review(可选修改：exclude_source / edit_claim / rewrite_section 改完重新导出；approve 只是结束)`。模型默认 DeepSeek V4 Pro（调研 agent 开思考，结构化步骤不开）。设计见 `../docs/调研场景与多场景架构设计.md` 第 17 节。
+调研场景（图 + CLI + 接口 + 前端）：`intake → confirm_scope(只在需要澄清时中断) → research（全局 create_agent，`ask_user` 会中断；无文字答案时无工具受控收尾）→ consolidate（无工具结构化整理，关键缺口回 research 补一轮；补查没拿到新答案或整理失败就保留上一轮的结果）→ write（每版连同下载包一起写好，来源状态按这版正文重算）→ check（只是说明，不拦交付）→ review(可选修改：exclude_source / edit_claim / rewrite_section 改完出新一版；approve 只是结束)`。每一版报告写出来就是交付物；没答完的会在报告开头写明还缺什么。模型默认 DeepSeek V4 Pro（调研 agent 开思考，结构化步骤不开）。设计见 `../docs/调研场景与多场景架构设计.md` 第 17 节。
 
 ## 运行
 
@@ -12,7 +12,7 @@
 ```bash
 uv sync
 uv run playwright install chromium
-uv run pytest -q            # 87 个用例，不联网（FakePlanner / FakeResearchPlanner + MockTransport 网关）
+uv run pytest -q            # 95 个用例，不联网（FakePlanner / FakeResearchPlanner + MockTransport 网关）
 ```
 
 Web 方式（M2）：
@@ -55,11 +55,11 @@ uv run python -m app.cli --scenario research --fake new "AI 海报工具在局�
 uv run python -m app.cli --scenario research --fake resume <thread_id> '{"answers":{"q1":"改文字"}}'                          # 澄清问题（只在 intake 提了问题时出现）
 uv run python -m app.cli --scenario research --fake resume <thread_id> '{"answer":"包含"}'                                   # agent 动态提问；或 {"skip":true}
 uv run python -m app.cli --scenario research --fake resume <thread_id> '{"action":"exclude_source","target":"s2"}'            # 终审：排除来源，依赖它的论断退回草稿并从报告移除
-uv run python -m app.cli --scenario research --fake resume <thread_id> '{"action":"approve"}'                                 # 导出确认物包
+uv run python -m app.cli --scenario research --fake resume <thread_id> '{"action":"approve"}'                                 # 不用改了，结束
 uv run python -m app.cli --scenario research state <thread_id>
 ```
 
-调研的检查点在 `data/checkpoints_research.sqlite`，每版报告 `report_v{n}.md` 和导出的 `package/{manifest,items,sources}.json + report.md` 在 `output/research/<thread_id>/`。
+调研的检查点在 `data/checkpoints_research.sqlite`，每版报告 `report_v{n}.md` 和最新一版的下载包 `package/{manifest,items,sources}.json + report.md`（`items.json` 只含正文用到的论断，`sources.json` 只含它们引用的来源）在 `output/research/<thread_id>/`。“导出”只指下载：`state.package` 给出最新一版的下载地址，`/{id}/export` 打成 zip；改动前留下的旧线程，包和最新一版对不上的不给下载地址。
 
 修复前留下的卡死线程：旧版节点拒绝回答后，坏回答会留在检查点里，之后每次提交正确回答都报同一个错（比如一直“回答的不是当前问题”）。停在澄清卡或终审卡上的这种线程，用 `PYTHONPATH=. uv run python scripts/unstick_research_thread.py <thread_id> ...` 手工解卡（不调模型；先确认线程没在跑），然后刷新页面重新回答。
 
@@ -77,4 +77,4 @@ uv run python -m app.cli --scenario research state <thread_id>
 - `app/tools/` agent-tools 网关客户端（搜索 / 网页读取）与调研 agent 的工具（`search_web` / `read_page` / `ask_user`）
 - `scripts/` 对真实模型与网关的验证脚本：`probe_create_agent.py`（假搜索）、`probe_gateway_agent.py`（真实搜索 / 读取）、`probe_research_llm.py`（调研场景三种结构化输出），`PYTHONPATH=. uv run python scripts/<name>.py`
 - `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）。海报：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出。调研（`src/research.jsx`，顶栏切换）：需求清楚直接开始，模糊才弹澄清卡 → agent 提问卡（带“不问会怎样”，可跳过）→ 大纲 + 论断 + 假设 → 报告 / 论断 / 来源三个页签，点论断或来源单独处理 → 终审卡 / 自由文本重写某章 → 导出确认物包
-- `tests/` 海报：T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等；调研：`test_research.py`（全流程可追溯 / 排除来源传播 / 改论断 / 重写章节 / 改大纲只补调研新章 / 跳过提问 / sqlite 跨实例恢复）、`test_research_resume.py`（路径穿越与符号链接 / 严格载荷 / 被拒后能继续 / 过期中断 id / 重复提交 / 断线与排队）、`test_research_runs.py`（并行执行 / 提交失败退还占位 / 断线续读与刷新补发 / 保活 / 失败保留内容与重试 / 回答已用上后出错不再让人重答 / 排队中重启后可重试 / 被掐断的执行可重试）
+- `tests/` 海报：T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等；调研：`test_research.py`（全流程可追溯 / 排除来源传播 / 改论断 / 重写章节 / 改大纲只补调研新章 / 跳过提问 / sqlite 跨实例恢复 / 同批夹提问也按额度 / 没呈现的提问不占额度 / 回补失败保留第一轮 / 来源状态随报告重算 / 重写带用户约束 / 无效报告照样交付）、`test_research_resume.py`（路径穿越与符号链接 / 严格载荷 / 被拒后能继续 / 过期中断 id / 重复提交 / 断线与排队）、`test_research_runs.py`（并行执行 / 提交失败退还占位 / 断线续读与刷新补发 / 保活 / 失败保留内容与重试 / 回答已用上后出错不再让人重答 / 排队中重启后可重试 / 被掐断的执行可重试）

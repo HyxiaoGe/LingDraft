@@ -9,7 +9,7 @@
 调研场景的回传格式（与接口层同一份校验，不合法的不会交给图）：
   澄清问题   {"answers": {"q1": "..."}}（null 或不传的记为假设）
   动态提问   {"answer": "..."} 或 {"skip": true}，二选一
-  终审       报告校验过就已经导出；这里是可选的修改，改完会重新导出覆盖
+  终审       每一版报告写出来就是交付物（下载包在 package/）；这里是可选的修改，改完出新一版
              {"action": "approve"}（不用改了，结束） | {"action": "exclude_source", "target": "s2"}
              | {"action": "edit_claim", "target": "k1", "content": "..."}
              | {"action": "rewrite_section", "target": "c1", "instruction": "..."}
@@ -98,7 +98,6 @@ def _state_view(scenario: str, snap) -> dict:
             "versions": [x.model_dump() for x in v.get("versions", [])],
             "checks": [c.model_dump() for c in v.get("check_results", [])],
             "notes": v.get("notes", []),
-            "exported": v.get("exported"),
         }
     return {
         "next": snap.next,
