@@ -44,7 +44,7 @@ class RunRegistry(Protocol):
     admit 是原子的“占位成功 / 已被占用”，调用方不加锁；多 worker 部署时换成共享存储的实现（如 Redis SET NX），接口不变。
     """
 
-    def admit(self, key: str, info: dict | None = None) -> bool: ...
+    def admit(self, key: str) -> bool: ...
     def started(self, key: str) -> None: ...
     def get(self, key: str) -> dict | None: ...
     def release(self, key: str) -> None: ...
@@ -57,11 +57,11 @@ class LocalRunRegistry:
         self._mu = threading.Lock()
         self._runs: dict[str, dict] = {}
 
-    def admit(self, key: str, info: dict | None = None) -> bool:
+    def admit(self, key: str) -> bool:
         with self._mu:
             if key in self._runs:
                 return False
-            self._runs[key] = {**(info or {}), "queued": True}
+            self._runs[key] = {"queued": True}
             return True
 
     def started(self, key: str) -> None:
@@ -258,10 +258,10 @@ class BaseRunner:
                 else:
                     yield {"event": "node", "data": self._summarize(thread_id, node, update)}
 
-    def _submit(self, thread_id: str, make_input: Callable[[], Any], info: dict | None = None) -> AsyncIterator[str]:
-        """占位 → 算出图的输入（校验在这一步，不通过就退位）→ 提交执行。占着位，别的请求改不了这个线程。"""
+    def _submit(self, thread_id: str, make_input: Callable[[], Any]) -> AsyncIterator[str]:
+        """占位 → 算出图的输入（校验在这一步，不通过就退位；新的调研线程在这一步先把需求落盘）→ 提交执行。占着位，别的请求改不了这个线程。"""
         key = self._run_key(thread_id)
-        if not self.runs.admit(key, info):
+        if not self.runs.admit(key):
             raise RunConflict("这一步还在处理，等它完成后再提交")
         try:
             return self._launch(thread_id, make_input())

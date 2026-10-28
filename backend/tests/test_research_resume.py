@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import shutil
 import threading
 import time
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -115,6 +118,24 @@ def test_thread_id_cannot_escape_output_dir(client, rr, tmp_path):
         assert "SECRET" not in r.text, url
     with pytest.raises(ValueError):
         rr.thread_dir("..")
+
+
+def test_downloads_stay_inside_thread_dir_despite_links(client, rr, tmp_path):
+    st = _new(client, SIMPLE)
+    tid = st["thread_id"]
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "report.md").write_text("SECRET")
+    pkg = rr.thread_dir(tid) / "package"
+    (pkg / "leak.md").symlink_to(outside / "report.md")  # 包目录里一个指向外面的文件链接
+    assert client.get(f"/api/research/threads/{tid}/package/leak.md").status_code == 404
+    names = zipfile.ZipFile(io.BytesIO(client.get(f"/api/research/threads/{tid}/export").content)).namelist()
+    assert "leak.md" not in names and "report.md" in names
+    shutil.rmtree(pkg)
+    pkg.symlink_to(outside, target_is_directory=True)  # 整个包目录换成指向外面的链接
+    r = client.get(f"/api/research/threads/{tid}/package/report.md")
+    assert r.status_code == 404 and "SECRET" not in r.text
+    assert zipfile.ZipFile(io.BytesIO(client.get(f"/api/research/threads/{tid}/export").content)).namelist() == []
 
 
 # ---- 严格载荷 ----

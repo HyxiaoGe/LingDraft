@@ -185,12 +185,13 @@ export function routeResearchText(text, st, resume, setCard) {
 
 // ---------------- 结果渲染 ----------------
 
-export function ResearchBody({ st, it, onCard, resume }) {
+// live：这是线程当前的状态，报告里的论断、来源可以点着改；历史消息只展示
+export function ResearchBody({ st, it, live, onCard, resume }) {
   if (st.status === "failed") {
     return (
       <>
         <p>这一步没跑完：{st.error}。已有的内容都还在，可以从断开的地方重试。</p>
-        {st.exported && <ReviewBody st={st} it={null} onCard={onCard} resume={resume} />}
+        {st.versions?.length > 0 && <ReviewBody st={st} it={null} onCard={onCard} resume={resume} />}
       </>
     );
   }
@@ -200,7 +201,8 @@ export function ResearchBody({ st, it, onCard, resume }) {
   if (it?.type === "research.ask") {
     return <p>调研到一半有个只有你能回答的问题。</p>;
   }
-  if (it?.type === "research.review" || st.exported) return <ReviewBody st={st} it={it} onCard={onCard} resume={resume} />;
+  // 没导出就结束的（报告没通过校验，用户选了不用改）也要把草稿、校验结果和说明摆出来
+  if (it?.type === "research.review" || st.versions?.length > 0) return <ReviewBody st={st} it={it} live={live} onCard={onCard} resume={resume} />;
   return null;
 }
 
@@ -210,7 +212,7 @@ const CHECK_LABEL = {
   report_valid: "报告有带来源的论断", question_answered: "回答了研究问题",
 };
 
-function ReviewBody({ st, it, onCard, resume }) {
+function ReviewBody({ st, it, live, onCard, resume }) {
   const [tab, setTab] = useState("report");
   const [finalText, setFinalText] = useState(null);
   useEffect(() => {
@@ -219,7 +221,8 @@ function ReviewBody({ st, it, onCard, resume }) {
   const report = it?.report || finalText;
   const claims = it?.claims || st.claims || [];
   const sources = it?.sources || st.sources || [];
-  const sections = it?.sections || [];
+  const sections = it?.sections || st.outline || [];
+  const act = live && it ? it : null; // 能点着改的卡
   const checks = it?.checks || st.checks || [];
   const failed = checks.filter((c) => !c.passed);
   const versions = st.versions || [];
@@ -228,8 +231,8 @@ function ReviewBody({ st, it, onCard, resume }) {
   const notes = [...new Set(it?.notes || st.notes || [])];
   return (
     <>
-      {it ? <p>第 {it.version} 版{st.exported?.version === it.version ? "已导出" : "好了，但没有带来源的论断，没有导出"}（{last?.note}）。每句话都挂着论断，推断句有标记；觉得不合适，点论断或来源可以单独处理。{it.answer_how === "close" ? " 这次调研没有自己收尾，答案是基于已查到的材料补的，请多留意。" : ""}</p>
-          : st.status !== "failed" && <p>已结束，用的是第 {st.exported?.version} 版。</p>}
+      {it ? <p>第 {it.version} 版{st.exported?.version === it.version ? "已导出" : "好了，但没有带来源的论断，没有导出"}（{last?.note}）。每句话都挂着论断，推断句有标记{act ? "；觉得不合适，点论断或来源可以单独处理" : ""}。{it.answer_how === "close" ? " 这次调研没有自己收尾，答案是基于已查到的材料补的，请多留意。" : ""}</p>
+          : st.status !== "failed" && <p>{st.exported ? `已结束，用的是第 ${st.exported.version} 版。` : `已结束，第 ${last?.n} 版没有导出（自动校验没通过，见下方）。`}</p>}
       <div className="rtabs">
         {[["report", "报告"], ["claims", `论断 ${claims.filter((c) => !c.orphaned).length}`], ["sources", `来源 ${sources.filter((s) => s.status === "adopted").length}`]].map(([k, l]) => (
           <button key={k} className={tab === k ? "sel" : ""} onClick={() => setTab(k)}>{l}</button>
@@ -243,13 +246,13 @@ function ReviewBody({ st, it, onCard, resume }) {
             <div key={sec.id}>
               <div className="ctitle">{sec.title}</div>
               {claims.filter((c) => c.outline_id === sec.id).map((c) => (
-                <ClaimRow key={c.id} c={c} onClick={it ? () => onCard(claimCard(c, it, resume)) : null} />
+                <ClaimRow key={c.id} c={c} onClick={act ? () => onCard(claimCard(c, act, resume)) : null} />
               ))}
             </div>
           ))}
         </div>
       )}
-      {tab === "sources" && <SourceList sources={sources} it={it} onCard={onCard} resume={resume} />}
+      {tab === "sources" && <SourceList sources={sources} it={act} onCard={onCard} resume={resume} />}
       {failed.length > 0 ? <div className="checks bad">自动校验未通过：{failed.map((c) => `${CHECK_LABEL[c.name] || c.name} ${c.detail}`).join("；")}</div>
         : checks.length > 0 && <div className="checks">{checks.map((c) => "✓ " + (CHECK_LABEL[c.name] || c.name) + (c.detail ? `（${c.detail.replace(/；$/, "")}）` : "")).join(" · ")}</div>}
       {notes.length > 0 && <div className="notes">{notes.map((n, i) => <div key={i}>· {n}</div>)}</div>}

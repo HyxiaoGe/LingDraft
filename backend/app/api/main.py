@@ -63,13 +63,28 @@ def _dir(r: BaseRunner, thread_id: str) -> Path:
         raise HTTPException(404, "thread 不存在") from None
 
 
-def _safe_file(base: Path, name: str) -> Path:
+def _inside(root: Path, path: Path) -> bool:
+    """解析掉符号链接以后仍在线程目录下：目录里有指向外面的链接（子目录或文件）也读不出去。"""
+    return path.resolve().is_relative_to(root.resolve())
+
+
+def _safe_file(root: Path, name: str, sub: str | None = None) -> Path:
+    """root 是线程目录，sub 是其中的子目录（如 package）；边界按线程目录算，子目录本身是链接也不行。"""
     if "/" in name or "\\" in name or name.startswith("."):
         raise HTTPException(400, "非法文件名")
-    path = base / name
-    if not path.resolve().is_relative_to(base.resolve()) or not path.is_file():
+    path = (root / sub if sub else root) / name
+    if not _inside(root, path) or not path.is_file():
         raise HTTPException(404, "文件不存在")
     return path
+
+
+def _zip(root: Path, src: Path, filename: str) -> Response:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for p in src.iterdir():
+            if p.is_file() and _inside(root, p):
+                z.write(p, p.name)
+    return Response(buf.getvalue(), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @app.post("/api/threads")
@@ -120,12 +135,7 @@ async def export_zip(thread_id: str):
     if not _view(runner(), thread_id)["exported"]:
         raise HTTPException(404, "尚未导出，请先在 review 中确认")
     tdir = _dir(runner(), thread_id)
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for p in tdir.iterdir():
-            if p.is_file():
-                z.write(p, p.name)
-    return Response(buf.getvalue(), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="poster-{thread_id}.zip"'})
+    return _zip(tdir, tdir, f"poster-{thread_id}.zip")
 
 
 # ---- 调研场景 ----
@@ -193,7 +203,7 @@ async def research_file(thread_id: str, name: str):
 
 @app.get("/api/research/threads/{thread_id}/package/{name}")
 async def research_package_file(thread_id: str, name: str):
-    path = _safe_file(_dir(research(), thread_id) / "package", name)
+    path = _safe_file(_dir(research(), thread_id), name, "package")
     media = "application/json" if name.endswith(".json") else "text/markdown; charset=utf-8"
     return FileResponse(path, media_type=media)
 
@@ -202,10 +212,5 @@ async def research_package_file(thread_id: str, name: str):
 async def research_export(thread_id: str):
     if not _view(research(), thread_id)["exported"]:
         raise HTTPException(404, "尚未导出，请先在终审中确认")
-    pkg = _dir(research(), thread_id) / "package"
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        for p in pkg.iterdir():
-            if p.is_file():
-                z.write(p, p.name)
-    return Response(buf.getvalue(), media_type="application/zip", headers={"Content-Disposition": f'attachment; filename="research-{thread_id}.zip"'})
+    tdir = _dir(research(), thread_id)
+    return _zip(tdir, tdir / "package", f"research-{thread_id}.zip")

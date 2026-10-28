@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from langgraph.graph import START
 from langgraph.types import Command
 
 from app import config
@@ -24,6 +25,7 @@ class NothingToRetry(Exception):
 
 
 CUT_SHORT = "上次运行没跑完就停了（多半是服务重启过）"
+_INTERRUPT = "__interrupt__"  # 检查点里中断写入的通道名；LangGraph 1.0 起把这个常量设成了私有，改名的话停在提问卡上的测试会先挂
 
 
 class ResearchRunner(BaseRunner):
@@ -39,7 +41,15 @@ class ResearchRunner(BaseRunner):
         self.executor = Executor(workers or config.RESEARCH_WORKERS, "research")
 
     def start(self, thread_id: str, request: str):
-        return self._submit(thread_id, lambda: {"request": request}, info={"request": request})
+        return self._submit(thread_id, lambda: self.accept(thread_id, request))
+
+    def accept(self, thread_id: str, request: str) -> None:
+        """把线程 id 交给页面之前，先把需求写进检查点，图从这里接着跑（输入为 None）。
+
+        排队时服务重启也查得到这个线程：没在跑、没走完，算失败，可以重试。
+        """
+        self.graph.update_state({"configurable": {"thread_id": thread_id}}, {"request": request}, as_node=START)
+        return None
 
     def retry(self, thread_id: str):
         return self._submit(thread_id, lambda: self.retry_input(thread_id))
@@ -47,9 +57,30 @@ class ResearchRunner(BaseRunner):
     def retry_input(self, thread_id: str) -> None:
         """只有失败的线程能重试：从最后一个检查点接着跑（输入为 None），失败那一步重做，之前的步骤和 agent 里做过的搜索都不重来。"""
         snap = self.graph.get_state({"configurable": {"thread_id": thread_id}})
-        if not snap.values or not snap.next or any(t.interrupts for t in snap.tasks):
+        if not snap.values or not snap.next or self._pending(thread_id, snap) is not None:
             raise NothingToRetry("这个线程没有失败，不需要重试")
         return None
+
+    def pending(self, thread_id: str):
+        return self._pending(thread_id, self.graph.get_state({"configurable": {"thread_id": thread_id}}))
+
+    def _pending(self, thread_id: str, snap):
+        """线程在等的那张卡；没有就是 None。
+
+        agent 里的提问会同时挂在 research 节点上。回答已经被 agent 用上、后面某一步出错（或进程停了）时，
+        外层那条中断还留着，子图里却已经没有了：这张卡不再等人回答，再答也不会被用上——线程算失败，重试会带着已给的回答接着跑。
+        """
+        for task in snap.tasks:
+            for it in task.interrupts:
+                if not self._answered(thread_id, task, it):
+                    return it
+        return None
+
+    def _answered(self, thread_id: str, task, it) -> bool:
+        sub = self.graph.checkpointer.get_tuple({"configurable": {"thread_id": thread_id, "checkpoint_ns": f"{task.name}:{task.id}"}})
+        if sub is None:  # 节点自己发的中断（澄清、终审）：回答通过之前不会写进检查点，一直有效
+            return False
+        return not any(ch == _INTERRUPT and any(getattr(i, "id", None) == it.id for i in v) for _, ch, v in sub.pending_writes)
 
     def resume_input(self, thread_id: str, payload: dict, interrupt_id: str | None = None) -> Any:
         """回答要对着当前这张卡（中断 id 一致）并通过校验，才交给图；按 id 恢复，图里不会错配到别的中断。"""
@@ -81,13 +112,9 @@ class ResearchRunner(BaseRunner):
         run = self.runs.get(self._run_key(thread_id))
         snap = self.graph.get_state({"configurable": {"thread_id": thread_id}})
         v = snap.values
-        if not v:
-            if run is None:
-                return {"thread_id": thread_id, "exists": False}
-            # 请求已接受、图还没写下第一个检查点（多半在排队）：先能查到，页面刷新回来才不会 404
-            return {"thread_id": thread_id, "exists": True, "scenario": "research", "next": [],
-                    "status": "queued" if run["queued"] else "running", "error": None, "request": run.get("request"), "interrupt": None}
-        pending = next((it for task in snap.tasks for it in task.interrupts), None)
+        if not v:  # 线程 id 交出去之前需求已经写进检查点（见 accept），没有就是不存在
+            return {"thread_id": thread_id, "exists": False}
+        pending = self._pending(thread_id, snap)
         status, error = self._status(snap, run, pending)
         return {
             "thread_id": thread_id,

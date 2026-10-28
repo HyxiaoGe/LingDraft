@@ -12,7 +12,7 @@
 ```bash
 uv sync
 uv run playwright install chromium
-uv run pytest -q            # 84 个用例，不联网（FakePlanner / FakeResearchPlanner + MockTransport 网关）
+uv run pytest -q            # 87 个用例，不联网（FakePlanner / FakeResearchPlanner + MockTransport 网关）
 ```
 
 Web 方式（M2）：
@@ -30,7 +30,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 
 调研的 resume 要带上当前这张卡的中断 id：`{"interrupt_id": "...", "payload": {...}}`，id 在 `state.interrupt.id` 和 `interrupt` 事件里。回答先过 `app/graph/research/answers.py` 的校验（CLI 也用同一份）再交给图：不合法返回 400，线程停在原卡上；卡已过期（线程往前走了）或这一步还在排队 / 运行返回 409。同一个线程同时只接受一次执行：请求被接受时占位，执行完才释放，浏览器断开不影响；新线程排队时也能马上查到状态。
 
-调研线程的 `state.status`：`queued` / `running`（有执行占着位）、`waiting`（停在卡上等用户）、`done`（走完了）、`failed`（某一步出错，或执行被掐断、比如服务重启；原因在 `state.error`）。失败不会抹掉已有内容，`POST /{id}/retry` 从最后一个检查点接着跑：失败的那一步重做，agent 里已经做过的搜索、读页不重来；没失败的返回 409。回答提交后那一步就出错的，回答没被用上，线程仍是 `waiting`、停在原卡上，重新回答即可。
+调研线程的 `state.status`：`queued` / `running`（有执行占着位）、`waiting`（停在卡上等用户）、`done`（走完了）、`failed`（某一步出错，或执行被掐断、比如服务重启；原因在 `state.error`）。失败不会抹掉已有内容，`POST /{id}/retry` 从最后一个检查点接着跑：失败的那一步重做，agent 里已经做过的搜索、读页不重来；没失败的返回 409。回答提交后还没被用上就出错的（比如重建 agent 时失败），线程仍是 `waiting`、停在原卡上，重新回答即可；agent 已经拿到回答、之后才出错的，原卡作废（再答返回 409），线程是 `failed`，重试会带着已给的回答接着跑。新线程在把 id 交给页面之前就把需求写进检查点，排队时服务重启也查得到（`failed`，可重试）。
 
 执行的事件先写进事件日志（`EventLog`，进程内实现，多 worker 时换 Redis Stream），连接只是去读：页面断线或刷新后带着最后一个事件 id 请求 `/{id}/events`，执行还没结束就从断点接着推（没有 id 就从这次执行的开头补发），已经结束就只给当前状态。日志只留在内存里，进程重启就没了，那时以检查点为准。
 
@@ -77,4 +77,4 @@ uv run python -m app.cli --scenario research state <thread_id>
 - `app/tools/` agent-tools 网关客户端（搜索 / 网页读取）与调研 agent 的工具（`search_web` / `read_page` / `ask_user`）
 - `scripts/` 对真实模型与网关的验证脚本：`probe_create_agent.py`（假搜索）、`probe_gateway_agent.py`（真实搜索 / 读取）、`probe_research_llm.py`（调研场景三种结构化输出），`PYTHONPATH=. uv run python scripts/<name>.py`
 - `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）。海报：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出。调研（`src/research.jsx`，顶栏切换）：需求清楚直接开始，模糊才弹澄清卡 → agent 提问卡（带“不问会怎样”，可跳过）→ 大纲 + 论断 + 假设 → 报告 / 论断 / 来源三个页签，点论断或来源单独处理 → 终审卡 / 自由文本重写某章 → 导出确认物包
-- `tests/` 海报：T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等；调研：`test_research.py`（全流程可追溯 / 排除来源传播 / 改论断 / 重写章节 / 改大纲只补调研新章 / 跳过提问 / sqlite 跨实例恢复）、`test_research_resume.py`（路径穿越 / 严格载荷 / 被拒后能继续 / 过期中断 id / 重复提交 / 断线与排队）、`test_research_runs.py`（并行执行 / 提交失败退还占位 / 断线续读与刷新补发 / 保活 / 失败保留内容与重试 / 被掐断的执行可重试）
+- `tests/` 海报：T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等；调研：`test_research.py`（全流程可追溯 / 排除来源传播 / 改论断 / 重写章节 / 改大纲只补调研新章 / 跳过提问 / sqlite 跨实例恢复）、`test_research_resume.py`（路径穿越与符号链接 / 严格载荷 / 被拒后能继续 / 过期中断 id / 重复提交 / 断线与排队）、`test_research_runs.py`（并行执行 / 提交失败退还占位 / 断线续读与刷新补发 / 保活 / 失败保留内容与重试 / 回答已用上后出错不再让人重答 / 排队中重启后可重试 / 被掐断的执行可重试）

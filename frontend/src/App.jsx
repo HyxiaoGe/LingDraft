@@ -22,7 +22,6 @@ export default function App() {
   const chatRef = useRef(null);
   const fileRef = useRef(null);
   const threadRef = useRef(null); // 问题卡的回调在 state 更新前就建好了，thread_id 走 ref
-  const interruptRef = useRef(null); // 同理：当前这张卡的中断 id，回答时带回去，后端据此判断卡有没有过期
   const lastEventRef = useRef(null); // 调研：收到的最后一个事件 id，断线或刷新后凭它接着读，不重不漏
   const scenarioRef = useRef(scenario); // 同理：恢复线程时卡片在 setScenario 生效前就建好了，场景也走 ref
   scenarioRef.current = scenario;
@@ -42,10 +41,9 @@ export default function App() {
 
   const patchAi = (id, fn) => setMessages((ms) => ms.map((m) => (m.id === id ? fn(m) : m)));
 
-  // 一轮结束或恢复回来：记下状态和这张卡的中断 id，按 interrupt 类型弹问题卡
+  // 一轮结束或恢复回来：记下状态，按 interrupt 类型弹问题卡（调研的卡绑定这份状态里的线程和中断 id）
   const show = (id, st, extra) => {
     threadRef.current = st.thread_id;
-    interruptRef.current = st.interrupt?.id ?? null;
     if (st.scenario === "research") history.replaceState(null, "", "#r/" + st.thread_id);
     setState(st);
     patchAi(id, (m) => ({ ...m, stage: null, result: st, ...extra }));
@@ -153,18 +151,18 @@ export default function App() {
       setBusy(false);
     }
   };
-  const resume = (payload, userText, qa) =>
-    run((cb) => (scenarioRef.current === "research"
-      ? resumeResearchThread(threadRef.current, interruptRef.current, payload, cb)
-      : resumeThread(threadRef.current, payload, cb)), userText, qa);
-  const retry = () => run((cb) => retryResearchThread(threadRef.current, cb), "重试");
+  const resume = (payload, userText, qa) => run((cb) => resumeThread(threadRef.current, payload, cb), userText, qa);
+  // 调研的回答绑定到出卡时的那份状态：线程和中断 id 都取自它，不在发送时换成最新的。卡过期了后端会拒（409），不会改到别的线程、别的卡上
+  const resumeFor = (st) => (payload, userText, qa) =>
+    run((cb) => resumeResearchThread(st.thread_id, st.interrupt?.id, payload, cb), userText, qa);
+  const retry = (threadId) => run((cb) => retryResearchThread(threadId, cb), "重试");
 
   // ---- 把 interrupt 变成问题卡 ----
   const cardFor = (st) => {
-    if (st.scenario === "research" && st.status === "failed") return retryCard(retry); // 原因写在回复正文里
+    if (st.scenario === "research" && st.status === "failed") return retryCard(() => retry(st.thread_id)); // 原因写在回复正文里
     const it = st.interrupt;
     if (!it) return null;
-    if (it.type.startsWith("research.")) return researchCardFor(it, st, resume, setCard);
+    if (it.type.startsWith("research.")) return researchCardFor(it, st, resumeFor(st), setCard);
     if (it.type === "confirm_facts") return factsCard(it, resume);
     if (it.type === "choose_style") return styleCard(it, resume);
     if (it.type === "review") return reviewCard(it, st, resume, setCard);
@@ -179,8 +177,8 @@ export default function App() {
     : interruptType === "research.ask" ? "ask" : "locked";
   const onSend = (text) => {
     if (inputMode === "new") return start(text);
-    if (inputMode === "ask") return resume({ answer: text }, null, [{ q: state.interrupt.title, a: text }]);
-    if (inputMode === "review") return scenarioRef.current === "research" ? routeResearchText(text, state, resume, setCard) : routeFreeText(text, state, resume, setCard);
+    if (inputMode === "ask") return resumeFor(state)({ answer: text }, null, [{ q: state.interrupt.title, a: text }]);
+    if (inputMode === "review") return state.scenario === "research" ? routeResearchText(text, state, resumeFor(state), setCard) : routeFreeText(text, state, resume, setCard);
   };
   const title = !state ? (scenario === "research" ? "灵稿 · 产品调研" : "灵稿 · 宣传海报")
     : scenario === "research" ? (state.scope?.question || "产品调研") : "黑五预热宣传海报";
@@ -200,7 +198,8 @@ export default function App() {
         <div className="chat-inner">
           {messages.length === 0 && <Welcome scenario={scenario} onPick={(t) => start(t)} />}
           {messages.map((m) => (m.role === "user" ? <UserMsg key={m.id} text={m.text} />
-            : <AiMsg key={m.id} m={m} onPickElement={(e) => setCard(elementCard(e, state, resume, setCard))} onCard={setCard} resume={resume} />))}
+            : <AiMsg key={m.id} m={m} live={m.result === state} onPickElement={(e) => setCard(elementCard(e, state, resume, setCard))} onCard={setCard}
+                resume={m.result?.scenario === "research" ? resumeFor(m.result) : resume} />))}
           {error && <div className="err">出错：{error}</div>}
         </div>
       </div>
@@ -433,7 +432,8 @@ function UserMsg({ text }) {
   return <div className="msg-user"><div className="bubble">{text}</div></div>;
 }
 
-function AiMsg({ m, onPickElement, onCard, resume }) {
+// live：这条消息展示的是线程当前的状态。之前的消息只是历史，里面的报告不能再点着改
+function AiMsg({ m, live, onPickElement, onCard, resume }) {
   const [open, setOpen] = useState(true);
   const st = m.result;
   const it = st?.interrupt;
@@ -465,7 +465,7 @@ function AiMsg({ m, onPickElement, onCard, resume }) {
         {m.acts?.length > 0 && <ActLog acts={m.acts} live={!!m.stage} />}
         {m.stage && <div className="status"><span className="dots">{m.stage}</span><span className="sep">|</span><span>{st?.scenario === "research" || m.restored || !st ? "可以关掉页面，回来后从这一步继续" : "请稍候"}</span></div>}
         {st && !m.stage && (st.scenario === "research"
-          ? <ResearchBody st={st} it={it} onCard={onCard} resume={resume} />
+          ? <ResearchBody st={st} it={it} live={live} onCard={onCard} resume={resume} />
           : <ResultBody st={st} it={it} cur={cur} sel={sel} setSel={setSel} elements={elements} onPickElement={onPickElement} />)}
       </div>
     </div>
