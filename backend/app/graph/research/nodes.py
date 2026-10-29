@@ -6,7 +6,7 @@ research 把 agent 子图当函数调用，子图里的 ask_user 中断会冒到
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from langchain_core.runnables import RunnableConfig
@@ -21,8 +21,10 @@ from app.graph.research.agent import (
     collect_asks,
     collect_skills,
     collect_sources,
+    collect_steps,
     final_answer_text,
     search_failures,
+    url_key,
 )
 from app.graph.research.answers import InvalidAnswer, card_schema, resume_value
 from app.graph.research.state import (
@@ -34,7 +36,9 @@ from app.graph.research.state import (
     Claim,
     ClarifyForm,
     OutlineNode,
+    Quote,
     ReportVersion,
+    ResearchRound,
     ResearchState,
     ReviewDecision,
     Scope,
@@ -126,11 +130,11 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         _stage("正在理解研究问题")
         res = planner.intake(state["request"])
         return {
-            "scope": res.scope, "clarify": res.questions[:2], "scope_confirmed": False,
-            "answer": None, "answer_how": "none", "answered": False, "gap": None, "open_gap": None, "gap_rounds": 0, "outline": [],
+            "scope": res.scope, "clarify": res.questions[:2], "clarify_answers": {}, "scope_confirmed": False,
+            "answer": None, "answer_how": "none", "answered": False, "gap": None, "open_gap": None, "gap_rounds": 0, "rounds": [], "outline": [],
             "sources": [], "time_issues": {}, "claims": [], "assumptions": [], "asks": [], "asks_used": 0, "skills": [], "sections": {},
-            "rewrite_targets": [], "rewrite_instructions": {}, "review_text": None, "review_reply": None,
-            "versions": [], "check_results": [], "notes": [], "approved": False,
+            "rewrite_targets": [], "rewrite_instructions": {}, "review_text": None, "review_quote": None, "review_reply": None,
+            "change": None, "versions": [], "check_results": [], "notes": [], "approved": False,
         }
 
     def confirm_scope(state: ResearchState) -> dict:
@@ -153,6 +157,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         return {
             "scope": scope.model_copy(update={"extra": "；".join(answered) or None}),
             "scope_confirmed": True,
+            "clarify_answers": {q.id: (form.answers.get(q.id) or "").strip() or None for q in questions},
             "assumptions": assumptions,
         }
 
@@ -175,6 +180,7 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         sources = list(state.get("sources", []))
         new_sources, _ = collect_sources(messages, sources, _next_index(sources, "s"))
         sources += new_sources
+        steps = collect_steps(messages, {url_key(s.url): s.id for s in sources})
 
         notes = list(state.get("notes", []))
         picked = loaded + [n for n in collect_skills(messages) if n not in loaded]
@@ -192,9 +198,13 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         new_asks = collect_asks(messages)
         asks = list(state.get("asks", [])) + new_asks
         assumptions = list(state.get("assumptions", [])) + [f"「{a.question}」用户跳过了，按模型假设处理" for a in new_asks if a.skipped]
+        kept = answer is None and gap and state.get("answer")
+        done = ResearchRound(gap=gap, steps=steps, answer_how="kept" if kept else how, new_sources=len(new_sources),
+                             ended_at=datetime.now(UTC).isoformat(timespec="seconds"))
         out = {"sources": sources, "asks": asks, "assumptions": assumptions, "skills": picked,
-               "asks_used": asks_used + len(new_asks), "notes": notes}  # 只算呈现给用户的提问（含跳过的）
-        if answer is None and gap and state.get("answer"):
+               "asks_used": asks_used + len(new_asks), "notes": notes,  # 只算呈现给用户的提问（含跳过的）
+               "rounds": list(state.get("rounds", [])) + [done]}
+        if kept:
             # 补查没拿到新答案：上一轮的答案和整理结果都留着，不拿空答案冲掉，也不把同一份答案再整理一遍（结论可能碰巧翻过来）
             notes.append("补查没有给出新答案，沿用上一轮的答案和整理结果")
             return {**out, "gap": None, "open_gap": gap, "answered": False}
@@ -318,10 +328,12 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         title = {o.id: o.title for o in state["outline"]}
         note = "初稿" if n == 1 else "重写" + "，".join(f"「{title.get(t, t)}」" + (f"：{instructions[t]}" if instructions.get(t) else "")
                                                      for t in targets)
+        change = state.get("change") or {}
+        version = ReportVersion(n=n, path=str(path), note=note, asked=change.get("asked", ""), understood=change.get("understood", ""))
         return {
             "sections": sections, "sources": sources,
-            "versions": state.get("versions", []) + [ReportVersion(n=n, path=str(path), note=note)],
-            "rewrite_targets": [], "rewrite_instructions": {}, "notes": notes,
+            "versions": state.get("versions", []) + [version],
+            "rewrite_targets": [], "rewrite_instructions": {}, "notes": notes, "change": None,
         }
 
     def check(state: ResearchState) -> dict:
@@ -360,18 +372,23 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         payload = _review_payload(state)
         d = _validated(interrupt(payload, response_schema=card_schema(payload)), ReviewDecision)  # 目标存在、字段齐全由 schema 保证
         if d.action == "instruct":
-            return {"approved": False, "review_text": d.text.strip(), "review_reply": None}
-        return {**_apply(state, [d]), "review_reply": None}
+            return {"approved": False, "review_text": d.text.strip(), "review_quote": d.quote.model_dump() if d.quote else None,
+                    "review_reply": None}
+        out = _apply(state, [d])
+        return {**out, "review_reply": None, "change": {"asked": _describe(state, d)} if out.get("rewrite_targets") else None}
 
     def interpret(state: ResearchState) -> dict:
         """把用户在终审时直接说的话交给模型，理解成和按钮一样的操作；对不上就带着模型的回复回到终审。"""
         text = state.get("review_text") or ""
+        quote = Quote.model_validate(state["review_quote"]) if state.get("review_quote") else None
         _stage("理解你的修改要求")
         payload = _review_payload(state)
+        cleared = {"review_text": None, "review_quote": None}
         try:
-            plan = planner.interpret_review(state["scope"], payload["report"], state["outline"], state["claims"], state["sources"], text)
+            plan = planner.interpret_review(state["scope"], payload["report"], state["outline"], state["claims"], state["sources"], text,
+                                            quote)
         except Exception as e:  # noqa: BLE001
-            return {"review_text": None, "review_reply": f"这句话没能处理（{type(e).__name__}），可以再说一次，或者用下面的选项"}
+            return {**cleared, "review_reply": f"这句话没能处理（{type(e).__name__}），可以再说一次，或者用下面的选项"}
         ops: list[ReviewDecision] = []
         bad: list[str] = []
         for op in plan.ops:
@@ -384,14 +401,16 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         reply = "；".join(x for x in parts if x) or None
         changes = [d for d in ops if d.action != "approve"]
         if not ops or (not changes and any(d.action != "approve" for d in plan.ops)):
-            return {"review_text": None, "review_reply": reply or "没对上要改的地方，可以换个说法，或者用下面的选项"}
+            return {**cleared, "review_reply": reply or "没对上要改的地方，可以换个说法，或者用下面的选项"}
         if not changes:
-            return {"approved": True, "review_text": None, "review_reply": None,
+            return {**cleared, "approved": True, "review_reply": None,
                     "notes": list(state.get("notes", [])) + [f"按你的话（{text}）理解为：不用改了"]}
         out = _apply(state, changes)
-        out["notes"] = list(out.get("notes", state.get("notes", []))) + [
-            f"按你的话（{text}）理解为：" + "；".join(_describe(state, d) for d in changes)]
-        return {**out, "review_text": None, "review_reply": reply}
+        understood = "；".join(_describe(state, d) for d in changes)
+        out["notes"] = list(out.get("notes", state.get("notes", []))) + [f"按你的话（{text}）理解为：{understood}"]
+        asked = f"「{quote.text}」{text}" if quote else text
+        return {**out, **cleared, "review_reply": reply,
+                "change": {"asked": asked, "understood": understood} if out.get("rewrite_targets") else None}
 
     return {
         "intake": intake, "confirm_scope": confirm_scope, "research": research, "consolidate": consolidate,
@@ -443,11 +462,14 @@ def _apply(state: ResearchState, decisions: list[ReviewDecision]) -> dict:
 
 
 def _describe(state: ResearchState, d: ReviewDecision) -> str:
+    """给用户看的一句话：这一版是按什么改的。来源用报告里的标注（S16），论断不露内部 id、用原来的表述。"""
     if d.action == "exclude_source":
         src = next((s for s in state["sources"] if s.id == d.target), None)
-        return f"排除来源 {d.target}" + (f"（{src.title}）" if src and src.title else "")
+        return f"排除来源 {report.source_label(d.target)}" + (f"（{src.title}）" if src and src.title else "")
     if d.action == "edit_claim":
-        return f"论断 {d.target} 改成：{d.content.strip()}"
+        claim = next((c for c in state["claims"] if c.id == d.target), None)
+        before = claim.statement if claim else d.target
+        return f"把「{before[:40]}{'…' if len(before) > 40 else ''}」改成：{d.content.strip()}"
     if d.action == "rewrite_section":
         node = next((n for n in state["outline"] if n.id == d.target), None)
         return f"重写「{node.title if node else d.target}」" + (f"：{d.instruction.strip()}" if d.instruction else "")

@@ -14,6 +14,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -42,6 +43,7 @@ class RunRegistry(Protocol):
     """线程的运行占位：页面刷新回来时据此判断“还在跑”，重复提交据此拒绝。
 
     admit 是原子的“占位成功 / 已被占用”，调用方不加锁；多 worker 部署时换成共享存储的实现（如 Redis SET NX），接口不变。
+    get 返回 {"queued": 是否还在排队, "since": 开始执行的时间（ISO，开始后才有）}。
     """
 
     def admit(self, key: str) -> bool: ...
@@ -67,7 +69,7 @@ class LocalRunRegistry:
     def started(self, key: str) -> None:
         with self._mu:
             if key in self._runs:
-                self._runs[key]["queued"] = False
+                self._runs[key].update(queued=False, since=datetime.now(UTC).isoformat(timespec="seconds"))
 
     def get(self, key: str) -> dict | None:
         with self._mu:

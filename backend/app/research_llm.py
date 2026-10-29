@@ -24,6 +24,7 @@ from app.graph.research.state import (
     ClarifyQuestion,
     IntakeResult,
     OutlineNode,
+    Quote,
     Scope,
     SectionText,
     Sentence,
@@ -116,7 +117,7 @@ class ResearchPlanner(Protocol):
                       user_facts: list[str] = (), report: str | None = None) -> SectionText: ...
 
     def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
-                         text: str) -> ReviewPlan: ...
+                         text: str, quote: Quote | None = None) -> ReviewPlan: ...
 
     def agent_model(self) -> BaseChatModel: ...
 
@@ -205,8 +206,17 @@ class LiveResearchPlanner:
         self._gateway = gateway or GatewayClient(config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY, scene="research")
         self._tools = make_research_tools(self._gateway)
 
-    def _structured(self, llm, schema):
-        return llm.with_structured_output(schema, method="json_schema", strict=True)
+    @staticmethod
+    def _structured(llm, schema):
+        """DeepSeek 的 json_schema 实际走工具调用；模型偶尔直接回一段文字、不调工具，langchain 这时给 None 而不报错。
+        转成异常，交给调用方的重试或失败处理，不让 None 流进后面的步骤。"""
+
+        def parsed(out: dict):
+            if out["parsed"] is None:
+                raise RuntimeError(f"模型没有按结构返回：{out['parsing_error'] or '没有调用结构化输出'}")
+            return out["parsed"]
+
+        return llm.with_structured_output(schema, method="json_schema", strict=True, include_raw=True) | parsed
 
     @staticmethod
     def _intake_messages(request: str) -> list:
@@ -252,20 +262,25 @@ class LiveResearchPlanner:
 
     @staticmethod
     def _interpret_messages(scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
-                            text: str) -> list:
-        """用户看到的报告原样给模型，再附上节、论断、来源的 id，模型才能把用户的说法对到具体对象上。"""
+                            text: str, quote: Quote | None = None) -> list:
+        """用户看到的报告原样给模型，再附上节、论断、来源的 id，模型才能把用户的说法对到具体对象上。
+
+        用户先在报告里选中一段再说的话：选中的原文和它落在哪些论断、哪些节上一起给模型（位置由页面按报告块算出）。
+        """
         claim_lines = [f"- {c.id} | {c.outline_id} | {c.kind} | {c.statement} | {', '.join(c.source_ids) or '无'}"
                        for c in claims if not c.orphaned]
         source_lines = [f"- {s.id} | {s.title or '（无标题）'} | {s.url} | {_SOURCE_STATUS[s.status]}" for s in sources]
         user = prompts.render("interpret.user", question=scope.question, report=report,
                               outline="\n".join(f"- {n.id} | {n.title}" for n in outline),
-                              claims="\n".join(claim_lines) or "（无）", sources="\n".join(source_lines) or "（无）", text=text)
+                              claims="\n".join(claim_lines) or "（无）", sources="\n".join(source_lines) or "（无）", text=text,
+                              quote=quote.text if quote else None, quote_claims="、".join(quote.claim_ids) if quote else "",
+                              quote_sections="、".join(quote.section_ids) if quote else "")
         return [("system", prompts.render("interpret.system")), ("user", user)]
 
     def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
-                         text: str) -> ReviewPlan:
+                         text: str, quote: Quote | None = None) -> ReviewPlan:
         return self._structured(self._fast, ReviewPlan).invoke(
-            self._interpret_messages(scope, report, outline, claims, sources, text))
+            self._interpret_messages(scope, report, outline, claims, sources, text, quote))
 
     def agent_model(self) -> BaseChatModel:
         return self._agent
@@ -492,8 +507,8 @@ class FakeResearchPlanner:
         return SectionText(outline_id=node.id, sentences=sentences)
 
     def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
-                         text: str) -> ReviewPlan:
-        self.calls.append(("interpret", text))
+                         text: str, quote: Quote | None = None) -> ReviewPlan:
+        self.calls.append(("interpret", text) if quote is None else ("interpret", text, quote.model_dump()))
         if self.review_plans:
             return self.review_plans.pop(0)
         return ReviewPlan(ops=[], reply="（假模型）没有预设怎么理解这句话")

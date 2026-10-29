@@ -10,10 +10,10 @@ from langgraph.types import Command
 
 from app import config
 from app.api.runner import BaseRunner, Executor, jsonable
-from app.graph.research.agent import ask_view, is_ask_interrupt
-from app.graph.research.nodes import blocks_of
+from app.graph.research.agent import ask_view, collect_sources, collect_steps, is_ask_interrupt, url_key
+from app.graph.research.nodes import _next_index, blocks_of
 from app.graph.research.answers import resume_value
-from app.graph.research.graph import build_graph, open_sqlite_checkpointer
+from app.graph.research.graph import build_graph, open_sqlite_checkpointer, thread_ids
 from app.research_llm import FakeResearchPlanner, LiveResearchPlanner
 
 
@@ -93,7 +93,7 @@ class ResearchRunner(BaseRunner):
     # ---- 视图 ----
 
     def _versions(self, thread_id: str, versions: list) -> list[dict]:
-        return [{"n": v.n, "note": v.note} for v in versions]
+        return [{"n": v.n, "note": v.note, "asked": v.asked, "understood": v.understood} for v in versions]
 
     def state_view(self, thread_id: str) -> dict:
         # 先查占位再取检查点：执行恰好在两步之间结束时，拿到的是结束后的检查点，不会把上一张卡当成当前的
@@ -112,8 +112,14 @@ class ResearchRunner(BaseRunner):
             "status": status,
             "error": error,
             "request": v.get("request"),
+            "updated_at": snap.created_at,  # 最近一个检查点的时间
+            "running_since": run.get("since") if run else None,  # 这次执行开始的时间；排队中、没在跑为 None
             "scope": jsonable(v.get("scope")),
             "scope_confirmed": v.get("scope_confirmed", False),
+            "clarify": jsonable(v.get("clarify", [])),
+            "clarify_answers": v.get("clarify_answers"),  # 这个字段之前的线程没有，为 None
+            "rounds": jsonable(v.get("rounds", [])),  # 做完的每轮调研；这个字段之前的线程为空
+            "current_round": self._current_round(thread_id, snap) if "research" in snap.next else None,
             "outline": jsonable(v.get("outline", [])),
             "answer": v.get("answer"),
             "answer_how": v.get("answer_how", "none"),
@@ -132,6 +138,55 @@ class ResearchRunner(BaseRunner):
             # 跑着的时候检查点里可能还是上一张卡，不给出去
             "interrupt": self._interrupt_view(thread_id, pending) if pending and run is None else None,
         }
+
+    def _current_round(self, thread_id: str, snap) -> dict | None:
+        """正在跑（或停在提问上、半路失败）的这一轮调研已经做了哪些步骤，从 agent 子图最近的检查点里取。
+
+        来源按这一轮结束时入库的规则先算一遍（消息只增不改，编号和入库时的一致）；只算不存，线程状态不变。
+        """
+        task = next((t for t in snap.tasks if t.name == "research"), None)
+        if task is None:
+            return None
+        sub = self.graph.checkpointer.get_tuple({"configurable": {"thread_id": thread_id, "checkpoint_ns": f"{task.name}:{task.id}"}})
+        messages = (sub.checkpoint["channel_values"].get("messages") if sub else None) or []
+        sources = [s.model_copy() for s in snap.values.get("sources", [])]  # collect_sources 会改已有来源的摘要，不能改到状态里的
+        new, _ = collect_sources(messages, sources, _next_index(sources, "s"))
+        ids = {url_key(s.url): s.id for s in sources + new}
+        return {"gap": snap.values.get("gap"), "steps": jsonable(collect_steps(messages, ids)), "sources": jsonable(new)}
+
+    def summary_view(self, thread_id: str) -> dict | None:
+        """任务列表里的一行：标题、状态、停在哪张卡上、第几版。不存在返回 None。"""
+        run = self.runs.get(self._run_key(thread_id))
+        snap = self.graph.get_state({"configurable": {"thread_id": thread_id}})
+        v = snap.values
+        if not v:
+            return None
+        pending = self._pending(thread_id, snap)
+        status, _ = self._status(snap, run, pending)
+        waiting, questions = None, 0
+        if status == "waiting":
+            if is_ask_interrupt(pending.value):
+                waiting = "ask"
+            else:
+                waiting = str(pending.value.get("type", "")).removeprefix("research.")
+                questions = len(pending.value.get("questions") or [])
+        scope, versions = v.get("scope"), v.get("versions", [])
+        return {
+            "thread_id": thread_id,
+            "title": scope.question if scope else v.get("request"),
+            "request": v.get("request"),
+            "status": status,
+            "waiting": waiting,  # scope / ask / review
+            "questions": questions,  # 澄清卡上有几个问题
+            "version": versions[-1].n if versions else None,
+            "updated_at": snap.created_at,
+            "running_since": run.get("since") if run else None,
+        }
+
+    def list_threads(self) -> list[dict]:
+        """所有调研线程，最近有动静的在前。"""
+        rows = [x for t in thread_ids(self.graph.checkpointer) if (x := self.summary_view(t))]
+        return sorted(rows, key=lambda x: x["updated_at"] or "", reverse=True)
 
     @staticmethod
     def _status(snap, run: dict | None, pending) -> tuple[str, str | None]:

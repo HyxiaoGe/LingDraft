@@ -232,6 +232,11 @@ user = """研究问题：{{ question }}
 
 来源（id | 标题 | 网址 | 状态）：
 {{ sources }}
-
+{% if quote %}
+用户先在报告里选中了一段文字，再说的这句话。选中的文字：
+「{{ quote }}」
+{% if quote_claims %}选中的句子挂着论断 {{ quote_claims }}{% else %}选中的句子没有挂论断{% endif %}{% if quote_sections %}，在节 {{ quote_sections }} 里{% endif %}。
+用户说的“这句”“这里”“这段”“它”指的就是选中的部分；没说要改别处时，只动选中部分对应的论断或节。
+{% endif %}
 用户说：{{ text }}
 """

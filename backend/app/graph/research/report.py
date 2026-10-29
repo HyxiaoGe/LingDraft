@@ -66,7 +66,7 @@ def report_blocks(
         sec = sections.get(node.id)
         if sec is None:
             continue
-        blocks.append({"type": "heading", "text": node.title})
+        blocks.append({"type": "heading", "text": node.title, "section_id": node.id})
         for s in sec.sentences:
             claim = by_claim.get(s.claim_id) if s.claim_id else None
             blocks.append({

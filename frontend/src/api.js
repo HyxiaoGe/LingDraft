@@ -15,18 +15,24 @@ const IDLE_MS = 45000;
 
 // 后端"推进"接口都返回 SSE；这里把流解析成事件回调 onEvent(event, data, id)，最后一个 state 事件是完整状态。
 // id 是事件在这次执行里的编号，断线后凭它接着读。流中途断开时返回 null（没收到 state），或者抛出不带 status 的网络错误。
-async function sse(url, init, onEvent) {
+// signal：页面切到别的线程时主动断开，抛出的错误带 aborted（服务器上的执行不受影响）
+async function sse(url, init, onEvent, signal) {
   const ctl = new AbortController();
   let timer;
   const alive = () => { clearTimeout(timer); timer = setTimeout(() => ctl.abort(), IDLE_MS); };
+  const stop = () => ctl.abort();
+  signal?.addEventListener("abort", stop);
   alive();
   try {
+    if (signal?.aborted) ctl.abort();
     return await readSse(await fetch(url, { ...init, signal: ctl.signal }), onEvent, alive);
   } catch (e) {
+    if (signal?.aborted) throw Object.assign(new Error("已切到别的线程"), { aborted: true });
     if (ctl.signal.aborted) throw new Error("连接长时间没有数据，已断开");
     throw e;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", stop);
   }
 }
 
@@ -83,8 +89,14 @@ export async function getState(threadId) {
 
 // ---- 调研场景 ----
 
-export async function createResearchThread(request, onEvent) {
-  return sse("/api/research/threads", postJson({ request }), onEvent);
+export async function listResearchThreads() {
+  const resp = await fetch("/api/research/threads");
+  if (!resp.ok) throw await httpError(resp);
+  return (await resp.json()).threads;
+}
+
+export async function createResearchThread(request, onEvent, signal) {
+  return sse("/api/research/threads", postJson({ request }), onEvent, signal);
 }
 
 export async function getResearchState(threadId) {
@@ -94,17 +106,17 @@ export async function getResearchState(threadId) {
 }
 
 // interruptId 是这张卡的中断 id：线程已经往前走了（卡过期）或正在处理，后端返回 409
-export async function resumeResearchThread(threadId, interruptId, payload, onEvent) {
-  return sse(`/api/research/threads/${threadId}/resume`, postJson({ interrupt_id: interruptId, payload }), onEvent);
+export async function resumeResearchThread(threadId, interruptId, payload, onEvent, signal) {
+  return sse(`/api/research/threads/${threadId}/resume`, postJson({ interrupt_id: interruptId, payload }), onEvent, signal);
 }
 
 // 失败的线程从断开的那一步接着跑；没失败的返回 409
-export async function retryResearchThread(threadId, onEvent) {
-  return sse(`/api/research/threads/${threadId}/retry`, { method: "POST" }, onEvent);
+export async function retryResearchThread(threadId, onEvent, signal) {
+  return sse(`/api/research/threads/${threadId}/retry`, { method: "POST" }, onEvent, signal);
 }
 
 // 接上线程当前这次执行：after 是收到的最后一个事件 id（没有就从头补发）；执行早就结束了就只给当前状态
-export async function followResearchThread(threadId, after, onEvent) {
+export async function followResearchThread(threadId, after, onEvent, signal) {
   const q = after ? `?after=${encodeURIComponent(after)}` : "";
-  return sse(`/api/research/threads/${threadId}/events${q}`, {}, onEvent);
+  return sse(`/api/research/threads/${threadId}/events${q}`, {}, onEvent, signal);
 }

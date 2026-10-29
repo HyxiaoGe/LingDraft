@@ -47,6 +47,11 @@ def card_schema(card: dict) -> type[BaseModel]:
                     label, ids = targets[self.action]
                     if self.target not in ids:
                         raise ValueError(f"{label}不存在：{self.target}")
+                if self.quote:  # 选中位置是页面算的，也要落在卡上的论断、章节上
+                    for label, key, got in (("论断", "edit_claim", self.quote.claim_ids), ("章节", "rewrite_section", self.quote.section_ids)):
+                        unknown = [x for x in got if x not in targets[key][1]]
+                        if unknown:
+                            raise ValueError(f"选中的{label}不存在：{', '.join(unknown)}")
                 return self
 
         return ReviewAnswer

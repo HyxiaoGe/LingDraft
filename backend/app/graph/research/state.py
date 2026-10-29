@@ -118,6 +118,35 @@ class ReportVersion(BaseModel):
     n: int
     path: str
     note: str
+    asked: str = Field(default="", description="这一版是按用户的哪个操作或哪句话改的；初稿和旧版本为空")
+    understood: str = Field(default="", description="用户直接说的话被理解成了哪些操作；按钮操作为空")
+
+
+class ToolStep(BaseModel):
+    """调研 agent 的一次工具调用（额度用完被拦下的不算），给页面的过程时间线用。"""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(description="工具调用 id；页面据此把实时进度和存下来的记录对上")
+    kind: Literal["search", "read", "skill", "ask"]
+    text: str = Field(description="搜索词 / 网址 / 方法名 / 问题")
+    limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制")
+    ok: bool = True
+    hits: int = 0  # 搜索返回的条数
+    body: bool = False  # 读页读到了正文
+    title: str = ""  # 读到的页面标题
+    source_ids: list[str] = Field(default_factory=list, description="这一步得到的来源")
+    message: str = Field(default="", description="失败的原因；提问时是用户的回答")
+
+
+class ResearchRound(BaseModel):
+    """一轮调研：第一轮，或整理发现缺口后的补查。"""
+
+    model_config = ConfigDict(extra="forbid")
+    gap: str | None = None  # 补查那一轮要补的缺口
+    steps: list[ToolStep] = Field(default_factory=list)
+    answer_how: str = "agent"  # agent / close / none / kept
+    new_sources: int = 0
+    ended_at: str = ""
 
 
 class CheckResult(BaseModel):
@@ -149,7 +178,16 @@ class ClarifyForm(BaseModel):
 _REVIEW_REQUIRED = {"approve": (), "exclude_source": ("target",), "edit_claim": ("target", "content"), "rewrite_section": ("target",),
                     "instruct": ("text",)}
 _REVIEW_ALLOWED = {"approve": (), "exclude_source": ("target",), "edit_claim": ("target", "content"),
-                   "rewrite_section": ("target", "instruction"), "instruct": ("text",)}
+                   "rewrite_section": ("target", "instruction"), "instruct": ("text", "quote")}
+
+
+class Quote(BaseModel):
+    """用户在报告里选中的文字：原文，以及它落在哪些论断、哪些节上（页面按报告块算出来）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(min_length=1, max_length=1000)
+    claim_ids: list[str] = Field(default_factory=list)
+    section_ids: list[str] = Field(default_factory=list)
 
 
 class ReviewDecision(BaseModel):
@@ -159,10 +197,11 @@ class ReviewDecision(BaseModel):
     content: str | None = None
     instruction: str | None = None
     text: str | None = None
+    quote: Quote | None = None  # 只跟 instruct：用户先选中一段再说的话
 
     @model_validator(mode="after")
     def _fields(self):
-        extra = [f for f in ("target", "content", "instruction", "text") if getattr(self, f) is not None and f not in _REVIEW_ALLOWED[self.action]]
+        extra = [f for f in ("target", "content", "instruction", "text", "quote") if getattr(self, f) is not None and f not in _REVIEW_ALLOWED[self.action]]
         if extra:
             raise ValueError(f"{self.action} 不接受：{', '.join(extra)}")
         missing = [f for f in _REVIEW_REQUIRED[self.action] if not (getattr(self, f) or "").strip()]
@@ -192,12 +231,14 @@ class ResearchState(TypedDict, total=False):
     scope: Scope | None
     clarify: list[ClarifyQuestion]
     scope_confirmed: bool
+    clarify_answers: dict[str, str | None]  # 澄清卡的回答：{问题 id: 答案}，跳过的是 None
     answer: str | None  # agent 的文字候选答案
     answer_how: str  # 怎么得到的：agent / close / none
     answered: bool  # 整理步骤判断候选答案是否回答了研究问题
     gap: str | None  # 整理时发现的关键证据缺口，回研究环节补
     open_gap: str | None  # 补过之后仍缺的证据：报告照常给出，并写明还没答完的地方
     gap_rounds: int
+    rounds: list[ResearchRound]  # 每轮调研做了哪些搜索、读页、提问
     outline: list[OutlineNode]
     sources: list[Source]
     time_issues: dict[str, str]  # 整理步骤判断发布时间不在用户要的时间范围里的来源：{来源 id: 理由}
@@ -210,6 +251,8 @@ class ResearchState(TypedDict, total=False):
     rewrite_targets: list[str]
     rewrite_instructions: dict[str, str]  # 重写某节时用户的要求：{节 id: 要求}
     review_text: str | None  # 终审时用户直接说的话，交给模型理解
+    review_quote: dict | None  # 用户说那句话前在报告里选中的文字（Quote）
+    change: dict | None  # 这次修改是按什么来的：{"asked": 用户的操作或原话, "understood": 理解成的操作}，写进下一版
     review_reply: str | None  # 模型没能把用户的话对上具体操作时的回复，显示在下一张终审卡上
     versions: list[ReportVersion]
     check_results: list[CheckResult]

@@ -36,6 +36,7 @@ from app.graph.research.state import (
     MAX_SKILL_LOADS,
     AskRecord,
     Source,
+    ToolStep,
 )
 
 EXCERPT_CHARS = 400
@@ -44,26 +45,54 @@ ASK_BLOCKED = "ask_user_over_budget"  # 超额的 ask_user 调用改成这个名
 DANGLING_NOTE = prompts.render("agent.dangling_call")
 
 
+def _search_limits(args: dict) -> list[str]:
+    return ([f"近 {args['recency_days']} 天"] if args.get("recency_days") else []) + [str(d) for d in args.get("domains") or []]
+
+
+def _emit(event: dict) -> None:
+    try:
+        get_stream_writer()(event)
+    except RuntimeError:
+        pass
+
+
 class ToolProgressMiddleware(AgentMiddleware):
-    """每次调工具前往自定义流里写一句进度，页面在“正在调研”期间能看到在搜什么、读什么。"""
+    """每次调工具前后往自定义流里写进度：开始时说在搜什么、读什么，做完带上这一步的记录（搜到几条、读没读到正文）和找到的网页。
+
+    两条用同一个 id（工具调用 id），页面据此把它们、以及线程状态里存下来的记录对上。排在额度中间件里面，被额度拦下的调用不出现。
+    """
 
     def wrap_tool_call(self, request, handler):
-        name = request.tool_call["name"]
-        args = request.tool_call.get("args") or {}
+        call = request.tool_call
+        name = call["name"]
+        args = call.get("args") or {}
         text = None
         if name == "search_web":
-            limits = ([f"近 {args['recency_days']} 天"] if args.get("recency_days") else []) + list(args.get("domains") or [])
-            text, kind = f"搜索：{args.get('query', '')}" + (f"（{'，'.join(map(str, limits))}）" if limits else ""), "search"
+            limits = _search_limits(args)
+            text, kind = f"搜索：{args.get('query', '')}" + (f"（{'，'.join(limits)}）" if limits else ""), "search"
         elif name == "read_page":
             text, kind = f"读取：{args.get('url', '')}", "read"
         elif name == "load_skill" and (skill := skills.catalog().get(str(args.get("name", "")).strip())):
             text, kind = f"按「{skill.title}」的方法调研", "skill"
-        if text:
-            try:
-                get_stream_writer()({"stage": text[:160], "kind": kind})
-            except RuntimeError:
-                pass
-        return handler(request)
+        if not text:
+            return handler(request)
+        start = {"stage": text[:160], "kind": kind, "id": call.get("id")}
+        _emit(start)
+        result = handler(request)
+        step = tool_step(call, result) if isinstance(result, ToolMessage) else None
+        if step is not None:
+            _emit({**start, "done": True, "step": step.model_dump(), "found": _found(name, result)})
+        return result
+
+
+def _found(name: str, result: ToolMessage) -> list[dict]:
+    """这一步找到的网页（网址、标题），页面在调研还没结束时先列出来；编号要等这一轮结束、来源入库时才定。"""
+    data = _parse(result)
+    if name == "search_web" and isinstance(data, list):
+        return [{"url": h.get("url") or "", "title": h.get("title") or "", "body": False} for h in data if (h.get("url") or "").strip()]
+    if name == "read_page" and isinstance(data, dict) and data.get("ok") and (data.get("content") or "").strip():
+        return [{"url": data.get("url") or "", "title": data.get("title") or "", "body": True}]
+    return []
 
 
 class ToolBudgetMiddleware(AgentMiddleware):
@@ -196,8 +225,8 @@ def build_agent(model: BaseChatModel, tools: list, system_prompt: str, *, ask_li
         middleware.append(HumanInTheLoopMiddleware(interrupt_on={"ask_user": {"allowed_decisions": ["respond"]}}))
         limits["ask_user"] = ask_limit
     middleware += [
-        ToolProgressMiddleware(),
         ToolBudgetMiddleware(limits),
+        ToolProgressMiddleware(),  # 在额度中间件里面：被拦下的调用不报进度
         InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
         CallLimitMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end"),
     ]
@@ -391,6 +420,55 @@ def collect_sources(messages: list[BaseMessage], existing: list[Source], next_in
             if data.get("title") and not src.title:
                 src.title = data["title"]
     return new, {s.url: s.id for s in by_url.values()}
+
+
+def tool_step(call: dict, result: ToolMessage | None, url_ids: dict[str, str] | None = None) -> ToolStep | None:
+    """一次工具调用 → 过程记录。没有结果的、被额度拦下的（结果不是系统的 JSON）、没呈现给用户的提问不记。
+
+    url_ids 是 url_key → 来源 id：给了就把这一步得到的来源编号记上。
+    """
+    if result is None:
+        return None
+    name, args, cid = call["name"], call.get("args") or {}, call.get("id") or ""
+    data = _parse(result)
+    ids = url_ids or {}
+
+    def sids(urls) -> list[str]:
+        return [ids[k] for k in dict.fromkeys(url_key(u) for u in urls if u) if k in ids]
+
+    if name == "search_web":
+        query, limits = str(args.get("query", "")), _search_limits(args)
+        if isinstance(data, list):
+            return ToolStep(id=cid, kind="search", text=query, limits=limits, hits=len(data),
+                            source_ids=sids((h.get("url") or "").strip() for h in data))
+        if isinstance(data, dict):
+            return ToolStep(id=cid, kind="search", text=query, limits=limits, ok=False, message=str(data.get("message") or data.get("kind") or ""))
+        return None
+    if name == "read_page":
+        if not isinstance(data, dict):
+            return None
+        url = str(args.get("url", ""))
+        if data.get("ok") and (data.get("content") or "").strip():
+            return ToolStep(id=cid, kind="read", text=url, body=True, title=data.get("title") or "",
+                            source_ids=sids([(data.get("url") or url).strip()]))
+        return ToolStep(id=cid, kind="read", text=url, ok=False, message=str(data.get("message") or data.get("kind") or "没有读到正文"))
+    if name == "load_skill":
+        skill = skills.catalog().get(str(args.get("name", "")).strip())
+        return ToolStep(id=cid, kind="skill", text=skill.title) if skill and result.status != "error" else None
+    if name == "ask_user":
+        r = ask_result(result)
+        if r.get("unshown") or result.status == "error":
+            return None
+        return ToolStep(id=cid, kind="ask", text=str(args.get("question") or ""), ok=not r.get("skipped"),
+                        message="" if r.get("skipped") else str(r.get("answer") or ""))
+    return None
+
+
+def collect_steps(messages: list[BaseMessage], url_ids: dict[str, str] | None = None) -> list[ToolStep]:
+    """一次运行里的工具调用，按发起的顺序。"""
+    results = {m.tool_call_id: m for m in messages if isinstance(m, ToolMessage)}
+    steps = (tool_step(tc, results.get(tc["id"]), url_ids) for m in messages if isinstance(m, AIMessage) for tc in m.tool_calls)
+    return [s for s in steps if s is not None]
 
 
 def search_failures(messages: list[BaseMessage]) -> list[str]:

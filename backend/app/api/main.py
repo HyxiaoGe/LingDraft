@@ -145,6 +145,12 @@ class ResearchCreateBody(BaseModel):
     request: str
 
 
+@app.get("/api/research/threads")
+async def research_list():
+    """任务列表：所有调研线程的标题和状态。"""
+    return {"threads": research().list_threads()}
+
+
 @app.post("/api/research/threads")
 async def research_create(body: ResearchCreateBody):
     if not body.request.strip():

@@ -15,7 +15,8 @@ from app.research_llm import ResearchPlanner
 
 ALLOWED_MODELS = [
     ("app.graph.research.state", n)
-    for n in ("Scope", "ClarifyQuestion", "OutlineNode", "Source", "Claim", "SectionText", "Sentence", "ReportVersion", "CheckResult", "AskRecord")
+    for n in ("Scope", "ClarifyQuestion", "OutlineNode", "Source", "Claim", "SectionText", "Sentence", "ReportVersion", "CheckResult", "AskRecord",
+              "ToolStep", "ResearchRound")
 ]
 
 
@@ -31,6 +32,20 @@ def open_sqlite_checkpointer(path: Path) -> SqliteSaver:
 
 def memory_checkpointer() -> InMemorySaver:
     return InMemorySaver(serde=make_serde())
+
+
+def thread_ids(checkpointer: BaseCheckpointSaver) -> list[str]:
+    """检查点里有哪些线程（只看外层图）。checkpointer.list(None) 会把所有检查点都反序列化一遍，这里直接查表。
+
+    换成 Postgres 时它的 checkpoints 表也有 thread_id、checkpoint_ns 两列，照这条 SQL 写一份即可。
+    """
+    if isinstance(checkpointer, SqliteSaver):
+        with checkpointer.cursor(transaction=False) as cur:  # 带锁，表还没建时先建表
+            rows = cur.execute("SELECT DISTINCT thread_id FROM checkpoints WHERE checkpoint_ns = ''").fetchall()
+        return [r[0] for r in rows]
+    if isinstance(checkpointer, InMemorySaver):
+        return [t for t, by_ns in list(checkpointer.storage.items()) if by_ns.get("")]
+    raise TypeError(f"不支持列出线程的检查点存储：{type(checkpointer).__name__}")
 
 
 def build_graph(planner: ResearchPlanner, checkpointer: BaseCheckpointSaver, out_dir: Path):
