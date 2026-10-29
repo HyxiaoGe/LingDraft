@@ -37,7 +37,7 @@ class _SearchBody(BaseModel):
 class _ReadBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
     title: str | None = None
-    content: str | None = None
+    content: str  # 读页成功一定有正文：reader-service 读不到正文时自己按 empty_content 失败返回
     provider: str | None = None
 
 
@@ -176,7 +176,9 @@ class GatewayClient:
                 body = _ReadBody.model_validate(data)
             except ValidationError as e:
                 return ReadResult(ok=False, url=url, kind="bad_response", message=f"读取服务返回的格式不对（{_brief(e)}）")
-            content = body.content or ""
+            content = body.content
+            if not content.strip():
+                return ReadResult(ok=False, url=url, kind="bad_response", message="读取服务返回的正文是空的")
             return ReadResult(
                 ok=True,
                 url=url,

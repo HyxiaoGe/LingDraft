@@ -278,6 +278,18 @@ def test_collect_sources_prefers_body_excerpt():
     assert new[0].excerpt_kind == "body" and len(new[0].excerpt) == 400 and new[0].published_at == "2026-01-01"
 
 
+def test_read_without_body_keeps_search_excerpt():
+    """读页结果没有正文时不算读到：搜索摘要留着，不标成正文，也不为没见过的网址新建来源。"""
+    hits = [{"url": "https://a.test/1", "title": "A", "description": "摘要"}]
+    msgs = [
+        ToolMessage(content=json.dumps(hits), name="search_web", tool_call_id="1"),
+        ToolMessage(content=json.dumps({"ok": True, "url": "https://a.test/1", "content": ""}), name="read_page", tool_call_id="2"),
+        ToolMessage(content=json.dumps({"ok": True, "url": "https://a.test/2", "title": "B", "content": " "}), name="read_page", tool_call_id="3"),
+    ]
+    new, mapping = collect_sources(msgs, [], 1)
+    assert mapping == {"https://a.test/1": "s1"} and new[0].excerpt == "摘要" and new[0].excerpt_kind == "summary"
+
+
 def test_ask_resume_matches_multiple_requests():
     pending = {"action_requests": [{"name": "ask_user", "args": {"question": "a"}}, {"name": "ask_user", "args": {"question": "b"}}]}
     d = ask_resume("答", pending=pending)["decisions"]

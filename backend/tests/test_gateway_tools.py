@@ -163,7 +163,8 @@ def test_malformed_responses_are_failures():
     body = {"results": [{"url": None, "title": "无网址"}, {"url": "https://a", "title": None, "x": 1}]}
     (hit,) = _client(lambda req: httpx.Response(200, json=body)).search("q")  # 没有网址的条目跳过
     assert hit.to_dict() == {"title": "", "url": "https://a", "description": "", "content": "", "published_at": None}
-    for body in ({"content": 7}, [], {"title": ["T"]}):
+    # 读页成功一定带正文（reader-service 读不到正文时自己按 empty_content 失败返回）：200 却没有正文也是格式错
+    for body in ({"content": 7}, [], {"title": ["T"]}, {"error": "upstream failed"}, {"title": "T"}, {"content": " \n"}):
         r = _client(lambda req, body=body: httpx.Response(200, json=body)).read("https://a")
         assert not r.ok and r.kind == "bad_response" and not r.retryable, body
     tools = {t.name: t for t in make_research_tools(_client(lambda req: httpx.Response(200, json={"results": 1})))}

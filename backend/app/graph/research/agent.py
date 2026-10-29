@@ -376,6 +376,9 @@ def collect_sources(messages: list[BaseMessage], existing: list[Source], next_in
                 by_url[url_key(url)] = src
                 new.append(src)
         elif m.name == "read_page" and isinstance(data, dict) and data.get("ok"):
+            content = data.get("content") or ""
+            if not content.strip():  # 没有正文不算读到，不能拿空串顶掉搜索摘要（网关已拦下，这里兜住回放和旧消息）
+                continue
             url = (data.get("url") or "").strip()
             src = by_url.get(url_key(url))
             if src is None:
@@ -383,7 +386,7 @@ def collect_sources(messages: list[BaseMessage], existing: list[Source], next_in
                 next_index += 1
                 by_url[url_key(url)] = src
                 new.append(src)
-            src.excerpt = (data.get("content") or "")[:EXCERPT_CHARS]
+            src.excerpt = content[:EXCERPT_CHARS]
             src.excerpt_kind = "body"
             if data.get("title") and not src.title:
                 src.title = data["title"]
