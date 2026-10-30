@@ -108,10 +108,13 @@
 .ws-head-title { width: 100%; max-width: 624px; margin: 0 auto; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* 和对话正文对齐 */
 .ws-scroll { flex: 1; overflow-y: auto; }
 .ws-flow { max-width: 680px; margin: 0 auto; padding: 28px 28px 32px; } /* 正文一行四十来个字 */
-/* 用户的话：悬停时下面浮出复制、编辑（浮在下一行右边的空处，不占高度） */
+/* 用户的话：下面一行是时间、复制、编辑，悬停时浮出，最后一句的一直在（浮在下一行右边的空处，不占高度） */
 .ws-user { position: relative; display: flex; justify-content: flex-end; margin: 0 0 22px; }
+.ws-user.pinned { margin-bottom: 36px; } /* 最后一句下面那行一直在，给它留出位置 */
 .ws-user-foot { position: absolute; top: 100%; right: -8px; margin-top: 1px; display: flex; gap: 2px; opacity: 0; transition: opacity .15s; }
-.ws-user:hover .ws-user-foot, .ws-user-foot:focus-within { opacity: 1; }
+.ws-user:hover .ws-user-foot, .ws-user-foot:focus-within, .ws-user-foot.pinned { opacity: 1; }
+/* 时间：和小按钮一样高、一样的左右留白，跟按钮排在一行 */
+.ws-time { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; font-size: 12px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ws-user-foot .ws-btn { color: var(--muted); }
 .ws-user-foot .ws-btn:hover { color: var(--ink); }
 /* 改最后一句 */

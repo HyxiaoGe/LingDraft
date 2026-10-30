@@ -17,7 +17,7 @@ from langgraph.graph import START
 from app import config
 from app.api.runner import BaseRunner, Executor, RunConflict, jsonable
 from app.graph.research import history
-from app.graph.research.agent import TURN_END, stop_turn
+from app.graph.research.agent import TURN_END, now, stop_turn
 from app.graph.research.graph import build_graph, open_sqlite_checkpointer, thread_ids
 from app.graph.research.sources import collect_sources
 from app.graph.research.state import Turn
@@ -42,6 +42,11 @@ class Stopped(Exception):
 
 CUT_SHORT = "上次运行没跑完就停了"
 DELTA_S = 0.08  # 逐字片段攒这么久发一次
+SENT_AT = "sent_at"  # 用户那句话的发送时间，记在消息的 additional_kwargs 里（不会发给模型）
+
+
+def _said(text: str, **kw: Any) -> HumanMessage:
+    return HumanMessage(content=text.strip(), additional_kwargs={SENT_AT: now()}, **kw)
 
 
 class StopCheck(BaseCallbackHandler):
@@ -118,7 +123,8 @@ def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
     for m in messages:
         if isinstance(m, HumanMessage):
             t = by_id.get(m.id)
-            cur = {"id": m.id, "user": history.text_of(m), "items": [], "record": t.model_dump(exclude={"id"}) if t else None}
+            cur = {"id": m.id, "user": history.text_of(m), "sent_at": m.additional_kwargs.get(SENT_AT, ""), "items": [],
+                   "record": t.model_dump(exclude={"id"}) if t else None}
             out.append(cur)
             continue
         if cur is None or not isinstance(m, AIMessage):
@@ -182,7 +188,7 @@ class ResearchRunner(BaseRunner):
         snap = self.graph.get_state(self._cfg(thread_id))
         if snap.values and snap.next:
             raise NotIdle("上一轮没跑完，先重试")
-        self.graph.update_state(self._cfg(thread_id), {"messages": [HumanMessage(content=text.strip())]}, as_node=START)
+        self.graph.update_state(self._cfg(thread_id), {"messages": [_said(text)]}, as_node=START)
         return None
 
     def retry(self, thread_id: str):
@@ -200,7 +206,7 @@ class ResearchRunner(BaseRunner):
 
     def regenerate_input(self, thread_id: str, text: str | None = None) -> None:
         """最后一轮重新回答：去掉用户最后那句话之后的消息和这一轮的记录，从那句话接着跑。
-        带 text 是用户改了最后那句话：先换成 text（消息 id 不变，还是同一轮），再重新回答。标题不重起。"""
+        带 text 是用户改了最后那句话：先换成 text（消息 id 不变，还是同一轮，发送时间记成改的时候），再重新回答。标题不重起。"""
         snap = self.graph.get_state(self._cfg(thread_id))
         v = snap.values
         if v and snap.next:
@@ -211,7 +217,7 @@ class ResearchRunner(BaseRunner):
             raise NothingToRegenerate("还没有回答，不需要重新生成")
         human = msgs[start]
         turns = [t for t in v.get("turns", []) if t.id != human.id]
-        edited = [HumanMessage(id=human.id, content=text.strip())] if text is not None else []
+        edited = [_said(text, id=human.id)] if text is not None else []
         self.graph.update_state(self._cfg(thread_id), {"messages": edited + [RemoveMessage(id=m.id) for m in msgs[start + 1:]], "turns": turns},
                                 as_node=START)
         return None

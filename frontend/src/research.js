@@ -30,6 +30,17 @@ export function when(iso, now = Date.now()) {
   return d.toDateString() === today.toDateString() ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+// 一句话、一条回答的时间：“10月31日 14:32”，不是今年的带上年份；full 精确到秒，放在悬停提示里
+export function stamp(iso, now = Date.now()) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  const pad = (n) => String(n).padStart(2, "0");
+  const day = `${d.getMonth() + 1}月${d.getDate()}日`;
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const year = `${d.getFullYear()}年`;
+  return { text: `${d.getFullYear() === new Date(now).getFullYear() ? "" : year}${day} ${hm}`, full: `${year}${day} ${hm}:${pad(d.getSeconds())}` };
+}
+
 export const domain = (url) => {
   try {
     return new URL(url).hostname.replace(/^www\./, "");

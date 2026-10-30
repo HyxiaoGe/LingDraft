@@ -1,10 +1,11 @@
 // 对话。一轮是用户的一句话加上模型这一轮做的事：先是过程（思考、搜索、读页按发生的先后），然后是正文和这条回答用到的来源；
 // 最后一轮下面是推荐问题。过程正在跑时展开，这一轮结束后收成一行“已完成 25 秒”，点开看每一步。
-// 每句话和每条回答都能复制；最后一句在空闲时能改，改完按新的话重新回答。存下来的对话为准，正在跑的这一轮叠上实时片段。
+// 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。最后一轮的这些一直显示，之前的悬停才出现。
+// 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { IconArrowUp, IconCheck, IconChevron, IconCopy, IconEdit, IconLoop, IconPage, IconRetry, IconSearch, IconStop, IconWarn, Spinner } from "./icons.jsx";
 import { Markdown } from "./markdown.jsx";
-import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn } from "./research.js";
+import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn, stamp } from "./research.js";
 import { AnswerSources, Mark } from "./sources.jsx";
 
 const EXAMPLES = [
@@ -90,7 +91,7 @@ function Turn({ t, st, live, running, stopping, last, now, act }) {
   const replied = answer.some((i) => i.type === "text");
   return (
     <>
-      {t.user && <UserMsg text={live?.edit ?? t.user} editable={last && idle} onEdit={act.edit} />}
+      {t.user && <UserMsg text={live?.edit ?? t.user} at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && idle} onEdit={act.edit} />}
       <div className="ws-ai">
         {(running || rec) && <Process items={process} st={st} nums={nums} rec={rec} running={running} failed={failed} now={now} />}
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
@@ -98,8 +99,9 @@ function Turn({ t, st, live, running, stopping, last, now, act }) {
         {!running && <AnswerSources nums={nums} sources={st?.sources} />}
         {!running && rec?.ended_at && rec.outcome === "no_reply" && <p className="ws-muted">这一轮没有给出文字回复。</p>}
         {failed && <Failed st={st} act={act} />}
-        {!running && (replied || (last && idle)) && (
+        {!running && (replied || rec?.ended_at || (last && idle)) && (
           <div className={"ws-ai-foot" + (last ? "" : " quiet")}>
+            <Stamp iso={rec?.ended_at} now={now} />
             {replied && <CopyButton text={() => answerText(items, st?.sources)} />}
             {last && idle && <button className="ws-btn ghost sm" onClick={act.regenerate}><IconLoop size={13} />重新回答</button>}
           </div>
@@ -110,15 +112,16 @@ function Turn({ t, st, live, running, stopping, last, now, act }) {
   );
 }
 
-// 用户说的话：悬停时下面出现“复制”；最后一句在空闲时还有“编辑”
-function UserMsg({ text, editable, onEdit }) {
+// 用户说的话：下面是发送时间和“复制”，最后一句在空闲时还有“编辑”。pinned（最后一轮）一直显示，其他的悬停才出现
+function UserMsg({ text, at, pinned, now, editable, onEdit }) {
   const [editing, setEditing] = useState(false);
   useEffect(() => { if (!editable) setEditing(false); }, [editable]); // 开着编辑框时这一轮又跑起来了（点了重新回答、推荐问题），编辑框就收起
   if (editing && editable) return <EditBox text={text} onCancel={() => setEditing(false)} onSend={(t) => { setEditing(false); onEdit(t); }} />;
   return (
-    <div className="ws-user">
+    <div className={"ws-user" + (pinned ? " pinned" : "")}>
       <div className="ws-bubble">{text}</div>
-      <div className="ws-user-foot">
+      <div className={"ws-user-foot" + (pinned ? " pinned" : "")}>
+        <Stamp iso={at} now={now} />
         <CopyButton text={() => text} />
         {editable && <button className="ws-btn ghost sm" onClick={() => setEditing(true)}><IconEdit size={13} />编辑</button>}
       </div>
@@ -152,6 +155,12 @@ function EditBox({ text, onCancel, onSend }) {
       </div>
     </div>
   );
+}
+
+// 发送或回答完的时间，悬停看精确到秒
+function Stamp({ iso, now }) {
+  const s = stamp(iso, now);
+  return s && <time className="ws-time" dateTime={iso} title={s.full}>{s.text}</time>;
 }
 
 // 复制：点了以后显示“已复制”一会儿。text 是函数，点的时候才算要复制的文字

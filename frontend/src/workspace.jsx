@@ -17,7 +17,8 @@ export default function Workspace() {
   const [threads, setThreads] = useState(null);
   const [tid, setTid] = useState(hashId);
   const [st, setSt] = useState(null);
-  // 这个页面发起或接上的那次执行：{said, turnsAtStart, items, stage, title, stopping, hidden, edit}
+  // 这个页面发起或接上的那次执行：{said, sentAt, turnsAtStart, items, stage, title, stopping, hidden, edit}
+  // sentAt：这次说的话或改的话按本机时间记的发送时间，存下来的对话回来以前先显示它
   const [live, setLive] = useState(null);
   const [busy, setBusyState] = useState(false);
   const [error, setError] = useState(null);
@@ -180,7 +181,7 @@ export default function Workspace() {
     const g = gen.current;
     setBusy(true);
     setError(null);
-    setLive({ items: [], said, turnsAtStart: st?.turns?.length || 0, stage: "正在准备…", ...extra });
+    setLive({ items: [], said, sentAt: said || extra.edit ? new Date().toISOString() : undefined, turnsAtStart: st?.turns?.length || 0, stage: "正在准备…", ...extra });
     const errs = [];
     try {
       const s = await fn(onEvent(g, errs), ctl.current.signal);
@@ -194,7 +195,9 @@ export default function Workspace() {
       const recoverable = tidRef.current && (!e.status || e.status === 400 || e.status === 409);
       if (e.status || !recoverable) setError(String(e.message || e));
       if (recoverable) {
-        setLive((l) => ({ items: [], ...l, said: e.status ? null : l?.said, stage: e.status ? "服务器还在处理，等它完成" : "连接断了，正在重连…" }));
+        // 被拒的话（说的、改的）没存下来，不再显示
+        const rejected = e.status ? { said: null, edit: undefined, sentAt: undefined } : {};
+        setLive((l) => ({ items: [], ...l, ...rejected, stage: e.status ? "服务器还在处理，等它完成" : "连接断了，正在重连…" }));
         return await follow(tidRef.current, g, errs);
       }
       setBusy(false);

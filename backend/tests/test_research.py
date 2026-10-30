@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -10,6 +11,7 @@ import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
+from app.api import research_runner
 from app.api.research_runner import NothingToRegenerate, NotIdle, ResearchRunner, StreamBuffer
 from app.api.runner import RunConflict
 from app.api.runner import LocalRunRegistry
@@ -308,6 +310,7 @@ def test_regenerate_replaces_the_last_answer(chat):
     assert len(v["turns"]) == 2 and v["turns"][1]["id"] == first["turns"][1]["id"] and v["turns"][1]["user"] == "查一下局部修改"
     assert _kinds(v["turns"][1]) == _kinds(first["turns"][1]) and v["turns"][1]["record"]["outcome"] == "ok"
     assert v["turns"][0] == first["turns"][0]
+    assert v["turns"][1]["sent_at"] == first["turns"][1]["sent_at"]  # 没改那句话，发送时间照旧
     assert len(chat.values()["messages"]) == n  # 旧的回答去掉了，没有叠在后面
     assert sum(isinstance(m, AIMessage) and m.content.startswith("结论") for m in chat.values()["messages"]) == 1
     assert [n for n, _ in chat.planner.calls].count("title") == 1
@@ -336,15 +339,17 @@ def test_regenerate_refused_when_failed_or_empty():
 # ---- 改最后一句、改标题、删除 ----
 
 
-def test_edit_replaces_the_last_question_and_answers_again(chat):
+def test_edit_replaces_the_last_question_and_answers_again(chat, monkeypatch):
     chat.say("直接答：先问一句")
     first = chat.say("查一下局部修改")
+    assert datetime.fromisoformat(first["turns"][1]["sent_at"]).tzinfo is not None
+    monkeypatch.setattr(research_runner, "now", lambda: "2026-11-01T02:03:04+00:00")
     chat.r.regenerate_input(chat.tid, "  直接答：换个问法 ")
     v = chat.run()
     assert len(v["turns"]) == 2 and v["turns"][0] == first["turns"][0]
     turn = v["turns"][1]
     assert turn["id"] == first["turns"][1]["id"] and turn["user"] == "直接答：换个问法" and _kinds(turn) == _kinds(first["turns"][0])
-    assert turn["record"]["outcome"] == "ok"
+    assert turn["record"]["outcome"] == "ok" and turn["sent_at"] == "2026-11-01T02:03:04+00:00"  # 发送时间记成改的时候
     humans = [history.text_of(m) for m in chat.values()["messages"] if isinstance(m, HumanMessage)]
     assert humans == ["直接答：先问一句", "直接答：换个问法"]  # 旧的那句换掉了，没有叠在后面
     assert v["title"] == first["title"] and [n for n, _ in chat.planner.calls].count("title") == 1
