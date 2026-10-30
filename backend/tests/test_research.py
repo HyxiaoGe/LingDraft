@@ -17,7 +17,9 @@ from app.graph.research.graph import memory_checkpointer, open_sqlite_checkpoint
 from app.graph.research.report import report_blocks, run_checks, to_markdown
 from app.graph.research.sources import collect_sources, url_key
 from app.graph.research.state import Claim, OutlineNode, SectionText, Sentence, Source
-from app.research_llm import ClaimDraft, ConsolidateResult, FakeResearchPlanner, FakeToolModel, SectionDraft, SentenceDraft, TimeIssue
+from app.model_guard import ModelUnavailable
+from app.research_llm import (FAKE_BLOCKED, ClaimDraft, ConsolidateResult, FakeResearchPlanner, FakeToolModel, SectionDraft, SentenceDraft,
+                              TimeIssue)
 from app.tools.gateway import GatewayAuthError, GatewayClient
 from app.tools.research_tools import make_research_tools
 
@@ -459,6 +461,118 @@ def test_search_auth_error_fails_the_run(tmp_path):
         c.say("比较两款笔记软件")
     v = c.view()
     assert v["status"] == "failed" and "401" in v["error"]
+
+
+
+# ---- 模型服务：内容审核、不可用 ----
+
+
+def _search_returns(hits: list[dict]):
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/search/search":
+            return httpx.Response(200, json={"results": hits})
+        return httpx.Response(404, json={"detail": {"kind": "page_not_found", "message": "gone", "retryable": False}})
+    return handler
+
+
+def _hits(*contents: str) -> list[dict]:
+    return [{"title": f"结果 {i}", "url": f"https://example.test/{i}", "description": f"摘要 {i}", "content": c} for i, c in enumerate(contents, 1)]
+
+
+def _search_step(v: dict) -> dict:
+    return next(i for i in v["turns"][-1]["items"] if i["type"] == "step" and i["kind"] == "search")
+
+
+def test_blocked_search_hit_is_dropped_and_the_turn_goes_on(tmp_path):
+    """三条搜索结果里一条没通过审核：一条条单独送审，只去掉那一条，接着跑；去掉的写回消息，之后的请求不再带上。"""
+    p = _with_gateway(FakeResearchPlanner(), _search_returns(_hits("内容一", f"内容二{FAKE_BLOCKED}", "内容三")))
+    c = Chat(tmp_path, p)
+    v = c.say("比较两款笔记软件")
+    assert v["status"] == "idle" and v["turns"][0]["record"]["outcome"] == "ok"
+    probes = [x for name, x in p.calls if name == "blocked"]
+    assert len(probes) == 1 and len(probes[0]) == 3
+    step = _search_step(v)
+    assert step["ok"] and step["hits"] == 2 and step["message"] == "1 条没通过内容审核，已去掉"
+    assert "https://example.test/2" not in {s["url"] for s in v["sources"].values()}
+    assert not any(FAKE_BLOCKED in str(m.content) for m in c.values()["messages"])
+    assert v["turns"][0]["items"][-1]["type"] == "text"
+
+
+def test_whole_batch_dropped_when_no_single_hit_is_blocked(tmp_path, monkeypatch):
+    """单条都能过（合在一起才拦）：这次搜索的结果整个去掉，按搜索失败交给 agent。"""
+    p = _with_gateway(FakeResearchPlanner(), _search_returns(_hits("内容一", f"内容二{FAKE_BLOCKED}")))
+    monkeypatch.setattr(p, "blocked", lambda texts: [False] * len(texts))
+    v = Chat(tmp_path, p).say("比较两款笔记软件")
+    step = _search_step(v)
+    assert not step["ok"] and step["message"] == "没通过模型服务的内容审核，内容已去掉，不能用"
+    assert v["status"] == "idle" and v["turns"][0]["items"][-1]["text"] == "没查到。" and v["sources"] == {}
+
+
+def test_still_blocked_after_dropping_material_stops_the_turn(chat):
+    v = chat.say("比较两款笔记软件 查完就拦")
+    turn = v["turns"][0]
+    assert _kinds(turn)[-1] == "blocked" and turn["items"][-1]["reason"] == "material"
+    assert turn["record"]["outcome"] == "blocked" and turn["record"]["suggestions"] == [] and v["status"] == "idle"
+
+
+def test_blocked_user_message_stops_the_turn_and_is_left_out_later(chat):
+    """用户的话没通过：这一轮停下，页面上留着；之后的请求不带这一轮，不然每次都会被拦。"""
+    v = chat.say(f"直接答 {FAKE_BLOCKED}")
+    (turn,) = v["turns"]
+    assert _kinds(turn) == ["blocked"] and turn["items"][0]["reason"] == "input"
+    assert turn["record"]["outcome"] == "blocked" and turn["record"]["usage"]["model_calls"] == 0
+    v = chat.say("直接答：换个说法")
+    assert len(v["turns"]) == 2 and v["turns"][1]["record"]["outcome"] == "ok"
+    assert v["turns"][1]["items"][-1]["text"] == "直接回答：这个问题不用查。"
+
+
+def test_blocked_answer_stops_the_turn(chat):
+    chat.say("问一下 直接答")
+    v = chat.answer({"answer": f"包含{FAKE_BLOCKED}"})
+    turn = v["turns"][0]
+    assert _kinds(turn)[-2:] == ["ask", "blocked"] and turn["items"][-1]["reason"] == "input" and v["status"] == "idle"
+
+
+def test_blocked_output_stops_the_turn_and_drops_what_was_streamed(chat):
+    v = chat.say("输出拦截 直接答")
+    assert any(e["event"] == "delta" for e in chat.events)  # 思考已经流出去了
+    (turn,) = v["turns"]
+    assert _kinds(turn) == ["blocked"] and turn["items"][0]["reason"] == "output"
+
+
+class FlakyModel(FakeToolModel):
+    fails: list[int] = []
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+        if self.fails:
+            self.fails.pop()
+            raise ModelUnavailable("模型服务暂时不可用（服务端出错），约 3 分钟后再试")
+        yield from super()._stream(messages, stop, run_manager, **kwargs)
+
+
+def test_model_unavailable_fails_the_turn_and_retry_continues(tmp_path):
+    p = FakeResearchPlanner()
+    p._model = FlakyModel(fails=[1])
+    c = Chat(tmp_path, p)
+    with pytest.raises(ModelUnavailable):
+        c.say("直接答")
+    v = c.view()
+    assert v["status"] == "failed" and v["error"].startswith("模型服务暂时不可用（服务端出错）")
+    v = c.run(c.r.retry_input(c.tid))
+    assert v["status"] == "idle" and v["turns"][0]["items"][-1]["text"] == "直接回答：这个问题不用查。"
+
+
+class ConsolidateDown(FakeResearchPlanner):
+    def consolidate(self, *args, **kwargs):
+        raise ModelUnavailable("模型服务暂时不可用（连接失败），稍后再试")
+
+
+def test_model_unavailable_while_writing_the_report_fails_the_turn(tmp_path):
+    """整理时模型服务不可用：不当成整理出错交给 agent（它会接着调已经不可用的服务），这一轮失败，等恢复后重试。"""
+    c = Chat(tmp_path, ConsolidateDown())
+    with pytest.raises(ModelUnavailable):
+        c.say("调研一下局部修改")
+    assert c.view()["status"] == "failed"
 
 
 # ---- 检查点 ----

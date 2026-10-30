@@ -32,6 +32,9 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 
 调研线程的 `state.status`：`queued` / `running`（有执行占着位）、`waiting`（停在提问上等用户）、`idle`（这一轮跑完了，可以接着说）、`failed`（某一步出错，或执行被掐断、比如服务重启；原因在 `state.error`）。失败不会抹掉已有内容，`POST /{id}/retry` 从最后一个检查点接着跑：失败的那一步重做，agent 里已经做过的搜索、读页不重来；没失败的返回 409。回答提交后还没被用上就出错的（比如重建 agent 时失败），线程仍是 `waiting`、停在原卡上，重新回答即可；agent 已经拿到回答、之后才出错的，原卡作废（再答返回 409），线程是 `failed`，重试会带着已给的回答接着跑。用户的话在交出线程 id 之前就写进检查点，排队时服务重启也查得到（`failed`，可重试）；上一轮没跑完、或停在提问上时不能接着说（409），先重试或回答。
 
+模型服务出错（`app/model_guard.py`，只认服务商的协议信号）：连不上、超时、429、5xx 先由 SDK 重试；重试用完、密钥无效（401/403）、余额不足（402）、生成被打断（`insufficient_system_resource`）算不可用，同一个模型连续 2 次就熔断 180 秒，这期间的调用直接失败（`state.error` 是“模型服务暂时不可用（原因），约 N 分钟后再试”），冷却后放一个调用去试，成功就恢复；原因写进服务日志。请求本身的错误（400 等）不算。这一轮按失败处理，由用户点重试。
+内容审核（DeepSeek 拦下请求时返回 400、`error.message` 为 `Content Exists Risk`；输出被截断时 `finish_reason=content_filter`）由 agent 的 `ContentGuard` 中间件处理：新加进来的搜索、读页结果一条条单独送审（只发这段文字、只要 1 个 token），去掉没通过的那条（同一个消息 id 覆盖）接着跑；单条都能过就把这一批结果整个去掉再试；新加进来的是用户的话或回答、去掉后仍被拦、输出被截断时，这一轮停下（`outcome: blocked`，页面显示固定说明），这一轮整轮不再带进之后的上下文。
+
 执行的事件先写进事件日志（`EventLog`，进程内实现，多 worker 时换 Redis Stream），连接只是去读：页面断线或刷新后带着最后一个事件 id 请求 `/{id}/events`，执行还没结束就从断点接着推（没有 id 就从这次执行的开头补发），已经结束就只给当前状态。日志只留在内存里，进程重启就没了，那时以检查点为准。
 
 CLI 演示（`--fake` 用确定性假模型；去掉 `--fake` 需设置 `ARK_API_KEY`，走豆包）：
@@ -71,10 +74,10 @@ uv run python -m app.cli --scenario research state <thread_id>
 - `app/llm.py` `Planner` 协议：`ArkPlanner`（豆包，json_schema 结构化输出）/ `FakePlanner`
 - `app/render/` Jinja2 模板 → Playwright 截图；`checks.py` 事实逐字比对 / 违禁词 / 溢出
 - `app/api/` FastAPI；`runner.py` `BaseRunner`（图执行放到工作线程，事件写进 `EventLog` 再转成 SSE；`RunRegistry` 运行占位；两者都是进程内实现，多 worker 时换共享存储）+ 海报 `GraphRunner`（单线程）；`research_runner.py` 调研的执行器（多线程）、状态视图与运行状态、重试、中断整形（带中断 id）、事件摘要
-- `app/graph/research/` 调研场景：`state.py`（来源 / 大纲 / 论断 / 逐句正文 / 版本 / 每轮记录）、`agent.py`（`create_agent` 与中间件：提问、调用上限、工具进度、无效工具调用重试、一轮结束时出版和推荐追问）、`workbench.py`（四个报告工具改工作稿，一轮结束落成一版）、`history.py`（从消息里读出用户的话、提问与回答、工具步骤、用量）、`sources.py`（从搜索、读页结果里收集来源，同一网页只给一个 id）、`answers.py`（提问的回答校验，接口 / CLI 共用）、`graph.py`、`report.py`（确定性拼装报告与校验）、`prompts.toml`（给模型看的文字：系统提示词、工具描述、注入的说明；`prompts.py` 只负责渲染）、`skills/`（调研方法，见下）
+- `app/graph/research/` 调研场景：`state.py`（来源 / 大纲 / 论断 / 逐句正文 / 版本 / 每轮记录）、`agent.py`（`create_agent` 与中间件：提问、调用上限、工具进度、无效工具调用重试、内容审核拦下时去掉资料或停下这一轮、一轮结束时出版和推荐追问）、`workbench.py`（四个报告工具改工作稿，一轮结束落成一版）、`history.py`（从消息里读出用户的话、提问与回答、工具步骤、用量）、`sources.py`（从搜索、读页结果里收集来源，同一网页只给一个 id）、`answers.py`（提问的回答校验，接口 / CLI 共用）、`graph.py`、`report.py`（确定性拼装报告与校验）、`prompts.toml`（给模型看的文字：系统提示词、工具描述、注入的说明；`prompts.py` 只负责渲染）、`skills/`（调研方法，见下）
 - `app/research_llm.py` `ResearchPlanner` 协议：`LiveResearchPlanner`（DeepSeek 或豆包 + 真实网关）/ `FakeResearchPlanner`（脚本化的假工具模型 + MockTransport 网关）
 - `app/tools/` agent-tools 网关客户端（搜索 / 网页读取）与调研 agent 的工具（`search_web` / `read_page` / `ask_user` / `load_skill`；描述在 `prompts.toml` 的 `[tools.*]`）
 - `app/evals/` + `evals/` 回放评测：用真实模型跑 `evals/research/cases.yaml`，按轨迹和裁判模型打分，用法和写用例的约定见 `evals/README.md`
 - `scripts/` 对真实模型与网关的验证脚本：`probe_create_agent.py`（假搜索）、`probe_gateway_agent.py`（真实搜索 / 读取）、`PYTHONPATH=. uv run python scripts/<name>.py`；`probe_ask.py` / `probe_autonomy.py` 是早先改调研流程前的探针，结果记在 `../docs/probe/`，现在的代码上跑不了
 - `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）。海报：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出。调研（`src/workspace.jsx`，顶栏切换）：左边是对话，每一轮先是思考和工具步骤（跑的时候展开，跑完收起成“思考了 N 秒”），再是带来源角标的回复、“调研报告 · 第 N 版”卡片和推荐追问；右边是交付物，报告 / 论断 / 来源三个页签，在报告里选中文字改、重写一节、改论断、排除来源都作为一句话发回对话
-- `tests/` 海报：T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等；调研：`test_research.py`（一轮的结构与事件 / 简单问题不写报告 / 后面几轮不改就不出版 / 排除来源、改论断、重写一节、选中文字改 / 两节共用论断时重写和改论断 / 改了报告没写说明也出版 / 提问与跳过 / 无效工具调用重试 / 整理失败是工具错误 / sqlite 往返 / 来源去重与编号 / 时间范围）、`test_research_resume.py`（严格载荷 / 被拒后能继续 / 过期中断 id / 重复提交 / 断线与排队）、`test_research_runs.py`（并行执行 / 提交失败退还占位 / 断线续读与刷新补发 / 保活 / 失败保留内容与重试 / 排队中重启后可重试 / 被掐断的执行可重试）、`test_api_research.py`（接口）
+- `tests/` 海报：T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等；调研：`test_research.py`（一轮的结构与事件 / 简单问题不写报告 / 后面几轮不改就不出版 / 排除来源、改论断、重写一节、选中文字改 / 两节共用论断时重写和改论断 / 改了报告没写说明也出版 / 提问与跳过 / 无效工具调用重试 / 整理失败是工具错误 / 内容审核拦下资料、用户的话、输出 / 模型服务不可用 / sqlite 往返 / 来源去重与编号 / 时间范围）、`test_research_resume.py`（严格载荷 / 被拒后能继续 / 过期中断 id / 重复提交 / 断线与排队）、`test_research_runs.py`（并行执行 / 提交失败退还占位 / 断线续读与刷新补发 / 保活 / 失败保留内容与重试 / 排队中重启后可重试 / 被掐断的执行可重试）、`test_api_research.py`（接口）；`test_model_guard.py`（模型服务出错的分类与熔断）

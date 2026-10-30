@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import time
 from pathlib import Path
 from typing import Any
@@ -78,7 +79,8 @@ class StreamBuffer:
 
 
 def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
-    """对话按轮：用户的话，然后这一轮里模型的思考、正文、工具步骤、提问按先后排。每轮带这一轮的记录（版本、推荐问题、用量）。"""
+    """对话按轮：用户的话，然后这一轮里模型的思考、正文、工具步骤、提问按先后排，被内容审核拦下时最后是一条 blocked。
+    每轮带这一轮的记录（版本、推荐问题、用量）。"""
     by_id = {t.id: t for t in turns}
     results = {m.tool_call_id: m for m in messages if isinstance(m, ToolMessage)}
     out: list[dict] = []
@@ -92,6 +94,9 @@ def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
         if cur is None or not isinstance(m, AIMessage):
             continue
         items = cur["items"]
+        if reason := history.blocked_reason(m):
+            items.append({"type": "blocked", "id": m.id, "reason": reason})
+            continue
         if thinking := m.additional_kwargs.get("reasoning_content"):
             items.append({"type": "thinking", "id": m.id, "text": thinking, "ms": m.response_metadata.get("thinking_ms")})
         if text := history.text_of(m).strip():
@@ -109,6 +114,19 @@ def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
             elif step := history.step_of(tc, res):
                 items.append({"type": "step", **step.model_dump()})
     return out
+
+
+def _error_text(err: str) -> str:
+    """检查点里存的是异常的 repr（ModelUnavailable('…')），页面上只要里面那句话；解不开就原样给。"""
+    name, sep, rest = err.partition("(")
+    if sep and name.isidentifier() and rest.endswith(")"):
+        try:
+            msg = ast.literal_eval("(" + rest)
+        except (ValueError, SyntaxError):
+            return err
+        if isinstance(msg, str):
+            return msg
+    return err
 
 
 class ResearchRunner(BaseRunner):
@@ -278,7 +296,7 @@ class ResearchRunner(BaseRunner):
         if not snap.next:
             return "idle", None
         err = next((t.error for t in snap.tasks if t.error), None)
-        return "failed", str(err) if err else CUT_SHORT
+        return "failed", _error_text(str(err)) if err else CUT_SHORT
 
     def _interrupt_view(self, thread_id: str, it) -> dict | None:
         if not it or not is_ask_interrupt(it.value):

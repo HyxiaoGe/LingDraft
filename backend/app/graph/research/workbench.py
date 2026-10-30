@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from app.graph.research import history, prompts, report
 from app.graph.research.sources import cited, collect_sources
 from app.graph.research.state import Claim, OutlineNode, ReportVersion, ResearchState, SectionText, Sentence, Source
+from app.model_guard import ModelUnavailable
 
 REPORT_TOOLS = ("write_report", "revise_section", "edit_claim", "exclude_source")
 NEW_SECTION = "new"
@@ -146,6 +147,8 @@ def _consolidate(planner, state: ResearchState, draft: str, part: str | None) ->
     try:
         res = planner.consolidate(history.requests(msgs), draft, [usable[sid] for sid in ids if sid in usable],
                                   history.user_answers(msgs), history.report_guide(msgs), part)
+    except ModelUnavailable:
+        raise  # 模型服务不可用：这一轮失败，服务恢复后重试；不当成整理出错交给 agent
     except Exception as e:  # noqa: BLE001
         raise ToolException(prompts.render("workbench.failed", error=f"{type(e).__name__}: {e}")) from e
     return res, set(usable), notes

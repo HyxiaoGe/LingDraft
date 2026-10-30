@@ -137,7 +137,8 @@ class Turn(BaseModel):
     version: int | None = Field(default=None, description="这一轮出的报告版本；没改报告为 None")
     suggestions: list[str] = Field(default_factory=list)
     usage: Usage = Field(default_factory=Usage)
-    outcome: Literal["ok", "no_reply"] = Field(default="ok", description="no_reply：这一轮结束时模型没有给出正文")
+    outcome: Literal["ok", "no_reply", "blocked"] = Field(default="ok", description="no_reply：这一轮结束时模型没有给出正文；"
+                                                                         "blocked：被模型服务的内容审核拦下，这一轮停了")
 
 
 # ---- 用户的话附带的东西：报告上选中的文字、按钮操作 ----

@@ -15,6 +15,7 @@ from app.graph.research.sources import parse
 from app.graph.research.state import ToolStep, Usage
 
 LINGDRAFT = "lingdraft"  # 用户消息的 additional_kwargs 里放页面显示用的原话、选中的文字、按钮操作；模型看到的是 content
+BLOCKED = "lingdraft_blocked"  # 一轮因内容审核停下时，系统补的那条模型消息 response_metadata 里的键，值是原因（见 agent.ContentGuard）
 STEP_TOOLS = {"search_web": "search", "read_page": "read", "load_skill": "skill", "write_report": "report",
               "revise_section": "report", "edit_claim": "report", "exclude_source": "report"}
 
@@ -46,6 +47,20 @@ def final_text(messages: list[BaseMessage]) -> str:
         if isinstance(m, AIMessage):
             return "" if m.tool_calls else text_of(m).strip()
     return ""
+
+
+def blocked_reason(m: BaseMessage) -> str | None:
+    return m.response_metadata.get(BLOCKED) if isinstance(m, AIMessage) else None
+
+
+def without_blocked_turns(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """去掉因内容审核停下的那几轮（从用户的话到这一轮结束）：带着它们，之后的每次请求都会被拦。"""
+    turns: list[list[BaseMessage]] = []
+    for m in messages:
+        if isinstance(m, HumanMessage) or not turns:
+            turns.append([])
+        turns[-1].append(m)
+    return [m for t in turns if not any(blocked_reason(x) for x in t) for m in t]
 
 
 def dangling(messages: list[BaseMessage]) -> list[ToolMessage]:
@@ -149,7 +164,9 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
     failed = result.status == "error"
     if kind == "search":
         if isinstance(data, list) and not failed:
-            return ToolStep(id=cid, kind=kind, text=text, hits=len(data), source_ids=[h["id"] for h in data if h.get("id")], **extra)
+            dropped = result.artifact.get("blocked", 0) if isinstance(result.artifact, dict) else 0
+            return ToolStep(id=cid, kind=kind, text=text, hits=len(data), source_ids=[h["id"] for h in data if h.get("id")],
+                            message=prompts.render("agent.hits_blocked", n=dropped) if dropped else "", **extra)
         msg = (data.get("message") or data.get("kind")) if isinstance(data, dict) else text_of(result)
         return ToolStep(id=cid, kind=kind, text=text, ok=False, message=str(msg or ""), **extra)
     if kind == "read":
@@ -176,7 +193,7 @@ def usage_of(messages: list[BaseMessage]) -> Usage:
     """一轮里调研 agent 的模型调用和搜索、读页次数。token 来自模型返回的用量（流式要开 stream_usage）。"""
     u = Usage()
     for m in messages:
-        if isinstance(m, AIMessage):
+        if isinstance(m, AIMessage) and not blocked_reason(m):  # 内容审核停下时补的那条不是模型调用
             meta: dict[str, Any] = m.usage_metadata or {}  # type: ignore[assignment]
             u.model_calls += 1
             u.input_tokens += meta.get("input_tokens") or 0

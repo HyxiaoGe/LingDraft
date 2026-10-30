@@ -1,0 +1,140 @@
+"""模型服务出错的分类和熔断：按服务商的协议信号分，不可用的连续够数就断开，冷却后放一个去试。"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import httpx2
+import openai
+import pytest
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from pydantic import Field
+
+from app.model_guard import BLOCKED_MESSAGE, Breaker, ContentBlocked, GuardedChatModel, ModelUnavailable, unavailable_reason
+
+REQ = httpx2.Request("POST", "https://api.test/chat/completions")
+_STATUS = {400: openai.BadRequestError, 401: openai.AuthenticationError, 429: openai.RateLimitError, 500: openai.InternalServerError}
+
+
+def status(code: int, message: str = "x") -> openai.APIStatusError:
+    cls = _STATUS.get(code, openai.APIStatusError)
+    return cls(f"Error code: {code} - {message}", response=httpx2.Response(code, request=REQ), body={"message": message})
+
+
+class Scripted(BaseChatModel):
+    """按 script 依次给结果：异常就抛，字符串是这次的 finish_reason。流式先吐一段正文再给结果。"""
+
+    script: list[Any] = Field(default_factory=list)
+    calls: list[int] = Field(default_factory=list)
+
+    @property
+    def _llm_type(self) -> str:
+        return "scripted"
+
+    def _next(self):
+        self.calls.append(1)
+        return self.script.pop(0) if self.script else "stop"
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs: Any) -> ChatResult:
+        act = self._next()
+        if isinstance(act, Exception):
+            raise act
+        return ChatResult(generations=[ChatGeneration(message=AIMessage("好"), generation_info={"finish_reason": act})])
+
+    def _stream(self, messages, stop=None, run_manager=None, **kwargs: Any):
+        act = self._next()
+        yield ChatGenerationChunk(message=AIMessageChunk(content="好"))
+        if isinstance(act, Exception):
+            raise act
+        yield ChatGenerationChunk(message=AIMessageChunk(content=""), generation_info={"finish_reason": act})
+
+
+class Guarded(GuardedChatModel, Scripted):
+    pass
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+@pytest.fixture
+def clock(monkeypatch) -> Clock:
+    c = Clock()
+    monkeypatch.setattr(GuardedChatModel, "breaker", Breaker(failures=2, cooldown_s=180, clock=c))
+    return c
+
+
+def test_reasons_come_from_the_protocol():
+    assert unavailable_reason(openai.APITimeoutError(request=REQ)) == "超时"
+    assert unavailable_reason(openai.APIConnectionError(request=REQ)) == "连接失败"
+    assert [unavailable_reason(status(c)) for c in (401, 402, 429, 500, 503)] == ["密钥无效", "余额不足", "请求太频繁", "服务端出错", "服务端出错"]
+    assert unavailable_reason(openai.APIError("流里的错误", REQ, body={"message": "boom"})) == "服务端出错"
+    assert unavailable_reason(status(400)) is None and unavailable_reason(status(404)) is None and unavailable_reason(ValueError()) is None
+
+
+def test_two_failures_open_the_breaker_then_one_probe_after_cooldown(clock):
+    m = Guarded(script=[status(500), openai.APIConnectionError(request=REQ)])
+    with pytest.raises(ModelUnavailable, match="服务端出错.*稍后再试"):
+        m.invoke("hi")
+    with pytest.raises(ModelUnavailable, match="连接失败.*约 3 分钟后再试"):
+        m.invoke("hi")
+    clock.t += 60
+    with pytest.raises(ModelUnavailable, match="约 2 分钟后再试"):  # 断开中：不发请求
+        m.invoke("hi")
+    assert len(m.calls) == 2
+    clock.t += 121
+    assert m.invoke("hi").content == "好"  # 冷却完放一个去试，成功就恢复
+    assert m.invoke("hi").content == "好" and len(m.calls) == 4
+
+
+def test_failed_probe_reopens_and_only_one_probe_at_a_time(clock):
+    m = Guarded(script=[status(500), status(500)])
+    for _ in range(2):
+        with pytest.raises(ModelUnavailable):
+            m.invoke("hi")
+    clock.t += 181
+    m.script = [status(503)]
+    with pytest.raises(ModelUnavailable, match="约 3 分钟后再试"):  # 试探失败：直接再断开
+        m.invoke("hi")
+    clock.t += 181
+    stream = m.stream("hi")
+    next(stream)  # 试探还没有结果
+    with pytest.raises(ModelUnavailable):
+        m.invoke("hi")
+    stream.close()  # 中途不读了：名额让给下一个
+    assert m.invoke("hi").content == "好"
+
+
+def test_moderation_block_is_content_blocked_and_not_a_failure(clock):
+    m = Guarded(script=[status(500), status(400, BLOCKED_MESSAGE), status(500), status(400, "bad tool schema")])
+    with pytest.raises(ModelUnavailable):
+        m.invoke("hi")
+    with pytest.raises(ContentBlocked) as e:
+        m.invoke("hi")
+    assert not e.value.output
+    with pytest.raises(ModelUnavailable, match="稍后再试"):  # 拦下说明服务答复了：不可用的计数重新算，没断开
+        m.invoke("hi")
+    with pytest.raises(openai.BadRequestError):  # 别的请求错误原样抛出
+        m.invoke("hi")
+    assert m.invoke("hi").content == "好"
+
+
+def test_block_inside_the_stream_and_finish_reasons(clock):
+    m = Guarded(script=[openai.APIError("x", REQ, body={"message": BLOCKED_MESSAGE}), "content_filter", "insufficient_system_resource"])
+    with pytest.raises(ContentBlocked) as e:
+        list(m.stream("hi"))
+    assert not e.value.output
+    with pytest.raises(ContentBlocked) as e:
+        list(m.stream("hi"))
+    assert e.value.output  # 输出被截断
+    with pytest.raises(ModelUnavailable, match="服务端资源不足"):
+        list(m.stream("hi"))
+    m.script = ["content_filter"]
+    with pytest.raises(ContentBlocked):
+        m.invoke("hi")

@@ -147,8 +147,23 @@ function AiMsg({ children }) {
   );
 }
 
+// 被模型服务的内容审核拦下、这一轮停了：说明是固定的，原因来自后端（这一轮从哪里被拦）
+const BLOCKED_TEXT = {
+  input: "这句话没通过模型服务的内容审核，这一轮停在这里。换个说法再说一次。",
+  material: "这一轮查到的资料或写出的内容没通过模型服务的内容审核，这一轮停在这里。可以换个问法再试。",
+  output: "模型的回答没通过内容审核，被中断了，这一轮停在这里。可以换个问法再试。",
+};
+
 function Item({ it, st, nums, running, lastItem, act }) {
   if (it.type === "thinking") return <Thinking it={it} thinking={running && it.live && !it.ms} />;
+  if (it.type === "blocked") {
+    return (
+      <div className="ws-card warn">
+        <div className="ws-card-title"><IconWarn size={15} />内容审核没通过</div>
+        <div className="ws-card-sub">{BLOCKED_TEXT[it.reason] || BLOCKED_TEXT.input}这一轮不会带进之后的对话。</div>
+      </div>
+    );
+  }
   if (it.type === "step") return <ToolRow s={it} />;
   if (it.type === "ask") return <AskItem it={it} st={st} running={running} act={act} />;
   return (
@@ -187,7 +202,7 @@ function ToolRow({ s }) {
   let bad = !s.ok;
   if (s.kind === "search") {
     main = <>搜索「{s.text}」{s.limits.map((l) => <span key={l} className="lim">{l}</span>)}</>;
-    sub = s.pending ? "" : s.ok ? `${s.hits} 条结果` : `没搜成：${s.message || "出错了"}`;
+    sub = s.pending ? "" : s.ok ? `${s.hits} 条结果${s.message ? `（${s.message}）` : ""}` : `没搜成：${s.message || "出错了"}`;
   } else if (s.kind === "read") {
     main = <>读 <a href={s.text} target="_blank" rel="noreferrer" title={s.text}>{s.title || domain(s.text)}</a></>;
     sub = s.pending ? "" : s.body ? "读到原文" : `没读成${s.message ? `：${s.message}` : ""}`;

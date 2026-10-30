@@ -1,7 +1,7 @@
 """调研场景的模型接入层：ResearchPlanner 协议，LiveResearchPlanner（DeepSeek / 豆包，按配置）与 FakeResearchPlanner（离线）。
 
 agent 本身由 app.graph.research.agent 构建，这里提供它要的聊天模型和查资料的工具，以及几个不带工具的快模型步骤：
-整理报告草稿、起标题、推荐问题。
+整理报告草稿、起标题、推荐问题，还有内容审核拦下请求时把资料一条条单独送审。
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import re
 import threading
 import time
 from collections.abc import Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from typing import Any, Literal, Protocol
 from uuid import UUID
@@ -26,8 +27,11 @@ from app import config
 from app.graph.research import prompts
 from app.graph.research.sources import SOURCE_ID, cited
 from app.graph.research.state import CONSOLIDATE_RETRIES, Source
+from app.model_guard import ContentBlocked, GuardedChatModel, ModelUnavailable
 from app.tools.gateway import GatewayClient
 from app.tools.research_tools import make_research_tools
+
+PROBE_WORKERS = 4  # 单条送审同时发几个
 
 # ---- 结构化输出 schema（扁平、全部 required，符合 strict 模式） ----
 
@@ -87,6 +91,8 @@ class ResearchPlanner(Protocol):
     def title(self, text: str) -> str: ...
 
     def suggest(self, question: str, reply: str, has_report: bool) -> list[str]: ...
+
+    def blocked(self, texts: Sequence[str]) -> list[bool]: ...
 
 
 def _facts_block(user_facts: Sequence[str]) -> str:
@@ -149,7 +155,7 @@ class ThinkingTimer(BaseCallbackHandler):
 
 def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: str = "high", timeout: int = 180,
                     callbacks: list | None = None) -> BaseChatModel:
-    """按提供方构造聊天模型。
+    """按提供方构造聊天模型。每次调用都过熔断，服务商的错误换成 ModelUnavailable / ContentBlocked（见 app.model_guard）。
 
     DeepSeek 思考模式下：同一轮里的多次工具调用必须把 reasoning_content 原样传回（langchain-openai / langchain-deepseek 都不做，这里补），
     之前几轮的不传；不接受强制 tool_choice（with_structured_output 会设），这里去掉；temperature 无效。
@@ -157,9 +163,12 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
     if provider == "ark":
         from langchain_openai import ChatOpenAI
 
+        class ChatArk(GuardedChatModel, ChatOpenAI):
+            pass
+
         if not config.ARK_API_KEY:
             raise RuntimeError("未设置 ARK_API_KEY")
-        return ChatOpenAI(
+        return ChatArk(
             model=model or config.ARK_MODEL, base_url=config.ARK_BASE_URL, api_key=config.ARK_API_KEY,
             extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}}, timeout=timeout, max_retries=2, temperature=0,
             stream_usage=True, callbacks=callbacks,
@@ -171,7 +180,7 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
     if not config.DEEPSEEK_API_KEY:
         raise RuntimeError("未设置 DEEPSEEK_API_KEY")
 
-    class ChatDeepSeekRT(ChatDeepSeek):
+    class ChatDeepSeekRT(GuardedChatModel, ChatDeepSeek):
         def _get_request_payload(self, input_, *, stop=None, **kwargs):
             payload = super()._get_request_payload(input_, stop=stop, **kwargs)
             if thinking and payload.get("tool_choice") not in (None, "auto", "none"):
@@ -238,6 +247,8 @@ class LiveResearchPlanner:
         for _ in range(CONSOLIDATE_RETRIES):
             try:
                 return chain.invoke(consolidate_messages(requests, draft, sources, user_facts, report, part))
+            except (ModelUnavailable, ContentBlocked):
+                raise  # 再试也一样
             except Exception as e:  # noqa: BLE001
                 last = e
         raise RuntimeError(f"整理失败：{last}")
@@ -250,6 +261,20 @@ class LiveResearchPlanner:
         res = _structured(self._fast, Suggestions).invoke([("system", prompts.render("suggest.system", report=has_report)),
                                                            ("user", prompts.render("suggest.user", question=question, reply=reply))])
         return [q.strip() for q in res.questions if q.strip()]
+
+    def blocked(self, texts: Sequence[str]) -> list[bool]:
+        """每段文字单独发一次（只有这段、不思考、只要 1 个 token），看内容审核拦不拦。服务不可用照常抛出。"""
+        probe = self._fast.bind(max_tokens=1)
+
+        def one(text: str) -> bool:
+            try:
+                probe.invoke([("user", text)])
+            except ContentBlocked:
+                return True
+            return False
+
+        with ThreadPoolExecutor(max_workers=PROBE_WORKERS) as pool:
+            return list(pool.map(one, texts))
 
 
 # ---- 离线假实现 ----
@@ -298,6 +323,8 @@ class FakeToolModel(BaseChatModel):
     - “坏JSON”：第一步先发一个参数无法解析的工具调用；“一直坏”：每次都发；
     - “选型”：先读“对比与选型”的调研方法；“错方法”：先读一个不存在的方法；
     - 系统附注里的排除来源、改论断、重写一节：调对应的工具，改完回复。
+    内容审核（模拟服务商）：请求里任何地方有 FAKE_BLOCKED 就整个拒绝；用户的话里有“查完就拦”时，有工具结果就拒绝；
+    有“输出拦截”时，吐完思考后输出被截断。
     """
 
     bound: list[str] = Field(default_factory=list)
@@ -358,6 +385,7 @@ class FakeToolModel(BaseChatModel):
         return f"结论：可以用但不稳定 [{ids[0]}]。详细的看报告。" if ids else "没查到。", []
 
     def _message(self, messages: list[BaseMessage]) -> AIMessage:
+        _fake_review(messages)
         content, calls = self._decide(messages)
         valid = [{**c, "type": "tool_call"} for c in calls if not c.get("invalid")]
         invalid = [{"name": c["name"], "args": c["args"], "id": c["id"], "error": "bad json", "type": "invalid_tool_call"}
@@ -379,8 +407,24 @@ class FakeToolModel(BaseChatModel):
         tcc += [{"name": tc["name"], "args": tc["args"], "id": tc["id"], "index": len(tcc) + k, "type": "tool_call_chunk"}
                 for k, tc in enumerate(msg.invalid_tool_calls)]
         chunks.append(AIMessageChunk(content="", id=msg.id, tool_call_chunks=tcc, usage_metadata=FAKE_USAGE, chunk_position="last"))
-        for c in chunks:  # 回调（on_llm_new_token）由 BaseChatModel 发
+        for k, c in enumerate(chunks):  # 回调（on_llm_new_token）由 BaseChatModel 发
+            if k == 1 and "输出拦截" in _turn_text(messages):
+                raise ContentBlocked(output=True)
             yield ChatGenerationChunk(message=c)
+
+
+FAKE_BLOCKED = "【审核不通过】"
+
+
+def _turn_text(messages: list[BaseMessage]) -> str:
+    return next((str(m.content) for m in reversed(messages) if isinstance(m, HumanMessage)), "")
+
+
+def _fake_review(messages: list[BaseMessage]) -> None:
+    if any(FAKE_BLOCKED in str(m.content) for m in messages):
+        raise ContentBlocked(output=False)
+    if "查完就拦" in _turn_text(messages) and any(isinstance(m, ToolMessage) and m.name in ("search_web", "read_page") for m in messages):
+        raise ContentBlocked(output=False)
 
 
 def _hits(messages: list[BaseMessage]) -> list[dict]:
@@ -450,3 +494,7 @@ class FakeResearchPlanner:
     def suggest(self, question: str, reply: str, has_report: bool) -> list[str]:
         self.calls.append(("suggest", question))
         return [f"追问{k}：{question[:6]}" for k in (1, 2, 3)]
+
+    def blocked(self, texts: Sequence[str]) -> list[bool]:
+        self.calls.append(("blocked", list(texts)))
+        return [FAKE_BLOCKED in t for t in texts]
