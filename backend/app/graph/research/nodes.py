@@ -338,7 +338,8 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
 
     def check(state: ResearchState) -> dict:
         _stage("校验引用与标记")
-        results = report.run_checks(state["sections"], state["claims"], state["sources"], state.get("time_issues") or {})
+        numbers = report.source_numbers(state.get("outline", []), state["sections"], state["claims"], state["sources"])
+        results = report.run_checks(state["sections"], state["claims"], state["sources"], state.get("time_issues") or {}, numbers)
         results = [report.answer_check(state.get("answer"), state.get("answer_how", "none"))] + results
         results += report.report_check(state["sections"], state["claims"], _answered(state), state.get("open_gap"))
         return {"check_results": results}
@@ -385,8 +386,9 @@ def make_nodes(planner: ResearchPlanner, out_dir: Path) -> dict:
         payload = _review_payload(state)
         cleared = {"review_text": None, "review_quote": None}
         try:
+            numbers = {b["source_id"]: b["label"] for b in payload["blocks"] if b["type"] == "source"}
             plan = planner.interpret_review(state["scope"], payload["report"], state["outline"], state["claims"], state["sources"], text,
-                                            quote)
+                                            quote, numbers)
         except Exception as e:  # noqa: BLE001
             return {**cleared, "review_reply": f"这句话没能处理（{type(e).__name__}），可以再说一次，或者用下面的选项"}
         ops: list[ReviewDecision] = []
@@ -462,10 +464,10 @@ def _apply(state: ResearchState, decisions: list[ReviewDecision]) -> dict:
 
 
 def _describe(state: ResearchState, d: ReviewDecision) -> str:
-    """给用户看的一句话：这一版是按什么改的。来源用报告里的标注（S16），论断不露内部 id、用原来的表述。"""
+    """给用户看的一句话：这一版是按什么改的。来源写标题（报告里的编号每版会变），论断不露内部 id、用原来的表述。"""
     if d.action == "exclude_source":
         src = next((s for s in state["sources"] if s.id == d.target), None)
-        return f"排除来源 {report.source_label(d.target)}" + (f"（{src.title}）" if src and src.title else "")
+        return f"排除来源「{(src.title or src.url) if src else d.target}」"
     if d.action == "edit_claim":
         claim = next((c for c in state["claims"] if c.id == d.target), None)
         before = claim.statement if claim else d.target

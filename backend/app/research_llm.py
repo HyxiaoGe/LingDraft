@@ -117,7 +117,7 @@ class ResearchPlanner(Protocol):
                       user_facts: list[str] = (), report: str | None = None) -> SectionText: ...
 
     def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
-                         text: str, quote: Quote | None = None) -> ReviewPlan: ...
+                         text: str, quote: Quote | None = None, numbers: dict[str, str] | None = None) -> ReviewPlan: ...
 
     def agent_model(self) -> BaseChatModel: ...
 
@@ -262,14 +262,17 @@ class LiveResearchPlanner:
 
     @staticmethod
     def _interpret_messages(scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
-                            text: str, quote: Quote | None = None) -> list:
+                            text: str, quote: Quote | None = None, numbers: dict[str, str] | None = None) -> list:
         """用户看到的报告原样给模型，再附上节、论断、来源的 id，模型才能把用户的说法对到具体对象上。
+        numbers 是来源在这版报告里的编号（报告里的 [3]），报告没引用的来源没有编号。
 
         用户先在报告里选中一段再说的话：选中的原文和它落在哪些论断、哪些节上一起给模型（位置由页面按报告块算出）。
         """
         claim_lines = [f"- {c.id} | {c.outline_id} | {c.kind} | {c.statement} | {', '.join(c.source_ids) or '无'}"
                        for c in claims if not c.orphaned]
-        source_lines = [f"- {s.id} | {s.title or '（无标题）'} | {s.url} | {_SOURCE_STATUS[s.status]}" for s in sources]
+        numbers = numbers or {}
+        source_lines = [f"- {s.id} | {numbers.get(s.id, '无')} | {s.title or '（无标题）'} | {s.url} | {_SOURCE_STATUS[s.status]}"
+                        for s in sources]
         user = prompts.render("interpret.user", question=scope.question, report=report,
                               outline="\n".join(f"- {n.id} | {n.title}" for n in outline),
                               claims="\n".join(claim_lines) or "（无）", sources="\n".join(source_lines) or "（无）", text=text,
@@ -278,9 +281,9 @@ class LiveResearchPlanner:
         return [("system", prompts.render("interpret.system")), ("user", user)]
 
     def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
-                         text: str, quote: Quote | None = None) -> ReviewPlan:
+                         text: str, quote: Quote | None = None, numbers: dict[str, str] | None = None) -> ReviewPlan:
         return self._structured(self._fast, ReviewPlan).invoke(
-            self._interpret_messages(scope, report, outline, claims, sources, text, quote))
+            self._interpret_messages(scope, report, outline, claims, sources, text, quote, numbers))
 
     def agent_model(self) -> BaseChatModel:
         return self._agent
@@ -507,7 +510,7 @@ class FakeResearchPlanner:
         return SectionText(outline_id=node.id, sentences=sentences)
 
     def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
-                         text: str, quote: Quote | None = None) -> ReviewPlan:
+                         text: str, quote: Quote | None = None, numbers: dict[str, str] | None = None) -> ReviewPlan:
         self.calls.append(("interpret", text) if quote is None else ("interpret", text, quote.model_dump()))
         if self.review_plans:
             return self.review_plans.pop(0)

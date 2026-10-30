@@ -218,7 +218,10 @@ export default function Workspace() {
     answerScope: (answers) => resume({ answers }),
     answerAsk: (answer) => resume(answer == null ? { skip: true } : { answer }),
     approve: () => resume({ action: "approve" }, "不用改了，就用这版"),
-    exclude: (sid) => resume({ action: "exclude_source", target: sid }, `排除来源 ${sid.toUpperCase()}`),
+    exclude: (sid) => {
+      const src = st?.sources?.find((x) => x.id === sid); // 和版本说明的写法一致：写标题，不写每版会变的编号
+      return resume({ action: "exclude_source", target: sid }, `排除来源「${src?.title || src?.url || sid}」`);
+    },
     editClaim: (kid, content) => resume({ action: "edit_claim", target: kid, content }, `把这条论断改成：${content}`),
     rewrite: (sec, instruction) =>
       resume({ action: "rewrite_section", target: sec.id, ...(instruction ? { instruction } : {}) }, `重写「${sec.title}」${instruction ? `：${instruction}` : ""}`),

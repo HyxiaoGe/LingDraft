@@ -11,6 +11,8 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
+from app import config
+from app.api.favicon import Favicons
 from app.api.research_runner import NothingToRetry, ResearchRunner, StaleInterrupt
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 from app.graph.research.answers import InvalidAnswer
@@ -18,6 +20,7 @@ from app.graph.research.answers import InvalidAnswer
 app = FastAPI(title="LingDraft PoC")
 _runner: GraphRunner | None = None
 _research: ResearchRunner | None = None
+_favicons: Favicons | None = None
 
 
 def runner() -> GraphRunner:
@@ -42,6 +45,18 @@ def research() -> ResearchRunner:
 def set_research_runner(r: ResearchRunner) -> None:
     global _research
     _research = r
+
+
+def favicons() -> Favicons:
+    global _favicons
+    if _favicons is None:
+        _favicons = Favicons(config.DATA_DIR / "favicons")
+    return _favicons
+
+
+def set_favicons(f: Favicons | None) -> None:
+    global _favicons
+    _favicons = f
 
 
 def _sse(gen):
@@ -202,3 +217,19 @@ async def research_state(thread_id: str):
     return _view(research(), thread_id)
 
 
+@app.get("/api/favicon/{host}")
+async def favicon(host: str):
+    """来源网站的图标（后端代取并缓存）。取不到返回 404，页面显示域名首字母；404 也让浏览器缓存一天，不反复来要。"""
+    try:
+        got = await favicons().get(host, wait=2.5)
+    except ValueError:
+        raise HTTPException(400, "域名格式不对") from None
+    except TimeoutError:  # 还在取（慢网站）：先让页面显示首字母，后台取完存起来，下次打开就有
+        return Response(status_code=404, headers={"Cache-Control": "no-store"})
+    if got is None:
+        return Response(status_code=404, headers={"Cache-Control": "public, max-age=86400"})
+    data, kind = got
+    # 图标是别人网站上的文件：SVG 被直接打开时不让它跑脚本
+    return Response(data, media_type=kind, headers={
+        "Cache-Control": "public, max-age=604800", "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"})

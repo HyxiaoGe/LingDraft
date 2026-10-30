@@ -4,7 +4,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   IconArrowUp, IconAsk, IconBook, IconCheck, IconChevron, IconLayers, IconLoop, IconPage, IconReport, IconRetry, IconSearch, IconShield, IconWarn, Spinner,
 } from "./icons.jsx";
-import { ACTIVE, checkLabel, domain, elapsed, label, roundSteps, scopeLine } from "./research.js";
+import { ACTIVE, checkLabel, domain, elapsed, roundSteps, scopeLine } from "./research.js";
 
 const EXAMPLES = [
   ["简单问题", "最近新加坡的天气情况如何？"],
@@ -299,7 +299,6 @@ function ToolRow({ s }) {
       <Icon size={12} />
       <span className="main" title={s.text}>{main}</span>
       {sub && <span className="sub" title={sub}>{sub}</span>}
-      {s.source_ids.length > 0 && <span className="ids">{s.source_ids.map(label).join(" ")}</span>}
     </li>
   );
 }

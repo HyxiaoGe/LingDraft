@@ -2,12 +2,29 @@
 // 章节标题旁重写这一节。还没有报告时，等范围确认就列研究范围，调研中就边查边列已经找到的来源。
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { IconArrowUp, IconCheck, IconEdit, IconExternal, IconLoop, IconPage, IconReport, IconSearch, IconShield, IconWarn, IconX, Spinner } from "./icons.jsx";
-import { SSTATUS, checkLabel, domain, foundSources, label, sourceName } from "./research.js";
+import { SSTATUS, checkLabel, domain, foundSources, reportBlocks, sourceName, sourceNumbers } from "./research.js";
 
 const CKIND = { fact: "事实", inference: "推断" };
 const CSTATUS = { draft: "草稿", confirmed: "已确认", user_edited: "你改过" };
 const REWRITE_PRESETS = ["更简短", "先给结论再给依据", "多说明局限"];
 const uniq = (xs) => [...new Set(xs)];
+const byNumber = (num) => (a, b) => (+num[a] || Infinity) - (+num[b] || Infinity); // 有编号的按编号排，没编号的放后面
+
+// 来源网站的图标，后端代取（/api/favicon/域名）；取不到显示域名首字母。取不到的域名记下来，这个页面里不再请求
+const noIcon = new Set();
+const hostOf = (url) => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+};
+function Favicon({ url }) {
+  const host = hostOf(url);
+  const [failed, setFailed] = useState(null);
+  if (!host || noIcon.has(host) || failed === host) return <span className="ws-fav letter" aria-hidden="true">{(domain(url) || "?")[0].toUpperCase()}</span>;
+  return <img className="ws-fav" src={`/api/favicon/${host}`} alt="" loading="lazy" onError={() => { noIcon.add(host); setFailed(host); }} />;
+}
 
 export function Deliverable({ st, live, busy, act, isNew }) {
   const [tab, setTab] = useState("report");
@@ -106,9 +123,8 @@ function FoundSources({ st, live, busy }) {
             <span className={"kind" + (s.body ? " body" : "")}>{s.body ? "正文" : "摘要"}</span>
             <a href={s.url} target="_blank" rel="noreferrer" title={s.title ? `${s.title}\n${s.url}` : s.url}>
               <span className="t">{s.title || domain(s.url)}</span>
-              <span className="d">{domain(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""}</span>
+              <span className="d"><Favicon url={s.url} />{domain(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""}</span>
             </a>
-            {s.id && <span className="sid">{label(s.id)}</span>}
           </li>
         ))}
       </ul>
@@ -126,9 +142,10 @@ function soleClaims(st, sid) {
 }
 
 function Report({ st, canEdit, act }) {
-  const blocks = st.report_blocks?.length ? st.report_blocks : st.interrupt?.blocks || [];
+  const blocks = reportBlocks(st);
   const byId = Object.fromEntries((st.sources || []).map((s) => [s.id, s]));
-  const byLabel = Object.fromEntries((st.sources || []).map((s) => [label(s.id), s]));
+  const num = sourceNumbers(blocks);
+  const byNum = Object.fromEntries(Object.entries(num).map(([sid, n]) => [n, byId[sid]]));
   const article = useRef(null);
   const [pop, setPop] = useState(null); // 悬停的引用角标：{sid, rect}
   const [quote, setQuote] = useState(null); // 选中的文字：{text, claim_ids, section_ids, rect, open}
@@ -209,12 +226,12 @@ function Report({ st, canEdit, act }) {
         <div key={i} className={"ws-srcline" + (s?.status === "excluded" ? " excluded" : "")}>
           <span className="lb">{b.label}</span>
           <a href={b.url} target="_blank" rel="noreferrer">{b.title && b.title !== b.url ? b.title : b.url}</a>
-          <span className="meta">{domain(b.url)}{b.meta ? ` · ${b.meta}` : ""}</span>
+          <span className="meta"><Favicon url={b.url} />{domain(b.url)}{b.meta ? ` · ${b.meta}` : ""}</span>
         </div>,
       );
     } else if (b.type === "sentence") {
       const mark = (m) => {
-        const s = byLabel[m];
+        const s = byNum[m];
         return (
           <button key={m} className={"ws-mark" + (s?.status === "excluded" ? " excluded" : "") + (pop?.sid === s?.id ? " on" : "")}
             aria-label={`来源 ${m}`} onMouseEnter={(e) => s && showPop(s.id, e.currentTarget)} onMouseLeave={hidePop}
@@ -241,7 +258,7 @@ function Report({ st, canEdit, act }) {
       <article ref={article} className="ws-report" onMouseUp={() => setTimeout(capture, 0)}
         onKeyUp={(e) => e.shiftKey && capture()}>{out}</article>
       {pop && byId[pop.sid] && (
-        <SourcePop s={byId[pop.sid]} rect={pop.rect} st={st} canEdit={canEdit} onEnter={keepPop} onLeave={hidePop}
+        <SourcePop s={byId[pop.sid]} n={num[pop.sid]} rect={pop.rect} st={st} canEdit={canEdit} onEnter={keepPop} onLeave={hidePop}
           onExclude={() => { setPop(null); act.exclude(pop.sid); }} />
       )}
       {quote && canEdit && <QuoteBox q={quote} onOpen={() => setQuote({ ...quote, open: true })} onClose={closeQuote}
@@ -266,19 +283,19 @@ function floatStyle(rect, width, height) {
   return below ? { left, top: rect.bottom + 8, width } : { left, bottom: innerHeight - rect.top + 8, width };
 }
 
-function SourcePop({ s, rect, st, canEdit, onEnter, onLeave, onExclude }) {
+function SourcePop({ s, n, rect, st, canEdit, onEnter, onLeave, onExclude }) {
   const sole = soleClaims(st, s.id).length;
   const issue = st.time_issues?.[s.id];
   const next = (st.versions?.at(-1)?.n || 0) + 1;
   return (
-    <div className="ws-pop" style={floatStyle(rect, 340, 240)} onMouseEnter={onEnter} onMouseLeave={onLeave} role="dialog" aria-label={`来源 ${label(s.id)}`}>
+    <div className="ws-pop" style={floatStyle(rect, 340, 240)} onMouseEnter={onEnter} onMouseLeave={onLeave} role="dialog" aria-label={n ? `来源 ${n}` : "来源"}>
       <div className="ws-pop-top">
-        <span className="lb">{label(s.id)}</span>
+        {n && <span className="lb">{n}</span>}
         <span className={"ws-badge " + s.status}>{SSTATUS[s.status]}</span>
         <span className={"ws-badge " + (s.excerpt_kind === "body" ? "body" : "summary")}>{s.excerpt_kind === "body" ? "读到正文" : "只读到搜索摘要"}</span>
       </div>
       <div className="ws-pop-title">{sourceName(s)}</div>
-      <div className="ws-pop-meta">{domain(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""}</div>
+      <div className="ws-pop-meta"><Favicon url={s.url} />{domain(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""}</div>
       {s.excerpt && <div className="ws-pop-excerpt">{s.excerpt.length > 180 ? s.excerpt.slice(0, 180) + "…" : s.excerpt}</div>}
       {issue && <div className="ws-pop-issue"><IconWarn size={12} />发布时间可能不在范围内：{issue}</div>}
       <div className="ws-pop-actions">
@@ -348,6 +365,11 @@ function ClaimList({ st, canEdit, act }) {
   const claims = st.claims || [];
   const [editing, setEditing] = useState(null);
   const sections = st.outline || [];
+  const num = sourceNumbers(reportBlocks(st));
+  const byId = Object.fromEntries((st.sources || []).map((s) => [s.id, s]));
+  // 报告里引用的来源写编号；排除了的、这版没引用的没有编号，写网站名
+  const ref = (id) => num[id] ? <span key={id}>{num[id]}</span>
+    : <span key={id} className="off" title={byId[id] ? sourceName(byId[id]) : ""}>{byId[id] ? domain(byId[id].url) : id}</span>;
   return (
     <div className="ws-claims">
       {sections.map((sec) => {
@@ -361,7 +383,7 @@ function ClaimList({ st, canEdit, act }) {
                 <div className="ws-claim-top">
                   <span className={"ws-badge " + c.kind}>{CKIND[c.kind]}</span>
                   {c.orphaned ? <span className="ws-badge excluded">失去来源</span> : <span className={"ws-badge " + c.status}>{CSTATUS[c.status]}</span>}
-                  <span className="ids">{c.source_ids.map((id) => <span key={id}>{label(id)}</span>)}</span>
+                  <span className="ids">{[...c.source_ids].sort(byNumber(num)).map(ref)}</span>
                   {canEdit && !c.orphaned && editing !== c.id && <button className="ws-link" onClick={() => setEditing(c.id)}><IconEdit size={12} />改表述</button>}
                 </div>
                 {editing === c.id
@@ -401,8 +423,10 @@ function ClaimEdit({ c, onCancel, onSave }) {
 function SourceList({ st, canEdit, act }) {
   const [showAll, setShowAll] = useState(false);
   const sources = st.sources || [];
+  const num = sourceNumbers(reportBlocks(st));
+  const order = byNumber(num);
   const groups = [
-    ["adopted", "报告引用的", sources.filter((s) => s.status === "adopted")],
+    ["adopted", "报告引用的", sources.filter((s) => s.status === "adopted").sort((a, b) => order(a.id, b.id))],
     ["excluded", "你排除的", sources.filter((s) => s.status === "excluded")],
   ];
   const rest = sources.filter((s) => s.status === "candidate");
@@ -410,11 +434,11 @@ function SourceList({ st, canEdit, act }) {
     const sole = s.status === "adopted" ? soleClaims(st, s.id).length : 0;
     return (
       <li key={s.id} className={"ws-src " + s.status}>
-        <span className="lb">{label(s.id)}</span>
+        <span className={"lb" + (num[s.id] ? "" : " none")}>{num[s.id]}</span>
         <div className="body">
           <a href={s.url} target="_blank" rel="noreferrer" className="t" title={sourceName(s)}>{sourceName(s)}</a>
           <div className="meta">
-            {domain(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""} · {s.excerpt_kind === "body" ? "读到正文" : "只读到搜索摘要"}
+            <Favicon url={s.url} />{domain(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""} · {s.excerpt_kind === "body" ? "读到正文" : "只读到搜索摘要"}
             {st.time_issues?.[s.id] && <span className="warn"> · 发布时间可能不在范围内</span>}
           </div>
         </div>

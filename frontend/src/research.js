@@ -46,7 +46,10 @@ export const domain = (url) => {
 };
 
 export const sourceName = (s) => s.title || domain(s.url);
-export const label = (sid) => sid.toUpperCase(); // 报告里来源的标注就是它的 id（s16 → S16）
+// 报告块：交付以后存在 report_blocks 里，终审时随提问一起来
+export const reportBlocks = (st) => (st?.report_blocks?.length ? st.report_blocks : st?.interrupt?.blocks || []);
+// 来源在这版报告里的编号（[3]）：后端按正文里第一次出现的先后编，每版重新编；报告没引用的来源没有编号
+export const sourceNumbers = (blocks) => Object.fromEntries(blocks.filter((b) => b.type === "source").map((b) => [b.source_id, b.label]));
 export const SSTATUS = { candidate: "候选", adopted: "系统选用", excluded: "你排除了" };
 
 export const CHECK_LABEL = {

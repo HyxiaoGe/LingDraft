@@ -133,7 +133,9 @@ def test_each_version_says_what_it_was_for(client):
     sid = next(c for c in st["claims"] if c["source_ids"])["source_ids"][0]
     st = _last(_events(_resume(client, st, {"action": "exclude_source", "target": sid})), "state")
     v2 = st["versions"][-1]
-    assert v2["n"] == 2 and v2["asked"].startswith(f"排除来源 {sid.upper()}") and v2["understood"] == ""  # 和报告里的标注一致
+    title = next(s["title"] or s["url"] for s in st["sources"] if s["id"] == sid)
+    # 写来源标题，不写报告编号（编号每版重新编，换一版就对不上了）
+    assert v2["n"] == 2 and v2["asked"] == f"排除来源「{title}」" and v2["understood"] == ""
 
     api_main.research().planner.review_plans = [
         ReviewPlan(ops=[ReviewOp(action="rewrite_section", target="c1", content=None, instruction="更简短")], reply=None)]

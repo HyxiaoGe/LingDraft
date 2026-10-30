@@ -18,9 +18,14 @@ def referenced_source_ids(sections: dict[str, SectionText], claims: dict[str, Cl
     return seen
 
 
-def source_label(sid: str) -> str:
-    """来源在报告里的标注就是它的 id（s16 → S16）：版本之间不变，和来源页上显示的一致，用户说“排除 S16”不会有歧义。"""
-    return sid.upper()
+def source_numbers(outline: list[OutlineNode], sections: dict[str, SectionText], claims: list[Claim],
+                   sources: list[Source]) -> dict[str, str]:
+    """报告里来源的编号：按正文里第一次出现的先后编 1、2、3（节按大纲的顺序），和论文、维基百科的写法一样。每一版各自编，
+    同一条来源换一版编号可能变，所以过程记录和版本说明里不写编号，写来源标题；排除、悬停都按来源 id 对应。"""
+    ordered = {n.id: sections[n.id] for n in outline if n.id in sections}
+    known = {s.id for s in sources}
+    order = [sid for sid in referenced_source_ids(ordered, {c.id: c for c in claims}) if sid in known]
+    return {sid: str(i) for i, sid in enumerate(order, 1)}
 
 
 def cited_claim_ids(sections: dict[str, SectionText], claims: list[Claim]) -> set[str]:
@@ -51,7 +56,7 @@ def report_blocks(
     """报告的结构化内容：页面按它渲染，Markdown 也由它生成。每句是不是推断、挂哪些来源都来自论断，不看句子文字。"""
     by_claim = {c.id: c for c in claims}
     by_source = {s.id: s for s in sources}
-    order = referenced_source_ids(sections, by_claim)
+    num = source_numbers(outline, sections, claims, sources)
 
     blocks: list[dict] = [{"type": "title", "text": scope.question}]
     if not answered:  # 没答完也照常交付，但报告自己要说清楚
@@ -72,24 +77,22 @@ def report_blocks(
             blocks.append({
                 "type": "sentence", "text": s.text.strip(), "claim_id": claim.id if claim else None,
                 "inference": bool(claim and claim.kind == "inference"),
-                "marks": [source_label(sid) for sid in claim.source_ids if sid in by_source] if claim else [],
+                "marks": sorted((num[sid] for sid in claim.source_ids if sid in num), key=int) if claim else [],  # 一句后面的编号从小到大
             })
     for title, items in (("用户的回答", user_answers), ("假设与取舍", assumptions)):
         if items:
             blocks.append({"type": "heading", "text": title})
             blocks += [{"type": "item", "text": a} for a in items]
     blocks.append({"type": "heading", "text": "来源"})
-    for sid in order:
-        src = by_source.get(sid)
-        if src is None:
-            continue
+    for sid, n in num.items():
+        src = by_source[sid]
         meta = []
         if src.published_at:
             meta.append(f"发布 {src.published_at[:10]}")
         if src.retrieved_at:
             meta.append(f"抓取 {src.retrieved_at[:10]}")
         # 没有标题就只写网址，不把网址当标题再写一遍
-        blocks.append({"type": "source", "label": source_label(sid), "source_id": sid, "title": src.title or "", "url": src.url, "meta": "，".join(meta)})
+        blocks.append({"type": "source", "label": n, "source_id": sid, "title": src.title or "", "url": src.url, "meta": "，".join(meta)})
     return blocks
 
 
@@ -138,9 +141,12 @@ def report_check(sections: dict[str, SectionText], claims: list[Claim], answered
 
 
 def run_checks(
-    sections: dict[str, SectionText], claims: list[Claim], sources: list[Source], time_issues: dict[str, str] | None = None
+    sections: dict[str, SectionText], claims: list[Claim], sources: list[Source], time_issues: dict[str, str] | None = None,
+    numbers: dict[str, str] | None = None,
 ) -> list[CheckResult]:
+    """numbers 是来源在这版报告里的编号（source_numbers），校验说明里提到来源时写 [3]，和用户看到的报告对得上。"""
     by_claim = {c.id: c for c in claims}
+    cite = {sid: f"[{n}]" for sid, n in (numbers or {}).items()}
     by_source = {s.id: s for s in sources}
     used_claims = [by_claim[s.claim_id] for sec in sections.values() for s in sec.sentences if s.claim_id in by_claim]
     results: list[CheckResult] = []
@@ -155,7 +161,8 @@ def run_checks(
 
     incomplete = [sid for sid in referenced_source_ids(sections, by_claim)
                   if sid in by_source and not (by_source[sid].url and by_source[sid].title and by_source[sid].retrieved_at)]
-    results.append(CheckResult(name="sources_complete", passed=not incomplete, detail=_join("来源信息不全", incomplete)))
+    results.append(CheckResult(name="sources_complete", passed=not incomplete,
+                               detail=_join("来源信息不全", [cite.get(sid, sid) for sid in incomplete])))
 
     orphaned = [c.id for c in used_claims if c.orphaned]
     results.append(CheckResult(name="no_orphaned_claims", passed=not orphaned, detail=_join("失去来源支撑", orphaned)))
@@ -163,7 +170,7 @@ def run_checks(
     # 来源发布时间在不在用户要的时间范围里由整理步骤的模型判断（范围可能是“近三年”“2020 年以前”这类说法）；这里只看正文用到的
     off = [sid for sid in referenced_source_ids(sections, by_claim) if sid in (time_issues or {})]
     results.append(CheckResult(name="scope_time", passed=not off,
-                               detail="；".join(f"{sid}：{time_issues[sid]}" for sid in off) + ("；" if off else "")))
+                               detail="；".join(f"{cite.get(sid, sid)}：{time_issues[sid]}" for sid in off) + ("；" if off else "")))
     return results
 
 

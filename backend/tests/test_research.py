@@ -93,7 +93,7 @@ def test_full_flow_traceable_and_delivered(graph, tmp_path):
     assert "没有来源的论断应被丢弃" not in p["report"] and any("一起从正文移除" in n for n in p["notes"])
     # 报告里推断句带标记并带引用标号；来源表完整
     report = p["report"]
-    assert "推断：" in report and "[S1]" in report and "## 来源" in report
+    assert "推断：" in report and "[1]" in report and "## 来源" in report
     # 动态提问的回答原样进报告单独一节、不进假设；澄清的回答进了范围
     assert "## 用户的回答" in report and "范围是否包含 PPT 工具？ → 包含" in report
     assert not any("包含" in a for a in p["assumptions"])
@@ -576,16 +576,17 @@ def test_live_interpret_prompt_carries_ids_and_report_numbers():
     from app.research_llm import LiveResearchPlanner
 
     msgs = LiveResearchPlanner._interpret_messages(
-        Scope(question="问题"), "# 问题\n\n## 结论\n\n一句话[S3]\n",
+        Scope(question="问题"), "# 问题\n\n## 结论\n\n一句话[1]\n",
         [OutlineNode(id="c1", title="结论", question="?")],
         [Claim(id="k1", statement="一句话", kind="fact", source_ids=["s3"], outline_id="c1")],
         [Source(id="s3", url="https://a.test", title="A", status="adopted"), Source(id="s1", url="https://b.test", title="B")],
-        "排除 S1",
+        "排除第 1 条来源", numbers={"s3": "1"},
     )
     user = msgs[-1][1]
     assert "- c1 | 结论" in user and "- k1 | c1 | fact | 一句话 | s3" in user
-    assert "- s3 | A | https://a.test | 报告里引用了" in user and "- s1 | B | https://b.test | 搜到但报告没引用" in user
-    assert "用户说：排除 S1" in user
+    # 报告里的 [1] 是 s3：模型拿编号对到 id
+    assert "- s3 | 1 | A | https://a.test | 报告里引用了" in user and "- s1 | 无 | B | https://b.test | 搜到但报告没引用" in user
+    assert "用户说：排除第 1 条来源" in user
 
 
 def test_inference_marked_from_claim_kind_not_text(graph):
@@ -599,13 +600,15 @@ def test_inference_marked_from_claim_kind_not_text(graph):
     blocks = [b for b in p["blocks"] if b["type"] == "sentence" and b["claim_id"]]
     assert all(b["inference"] == (kind[b["claim_id"]] == "inference") and b["marks"] for b in blocks)
     assert to_markdown(p["blocks"]) == p["report"] == Path(p["report_path"]).read_text()
-    # 报告里的来源标注就是来源 id：排除一条来源后，其余来源的标注不变
+    # 来源按正文里第一次出现的先后编 1、2、3；排除一条后这版重新编，仍从 1 连着编
     labels = {b["source_id"]: b["label"] for b in p["blocks"] if b["type"] == "source"}
-    assert labels and all(lab == sid.upper() for sid, lab in labels.items())
+    assert list(labels.values()) == [str(i) for i in range(1, len(labels) + 1)]
+    marks = [m for b in blocks for m in b["marks"]]
+    assert sorted(set(marks), key=int) == list(labels.values()) and [m for i, m in enumerate(marks) if m not in marks[:i]] == list(labels.values())
     first = next(iter(labels))
     p2 = intr(resume(graph, "t1", {"action": "exclude_source", "target": first}))
     labels2 = {b["source_id"]: b["label"] for b in p2["blocks"] if b["type"] == "source"}
-    assert first not in labels2 and all(labels[s] == lab for s, lab in labels2.items())
+    assert first not in labels2 and list(labels2.values()) == [str(i) for i in range(1, len(labels2) + 1)]
     assert "inference_marked" not in {c["name"] for c in p["checks"]}
 
 
@@ -631,8 +634,8 @@ def test_time_check_ignores_uncited_sources():
     sections = {"c1": SectionText(outline_id="c1", sentences=[Sentence(text="a", claim_id="k1")])}
     res = {c.name: c for c in run_checks(sections, claims, sources, {"s2": "太旧"})}
     assert res["scope_time"].passed
-    res = {c.name: c for c in run_checks(sections, claims, sources, {"s1": "太旧"})}
-    assert not res["scope_time"].passed and res["scope_time"].detail == "s1：太旧；"
+    res = {c.name: c for c in run_checks(sections, claims, sources, {"s1": "太旧"}, {"s1": "1"})}
+    assert not res["scope_time"].passed and res["scope_time"].detail == "[1]：太旧；"  # 写报告里的编号，不写来源 id
 
 
 def test_untitled_source_listed_once():
@@ -644,8 +647,26 @@ def test_untitled_source_listed_once():
     claims = [Claim(id="k1", statement="a", kind="fact", source_ids=["s1", "s2"], outline_id="c1")]
     sections = {"c1": SectionText(outline_id="c1", sentences=[Sentence(text="a", claim_id="k1")])}
     blocks = report_blocks(Scope(question="q"), [OutlineNode(id="c1", title="一", question="?")], sections, claims, sources, [])
-    lines = [ln for ln in to_markdown(blocks).splitlines() if ln.startswith("[S")]
-    assert lines == ["[S1] https://a.test/x.pdf", "[S2] B 站 — https://b.test/"]
+    lines = [ln for ln in to_markdown(blocks).splitlines() if ln.startswith("[")]
+    assert lines == ["[1] https://a.test/x.pdf", "[2] B 站 — https://b.test/"]
+
+
+def test_sources_numbered_by_first_appearance():
+    """编号按正文里第一次出现的先后（节按大纲顺序），不按来源 id；没被正文引用的来源不编号。"""
+    from app.graph.research.report import report_blocks
+    from app.graph.research.state import Claim, OutlineNode, Scope, SectionText, Sentence, Source
+
+    sources = [Source(id=f"s{i}", url=f"https://{i}.test/", status="adopted") for i in range(1, 6)]
+    claims = [Claim(id="k1", statement="a", kind="fact", source_ids=["s4", "s2"], outline_id="c2"),
+              Claim(id="k2", statement="b", kind="fact", source_ids=["s5"], outline_id="c1"),
+              Claim(id="k3", statement="c", kind="fact", source_ids=["s1", "s2"], outline_id="c2")]  # s1 编 4、s2 编 3，角标排成 [3][4]
+    # 节的字典顺序和大纲顺序故意不一样：c2 先放进去，但大纲里 c1 在前
+    sections = {"c2": SectionText(outline_id="c2", sentences=[Sentence(text="a", claim_id="k1"), Sentence(text="c", claim_id="k3")]),
+                "c1": SectionText(outline_id="c1", sentences=[Sentence(text="b", claim_id="k2")])}
+    outline = [OutlineNode(id="c1", title="一", question="?"), OutlineNode(id="c2", title="二", question="?")]
+    blocks = report_blocks(Scope(question="q"), outline, sections, claims, sources, [])
+    assert [b["marks"] for b in blocks if b["type"] == "sentence" and b.get("claim_id")] == [["1"], ["2", "3"], ["3", "4"]]
+    assert [(b["label"], b["source_id"]) for b in blocks if b["type"] == "source"] == [("1", "s5"), ("2", "s4"), ("3", "s2"), ("4", "s1")]
 
 
 # ---- 后端流程：搜索服务出错、来源去重、报告不依赖磁盘文件 ----
