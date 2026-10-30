@@ -6,6 +6,7 @@ import httpx
 
 from app.evals.research import (
     Case,
+    CaseTurn,
     CitationJudgement,
     CitationVerdict,
     Recorder,
@@ -14,6 +15,7 @@ from app.evals.research import (
     run_case,
     summary_line,
     transcript,
+    turn_checks,
 )
 from app.research_llm import FakeResearchPlanner, fake_gateway_client
 from app.tools.gateway import GatewayClient
@@ -58,7 +60,8 @@ def test_multi_turn_case_passes_and_records_each_turn():
     assert r["passed"], (_failed(r), r.get("error"))
     assert all(t["stream_ids_match"] for t in r["turns"])
     assert r["usage"]["model_calls"] == sum(t["usage"]["model_calls"] for t in r["turns"])
-    assert [c["name"] for c in r["turns"][0]["checks"]] == ["finished", "replied", "stream_ids_match", "cited_known", "searched", "min_reads",
+    assert [c["name"] for c in r["turns"][0]["checks"]] == ["finished", "replied", "stream_ids_match", "cited_known", "cite_format", "searched",
+                                                           "min_reads",
                                                            "judge", "sources_supported"]
     # 裁判看的是这一轮的正文；引用按 agent 当时看到的材料核对；没有引用的那轮不核对
     said, rubric, reply = judge.rubrics[0]
@@ -100,3 +103,13 @@ def test_recorder_keeps_text_per_url():
     assert rec.searches[0]["freshness"] == "pm" and rec.searches[0]["domains"] == ["example.test"]
     assert "正文" in rec.text_for(hits[0].url) and "长摘要" in rec.text_for(hits[0].url)
     assert rec.text_for("https://nowhere.test") == "（没有记录到材料）"
+
+
+def test_citation_outside_brackets_fails_cite_format():
+    played = {"status": "idle", "outcome": "ok", "stream_ids_match": True, "searches": [], "reads": [],
+              "reply": "定价 2 美元 [s3ae980]。[s3ae980 之外，见 sa63a73] 另有说法 [sa63a73][s1b2c3d]",
+              "view": {"sources": {"s3ae980": {}, "sa63a73": {}, "s1b2c3d": {}}}}
+    checks = {c["name"]: c for c in turn_checks(CaseTurn(say="x"), played)}
+    assert not checks["cite_format"]["passed"] and checks["cite_format"]["detail"] == "没按 [id] 写的引用：s3ae980、sa63a73"
+    played["reply"] = "定价 2 美元 [s3ae980]，另有说法 [sa63a73][s1b2c3d]。"
+    assert {c["name"]: c for c in turn_checks(CaseTurn(say="x"), played)}["cite_format"]["passed"]

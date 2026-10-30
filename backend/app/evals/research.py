@@ -26,7 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.graph.research import history
 from app.graph.research.graph import memory_checkpointer
-from app.graph.research.sources import cited, url_key
+from app.graph.research.sources import SOURCE_ID, cited, url_key
 from app.prompting import PromptFile
 from app.tools.gateway import GatewayError
 
@@ -195,10 +195,13 @@ def turn_checks(turn: CaseTurn, played: dict) -> list[dict]:
     e = turn.expect
     ids = cited(played["reply"])
     unknown = [i for i in ids if i not in played["view"]["sources"]]
+    # 这条对话里的来源 id 出现在 [id] 以外的写法里（[a, b]、(a)、“见 a”），页面上不会变成角标，会原样露出来
+    loose = sorted(i for i in played["view"]["sources"] if i in SOURCE_ID.sub("", played["reply"]))
     out = [_check("finished", played["status"] == "idle", played.get("error") or played["status"]),
            _check("replied", played["outcome"] == "ok" and bool(played["reply"]), played.get("outcome") or ""),
            _check("stream_ids_match", played["stream_ids_match"]),
-           _check("cited_known", not unknown, f"不存在的来源：{'、'.join(unknown)}" if unknown else f"引用了 {len(ids)} 个来源")]
+           _check("cited_known", not unknown, f"不存在的来源：{'、'.join(unknown)}" if unknown else f"引用了 {len(ids)} 个来源"),
+           _check("cite_format", not loose, f"没按 [id] 写的引用：{'、'.join(loose)}" if loose else "")]
     if e.searched is not None:
         out.append(_check("searched", bool(played["searches"]) == e.searched, f"搜了 {len(played['searches'])} 次"))
     if e.min_reads is not None:
