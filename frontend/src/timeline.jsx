@@ -1,6 +1,7 @@
-// 对话。一轮是用户的一句话加上模型这一轮做的事：思考、工具步骤按发生的先后穿插，然后是正文和这条回答用到的来源；
-// 最后一轮下面是推荐问题。存下来的对话为准，正在跑的这一轮叠上实时片段。
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+// 对话。一轮是用户的一句话加上模型这一轮做的事：先是过程（思考、搜索、读页按发生的先后），然后是正文和这条回答用到的来源；
+// 最后一轮下面是推荐问题。过程正在跑时展开，这一轮结束后收成一行“已完成 25 秒”，点开看每一步。
+// 存下来的对话为准，正在跑的这一轮叠上实时片段。
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { IconArrowUp, IconChevron, IconLoop, IconPage, IconRetry, IconSearch, IconStop, IconWarn, Spinner } from "./icons.jsx";
 import { Markdown } from "./markdown.jsx";
 import { ACTIVE, QUEUED, citeNumbers, cutPartialCite, domain, elapsed, mergeItems } from "./research.js";
@@ -55,7 +56,7 @@ function Welcome({ onPick }) {
       <h2>想问什么？</h2>
       <p>直接问。需要查的会上网搜、读原文，回答里标出处，鼠标放在角标上能看到是哪条来源。</p>
       <div className="ws-examples">
-        {EXAMPLES.map((t) => <button key={t} className="ws-example" onClick={() => onPick(t)}><span className="t">{t}</span></button>)}
+        {EXAMPLES.map((t) => <button key={t} className="ws-suggest-item" onClick={() => onPick(t)}>{t}</button>)}
       </div>
     </div>
   );
@@ -81,45 +82,62 @@ function Turns({ st, live, busy, stopping, now, act }) {
 
 function Turn({ t, st, live, running, stopping, last, now, act }) {
   const items = mergeItems(t.items, live);
+  const { process, answer } = split(items);
   const nums = citeNumbers(items.filter((i) => i.type === "text").map((i) => i.text), st?.sources);
   const rec = t.record;
   const idle = !running && st?.status === "idle";
+  const failed = last && !running && st?.status === "failed";
   return (
     <>
       {t.user && <div className="ws-user"><div className="ws-bubble">{t.user}</div></div>}
-      <AiMsg>
-        {group(items).map((g, k, all) => (g.steps
-          ? <div key={`steps:${g.steps[0].id}`} className="ws-tools">{g.steps.map((s) => <ToolRow key={s.id} s={s} />)}</div>
-          : <Item key={`${g.type}:${g.id}`} it={g} st={st} nums={nums} running={running} lastItem={k === all.length - 1} />))}
-        {running && <LiveLine live={live} items={items} st={st} stopping={stopping} now={now} />}
+      <div className="ws-ai">
+        {(running || rec) && <Process items={process} st={st} nums={nums} rec={rec} running={running} failed={failed} now={now} />}
+        {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
+        {running && <LiveLine live={live} items={items} stopping={stopping} />}
         {!running && <AnswerSources nums={nums} sources={st?.sources} />}
         {!running && rec?.ended_at && rec.outcome === "no_reply" && <p className="ws-muted">这一轮没有给出文字回复。</p>}
-        {!running && rec?.outcome === "stopped" && <p className="ws-muted">已停止</p>}
-        {last && !running && st?.status === "failed" && <Failed st={st} act={act} />}
+        {failed && <Failed st={st} act={act} />}
         {last && idle && <div className="ws-ai-foot"><button className="ws-btn ghost sm" onClick={act.regenerate}><IconLoop size={13} />重新回答</button></div>}
-      </AiMsg>
+      </div>
       {last && idle && rec?.suggestions?.length > 0 && <Suggestions items={rec.suggestions} onPick={act.say} />}
     </>
   );
 }
 
-// 挨着的工具步骤排成一列
-function group(items) {
-  const out = [];
-  for (const it of items) {
-    if (it.type === "step" && out.at(-1)?.steps) out.at(-1).steps.push(it);
-    else out.push(it.type === "step" ? { steps: [it] } : it);
-  }
-  return out;
+// 按位置分开过程和正文：最后一次搜索或读页之前的都是过程（包括中途说的话），之后的思考也算过程，之后的文字是正文。
+// 正在跑时，正文后面又来了一步，那段文字就挪进过程（它确实是中途说的话）。被内容审核拦下的提示总是放在正文里
+function split(items) {
+  const lastStep = items.findLastIndex((i) => i.type === "step");
+  const process = [];
+  const answer = [];
+  items.forEach((it, k) => {
+    if (it.type === "blocked") answer.push(it);
+    else if (k <= lastStep || it.type === "thinking") process.push(it);
+    else answer.push(it);
+  });
+  return { process, answer };
 }
 
-function AiMsg({ children }) {
-  const kids = React.Children.toArray(children).filter(Boolean);
-  if (!kids.length) return null;
+// 这一轮的过程：正在跑时展开，结束后收成一行（已完成 / 已停止 / 已中断 / 没跑完，加上用时），点开看每一步
+function Process({ items, st, nums, rec, running, failed, now }) {
+  const [open, setOpen] = useState(null); // null：按默认（正在跑就展开）
+  const shown = (open ?? running) && items.length > 0;
+  const time = running ? elapsed(st?.running_since || rec?.started_at, now)
+    : rec?.ended_at ? elapsed(rec.started_at, Date.parse(rec.ended_at)) : "";
+  const verb = running ? "处理中" : failed ? "没跑完" : rec?.outcome === "stopped" ? "已停止" : rec?.outcome === "blocked" ? "已中断" : "已完成";
+  const label = `${verb}${time ? ` ${time}` : ""}`;
   return (
-    <div className="ws-ai">
-      <div className="ws-ai-head"><span className="ws-avatar">灵</span><span className="name">灵稿</span></div>
-      <div className="ws-ai-body">{kids}</div>
+    <div className="ws-proc">
+      {items.length
+        ? <button className="ws-proc-head" aria-expanded={shown} onClick={() => setOpen(!shown)}>{label}<IconChevron size={13} className={"chev" + (shown ? " up" : "")} /></button>
+        : <div className="ws-proc-head">{label}</div>}
+      {shown && (
+        <div className="ws-proc-body">
+          {items.map((it) => (it.type === "step" ? <ToolRow key={`step:${it.id}`} s={it} />
+            : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} thinking={running && it.live && !it.ms} />
+              : <div key={`text:${it.id}`} className="ws-proc-text"><Markdown text={cutPartialCite(it.text)} cite={(sid) => <Mark n={nums[sid]} s={st?.sources?.[sid]} />} /></div>))}
+        </div>
+      )}
     </div>
   );
 }
@@ -132,7 +150,6 @@ const BLOCKED_TEXT = {
 };
 
 function Item({ it, st, nums, running, lastItem }) {
-  if (it.type === "thinking") return <Thinking it={it} thinking={running && it.live && !it.ms} />;
   if (it.type === "blocked") {
     return (
       <div className="ws-card warn">
@@ -141,7 +158,6 @@ function Item({ it, st, nums, running, lastItem }) {
       </div>
     );
   }
-  if (it.type === "step") return <ToolRow s={it} />;
   return (
     <div className={"ws-reply" + (running && lastItem ? " typing" : "")}>
       <Markdown text={cutPartialCite(it.text)} cite={(sid) => <Mark n={nums[sid]} s={st?.sources?.[sid]} />} />
@@ -191,7 +207,8 @@ function ToolRow({ s }) {
   );
 }
 
-function LiveLine({ live, items, st, stopping, now }) {
+// 正在跑的这一轮最下面一行：现在在做什么（思考、搜索、写正文时各自已经有显示，这里不重复）
+function LiveLine({ live, items, stopping }) {
   const lastItem = items.at(-1);
   let stage = stopping ? "正在停止…" : live?.stage;
   if (!stage) {
@@ -203,7 +220,6 @@ function LiveLine({ live, items, st, stopping, now }) {
   return (
     <div className="ws-live" role="status">
       {stage && <><Spinner size={14} /><span className="stage">{stage}</span></>}
-      {st?.running_since && <span className="time">已用 {elapsed(st.running_since, now)}</span>}
       <span className="hint">可以关掉页面，回来接着看</span>
     </div>
   );
@@ -261,7 +277,6 @@ function Composer({ mode, stopping, onSend, onStop }) {
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
         <div className="ws-input-bar">
-          <span className="tag"><IconSearch size={12} />联网搜索 · 读原文</span>
           {canStop
             ? <button className="ws-send stop" aria-label={stopping ? "正在停止" : "停止"} title={stopping ? "正在停止" : "停止"} disabled={stopping} onClick={onStop}>
               {stopping ? <Spinner size={14} /> : <IconStop size={13} />}

@@ -68,6 +68,7 @@
 .ws-task .dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 8px; flex: none; background: var(--faint); }
 .ws-task .dot.active { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: ws-pulse 1.6s ease-in-out infinite; }
 .ws-task .dot.failed { background: var(--danger); }
+.ws-task .dot.idle { display: none; } /* 只有进行中、没跑完才标点 */
 @keyframes ws-pulse { 50% { box-shadow: 0 0 0 5px rgba(44, 79, 149, .1); } }
 .ws-task .body { min-width: 0; flex: 1; }
 .ws-task .title { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -81,21 +82,17 @@
 /* ---------- 对话 ---------- */
 .ws-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .ws-head { padding: 0 28px; border-bottom: 1px solid var(--line); height: 58px; flex: none; display: flex; flex-direction: column; justify-content: center; }
-.ws-head-title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-head-title { width: 100%; max-width: 624px; margin: 0 auto; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* 和对话正文对齐 */
 .ws-scroll { flex: 1; overflow-y: auto; }
-.ws-flow { max-width: 700px; margin: 0 auto; padding: 28px 28px 32px; }
+.ws-flow { max-width: 680px; margin: 0 auto; padding: 28px 28px 32px; } /* 正文一行四十来个字 */
 .ws-user { display: flex; justify-content: flex-end; margin: 0 0 22px; }
 .ws-bubble { background: var(--side); border: 1px solid var(--line); border-radius: var(--r-lg) var(--r-lg) 4px var(--r-lg); padding: 9px 14px; max-width: 80%; white-space: pre-wrap; overflow-wrap: anywhere; }
-.ws-ai { margin: 0 0 26px; }
-.ws-ai-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.ws-ai-head .name { font-weight: 600; font-size: 13px; }
-.ws-avatar { width: 22px; height: 22px; border-radius: 6px; background: var(--ink); color: #fff; font: 600 12.5px/1 var(--serif); display: inline-flex; align-items: center; justify-content: center; }
-.ws-ai-body { min-width: 0; padding-left: 30px; display: flex; flex-direction: column; gap: 12px; }
+.ws-ai { margin: 0 0 26px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .ws-ai-foot { display: flex; gap: 6px; margin: -4px 0 0 -10px; }
 .ws-ai-foot .ws-btn { color: var(--muted); }
 .ws-ai-foot .ws-btn:hover { color: var(--ink); }
 
-.ws-tool { display: flex; gap: 8px; align-items: baseline; padding: 3px 10px 3px 12px; font-size: 12.5px; color: var(--ink2); animation: ws-in .25s var(--ease); }
+.ws-tool { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; font-size: 12.5px; color: var(--ink2); animation: ws-in .25s var(--ease); }
 .ws-tool > svg { flex: none; color: var(--faint); transform: translateY(2px); }
 .ws-tool .main { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-tool .sub { color: var(--muted); flex: none; font-size: 12px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -106,20 +103,26 @@
 
 .ws-live { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--accent); flex-wrap: wrap; }
 .ws-live .stage { color: var(--ink2); }
-.ws-live .time, .ws-live .hint { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.ws-live .hint::before { content: "·"; margin-right: 8px; color: var(--faint); }
+.ws-live .hint { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ws-live .stage + .hint::before { content: "·"; margin-right: 8px; color: var(--faint); }
 /* 一轮里的东西：思考、工具步骤、正文、来源、推荐问题 */
 .ws-think-head { border: 0; background: none; padding: 2px 6px 2px 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); border-radius: var(--r-sm); }
 .ws-think-head:hover { color: var(--ink); }
-.ws-think-head .chev { transition: transform .2s var(--ease); transform: rotate(-90deg); }
-.ws-think-head .chev.up { transform: none; }
+/* 折叠的箭头：收起时朝右，展开时朝下 */
+.ws .chev { flex: none; transition: transform .2s var(--ease); transform: rotate(-90deg); }
+.ws .chev.up { transform: none; }
 .ws-think.live .ws-think-head { color: var(--accent); }
-.ws-think-text { margin-top: 4px; padding: 2px 0 2px 12px; border-left: 2px solid var(--line); font-size: 12.5px; line-height: 1.7; color: var(--muted);
+.ws-think-text { margin: 4px 0 2px; padding: 8px 12px; background: var(--side); border-radius: var(--r-sm); font-size: 12.5px; line-height: 1.7; color: var(--muted);
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; }
-.ws-tools { margin: 0; padding: 2px 0; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 1px; }
+/* 一轮的过程：一行“已完成 25 秒”，点开是每一步，左边一道线把它们归在这一行下面 */
+.ws-proc-head { align-self: flex-start; border: 0; background: none; padding: 2px 0; display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+button.ws-proc-head:hover { color: var(--ink); }
+.ws-proc-body { margin: 6px 0 0 2px; padding: 2px 0 2px 14px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+.ws-proc-text { font-size: 13px; line-height: 1.7; color: var(--ink2); overflow-wrap: anywhere; }
 
 /* 正文：Markdown */
-.ws-reply { font-size: 14.5px; line-height: 1.8; color: var(--ink); overflow-wrap: anywhere; }
+.ws-reply { font-size: 15px; line-height: 1.8; color: var(--ink); overflow-wrap: anywhere; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md p, .md ul, .md ol, .md blockquote, .md .md-table { margin: 0 0 10px; }
@@ -140,16 +143,16 @@
 @keyframes ws-blink { to { opacity: 0; } }
 .ws-mark.off { background: var(--hover); color: var(--faint); cursor: help; }
 
-.ws-suggest { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: -12px 0 26px 30px; }
+.ws-suggest { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: -12px 0 26px; }
 .ws-suggest-item { border: 1px solid var(--line2); background: var(--paper); border-radius: var(--r); padding: 6px 12px; font-size: 13px; color: var(--ink2); text-align: left; transition: border-color .15s, color .15s; }
 .ws-suggest-item:hover { border-color: var(--accent-line); color: var(--accent); }
-.ws-error { display: flex; gap: 8px; align-items: flex-start; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-line); border-radius: var(--r); padding: 9px 12px; font-size: 13px; margin: 0 0 16px 30px; }
+.ws-error { display: flex; gap: 8px; align-items: flex-start; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-line); border-radius: var(--r); padding: 9px 12px; font-size: 13px; margin: 0 0 16px; }
 .ws-error svg { flex: none; margin-top: 2px; }
 
 /* 提示卡：没跑完、内容审核没通过 */
-.ws-card { list-style: none; border: 1px solid var(--line2); border-radius: var(--r-lg); padding: 14px 16px; background: var(--paper);
-  display: flex; flex-direction: column; gap: 10px; animation: ws-in .25s var(--ease); margin: 8px 0 6px 30px; }
-.ws-card.warn { border-color: var(--warn-line); background: var(--warn-soft); margin-left: 0; }
+.ws-card { border: 1px solid var(--line2); border-radius: var(--r-lg); padding: 14px 16px; background: var(--paper);
+  display: flex; flex-direction: column; gap: 10px; animation: ws-in .25s var(--ease); margin: 2px 0; }
+.ws-card.warn { border-color: var(--warn-line); background: var(--warn-soft); }
 .ws-card-title { font-weight: 600; font-size: 14px; display: flex; gap: 8px; align-items: flex-start; }
 .ws-card-title svg { flex: none; margin-top: 3px; color: var(--accent); }
 .ws-card.warn .ws-card-title svg { color: var(--warn); }
@@ -160,10 +163,7 @@
 .ws-welcome { padding: 9vh 2px 0; }
 .ws-welcome h2 { font: 600 30px/1.35 var(--serif); letter-spacing: .02em; margin: 0 0 14px; }
 .ws-welcome p { color: var(--ink2); margin: 0 0 6px; max-width: 34em; }
-.ws-examples { display: flex; flex-direction: column; margin-top: 28px; border-top: 1px solid var(--line); }
-.ws-example { display: flex; gap: 14px; align-items: baseline; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 12px 4px; transition: background .15s; }
-.ws-example:hover { background: var(--side); }
-.ws-example .t { color: var(--ink); }
+.ws-examples { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 24px; }
 
 /* 输入框 */
 .ws-composer { padding: 10px 28px 18px; }
@@ -174,7 +174,6 @@
 .ws-input textarea::placeholder { color: var(--faint); }
 .ws-input textarea:disabled { color: var(--muted); }
 .ws-input-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
-.ws-input-bar .tag { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
 .ws-input-bar .ws-send { margin-left: auto; }
 
 
@@ -203,10 +202,14 @@
 .ws-badge.body { border-color: var(--ok-line); background: var(--ok-soft); color: var(--ok); }
 .ws-badge.summary { border-color: var(--warn-line); background: var(--warn-soft); color: var(--warn); }
 
-/* 回答下面的来源：编号、标题一行，出处和日期跟在后面，一条一行 */
-.ws-cited { border-top: 1px solid var(--line); padding-top: 10px; }
-.ws-cited-head { font-size: 12px; font-weight: 500; color: var(--muted); margin-bottom: 6px; font-variant-numeric: tabular-nums; }
-.ws-cited ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+/* 回答下面的来源：默认一行（几个网站图标加条数），点开一条一行：编号、标题，出处和日期跟在后面 */
+.ws-cited-head { border: 1px solid var(--line); background: var(--paper); border-radius: 999px; padding: 3px 10px 3px 6px; display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; color: var(--ink2); font-variant-numeric: tabular-nums; transition: border-color .15s; }
+.ws-cited-head:hover { border-color: var(--line2); color: var(--ink); }
+.ws-cited-head .sites { display: inline-flex; gap: 3px; }
+.ws-cited-head .ws-fav { margin: 0; width: 14px; height: 14px; }
+.ws-cited-head .ws-fav.letter { line-height: 14px; }
+.ws-cited ol { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
 .ws-cited li { display: flex; align-items: baseline; gap: 8px; font-size: 13px; line-height: 1.6; min-width: 0; }
 .ws-cited .lb { flex: none; }
 .ws-cited a { color: var(--ink2) !important; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

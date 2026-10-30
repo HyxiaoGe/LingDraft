@@ -246,7 +246,7 @@ const GROUPS = [
 
 function rowSub(t, now) {
   if (t.status === "queued") return "排队中";
-  if (t.status === "running") return t.running_since ? `进行中 · ${elapsed(t.running_since, now)}` : "进行中";
+  if (t.status === "running") return t.running_since ? `进行中，已用 ${elapsed(t.running_since, now)}` : "进行中";
   if (t.status === "failed") return "没跑完，可以重试";
   return "";
 }

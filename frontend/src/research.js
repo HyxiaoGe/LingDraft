@@ -43,7 +43,7 @@ export const sourceName = (s) => s.title || domain(s.url);
 // 正文里的引用：模型写的是来源 id，[s3fa9c1]
 export const CITE = /\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\]/g;
 // 写到一半的引用（正文还在逐字出现，或者停在了半路）先不显示，免得露出 [sc91d6 这样的半截 id
-export const cutPartialCite = (text) => text.replace(/\[s[0-9a-f]{0,9}$/, "");
+export const cutPartialCite = (text) => text.replace(/\[(s[0-9a-f]{0,9})?$/, "");
 // 一条回答引用的来源，按第一次出现的先后编 1、2、3，每条回答各自编号。不在这条对话来源里的 id 不编号（角标显示问号）
 export function citeNumbers(texts, sources) {
   const out = {};

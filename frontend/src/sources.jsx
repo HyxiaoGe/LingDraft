@@ -1,7 +1,7 @@
 // 来源的显示：正文里的引用角标（悬停看来源卡），和每条回答下面这条回答用到的来源。
 import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { IconExternal } from "./icons.jsx";
+import { IconChevron, IconExternal } from "./icons.jsx";
 import { domain, sourceName } from "./research.js";
 
 // 来源网站的图标，后端代取（/api/favicon/域名）；取不到显示域名首字母。取不到的域名记下来，这个页面里不再请求
@@ -111,14 +111,20 @@ export function Mark({ n, s }) {
   );
 }
 
-// 这条回答用到的来源：按在回答里第一次出现的先后，编号和正文里的角标一样
+// 这条回答用到的来源：默认收成一行（几个网站图标加条数），点开按在回答里第一次出现的先后列出，编号和正文里的角标一样
 export function AnswerSources({ nums, sources }) {
+  const [open, setOpen] = useState(false);
   const used = Object.entries(nums).map(([sid, n]) => [n, sources?.[sid]]).filter(([, s]) => s);
   if (!used.length) return null;
+  const sites = [...new Map(used.map(([, s]) => [hostOf(s.url), s.url])).values()].slice(0, 6); // 同一个网站只放一个图标
   return (
-    <div className="ws-cited" aria-label="这条回答用到的来源">
-      <div className="ws-cited-head">来源 {used.length}</div>
-      <ol>
+    <div className="ws-cited">
+      <button className="ws-cited-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="sites" aria-hidden="true">{sites.map((url) => <Favicon key={url} url={url} />)}</span>
+        {used.length} 个来源
+        <IconChevron size={13} className={"chev" + (open ? " up" : "")} />
+      </button>
+      {open && <ol aria-label="这条回答用到的来源">
         {used.map(([n, s]) => (
           <li key={s.id}>
             <span className="lb">{n}</span>
@@ -126,7 +132,7 @@ export function AnswerSources({ nums, sources }) {
             <span className="meta"><Favicon url={s.url} />{domain(s.url)}{s.published_at ? ` · ${s.published_at.slice(0, 10)}` : ""}</span>
           </li>
         ))}
-      </ol>
+      </ol>}
     </div>
   );
 }
