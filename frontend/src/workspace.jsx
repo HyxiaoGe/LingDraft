@@ -24,7 +24,7 @@ export default function Workspace() {
   const [error, setError] = useState(null);
   const gen = useRef(0); // 每切一次线程加一：旧线程的连接和回调发现对不上，就不再改页面
   const tidRef = useRef(tid);
-  const ctl = useRef(new AbortController()); // 当前线程的连接；切走时断开（服务器上的执行照常跑）
+  const ctl = useRef(new AbortController()); // 当前线程的连接；切走、或开始新的一次执行时断开（服务器上的执行照常跑）
   const lastEvent = useRef(null); // 收到的最后一个事件 id，断线后凭它接着读
   const busyRef = useRef(false);
   const refetchAt = useRef(0);
@@ -97,17 +97,17 @@ export default function Workspace() {
     }
   }
 
-  // 接上服务器上这次执行：补发断线期间漏掉的事件，再接着收；连不上就隔一会儿重连
-  async function follow(id, g, errs) {
+  // 接上服务器上这次执行：补发断线期间漏掉的事件，再接着收；连不上就隔一会儿重连。
+  // r 是这次执行在页面上的记号（见 run）；从打开线程接上的，用当前连接新开一个
+  async function follow(id, g, errs, r = { done: false, sig: ctl.current.signal }) {
     setBusy(true);
     for (let fails = 0; ;) {
       try {
-        const s = await followResearchThread(id, lastEvent.current, onEvent(g, errs), ctl.current.signal);
-        if (g !== gen.current) return;
-        if (s && !ACTIVE.has(s.status)) return finish(g, s, errs);
+        await followResearchThread(id, lastEvent.current, onEvent(g, errs, r), r.sig);
+        if (g !== gen.current || r.done) return;
         fails = 0; // 连得上，只是流又断了、或者执行刚开始：接着读
       } catch (e) {
-        if (e.aborted || g !== gen.current) return;
+        if (e.aborted || g !== gen.current || r.done) return;
         if (e.status === 404 || ++fails > 30) { // 线程不在了，或者几分钟都连不上；后端重启时代理回的 5xx 也按断线重连
           setError(`取回进度失败：${e.message || e}`);
           setBusy(false);
@@ -117,10 +117,11 @@ export default function Workspace() {
         setLive((l) => ({ items: [], ...l, stage: "连接断了，正在重连…" }));
       }
       await sleep(fails ? Math.min(1000 * 2 ** (fails - 1), 10000) : 500);
+      if (r.sig.aborted) return;
     }
   }
 
-  // 一次执行停下来了：以最终状态为准。执行中出过错但线程没算失败，把错误告诉用户
+  // 这一轮结束了：以这时的状态为准（推荐问题起好了会再来一次）。执行中出过错但线程没算失败，把错误告诉用户
   function finish(g, s, errs) {
     if (g !== gen.current) return;
     clearTimeout(refetchTimer.current);
@@ -147,8 +148,8 @@ export default function Workspace() {
     }, ms);
   }
 
-  const onEvent = (g, errs) => (ev, data, id) => {
-    if (g !== gen.current) return;
+  const onEvent = (g, errs, r) => (ev, data, id) => {
+    if (g !== gen.current || r.sig.aborted) return;
     if (id) lastEvent.current = id;
     if (ev === "thread") {
       if (tidRef.current !== data.thread_id) {
@@ -170,6 +171,12 @@ export default function Workspace() {
       if (ev === "step" && !data.step.pending) refetch(g, 1500); // 新的来源
     } else if (ev === "node") {
       refetch(g, 150);
+    } else if (ev === "state") {
+      // 这一轮结束了就按结束显示，不等连接关上：推荐问题起好了还会再来一次状态
+      if (!ACTIVE.has(data.status)) {
+        r.done = true;
+        finish(g, data, errs);
+      }
     } else if (ev === "error") {
       errs.push(data.message);
     }
@@ -179,18 +186,20 @@ export default function Workspace() {
   // said：用户这次说的话，存下来之前先在对话里显示；extra：这次执行的其他显示信息（重新回答时要藏起来的旧条目、改过的那句话）
   async function run(fn, said, extra = {}) {
     const g = gen.current;
+    ctl.current.abort(); // 上一轮的连接可能还开着在等推荐问题：又说了话，那些推荐问题不要了
+    ctl.current = new AbortController();
+    const r = { done: false, sig: ctl.current.signal }; // done：收到了这一轮结束的状态，之后连接断了也不用再接
     setBusy(true);
     setError(null);
     setLive({ items: [], said, sentAt: said || extra.edit ? new Date().toISOString() : undefined, turnsAtStart: st?.turns?.length || 0, stage: "正在准备…", ...extra });
     const errs = [];
     try {
-      const s = await fn(onEvent(g, errs), ctl.current.signal);
-      if (g !== gen.current) return;
-      if (s && !ACTIVE.has(s.status)) return finish(g, s, errs);
-      if (tidRef.current) return await follow(tidRef.current, g, errs); // 流没收完就断了
+      await fn(onEvent(g, errs, r), r.sig);
+      if (g !== gen.current || r.done) return;
+      if (tidRef.current) return await follow(tidRef.current, g, errs, r); // 流没收完就断了
       setBusy(false);
     } catch (e) {
-      if (e.aborted || g !== gen.current) return;
+      if (e.aborted || g !== gen.current || r.done) return;
       // 话被拒（400）、正在跑或上一轮没跑完（409）、连接断了（没有状态码）——都回服务器接上当前进度
       const recoverable = tidRef.current && (!e.status || e.status === 400 || e.status === 409);
       if (e.status || !recoverable) setError(String(e.message || e));
@@ -198,7 +207,7 @@ export default function Workspace() {
         // 被拒的话（说的、改的）没存下来，不再显示
         const rejected = e.status ? { said: null, edit: undefined, sentAt: undefined } : {};
         setLive((l) => ({ items: [], ...l, ...rejected, stage: e.status ? "服务器还在处理，等它完成" : "连接断了，正在重连…" }));
-        return await follow(tidRef.current, g, errs);
+        return await follow(tidRef.current, g, errs, r);
       }
       setBusy(false);
       setLive(null);

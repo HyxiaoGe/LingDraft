@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -167,6 +168,10 @@ class ResearchRunner(BaseRunner):
         self.graph = build_graph(self.planner, saver)
         # 对话不碰浏览器，几个线程各跑各的；检查点共用一个连接，SqliteSaver 自己加锁
         self.executor = Executor(workers or config.RESEARCH_WORKERS, "research")
+        # 正文写完这一轮就结束，推荐问题在结束之后才起（见 _after_run）。线程 → 等着起推荐问题的那一轮（轮 id, 用户的话, 回复）。
+        # 用户又说了话、重新回答或删掉对话时撤掉：起好了也不写。撤掉和写检查点都在锁里，不会和用户那边的写交错
+        self._suggest_mu = threading.Lock()
+        self._suggest_for: dict[str, tuple[str, str, str]] = {}
 
     @staticmethod
     def _cfg(thread_id: str) -> dict:
@@ -185,6 +190,7 @@ class ResearchRunner(BaseRunner):
 
         先落盘再交出线程 id：排队时服务重启也查得到这句话，算没跑完，可以重试。
         """
+        self._drop_suggestions(thread_id)
         snap = self.graph.get_state(self._cfg(thread_id))
         if snap.values and snap.next:
             raise NotIdle("上一轮没跑完，先重试")
@@ -207,6 +213,7 @@ class ResearchRunner(BaseRunner):
     def regenerate_input(self, thread_id: str, text: str | None = None) -> None:
         """最后一轮重新回答：去掉用户最后那句话之后的消息和这一轮的记录，从那句话接着跑。
         带 text 是用户改了最后那句话：先换成 text（消息 id 不变，还是同一轮，发送时间记成改的时候），再重新回答。标题不重起。"""
+        self._drop_suggestions(thread_id)
         snap = self.graph.get_state(self._cfg(thread_id))
         v = snap.values
         if v and snap.next:
@@ -235,7 +242,7 @@ class ResearchRunner(BaseRunner):
 
     def rename(self, thread_id: str, title: str) -> None:
         """改标题。没跑完的线程不能改：写一次状态，出错的那一步就丢了，重试接不上。"""
-        with self._hold(thread_id):
+        with self._hold(thread_id), self._suggest_mu:  # 和写推荐问题错开
             if self.graph.get_state(self._cfg(thread_id)).next:
                 raise NotIdle("上一轮没跑完，先重试")
             self.graph.update_state(self._cfg(thread_id), {"title": title}, as_node=TURN_END)
@@ -243,6 +250,7 @@ class ResearchRunner(BaseRunner):
     def delete(self, thread_id: str) -> None:
         """删掉整段对话（这个线程的所有检查点），找不回来。"""
         with self._hold(thread_id):
+            self._drop_suggestions(thread_id)
             self.graph.checkpointer.delete_thread(thread_id)
 
     def stop(self, thread_id: str) -> bool:
@@ -290,6 +298,49 @@ class ResearchRunner(BaseRunner):
             yield {"event": "node", "data": {"node": TURN_END}}
             return
         yield from buf.flush()
+        self._want_suggestions(thread_id)
+
+    # ---- 推荐问题：这一轮结束之后再起 ----
+
+    def _want_suggestions(self, thread_id: str) -> None:
+        """这一轮跑完、有回复，记下要起推荐问题。还占着运行位时记：记下之前用户插不进话，插进来的话一定会把它撤掉。"""
+        snap = self.graph.get_state(self._cfg(thread_id))
+        msgs = snap.values["messages"]
+        start = history.last_human(msgs)
+        reply = history.final_text(msgs[start + 1:])
+        if snap.next or not reply:
+            return
+        with self._suggest_mu:
+            self._suggest_for[thread_id] = (msgs[start].id, history.text_of(msgs[start]), reply)
+
+    def _drop_suggestions(self, thread_id: str) -> None:
+        """用户又说了话（或重新回答、删掉对话）：上一轮还没起好的推荐问题不要了。正在写的写完才返回，之后不会再写。"""
+        with self._suggest_mu:
+            self._suggest_for.pop(thread_id, None)
+
+    def _after_run(self, thread_id: str) -> Iterator[dict]:
+        """起推荐问题。这时这一轮已经结束，页面拿到了最终状态，线程可以接着说；起好了写进这一轮的记录，再发一次状态。"""
+        with self._suggest_mu:
+            job = self._suggest_for.get(thread_id)
+        if job is None:
+            return
+        turn_id, question, reply = job
+        try:
+            items = self.planner.suggest(question, reply)[:3]
+        except Exception:  # noqa: BLE001  推荐问题失败就不给
+            items = []
+        with self._suggest_mu:
+            if self._suggest_for.get(thread_id) is not job:  # 起的时候用户又说了话：不要了
+                return
+            del self._suggest_for[thread_id]
+            cfg = self._cfg(thread_id)
+            snap = self.graph.get_state(cfg)
+            turns = list(snap.values.get("turns", []))
+            if not items or snap.next or not turns or turns[-1].id != turn_id:
+                return
+            turns[-1] = turns[-1].model_copy(update={"suggestions": items})
+            self.graph.update_state(cfg, {"turns": turns}, as_node=TURN_END)
+        yield {"event": "state", "data": self.state_view(thread_id)}
 
     # ---- 视图 ----
 

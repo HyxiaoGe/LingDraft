@@ -12,7 +12,7 @@ import re
 import threading
 import uuid
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -287,6 +287,10 @@ class BaseRunner:
     def _summarize(self, thread_id: str, node: str, update: dict | None) -> dict:
         return {"node": node}
 
+    def _after_run(self, thread_id: str) -> Iterator[dict]:
+        """执行结束、占位退了、最终状态也发出去以后还要做的事（这时线程已经可以接着用）；吐出的事件接在这次执行后面，最后才是 end。"""
+        return iter(())
+
     def resume_input(self, thread_id: str, payload: dict, interrupt_id: str | None = None) -> Any:
         return Command(resume=payload)
 
@@ -338,6 +342,8 @@ class BaseRunner:
                     self.runs.release(key)
                 try:
                     self.events.append(run, {"event": "state", "data": self.state_view(thread_id)})
+                    for ev in self._after_run(thread_id):
+                        self.events.append(run, ev)
                 except Exception as e:  # noqa: BLE001
                     self.events.append(run, {"event": "error", "data": {"message": str(e)}})
             finally:

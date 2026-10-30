@@ -32,6 +32,21 @@ def flaky_runner(tmp_path, fail) -> ResearchRunner:
     return ResearchRunner(planner=p, data_dir=tmp_path / "data")
 
 
+def gated_runner(tmp_path, when) -> tuple[ResearchRunner, threading.Event]:
+    """模型在 when(messages) 为真的调用上停在闸门上，模拟一轮跑到一半。10 秒兜底；和 flaky_runner 一样在建运行器之前装上。"""
+    gate = threading.Event()
+
+    class Gated(FakeToolModel):
+        def _message(self, messages: list[BaseMessage]):
+            if when(messages):
+                gate.wait(10)
+            return super()._message(messages)
+
+    p = FakeResearchPlanner()
+    p._model = Gated()
+    return ResearchRunner(planner=p, data_dir=tmp_path / "data"), gate
+
+
 def after_tool(name: str):
     return lambda messages: isinstance(messages[-1], ToolMessage) and messages[-1].name == name
 

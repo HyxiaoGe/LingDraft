@@ -16,7 +16,7 @@ from app.api import main as api_main
 from app.api import runner as runner_mod
 from app.api.research_runner import ResearchRunner
 from app.api.runner import LocalEventLog, LocalRunRegistry
-from tests.research_helpers import SIMPLE, after_tool, events, flaky_runner, hold, last, new, run_async, say, state, wait_until
+from tests.research_helpers import SIMPLE, after_tool, events, flaky_runner, gated_runner, hold, last, new, run_async, say, state, wait_until
 
 
 @pytest.fixture
@@ -130,10 +130,11 @@ def test_failed_submit_gives_back_slots(tmp_path):
     assert ev[-2][2]["status"] == "idle"
 
 
-def test_nothing_else_while_running(client, rr):
+def test_nothing_else_while_running(tmp_path):
     """跑着的时候不能接着说、重新生成、重试；跑完照常。"""
+    rr, gate = gated_runner(tmp_path, after_tool("read_page"))  # 停在写正文之前
+    client = _client(rr)
     tid = new(client, "直接答：先说一句")["thread_id"]
-    gate = hold(rr.planner, "suggest")
     first: dict = {}
     t = threading.Thread(target=lambda: first.setdefault("resp", say(client, tid, SIMPLE)))
     t.start()
@@ -221,9 +222,10 @@ def test_reconnect_reads_only_what_was_missed(rr):
     run_async(go())
 
 
-def test_refresh_mid_run_replays_progress_so_far(rr):
+def test_refresh_mid_run_replays_progress_so_far(tmp_path):
+    rr, gate = gated_runner(tmp_path, after_tool("read_page"))  # 停在写正文之前：搜索、读页都发过了
+
     async def go():
-        gate = hold(rr.planner, "suggest")  # 停在这一轮收尾：搜索、读页、正文都发过了
         await rr.start("evt00002", SIMPLE).aclose()
         try:
             assert wait_until(lambda: any(e["event"] == "node" and e["data"]["node"] == "model" for e in _logged(rr, "evt00002"))
@@ -351,27 +353,69 @@ def test_tool_results_carry_retrieval_time(client, rr):
 # ---- 停止和重新生成 ----
 
 
-def test_stop_at_the_very_end_keeps_the_finished_answer(client, rr):
-    """正文已经写完、在起推荐问题时点停止：接口马上返回；没有下一步可停，这一轮照常结束；之后可以接着说。"""
+def _ended(http: TestClient, tid: str, n: int) -> bool:
+    v = state(http, tid)
+    return v["status"] == "idle" and len(v["turns"]) == n and bool(v["turns"][-1]["record"])
+
+
+def test_turn_ends_before_suggestions(client, rr):
+    """正文写完这一轮就结束：推荐问题还在起的时候线程已经空闲，没有可停的，能改名；页面先拿到这一轮的最终状态，
+    推荐问题起好了写进这一轮的记录，再发一次状态。"""
     tid = new(client, "直接答：先说一句")["thread_id"]
     gate = hold(rr.planner, "suggest")
     first: dict = {}
     t = threading.Thread(target=lambda: first.setdefault("resp", say(client, tid, SIMPLE)))
     t.start()
     try:
-        assert wait_until(lambda: state(client, tid)["status"] == "running")
-        assert _stop(client, tid).json() == {"ok": True}
-        assert state(client, tid)["stopping"] is True
+        assert wait_until(lambda: _ended(client, tid, 2))
+        rec = state(client, tid)["turns"][1]["record"]
+        assert rec["outcome"] == "ok" and rec["ended_at"] and rec["suggestions"] == []
+        assert _stop(client, tid).status_code == 409
+        assert client.patch(f"/api/research/threads/{tid}", json={"title": "改过"}).status_code == 200
     finally:
         gate.set()
         t.join(30)
     ev = events(first["resp"])
-    assert not any(e == "error" for e, _ in ev)
-    end = last(ev, "state")
-    assert end["status"] == "idle" and end["stopping"] is False and end["turns"][1]["items"][-1]["type"] == "text"
-    assert end["turns"][1]["record"]["outcome"] == "ok"
-    assert _stop(client, tid).status_code == 409  # 没在跑
-    assert say(client, tid, "直接答：好").status_code == 200
+    assert [e for e, _ in ev][-3:] == ["state", "state", "end"] and not any(e == "error" for e, _ in ev)
+    done, more = [d for e, d in ev if e == "state"]
+    assert done["status"] == "idle" and done["turns"][1]["record"]["suggestions"] == []
+    assert len(more["turns"][1]["record"]["suggestions"]) == 3 and more["title"] == "改过"  # 改名和写推荐问题都在
+    assert state(client, tid)["turns"][1]["record"]["suggestions"] == more["turns"][1]["record"]["suggestions"]
+
+
+def test_saying_more_drops_pending_suggestions(client, rr):
+    """推荐问题还没起好时用户又说了话：新的一轮马上开始，不等它；上一轮的推荐问题不要了，起好了也不写。"""
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    gate = hold(rr.planner, "suggest")
+    resp: dict = {}
+    talk = [threading.Thread(target=lambda k=k, text=text: resp.setdefault(k, say(client, tid, text))) for k, text in ((1, SIMPLE), (2, "直接答：好"))]
+    talk[0].start()
+    try:
+        assert wait_until(lambda: _ended(client, tid, 2))
+        talk[1].start()
+        assert wait_until(lambda: _ended(client, tid, 3))  # 上一轮的推荐问题还卡在闸门上
+    finally:
+        gate.set()
+        for t in talk:
+            t.join(30)
+    assert resp[2].status_code == 200 and [e for e, _ in events(resp[1])].count("state") == 1
+    end = state(client, tid)
+    assert end["turns"][1]["record"]["suggestions"] == [] and len(end["turns"][2]["record"]["suggestions"]) == 3
+
+
+def test_delete_drops_pending_suggestions(client, rr):
+    """推荐问题还没起好时删掉对话：起好了也不写，对话不会被写回来。"""
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    gate = hold(rr.planner, "suggest")
+    t = threading.Thread(target=lambda: say(client, tid, SIMPLE))
+    t.start()
+    try:
+        assert wait_until(lambda: _ended(client, tid, 2))
+        assert client.delete(f"/api/research/threads/{tid}").json() == {"ok": True}
+    finally:
+        gate.set()
+        t.join(30)
+    assert client.get(f"/api/research/threads/{tid}/state").status_code == 404
 
 
 def test_stop_before_the_model_answers(client, rr):

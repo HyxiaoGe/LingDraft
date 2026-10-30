@@ -59,6 +59,7 @@ class Chat:
                     self.r.stop(self.tid)
         finally:
             self.r.runs.release(key)
+        self.events += list(self.r._after_run(self.tid))  # 这一轮结束之后起推荐问题
         return self.view()
 
     def view(self) -> dict:

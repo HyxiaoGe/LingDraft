@@ -1,8 +1,8 @@
 """对话 agent：一条线程就是一个 create_agent 的对话，检查点挂在 agent 上，没有外层的图。
 
 用户每说一句话：先写进消息（update_state，as_node=START），再接着跑（stream(None)），直到模型给出不带工具调用的回复。
-- TurnMiddleware：还没有标题时按第一句话起标题；每轮开始、结束时记下这一轮；模型每次调用前换上系统提示词（日期按当天）；
-  一轮结束时要推荐问题。
+- TurnMiddleware：还没有标题时按第一句话起标题；每轮开始、结束时记下这一轮；模型每次调用前换上系统提示词（日期按当天）。
+  推荐问题不在这一轮里起：正文写完这一轮就结束，运行器在结束之后再起（见 api.research_runner）。
 - ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度。
 - InvalidToolCallRetryMiddleware：模型返回无法解析的工具调用时，让它带着解析错误重发，最多几次。
 - ContentGuard：模型服务的内容审核拦下请求时，去掉没通过的搜索、读页结果接着跑；去不掉就停下这一轮，之后不再带进上下文。
@@ -81,13 +81,7 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
             out["messages"] = fixes
         reply = history.final_text(turn_msgs)
         blocked = any(history.blocked_reason(m) for m in turn_msgs)
-        suggestions: list[str] = []
-        if reply:
-            try:
-                suggestions = self.planner.suggest(history.text_of(msgs[start]), reply)[:3]
-            except Exception:  # noqa: BLE001  推荐问题失败就不给
-                suggestions = []
-        turns[-1] = turns[-1].model_copy(update={"ended_at": now(), "suggestions": suggestions, "usage": history.usage_of(turn_msgs),
+        turns[-1] = turns[-1].model_copy(update={"ended_at": now(), "suggestions": [], "usage": history.usage_of(turn_msgs),
                                                  "outcome": "blocked" if blocked else "ok" if reply else "no_reply"})
         out["turns"] = turns
         return out

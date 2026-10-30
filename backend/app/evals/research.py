@@ -178,6 +178,7 @@ def play(runner, tid: str, turn: CaseTurn, rec: Recorder) -> dict:
     searches0, reads0 = rec.mark()
     runner.accept(tid, turn.say)
     events = list(runner._graph_events(tid, None))
+    list(runner._after_run(tid))  # 这一轮结束之后起推荐问题
     view = runner.state_view(tid)
     msgs = runner.graph.get_state(runner._cfg(tid)).values["messages"]
     t = view["turns"][-1]
