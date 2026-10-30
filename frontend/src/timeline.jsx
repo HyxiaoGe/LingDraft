@@ -221,7 +221,7 @@ function Process({ items, st, nums, rec, running, failed, now }) {
       {shown && (
         <div className="ws-proc-body">
           {items.map((it) => (it.type === "step" ? <ToolRow key={`step:${it.id}`} s={it} />
-            : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} thinking={running && it.live && !it.ms} />
+            : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} running={running} thinking={running && it.live && !it.ms} />
               : <ProcText key={`text:${it.id}`} it={it} cite={(sid) => <Mark n={nums[sid]} s={st?.sources?.[sid]} />} />))}
         </div>
       )}
@@ -306,11 +306,11 @@ function useTyped(key, text, live, unit) {
   return text.slice(0, n);
 }
 
-// 思考：正在想的时候展开、逐字出现；想完折叠成一行，点开看原文
-function Thinking({ it, thinking }) {
+// 思考：逐字出现。这一轮还在跑时展开，想完的那段也不收（收起来页面会往回缩、跳一下）；这一轮结束后折叠成一行，点开看原文
+function Thinking({ it, running, thinking }) {
   const text = useTyped(`thinking:${it.id}`, it.text, it.live);
-  const [open, setOpen] = useState(null); // null：按默认（正在想就展开）
-  const shown = open ?? thinking;
+  const [open, setOpen] = useState(null); // null：按默认（这一轮在跑就展开）
+  const shown = open ?? running;
   const box = useRef(null);
   useLayoutEffect(() => { // 正在想的时候框里跟着最新的字
     if (thinking && box.current) box.current.scrollTop = box.current.scrollHeight;
