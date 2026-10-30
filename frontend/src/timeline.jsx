@@ -1,10 +1,10 @@
 // 对话。一轮是用户的一句话加上模型这一轮做的事：先是过程（思考、搜索、读页按发生的先后），然后是正文和这条回答用到的来源；
 // 最后一轮下面是推荐问题。过程正在跑时展开，这一轮结束后收成一行“已完成 25 秒”，点开看每一步。
-// 存下来的对话为准，正在跑的这一轮叠上实时片段。
+// 每句话和每条回答都能复制；最后一句在空闲时能改，改完按新的话重新回答。存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { IconArrowUp, IconChevron, IconLoop, IconPage, IconRetry, IconSearch, IconStop, IconWarn, Spinner } from "./icons.jsx";
+import { IconArrowUp, IconCheck, IconChevron, IconCopy, IconEdit, IconLoop, IconPage, IconRetry, IconSearch, IconStop, IconWarn, Spinner } from "./icons.jsx";
 import { Markdown } from "./markdown.jsx";
-import { ACTIVE, QUEUED, citeNumbers, cutPartialCite, domain, elapsed, mergeItems } from "./research.js";
+import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn } from "./research.js";
 import { AnswerSources, Mark } from "./sources.jsx";
 
 const EXAMPLES = [
@@ -82,14 +82,15 @@ function Turns({ st, live, busy, stopping, now, act }) {
 
 function Turn({ t, st, live, running, stopping, last, now, act }) {
   const items = mergeItems(t.items, live);
-  const { process, answer } = split(items);
+  const { process, answer } = splitTurn(items);
   const nums = citeNumbers(items.filter((i) => i.type === "text").map((i) => i.text), st?.sources);
   const rec = t.record;
   const idle = !running && st?.status === "idle";
   const failed = last && !running && st?.status === "failed";
+  const replied = answer.some((i) => i.type === "text");
   return (
     <>
-      {t.user && <div className="ws-user"><div className="ws-bubble">{t.user}</div></div>}
+      {t.user && <UserMsg text={live?.edit ?? t.user} editable={last && idle} onEdit={act.edit} />}
       <div className="ws-ai">
         {(running || rec) && <Process items={process} st={st} nums={nums} rec={rec} running={running} failed={failed} now={now} />}
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
@@ -97,25 +98,93 @@ function Turn({ t, st, live, running, stopping, last, now, act }) {
         {!running && <AnswerSources nums={nums} sources={st?.sources} />}
         {!running && rec?.ended_at && rec.outcome === "no_reply" && <p className="ws-muted">这一轮没有给出文字回复。</p>}
         {failed && <Failed st={st} act={act} />}
-        {last && idle && <div className="ws-ai-foot"><button className="ws-btn ghost sm" onClick={act.regenerate}><IconLoop size={13} />重新回答</button></div>}
+        {!running && (replied || (last && idle)) && (
+          <div className={"ws-ai-foot" + (last ? "" : " quiet")}>
+            {replied && <CopyButton text={() => answerText(items, st?.sources)} />}
+            {last && idle && <button className="ws-btn ghost sm" onClick={act.regenerate}><IconLoop size={13} />重新回答</button>}
+          </div>
+        )}
       </div>
       {last && idle && rec?.suggestions?.length > 0 && <Suggestions items={rec.suggestions} onPick={act.say} />}
     </>
   );
 }
 
-// 按位置分开过程和正文：最后一次搜索或读页之前的都是过程（包括中途说的话），之后的思考也算过程，之后的文字是正文。
-// 正在跑时，正文后面又来了一步，那段文字就挪进过程（它确实是中途说的话）。被内容审核拦下的提示总是放在正文里
-function split(items) {
-  const lastStep = items.findLastIndex((i) => i.type === "step");
-  const process = [];
-  const answer = [];
-  items.forEach((it, k) => {
-    if (it.type === "blocked") answer.push(it);
-    else if (k <= lastStep || it.type === "thinking") process.push(it);
-    else answer.push(it);
-  });
-  return { process, answer };
+// 用户说的话：悬停时下面出现“复制”；最后一句在空闲时还有“编辑”
+function UserMsg({ text, editable, onEdit }) {
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { if (!editable) setEditing(false); }, [editable]); // 开着编辑框时这一轮又跑起来了（点了重新回答、推荐问题），编辑框就收起
+  if (editing && editable) return <EditBox text={text} onCancel={() => setEditing(false)} onSend={(t) => { setEditing(false); onEdit(t); }} />;
+  return (
+    <div className="ws-user">
+      <div className="ws-bubble">{text}</div>
+      <div className="ws-user-foot">
+        <CopyButton text={() => text} />
+        {editable && <button className="ws-btn ghost sm" onClick={() => setEditing(true)}><IconEdit size={13} />编辑</button>}
+      </div>
+    </div>
+  );
+}
+
+// 改最后一句：回车发送，Shift+回车换行，Esc 取消；没改动不能发
+function EditBox({ text, onCancel, onSend }) {
+  const [v, setV] = useState(text);
+  const ref = useRef(null);
+  useAutoHeight(ref, v);
+  useEffect(() => {
+    const el = ref.current;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, []);
+  const changed = v.trim() && v.trim() !== text.trim();
+  const send = () => changed && onSend(v.trim());
+  return (
+    <div className="ws-edit">
+      <textarea ref={ref} rows={1} value={v} aria-label="改这句话" onChange={(e) => setV(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
+          else if (e.key === "Escape") onCancel();
+        }} />
+      <div className="ws-edit-bar">
+        <span className="hint">发送后按新的话重新回答，这一轮原来的回答会被替换</span>
+        <button className="ws-btn ghost sm" onClick={onCancel}>取消</button>
+        <button className="ws-btn primary sm" disabled={!changed} onClick={send}>发送</button>
+      </div>
+    </div>
+  );
+}
+
+// 复制：点了以后显示“已复制”一会儿。text 是函数，点的时候才算要复制的文字
+function CopyButton({ text }) {
+  const [done, setDone] = useState(null); // null / "ok" / "fail"
+  const timer = useRef(null);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const copy = async () => {
+    try {
+      await copyText(text());
+      setDone("ok");
+    } catch {
+      setDone("fail");
+    }
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setDone(null), 1500);
+  };
+  return (
+    <button className="ws-btn ghost sm" onClick={copy} aria-live="polite">
+      {done === "ok" ? <IconCheck size={13} /> : <IconCopy size={13} />}
+      {done === "ok" ? "已复制" : done === "fail" ? "没复制成" : "复制"}
+    </button>
+  );
+}
+
+// 输入框跟着字数长高，最高 160px，再多就在框里滚
+function useAutoHeight(ref, value) {
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 160) + "px";
+  }, [ref, value]);
 }
 
 // 这一轮的过程：正在跑时展开，结束后收成一行（已完成 / 已停止 / 已中断 / 没跑完，加上用时），点开看每一步
@@ -258,12 +327,7 @@ function Composer({ mode, stopping, onSend, onStop }) {
   const ref = useRef(null);
   const enabled = mode === "new" || mode === "idle";
   const canStop = mode === "busy" || mode === "queued";
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = Math.min(el.scrollHeight, 160) + "px";
-  }, [text]);
+  useAutoHeight(ref, text);
   const send = () => {
     const t = text.trim();
     if (!t || !enabled) return;

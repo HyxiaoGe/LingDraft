@@ -11,6 +11,7 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from app.api.research_runner import NothingToRegenerate, NotIdle, ResearchRunner, StreamBuffer
+from app.api.runner import RunConflict
 from app.api.runner import LocalRunRegistry
 from app.graph.research import history
 from app.graph.research.agent import system_prompt
@@ -330,6 +331,52 @@ def test_regenerate_refused_when_failed_or_empty():
         c.r.regenerate_input(c.tid)
     with pytest.raises(NotIdle):
         c.r.accept(c.tid, "接着说")
+
+
+# ---- 改最后一句、改标题、删除 ----
+
+
+def test_edit_replaces_the_last_question_and_answers_again(chat):
+    chat.say("直接答：先问一句")
+    first = chat.say("查一下局部修改")
+    chat.r.regenerate_input(chat.tid, "  直接答：换个问法 ")
+    v = chat.run()
+    assert len(v["turns"]) == 2 and v["turns"][0] == first["turns"][0]
+    turn = v["turns"][1]
+    assert turn["id"] == first["turns"][1]["id"] and turn["user"] == "直接答：换个问法" and _kinds(turn) == _kinds(first["turns"][0])
+    assert turn["record"]["outcome"] == "ok"
+    humans = [history.text_of(m) for m in chat.values()["messages"] if isinstance(m, HumanMessage)]
+    assert humans == ["直接答：先问一句", "直接答：换个问法"]  # 旧的那句换掉了，没有叠在后面
+    assert v["title"] == first["title"] and [n for n, _ in chat.planner.calls].count("title") == 1
+
+
+def test_rename_and_delete(tmp_path):
+    c = Chat(saver=open_sqlite_checkpointer(tmp_path / "r.sqlite"))
+    c.say("直接答：先问一句")
+    c.r.rename(c.tid, "新标题")
+    assert c.view()["title"] == "新标题" and c.view()["status"] == "idle"
+    assert c.say("直接答：接着说")["title"] == "新标题"  # 改过的标题不会被重起
+    key = c.r._run_key(c.tid)
+    c.r.runs.admit(key)  # 像正在回答
+    with pytest.raises(RunConflict):
+        c.r.rename(c.tid, "又一个标题")
+    with pytest.raises(RunConflict):
+        c.r.delete(c.tid)
+    c.r.runs.release(key)
+    c.r.delete(c.tid)
+    assert c.view() == {"thread_id": c.tid, "exists": False} and c.r.list_threads() == []
+    assert c.r.runs.get(key) is None
+
+
+def test_rename_refused_when_failed():
+    c = Chat(planner=_with_gateway(FakeResearchPlanner(), lambda req: httpx.Response(401, json={"error": "unauthorized"})))
+    with pytest.raises(GatewayAuthError):
+        c.say("比较两款笔记软件")
+    with pytest.raises(NotIdle):
+        c.r.rename(c.tid, "新标题")
+    assert c.view()["status"] == "failed"  # 出错的那一步还在，可以重试
+    c.r.delete(c.tid)
+    assert not c.view()["exists"]
 
 
 # ---- 模型服务：内容审核、不可用 ----

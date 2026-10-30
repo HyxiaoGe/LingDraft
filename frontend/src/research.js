@@ -1,4 +1,4 @@
-// 对话页几处共用的小工具：状态文字、时间、来源的显示、实时片段和存下来的对话怎么合在一起。
+// 对话页几处共用的小工具：状态文字、时间、来源的显示、实时片段和存下来的对话怎么合在一起、复制和导出的文字。
 import { useEffect, useState } from "react";
 
 export const ACTIVE = new Set(["queued", "running"]); // 服务器上还有执行没结束
@@ -49,6 +49,66 @@ export function citeNumbers(texts, sources) {
   const out = {};
   for (const t of texts) for (const m of t.matchAll(CITE)) if (sources?.[m[1]]) out[m[1]] ??= String(Object.keys(out).length + 1);
   return out;
+}
+
+// 一轮的条目分成过程和正文：最后一次搜索或读页之前的都是过程（包括中途说的话），之后的思考也算过程，之后的文字是正文。
+// 正在跑时，正文后面又来了一步，那段文字就挪进过程（它确实是中途说的话）。被内容审核拦下的提示总是放在正文里
+export function splitTurn(items) {
+  const lastStep = items.findLastIndex((i) => i.type === "step");
+  const process = [];
+  const answer = [];
+  items.forEach((it, k) => {
+    if (it.type === "blocked") answer.push(it);
+    else if (k <= lastStep || it.type === "thinking") process.push(it);
+    else answer.push(it);
+  });
+  return { process, answer };
+}
+
+// 一条回答复制、导出时的文字：只要正文，引用换成页面上的编号，后面列出用到的来源（导出时写成 Markdown 链接）
+export function answerText(items, sources, { links = false } = {}) {
+  const nums = citeNumbers(items.filter((i) => i.type === "text").map((i) => i.text), sources);
+  const body = splitTurn(items).answer.filter((i) => i.type === "text")
+    .map((i) => cutPartialCite(i.text).replace(CITE, (_, sid) => (nums[sid] ? `[${nums[sid]}]` : ""))).join("\n\n").trim();
+  const used = Object.entries(nums).map(([sid, n]) => {
+    const s = sources[sid];
+    return links ? `${n}. [${sourceName(s).replace(/[[\]]/g, "")}](${s.url})` : `[${n}] ${sourceName(s)} ${s.url}`;
+  });
+  return used.length ? `${body}\n\n来源：\n${links ? "\n" : ""}${used.join("\n")}` : body;
+}
+
+// 整段对话导出成 Markdown：每轮是用户的话（引用块）和回答，不含思考和搜索步骤
+export function threadMarkdown(st) {
+  const turns = st.turns.map((t) => {
+    const asked = t.user.split("\n").map((l) => `> ${l}`).join("\n");
+    let reply = answerText(t.items, st.sources, { links: true }) || "（这一轮没有回答）";
+    if (t.record?.outcome === "stopped") reply += "\n\n（已停止）";
+    if (t.items.some((i) => i.type === "blocked")) reply += "\n\n（内容审核没通过，这一轮停在这里）";
+    return `${asked}\n\n${reply}`;
+  });
+  return `# ${st.title}\n\n${turns.join("\n\n---\n\n")}\n`;
+}
+
+// 复制到剪贴板。用 http 打开局域网地址时浏览器不给剪贴板接口，退回老办法
+export async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch { /* 下面的老办法 */ }
+  const ta = Object.assign(document.createElement("textarea"), { value: text });
+  ta.style.cssText = "position:fixed;top:0;opacity:0";
+  document.body.append(ta);
+  ta.select();
+  const ok = document.execCommand("copy");
+  ta.remove();
+  if (!ok) throw new Error("浏览器不让复制");
+}
+
+// 存成文件下载
+export function saveFile(name, text) {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/markdown;charset=utf-8" }));
+  Object.assign(document.createElement("a"), { href: url, download: name }).click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export const itemKey = (i) => `${i.type}:${i.id}`;

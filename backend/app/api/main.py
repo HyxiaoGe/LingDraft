@@ -160,6 +160,14 @@ class ResearchMessageBody(BaseModel):
     text: str
 
 
+class ResearchTitleBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str
+
+
+TITLE_MAX = 40
+
+
 def _text(body: ResearchMessageBody) -> str:
     if not body.text.strip():
         raise HTTPException(400, "说点什么再发送")
@@ -208,6 +216,45 @@ async def research_regenerate(thread_id: str):
         return _sse(r.regenerate(thread_id))
     except (RunConflict, NotIdle, NothingToRegenerate) as e:
         raise HTTPException(409, str(e)) from None
+
+
+@app.post("/api/research/threads/{thread_id}/edit")
+async def research_edit(thread_id: str, body: ResearchMessageBody):
+    """改了最后那句话，按新的话重新回答。运行中、上一轮没跑完、还没有说过话时返回 409。"""
+    r = research()
+    _view(r, thread_id)
+    text = _text(body)
+    try:
+        return _sse(r.regenerate(thread_id, text))
+    except (RunConflict, NotIdle, NothingToRegenerate) as e:
+        raise HTTPException(409, str(e)) from None
+
+
+@app.patch("/api/research/threads/{thread_id}")
+async def research_rename(thread_id: str, body: ResearchTitleBody):
+    """改标题，返回列表里的这一行。运行中、上一轮没跑完时返回 409。"""
+    r = research()
+    _view(r, thread_id)
+    title = " ".join(body.title.split())
+    if not title or len(title) > TITLE_MAX:
+        raise HTTPException(400, "标题不能为空" if not title else f"标题最多 {TITLE_MAX} 个字")
+    try:
+        r.rename(thread_id, title)
+    except (RunConflict, NotIdle) as e:
+        raise HTTPException(409, str(e)) from None
+    return r.summary_view(thread_id)
+
+
+@app.delete("/api/research/threads/{thread_id}")
+async def research_delete(thread_id: str):
+    """删掉这段对话，找不回来。运行中返回 409。"""
+    r = research()
+    _view(r, thread_id)
+    try:
+        r.delete(thread_id)
+    except RunConflict as e:
+        raise HTTPException(409, str(e)) from None
+    return {"ok": True}
 
 
 @app.post("/api/research/threads/{thread_id}/retry")

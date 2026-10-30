@@ -121,6 +121,24 @@ export async function regenerateResearchThread(threadId, onEvent, signal) {
   return sse(`/api/research/threads/${threadId}/regenerate`, { method: "POST" }, onEvent, signal);
 }
 
+// 改了最后那句话，按新的话重新回答。运行中、上一轮没跑完时后端返回 409
+export async function editResearchThread(threadId, text, onEvent, signal) {
+  return sse(`/api/research/threads/${threadId}/edit`, postJson({ text }), onEvent, signal);
+}
+
+// 改标题，返回列表里的这一行。运行中、上一轮没跑完时返回 409
+export async function renameResearchThread(threadId, title) {
+  const resp = await fetch(`/api/research/threads/${threadId}`, { ...postJson({ title }), method: "PATCH" });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 删掉这段对话，找不回来。运行中返回 409
+export async function deleteResearchThread(threadId) {
+  const resp = await fetch(`/api/research/threads/${threadId}`, { method: "DELETE" });
+  if (!resp.ok) throw await httpError(resp);
+}
+
 // 失败的线程从断开的那一步接着跑；没失败的返回 409
 export async function retryResearchThread(threadId, onEvent, signal) {
   return sse(`/api/research/threads/${threadId}/retry`, { method: "POST" }, onEvent, signal);

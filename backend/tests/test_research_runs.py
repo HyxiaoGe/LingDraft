@@ -407,6 +407,41 @@ def test_regenerate_over_http(client):
     assert _regenerate(client, "nope0000").status_code == 404
 
 
+def test_edit_rename_delete_over_http(client):
+    st = new(client, SIMPLE)
+    tid = st["thread_id"]
+    end = last(events(client.post(f"/api/research/threads/{tid}/edit", json={"text": "直接答：换个问法"})), "state")
+    assert len(end["turns"]) == 1 and end["turns"][0]["id"] == st["turns"][0]["id"] and end["turns"][0]["user"] == "直接答：换个问法"
+    assert client.post(f"/api/research/threads/{tid}/edit", json={"text": "  "}).status_code == 400
+    r = client.patch(f"/api/research/threads/{tid}", json={"title": "  改过的\n标题 "})
+    assert r.status_code == 200 and r.json()["title"] == "改过的 标题" and state(client, tid)["title"] == "改过的 标题"
+    assert client.patch(f"/api/research/threads/{tid}", json={"title": " "}).status_code == 400
+    assert client.patch(f"/api/research/threads/{tid}", json={"title": "长" * 41}).status_code == 400
+    assert client.delete(f"/api/research/threads/{tid}").json() == {"ok": True}
+    assert client.get(f"/api/research/threads/{tid}/state").status_code == 404
+    assert tid not in [t["thread_id"] for t in client.get("/api/research/threads").json()["threads"]]
+    for r in (client.delete(f"/api/research/threads/{tid}"), client.patch(f"/api/research/threads/{tid}", json={"title": "x"}),
+              client.post(f"/api/research/threads/{tid}/edit", json={"text": "x"})):
+        assert r.status_code == 404
+
+
+def test_rename_and_delete_refused_while_running(rr):
+    http = _client(rr)
+    gate = hold(rr.planner, "title")
+    out: dict = {}
+    t = threading.Thread(target=lambda: out.update(st=new(http, SIMPLE)))
+    t.start()
+    assert wait_until(lambda: http.get("/api/research/threads").json()["threads"])
+    tid = http.get("/api/research/threads").json()["threads"][0]["thread_id"]
+    try:
+        assert http.patch(f"/api/research/threads/{tid}", json={"title": "x"}).status_code == 409
+        assert http.delete(f"/api/research/threads/{tid}").status_code == 409
+    finally:
+        gate.set()
+        t.join(10)
+    assert out["st"]["status"] == "idle" and out["st"]["title"] != "x"
+
+
 def test_regenerate_rejected_when_failed(tmp_path):
     http = _client(flaky_runner(tmp_path, lambda messages: True))
     st = last(events(http.post("/api/research/threads", json={"text": SIMPLE})), "state")

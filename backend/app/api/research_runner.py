@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import ast
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import START
 
 from app import config
-from app.api.runner import BaseRunner, Executor, jsonable
+from app.api.runner import BaseRunner, Executor, RunConflict, jsonable
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, stop_turn
 from app.graph.research.graph import build_graph, open_sqlite_checkpointer, thread_ids
@@ -194,11 +195,12 @@ class ResearchRunner(BaseRunner):
             raise NothingToRetry("这个线程没有失败，不需要重试")
         return None
 
-    def regenerate(self, thread_id: str):
-        return self._submit(thread_id, lambda: self.regenerate_input(thread_id))
+    def regenerate(self, thread_id: str, text: str | None = None):
+        return self._submit(thread_id, lambda: self.regenerate_input(thread_id, text))
 
-    def regenerate_input(self, thread_id: str) -> None:
-        """最后一轮重新回答：去掉用户最后那句话之后的消息和这一轮的记录，从那句话接着跑。"""
+    def regenerate_input(self, thread_id: str, text: str | None = None) -> None:
+        """最后一轮重新回答：去掉用户最后那句话之后的消息和这一轮的记录，从那句话接着跑。
+        带 text 是用户改了最后那句话：先换成 text（消息 id 不变，还是同一轮），再重新回答。标题不重起。"""
         snap = self.graph.get_state(self._cfg(thread_id))
         v = snap.values
         if v and snap.next:
@@ -209,9 +211,33 @@ class ResearchRunner(BaseRunner):
             raise NothingToRegenerate("还没有回答，不需要重新生成")
         human = msgs[start]
         turns = [t for t in v.get("turns", []) if t.id != human.id]
-        self.graph.update_state(self._cfg(thread_id), {"messages": [RemoveMessage(id=m.id) for m in msgs[start + 1:]], "turns": turns},
+        edited = [HumanMessage(id=human.id, content=text.strip())] if text is not None else []
+        self.graph.update_state(self._cfg(thread_id), {"messages": edited + [RemoveMessage(id=m.id) for m in msgs[start + 1:]], "turns": turns},
                                 as_node=START)
         return None
+
+    @contextmanager
+    def _hold(self, thread_id: str) -> Iterator[None]:
+        """占着这个线程的运行位做一件事（改标题、删除）：做的时候这个线程跑不起来，在跑的也不让做。"""
+        key = self._run_key(thread_id)
+        if not self.runs.admit(key):
+            raise RunConflict("正在回答，答完或停下后才能改名、删除")
+        try:
+            yield
+        finally:
+            self.runs.release(key)
+
+    def rename(self, thread_id: str, title: str) -> None:
+        """改标题。没跑完的线程不能改：写一次状态，出错的那一步就丢了，重试接不上。"""
+        with self._hold(thread_id):
+            if self.graph.get_state(self._cfg(thread_id)).next:
+                raise NotIdle("上一轮没跑完，先重试")
+            self.graph.update_state(self._cfg(thread_id), {"title": title}, as_node=TURN_END)
+
+    def delete(self, thread_id: str) -> None:
+        """删掉整段对话（这个线程的所有检查点），找不回来。"""
+        with self._hold(thread_id):
+            self.graph.checkpointer.delete_thread(thread_id)
 
     def stop(self, thread_id: str) -> bool:
         """让这个线程正在跑（或排队）的这一轮停下；没有在跑的返回 False。真正停下由执行自己做（见 _graph_events）。"""
