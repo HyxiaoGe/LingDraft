@@ -213,18 +213,23 @@ function Report({ st, canEdit, act }) {
         </div>,
       );
     } else if (b.type === "sentence") {
+      const mark = (m) => {
+        const s = byLabel[m];
+        return (
+          <button key={m} className={"ws-mark" + (s?.status === "excluded" ? " excluded" : "") + (pop?.sid === s?.id ? " on" : "")}
+            aria-label={`来源 ${m}`} onMouseEnter={(e) => s && showPop(s.id, e.currentTarget)} onMouseLeave={hidePop}
+            onFocus={(e) => s && showPop(s.id, e.currentTarget)} onBlur={hidePop}
+            onClick={(e) => s && (pop?.sid === s.id ? setPop(null) : showPop(s.id, e.currentTarget))}>{m}</button>
+        );
+      };
+      // 角标多时可以逐个换行，但第一个和句末那个字粘在一起，不会单独掉到下一行
+      const chars = Array.from(b.text);
+      const last = b.marks.length ? chars.pop() || "" : "";
       out.push(
         <p key={i} className={"ws-sent" + (b.inference ? " inf" : "")} data-claim={b.claim_id || undefined} data-section={section || undefined}>
-          {b.text}
-          {b.marks.map((m) => {
-            const s = byLabel[m];
-            return (
-              <button key={m} className={"ws-mark" + (s?.status === "excluded" ? " excluded" : "") + (pop?.sid === s?.id ? " on" : "")}
-                aria-label={`来源 ${m}`} onMouseEnter={(e) => s && showPop(s.id, e.currentTarget)} onMouseLeave={hidePop}
-                onFocus={(e) => s && showPop(s.id, e.currentTarget)} onBlur={hidePop}
-                onClick={(e) => s && (pop?.sid === s.id ? setPop(null) : showPop(s.id, e.currentTarget))}>{m}</button>
-            );
-          })}
+          {chars.join("")}
+          {b.marks.length > 0 && <span className="ws-nobr">{last}{mark(b.marks[0])}</span>}
+          {b.marks.slice(1).map(mark)}
         </p>,
       );
     }
@@ -356,7 +361,7 @@ function ClaimList({ st, canEdit, act }) {
                 <div className="ws-claim-top">
                   <span className={"ws-badge " + c.kind}>{CKIND[c.kind]}</span>
                   {c.orphaned ? <span className="ws-badge excluded">失去来源</span> : <span className={"ws-badge " + c.status}>{CSTATUS[c.status]}</span>}
-                  <span className="ids">{c.source_ids.map(label).join(" ")}</span>
+                  <span className="ids">{c.source_ids.map((id) => <span key={id}>{label(id)}</span>)}</span>
                   {canEdit && !c.orphaned && editing !== c.id && <button className="ws-link" onClick={() => setEditing(c.id)}><IconEdit size={12} />改表述</button>}
                 </div>
                 {editing === c.id

@@ -242,7 +242,7 @@
 .ws-found-row a:hover .t { color: var(--accent); }
 .ws-found-row .t { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-found-row .d { display: block; font-size: 11.5px; color: var(--faint); }
-.ws-found-row .sid { font-size: 11px; color: var(--accent); flex: none; font-variant-numeric: tabular-nums; }
+.ws-found-row .sid { flex: none; }
 
 /* 报告：一页校样。正文宋体，一行不超过约 38 个字 */
 .ws-report-wrap { padding: 24px 24px 64px; max-width: 760px; margin: 0 auto; }
@@ -267,14 +267,23 @@
 /* 推断：紫色，左边页边上一道竖线，不只靠颜色区分 */
 .ws-sent.inf { color: var(--inf); }
 .ws-sent.inf::before { content: ""; position: absolute; left: -16px; top: .5em; bottom: .5em; width: 2px; border-radius: 1px; background: var(--inf-line); }
-.ws-mark { border: 0; background: none; padding: 0 2px; margin-left: 1px; font: 500 10.5px/1 var(--sans); vertical-align: super; color: var(--accent); border-radius: 3px; user-select: none; font-variant-numeric: tabular-nums; transition: background .12s; }
-.ws-mark:hover, .ws-mark.on { background: var(--accent-mark); }
-.ws-mark.excluded { color: var(--faint); text-decoration: line-through; }
+/* 引用角标：浅靛青小签，抬到字的上半截（用 top 抬，不撑高行距），悬停或打开来源卡时填满。
+   来源列表、来源页签、论断页签、来源卡上的编号用同一种签，一眼对得上 */
+.ws-nobr { white-space: nowrap; }
+.ws-mark { position: relative; top: -.4em; height: 16px; padding: 0 4px; margin-left: 2px; border: 0; border-radius: 4px; background: var(--accent-soft); color: var(--accent);
+  font: 600 10px/16px var(--sans); letter-spacing: .02em; font-variant-numeric: tabular-nums; user-select: none; transition: background .12s, color .12s; }
+.ws-nobr > .ws-mark { margin-left: 4px; }
+.ws-mark:hover, .ws-mark.on { background: var(--accent); color: #fff; }
+.ws-mark.excluded { background: var(--hover); color: var(--muted); text-decoration: line-through; }
+.ws-srcline .lb, .ws-src .lb, .ws-pop-top .lb, .ws-claim-top .ids > span, .ws-found-row .sid {
+  display: inline-block; min-width: 30px; height: 18px; padding: 0 5px; border-radius: 4px; text-align: center;
+  background: var(--accent-soft); color: var(--accent); font: 600 10.5px/18px var(--sans); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.ws-srcline.excluded .lb, .ws-src.excluded .lb, .ws-src.candidate .lb { background: var(--hover); color: var(--muted); }
 .ws-item { font-size: 14.5px; line-height: 1.85; color: var(--ink2); margin: 0 0 4px; padding-left: 16px; position: relative; }
 .ws-item::before { content: ""; position: absolute; left: 3px; top: .85em; width: 4px; height: 4px; border-radius: 50%; background: var(--faint); }
 /* 来源排成参考文献：编号悬在左边，标题宋体占一行，出处和日期在下一行 */
-.ws-srcline { display: grid; grid-template-columns: 34px minmax(0, 1fr); align-items: baseline; font-size: 13.5px; line-height: 1.65; margin: 0 0 10px; }
-.ws-srcline .lb { color: var(--accent); font: 500 11px/1.65 var(--sans); font-variant-numeric: tabular-nums; }
+.ws-srcline { display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: baseline; font-size: 13.5px; line-height: 1.65; margin: 0 0 10px; }
+.ws-srcline .lb { justify-self: start; }
 .ws-srcline a { color: var(--ink2) !important; overflow-wrap: anywhere; }
 .ws-srcline a:hover { color: var(--accent) !important; }
 .ws-srcline .meta { grid-column: 2; color: var(--faint); font: 11.5px/1.6 var(--sans); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
@@ -285,7 +294,7 @@
 .ws-pop, .ws-quote, .ws-quote-pill { position: fixed; z-index: 50; animation: ws-in .15s var(--ease); }
 .ws-pop { background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r-lg); box-shadow: var(--lift); padding: 13px 15px; font-size: 13px; line-height: 1.55; }
 .ws-pop-top { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
-.ws-pop-top .lb { font-weight: 600; color: var(--accent); font-size: 12px; margin-right: 2px; font-variant-numeric: tabular-nums; }
+.ws-pop-top .lb { background: var(--accent); color: #fff; margin-right: 2px; }
 .ws-pop-title { font: 600 14px/1.5 var(--serif); overflow-wrap: anywhere; }
 .ws-pop-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .ws-pop-excerpt { font: 12.5px/1.7 var(--serif); color: var(--ink2); border-left: 2px solid var(--line2); padding: 1px 0 1px 10px; margin-top: 9px; max-height: 110px; overflow: hidden; }
@@ -318,7 +327,7 @@
 .ws-claim.orphan { opacity: .6; }
 .ws-claim.orphan .ws-claim-text { text-decoration: line-through; }
 .ws-claim-top { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
-.ws-claim-top .ids { font-size: 11px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.ws-claim-top .ids { display: inline-flex; gap: 3px; margin-left: 8px; }
 .ws-claim-top .ws-link { margin-left: auto; }
 .ws-claim-text { font: 14.5px/1.8 var(--serif); }
 .ws-claim-edit textarea { width: 100%; border: 1px solid var(--accent); border-radius: var(--r-sm); padding: 6px 10px; font: 14.5px/1.8 var(--serif); resize: none; outline: none; box-shadow: 0 0 0 3px var(--accent-soft); overflow: hidden; }
@@ -327,14 +336,13 @@
 .ws-src-group > .ws-link + ul { margin-top: 8px; }
 .ws-src { display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-top: 1px solid var(--line); }
 .ws-src:first-child { border-top: 0; }
-.ws-src .lb { font-size: 11px; color: var(--accent); width: 30px; flex: none; font-variant-numeric: tabular-nums; }
+.ws-src .lb { flex: none; min-width: 34px; }
 .ws-src .body { flex: 1; min-width: 0; }
 .ws-src .t { display: block; font: 14px/1.55 var(--serif); color: var(--ink) !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-src .t:hover { color: var(--accent) !important; }
 .ws-src .meta { font-size: 11.5px; color: var(--faint); }
 .ws-src .meta .warn { color: var(--warn); }
 .ws-src.excluded .t { text-decoration: line-through; color: var(--faint) !important; }
-.ws-src.candidate .lb { color: var(--faint); }
 
 /* 窄屏：先收窄三栏，再把右栏放到下面 */
 @media (max-width: 1280px) {
