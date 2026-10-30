@@ -162,8 +162,10 @@ function processSteps({ st, live, running, now, act, it }) {
   const items = [];
   const qs = st.clarify || [];
   if (it?.type === "research.scope") {
-    items.push(<Step key="scope-ask" icon={IconAsk} tone="ask" title={`开始前有 ${qs.length} 处要先问清`} detail="不然调研方向可能会偏" />);
-    items.push(<ScopeCard key="scope-card" it={it} onSubmit={act.answerScope} />);
+    const n = (it.questions || []).length;
+    items.push(<Step key="scope-ask" icon={IconAsk} tone="ask" title={n ? `开始前有 ${n} 处要先问清` : "开始前要确认研究范围"}
+      detail={n ? "不然调研方向可能会偏" : "这条调研是早先发起的，那时开始前都要确认一次"} />);
+    items.push(n ? <ScopeCard key="scope-card" it={it} onSubmit={act.answerScope} /> : <ScopeStartCard key="scope-card" scope={st.scope} onStart={() => act.answerScope({})} />);
   } else if (qs.length && st.scope_confirmed) {
     items.push(
       <Step key="clarify" icon={IconAsk} title={`开始前问了你 ${qs.length} 个问题`} fold>
@@ -382,6 +384,19 @@ function ScopeCard({ it, onSubmit }) {
   );
 }
 
+// 早先的线程停在“确认范围”上：那时的卡只列推断出的范围、没有问题。按推断的范围直接开始
+function ScopeStartCard({ scope, onStart }) {
+  const rows = [["时间", scope?.time_range], ["地域", scope?.region], ["信源", scope?.lang]].filter(([, x]) => x);
+  return (
+    <li className="ws-card ask">
+      <div className="ws-card-title"><IconAsk size={15} />按推断出的范围开始调研？</div>
+      {rows.length > 0 && <div>{rows.map(([k, x]) => `${k}：${x}`).join(" · ")}</div>}
+      <div className="ws-card-sub">要换范围，新建一次调研、把要求写进需求里更直接。</div>
+      <div className="ws-card-foot"><span /><button className="ws-btn primary" onClick={onStart}>开始调研</button></div>
+    </li>
+  );
+}
+
 // 选项 + 自己写；自己写的内容和选中的选项二选一
 function Choices({ options, value, onChange, onPick }) {
   const custom = value && !options.includes(value) ? value : "";
@@ -424,7 +439,7 @@ const PLACEHOLDER = {
   new: "想研究什么？简单问题直接问，复杂的说清主题、时间和信源要求",
   review: "对这版报告说点什么，例如：第一节更简短",
   ask: "直接回答上面的问题…",
-  scope: "先回答上面的问题",
+  scope: "上面的卡处理完就开始调研",
   busy: "正在处理，稍等…",
   done: "这次调研已经结束；要研究别的，点左上角“新建调研”",
   failed: "这一步没跑完，点上面的“重试”",

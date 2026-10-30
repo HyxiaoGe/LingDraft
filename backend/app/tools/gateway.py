@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,6 +45,15 @@ class _ReadBody(BaseModel):
 def _brief(e: ValidationError) -> str:
     err = e.errors()[0]
     return ".".join(str(x) for x in err["loc"]) + "：" + err["msg"] if err["loc"] else err["msg"]
+
+
+_SEP = r"(?:\s+[-–—]\s+|\s*[|｜_]\s*)"  # 横线两边要有空格，不然“10-10-2024”也会被当成重复
+_REPEAT = re.compile(rf"^(?P<t>.{{2,}}?){_SEP}(?P=t)(?={_SEP}|$)")
+
+
+def tidy_title(title: str) -> str:
+    """网页标题常把正文标题重复一遍（“A - A”“A | A - 站名”），只留一份。只认一字不差的重复，不猜意思。"""
+    return _REPEAT.sub(r"\g<t>", title.strip(), count=1)
 
 
 @dataclass
@@ -152,7 +162,7 @@ class GatewayClient:
         except ValidationError as e:
             raise GatewayError(f"搜索服务返回的格式不对（{_brief(e)}）", kind="bad_response") from e
         return [
-            SearchHit(title=r.title or "", url=r.url, description=r.description or "", content=r.content or r.description or "",
+            SearchHit(title=tidy_title(r.title or ""), url=r.url, description=r.description or "", content=r.content or r.description or "",
                       published_at=r.published_at)
             for r in body.results if r.url
         ]
@@ -182,7 +192,7 @@ class GatewayClient:
             return ReadResult(
                 ok=True,
                 url=url,
-                title=body.title or "",
+                title=tidy_title(body.title or ""),
                 content=content[:max_chars],
                 provider=body.provider or "",
                 truncated=len(content) > max_chars,

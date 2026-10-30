@@ -57,14 +57,23 @@ export function Deliverable({ st, live, busy, act, isNew }) {
   return (
     <section className="ws-panel" aria-label="交付">
       <header className="ws-panel-head">
-        <div className="ws-tabs" role="tablist">
-          {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? "sel" : ""} onClick={() => setTab(k)}>{l}</button>)}
+        <div className="ws-tabs" role="tablist" aria-label="交付内容" onKeyDown={(e) => {
+          const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+          if (!step) return;
+          const k = tabs[(tabs.findIndex(([x]) => x === tab) + step + tabs.length) % tabs.length][0];
+          setTab(k);
+          e.currentTarget.querySelector(`#ws-tab-${k}`)?.focus();
+        }}>
+          {tabs.map(([k, l]) => (
+            <button key={k} id={`ws-tab-${k}`} role="tab" aria-selected={tab === k} aria-controls="ws-tabpanel" tabIndex={tab === k ? 0 : -1}
+              className={tab === k ? "sel" : ""} onClick={() => setTab(k)}>{l}</button>
+          ))}
         </div>
         <span className="ws-version" title={v.note}>第 {v.n} 版{versions.length > 1 ? ` / 共 ${versions.length} 版` : " · 初稿"}</span>
       </header>
       {banner && <div className="ws-banner"><Spinner size={13} />{banner}</div>}
       {st.status === "done" && <div className="ws-banner ok"><IconCheck size={13} />已确认，这次调研用的是第 {v.n} 版</div>}
-      <div className={"ws-panel-scroll" + (busy ? " dim" : "")}>
+      <div id="ws-tabpanel" role="tabpanel" aria-labelledby={`ws-tab-${tab}`} className={"ws-panel-scroll" + (busy ? " dim" : "")}>
         {tab === "report" && <Report st={st} canEdit={canEdit} act={act} />}
         {tab === "claims" && <ClaimList st={st} canEdit={canEdit} act={act} />}
         {tab === "sources" && <SourceList st={st} canEdit={canEdit} act={act} />}
@@ -96,7 +105,7 @@ function ScopePanel({ st }) {
     <div className="ws-scope">
       <div className="ws-scope-q">{s.question}</div>
       {rows.length > 0 && <dl>{rows.map(([k, x]) => <React.Fragment key={k}><dt>{k}</dt><dd>{x}</dd></React.Fragment>)}</dl>}
-      <p className="ws-muted">左边的问题回答完就按这个范围开始调研；你的回答会补进范围里。</p>
+      <p className="ws-muted">{st.interrupt?.questions?.length ? "左边的问题回答完就按这个范围开始调研；你的回答会补进范围里。" : "点“开始调研”就按这个范围开始。"}</p>
     </div>
   );
 }
@@ -147,14 +156,20 @@ function Report({ st, canEdit, act }) {
   const num = sourceNumbers(blocks);
   const byNum = Object.fromEntries(Object.entries(num).map(([sid, n]) => [n, byId[sid]]));
   const article = useRef(null);
-  const [pop, setPop] = useState(null); // 悬停的引用角标：{sid, rect}
+  const [pop, setPop] = useState(null); // 悬停的引用角标：{sid, rect, el}
+  const popRef = useRef(null);
   const [quote, setQuote] = useState(null); // 选中的文字：{text, claim_ids, section_ids, rect, open}
   const [rewrite, setRewrite] = useState(null); // 正在填“怎么重写”的节 id
   const closeTimer = useRef(null);
 
   const showPop = (sid, el) => {
     clearTimeout(closeTimer.current);
-    setPop({ sid, rect: el.getBoundingClientRect() });
+    setPop({ sid, rect: el.getBoundingClientRect(), el });
+  };
+  const closePop = () => { // Esc：收起来源卡，焦点回到角标上
+    clearTimeout(closeTimer.current);
+    pop?.el?.focus();
+    setPop(null);
   };
   const hidePop = () => {
     clearTimeout(closeTimer.current);
@@ -235,8 +250,15 @@ function Report({ st, canEdit, act }) {
         return (
           <button key={m} className={"ws-mark" + (s?.status === "excluded" ? " excluded" : "") + (pop?.sid === s?.id ? " on" : "")}
             aria-label={`来源 ${m}`} onMouseEnter={(e) => s && showPop(s.id, e.currentTarget)} onMouseLeave={hidePop}
-            onFocus={(e) => s && showPop(s.id, e.currentTarget)} onBlur={hidePop}
-            onClick={(e) => s && (pop?.sid === s.id ? setPop(null) : showPop(s.id, e.currentTarget))}>{m}</button>
+            onFocus={(e) => s && showPop(s.id, e.currentTarget)} onBlur={hidePop} onKeyDown={(e) => e.key === "Escape" && pop && closePop()}
+            onClick={(e) => {
+              if (!s) return;
+              if (e.detail === 0) { // 键盘按的回车或空格：来源卡已随焦点打开，把焦点移进卡里，“打开原文”“排除”才按得到
+                showPop(s.id, e.currentTarget);
+                requestAnimationFrame(() => popRef.current?.querySelector("a, button")?.focus());
+              } else if (pop?.sid === s.id) setPop(null);
+              else showPop(s.id, e.currentTarget);
+            }}>{m}</button>
         );
       };
       // 角标多时可以逐个换行，但第一个和句末那个字粘在一起，不会单独掉到下一行
@@ -258,8 +280,8 @@ function Report({ st, canEdit, act }) {
       <article ref={article} className="ws-report" onMouseUp={() => setTimeout(capture, 0)}
         onKeyUp={(e) => e.shiftKey && capture()}>{out}</article>
       {pop && byId[pop.sid] && (
-        <SourcePop s={byId[pop.sid]} n={num[pop.sid]} rect={pop.rect} st={st} canEdit={canEdit} onEnter={keepPop} onLeave={hidePop}
-          onExclude={() => { setPop(null); act.exclude(pop.sid); }} />
+        <SourcePop boxRef={popRef} s={byId[pop.sid]} n={num[pop.sid]} rect={pop.rect} st={st} canEdit={canEdit} onEnter={keepPop} onLeave={hidePop}
+          onClose={closePop} onExclude={() => { setPop(null); act.exclude(pop.sid); }} />
       )}
       {quote && canEdit && <QuoteBox q={quote} onOpen={() => setQuote({ ...quote, open: true })} onClose={closeQuote}
         onSubmit={(t) => { closeQuote(); act.instruct(t, { text: quote.text, claim_ids: quote.claim_ids, section_ids: quote.section_ids }); }} />}
@@ -283,12 +305,13 @@ function floatStyle(rect, width, height) {
   return below ? { left, top: rect.bottom + 8, width } : { left, bottom: innerHeight - rect.top + 8, width };
 }
 
-function SourcePop({ s, n, rect, st, canEdit, onEnter, onLeave, onExclude }) {
+function SourcePop({ boxRef, s, n, rect, st, canEdit, onEnter, onLeave, onClose, onExclude }) {
   const sole = soleClaims(st, s.id).length;
   const issue = st.time_issues?.[s.id];
   const next = (st.versions?.at(-1)?.n || 0) + 1;
   return (
-    <div className="ws-pop" style={floatStyle(rect, 340, 240)} onMouseEnter={onEnter} onMouseLeave={onLeave} role="dialog" aria-label={n ? `来源 ${n}` : "来源"}>
+    <div ref={boxRef} className="ws-pop" style={floatStyle(rect, 340, 240)} role="dialog" aria-label={n ? `来源 ${n}` : "来源"}
+      onMouseEnter={onEnter} onMouseLeave={onLeave} onFocus={onEnter} onBlur={onLeave} onKeyDown={(e) => e.key === "Escape" && onClose()}>
       <div className="ws-pop-top">
         {n && <span className="lb">{n}</span>}
         <span className={"ws-badge " + s.status}>{SSTATUS[s.status]}</span>
@@ -351,7 +374,7 @@ function RewriteBox({ sec, onCancel, onSubmit }) {
       </div>
       <div className="ws-card-input">
         <input value={text} placeholder="其他要求，不填就按原要求重写" aria-label="重写要求" onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && onSubmit(text.trim())} />
+          onKeyDown={(e) => (e.key === "Escape" ? onCancel() : e.key === "Enter" && !e.nativeEvent.isComposing && onSubmit(text.trim()))} />
         <button className="ws-btn primary sm" onClick={() => onSubmit(text.trim())}>重写</button>
         <button className="ws-btn ghost sm" onClick={onCancel}>取消</button>
       </div>
@@ -409,7 +432,11 @@ function ClaimEdit({ c, onCancel, onSave }) {
   }, [text]);
   return (
     <div className="ws-claim-edit">
-      <textarea ref={ref} autoFocus value={text} aria-label="论断的新表述" onChange={(e) => setText(e.target.value)} />
+      <textarea ref={ref} autoFocus value={text} aria-label="论断的新表述" onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onCancel();
+          else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) onSave(text.trim());
+        }} />
       <div className="row">
         <button className="ws-btn ghost sm" onClick={onCancel}>取消</button>
         <button className="ws-btn primary sm" disabled={!text.trim()} onClick={() => onSave(text.trim())}>保存，出新一版</button>

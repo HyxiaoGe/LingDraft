@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError
+from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError, tidy_title
 from app.tools.research_tools import make_research_tools
 
 
@@ -170,3 +170,29 @@ def test_malformed_responses_are_failures():
     tools = {t.name: t for t in make_research_tools(_client(lambda req: httpx.Response(200, json={"results": 1})))}
     msg = tools["search_web"].invoke({"name": "search_web", "args": {"query": "q"}, "id": "c1", "type": "tool_call"})
     assert msg.status == "error" and json.loads(msg.content)["kind"] == "bad_response"
+
+
+@pytest.mark.parametrize(("raw", "want"), [
+    ("DeepSeek 隐私政策 - DeepSeek 隐私政策", "DeepSeek 隐私政策"),
+    ("Wi-Fi 7 有多快 | Wi-Fi 7 有多快 - 某站", "Wi-Fi 7 有多快 - 某站"),  # 站名留着
+    ("  大模型“独角兽”亟须差异化应对价格冲击 - 大模型“独角兽”亟须差异化应对价格冲击 ", "大模型“独角兽”亟须差异化应对价格冲击"),
+    ("Wi-Fi 7 - 评测", "Wi-Fi 7 - 评测"),  # 不是重复不动
+    ("FAQ - FAQ", "FAQ"),
+    ("首页_首页", "首页"),
+    ("1 - 1", "1 - 1"),  # 一个字的不算
+    ("10-10-2024 发布会", "10-10-2024 发布会"),  # 横线两边没空格的不是分隔符
+    ("A 与 B - A 与 BC", "A 与 B - A 与 BC"),  # 只认一字不差的重复
+])
+def test_tidy_title(raw, want):
+    assert tidy_title(raw) == want
+
+
+def test_titles_tidied_on_search_and_on_old_sources():
+    """网页标题重复一遍的，搜索结果里理掉；以前存下的来源打开时（从检查点还原会重新校验）也理掉。"""
+    from app.graph.research.state import Source
+
+    def handler(req: httpx.Request):
+        return httpx.Response(200, json={"results": [{"title": "A 文章 - A 文章", "url": "https://a"}]})
+
+    assert _client(handler).search("q")[0].title == "A 文章"
+    assert Source(id="s1", url="https://a", title="A 文章 - A 文章").title == "A 文章"

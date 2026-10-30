@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from typing import Literal, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from app.tools.gateway import tidy_title
 
 SourceStatus = Literal["candidate", "adopted", "excluded"]
 ClaimKind = Literal["fact", "inference"]
@@ -83,6 +85,11 @@ class Source(BaseModel):
     status: SourceStatus = "candidate"
     note: str = ""
 
+    @field_validator("title")
+    @classmethod
+    def _tidy(cls, v: str) -> str:
+        return tidy_title(v)  # 新标题在网关那里就理过了；这里管以前存下的（打开旧线程时）
+
 
 class Claim(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -136,6 +143,11 @@ class ToolStep(BaseModel):
     title: str = ""  # 读到的页面标题
     source_ids: list[str] = Field(default_factory=list, description="这一步得到的来源")
     message: str = Field(default="", description="失败的原因；提问时是用户的回答")
+
+    @field_validator("title")
+    @classmethod
+    def _tidy(cls, v: str) -> str:
+        return tidy_title(v)
 
 
 class ResearchRound(BaseModel):
