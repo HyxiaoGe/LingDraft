@@ -126,6 +126,16 @@ def test_events_stream_title_steps_and_text(chat):
     assert text == chat.view()["turns"][0]["items"][-1]["text"]
 
 
+def test_phases_say_what_the_gaps_wait_for(chat):
+    """没有字和步骤的空档，页面靠阶段说明在等什么：起标题（只有第一轮）、每次调模型之前、这一轮结束后起推荐问题。"""
+    chat.say("查一下局部修改")
+    assert [e["data"]["phase"] for e in chat.events if e["event"] == "phase"] == ["title", "model", "model", "model", "suggest"]
+    names = [e["event"] for e in chat.events]
+    assert names.index("phase") < names.index("title")  # 先说在起标题，起好了才有标题
+    chat.say("直接答：再说一句")
+    assert [e["data"]["phase"] for e in chat.events if e["event"] == "phase"] == ["model", "suggest"]
+
+
 def test_simple_question_answers_directly(chat):
     v = chat.say("直接答：新加坡现在是什么季节？")
     (turn,) = v["turns"]
@@ -177,6 +187,8 @@ def test_invalid_tool_call_is_retried_with_the_error(chat):
     assert msgs.index(res) == msgs.index(bad) + 1
     assert v["status"] == "idle" and v["turns"][0]["items"][-1]["text"] == "直接回答：这个问题不用查。"
     assert not [i for i in v["turns"][0]["items"] if i["type"] == "step"]
+    # 重发的那次调用，页面说的是在让模型重写，不是普通的等模型
+    assert [e["data"]["phase"] for e in chat.events if e["event"] == "phase"] == ["title", "model", "retry", "suggest"]
 
 
 def test_invalid_tool_call_gives_up_after_retries(chat):
@@ -412,6 +424,8 @@ def test_blocked_search_hit_is_dropped_and_the_turn_goes_on():
     assert v["status"] == "idle" and v["turns"][0]["record"]["outcome"] == "ok"
     probes = [x for name, x in p.calls if name == "blocked"]
     assert len(probes) == 1 and len(probes[0]) == 3
+    phases = [e["data"]["phase"] for e in c.events if e["event"] == "phase"]
+    assert phases[phases.index("guard") - 1] == "model"  # 拦下以后才说在去掉资料重试
     step = _search_step(v)
     assert step["ok"] and step["hits"] == 2 and step["message"] == "1 条没通过内容审核，已去掉"
     assert "https://example.test/2" not in {s["url"] for s in v["sources"].values()}

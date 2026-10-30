@@ -1,5 +1,5 @@
 // 对话。一轮是用户的一句话加上模型这一轮做的事：先是过程（思考、搜索、读页按发生的先后），然后是正文和这条回答用到的来源；
-// 最后一轮下面是推荐问题。过程正在跑时展开，这一轮结束后收成一行“已完成 25 秒”，点开看每一步。
+// 最后一轮下面是推荐问题（起的时候先说一声）。过程正在跑时展开，这一轮结束后收成一行“已完成 25 秒”，点开看每一步。
 // 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。最后一轮的这些一直显示，之前的悬停才出现。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -14,7 +14,7 @@ const EXAMPLES = [
   "珠穆朗玛峰现在的官方高度是多少？",
 ];
 
-export function Conversation({ st, live, busy, error, now, act, isNew }) {
+export function Conversation({ st, live, busy, suggesting, error, now, act, isNew }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
   const fresh = isNew && !live;
@@ -51,7 +51,7 @@ export function Conversation({ st, live, busy, error, now, act, isNew }) {
       <div className="ws-scroll" ref={scrollRef}
         onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
         <div className="ws-flow">
-          {fresh ? <Welcome onPick={act.start} /> : <Turns st={st} live={live} busy={busy} stopping={stopping} now={now} act={act} />}
+          {fresh ? <Welcome onPick={act.start} /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} />}
           {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error}</span></div>}
         </div>
       </div>
@@ -74,7 +74,7 @@ function Welcome({ onPick }) {
 
 // ---------------- 一轮一轮 ----------------
 
-function Turns({ st, live, busy, stopping, now, act }) {
+function Turns({ st, live, busy, suggesting, stopping, now, act }) {
   const turns = st?.turns || [];
   const running = busy || ACTIVE.has(st?.status);
   // 刚说的话还没出现在存下来的对话里：先按页面手上的显示
@@ -84,13 +84,13 @@ function Turns({ st, live, busy, stopping, now, act }) {
     <>
       {all.map((t, i) => {
         const last = i === all.length - 1;
-        return <Turn key={t.id} t={t} st={st} live={last && running ? live : null} running={last && running} stopping={stopping} last={last} now={now} act={act} />;
+        return <Turn key={t.id} t={t} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} />;
       })}
     </>
   );
 }
 
-function Turn({ t, st, live, running, stopping, last, now, act }) {
+function Turn({ t, st, live, running, suggesting, stopping, last, now, act }) {
   const items = mergeItems(t.items, live);
   const { process, answer } = splitTurn(items);
   const nums = citeNumbers(items.filter((i) => i.type === "text").map((i) => i.text), st?.sources);
@@ -117,6 +117,7 @@ function Turn({ t, st, live, running, stopping, last, now, act }) {
         )}
       </div>
       {last && idle && rec?.suggestions?.length > 0 && <Suggestions items={rec.suggestions} onPick={act.say} />}
+      {last && idle && suggesting && !rec?.suggestions?.length && <SuggestWait />}
     </>
   );
 }
@@ -316,7 +317,7 @@ function Thinking({ it, running, thinking }) {
     if (thinking && box.current) box.current.scrollTop = box.current.scrollHeight;
   });
   const secs = it.ms ? Math.max(1, Math.round(it.ms / 1000)) : null;
-  const label = thinking ? "正在思考" : secs ? `思考了 ${secs} 秒` : "思考过程";
+  const label = thinking ? "深度思考中" : secs ? `思考了 ${secs} 秒` : "思考过程";
   return (
     <div className={"ws-think" + (thinking ? " live" : "")}>
       <button className="ws-think-head" aria-expanded={shown} onClick={() => setOpen(!shown)}>
@@ -334,11 +335,11 @@ function ToolRow({ s }) {
   let bad = !s.ok;
   if (s.kind === "read") {
     main = <>读 <a href={s.text} target="_blank" rel="noreferrer" title={s.text}>{s.title || domain(s.text)}</a></>;
-    sub = s.pending ? "" : s.body ? "读到原文" : `没读成${s.message ? `：${s.message}` : ""}`;
+    sub = s.pending ? "读取中…" : s.body ? "读到原文" : `没读成${s.message ? `：${s.message}` : ""}`;
     bad = !s.pending && !s.body;
   } else {
     main = <>搜索「{s.text}」{s.limits.map((l) => <span key={l} className="lim">{l}</span>)}</>;
-    sub = s.pending ? "" : s.ok ? `${s.hits} 条结果${s.message ? `（${s.message}）` : ""}` : `没搜成：${s.message || "出错了"}`;
+    sub = s.pending ? "搜索中…" : s.ok ? `${s.hits} 条结果${s.message ? `（${s.message}）` : ""}` : `没搜成：${s.message || "出错了"}`;
   }
   return (
     <div className={"ws-tool" + (s.pending ? " pending" : bad ? " bad" : "")}>
@@ -349,22 +350,64 @@ function ToolRow({ s }) {
   );
 }
 
-// 正在跑的这一轮最下面一行：现在在做什么（思考、搜索、写正文时各自已经有显示，这里不重复）
+// 空档里在等什么：后端在起标题、调模型之前发的阶段（见 app/graph/research/agent.py）
+const PHASES = {
+  title: "正在给对话起标题…",
+  model: "等待模型响应…",
+  retry: "工具参数没写对，让模型重写…",
+  guard: "部分资料没通过内容审核，去掉后重试…",
+};
+
+// 好一会儿看不到新进展时冒一句俏皮话，按在等什么挑
+const TIPS_ANY = [
+  "稍等一下，客官，“菜”马上就好",
+  "答应给你的，马上就来",
+  "快了快了，已经看到终点线了",
+  "别担心，没睡着，在干活呢",
+  "泡杯茶的功夫就好",
+  "好饭不怕晚，再等等",
+  "稳住，马上就好",
+  "再给我一点点时间",
+];
+const TIPS = {
+  model: [...TIPS_ANY, "脑子转得飞快，嘴还没跟上", "正在憋大招，马上放出来", "这题有点意思，值得多想一会儿", "正在把线索串成一条线", "让子弹再飞一会儿"],
+  search: [...TIPS_ANY, "正在全网翻箱倒柜", "线索正在赶来的路上", "大海捞针中，针快捞到了", "搜索有点堵车，马上通"],
+  read: [...TIPS_ANY, "这页有点长，容我多看两眼", "网页加载慢吞吞的，我也干着急", "正在逐字逐句地啃这篇", "有的网站慢，再给它一点时间"],
+};
+const TIP_AFTER = 5000; // 看不到新进展多久以后开始说
+const TIP_EVERY = 6000; // 一直没进展就隔一会儿换一句
+
+// 正在跑的这一轮最下面一行：空档里说清在等什么（思考、搜索、读页、写正文时各自已经有显示，这里不重复）；等久了加一句俏皮话
 function LiveLine({ live, items, stopping }) {
   const lastItem = items.at(-1);
-  let stage = stopping ? "正在停止…" : live?.stage;
-  if (!stage) {
-    if (lastItem?.type === "thinking" && lastItem.live && !lastItem.ms) stage = null; // 思考块自己有“正在思考”
-    else if (lastItem?.type === "step" && lastItem.pending) stage = null;
-    else if (lastItem?.type === "text" && lastItem.live) stage = null;
-    else stage = "正在处理";
-  }
+  const pending = items.filter((i) => i.type === "step" && i.pending); // 并行的几步里先做完的排在后面也算还在等
+  const streaming = lastItem?.live && (lastItem.type === "text" || (lastItem.type === "thinking" && !lastItem.ms));
+  const stage = stopping ? "正在停止…" : live?.stage || (pending.length || streaming ? null : PHASES[live?.phase] || "正在准备…");
+  const waitingFor = pending.some((i) => i.kind === "read") ? "read" : pending.length ? "search" : "model";
+  const tip = useTip(`${items.length}:${lastItem?.text?.length ?? 0}:${pending.length}:${live?.phase}:${stage}`, stopping ? null : TIPS[waitingFor]);
   return (
     <div className="ws-live" role="status">
       {stage && <><Spinner size={14} /><span className="stage">{stage}</span></>}
+      {tip && <span key={tip} className="tip" aria-hidden="true">{tip}</span>}
       <span className="hint">可以关掉页面，回来接着看</span>
     </div>
   );
+}
+
+// sig 是“看得到的进展”：变了就重新计时；没变的时间超过 TIP_AFTER，从 pool 里挑一句，之后隔 TIP_EVERY 换下一句。
+// 这一轮在跑时页面每秒重新渲染一次（见 useNow），这里跟着重算
+function useTip(sig, pool) {
+  const mark = useRef({ sig: null, at: 0, seed: 0 });
+  const t = Date.now();
+  if (mark.current.sig !== sig) mark.current = { sig, at: t, seed: Math.floor(Math.random() * 1000) };
+  const waited = t - mark.current.at;
+  if (!pool || waited < TIP_AFTER) return null;
+  return pool[(mark.current.seed + Math.floor((waited - TIP_AFTER) / TIP_EVERY)) % pool.length];
+}
+
+// 正文写完以后在起推荐问题：起好了换成推荐问题，没起成（或用户先说了话）就不显示
+function SuggestWait() {
+  return <div className="ws-suggest-wait" role="status"><Spinner size={12} /><span>猜猜你接下来还想问什么…</span></div>;
 }
 
 function Suggestions({ items, onPick }) {
@@ -421,6 +464,7 @@ function Composer({ mode, stopping, onSend, onStop }) {
             : <button className="ws-send" aria-label="发送" disabled={!enabled || !text.trim()} onClick={send}><IconArrowUp size={15} /></button>}
         </div>
       </div>
+      <div className="ws-ai-note">内容由 AI 生成，请仔细甄别</div>
     </div>
   );
 }

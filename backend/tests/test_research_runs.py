@@ -360,7 +360,7 @@ def _ended(http: TestClient, tid: str, n: int) -> bool:
 
 def test_turn_ends_before_suggestions(client, rr):
     """正文写完这一轮就结束：推荐问题还在起的时候线程已经空闲，没有可停的，能改名；页面先拿到这一轮的最终状态，
-    推荐问题起好了写进这一轮的记录，再发一次状态。"""
+    再收到“正在起推荐问题”的阶段，推荐问题起好了写进这一轮的记录，再发一次状态。"""
     tid = new(client, "直接答：先说一句")["thread_id"]
     gate = hold(rr.planner, "suggest")
     first: dict = {}
@@ -376,7 +376,8 @@ def test_turn_ends_before_suggestions(client, rr):
         gate.set()
         t.join(30)
     ev = events(first["resp"])
-    assert [e for e, _ in ev][-3:] == ["state", "state", "end"] and not any(e == "error" for e, _ in ev)
+    assert [e for e, _ in ev][-4:] == ["state", "phase", "state", "end"] and not any(e == "error" for e, _ in ev)
+    assert [d for e, d in ev if e == "phase"][-1] == {"phase": "suggest"}
     done, more = [d for e, d in ev if e == "state"]
     assert done["status"] == "idle" and done["turns"][1]["record"]["suggestions"] == []
     assert len(more["turns"][1]["record"]["suggestions"]) == 3 and more["title"] == "改过"  # 改名和写推荐问题都在

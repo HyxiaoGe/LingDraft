@@ -270,7 +270,7 @@ class ResearchRunner(BaseRunner):
 
     def _graph_events(self, thread_id: str, inp: Any):
         """agent 的流 → 页面事件。messages 只转发 model 节点的（快模型在别的节点里调用，不算）；
-        custom 是中间件写的进度（step）和标题（title）；updates 里改了 state 的节点做完发 node，页面据此重新取状态。
+        custom 是中间件写的进度（step）、标题（title）和阶段（phase：起标题、等模型这些空档在等什么）；updates 里改了 state 的节点做完发 node，页面据此重新取状态。
         用户点了停止：排队时就点的不跑，直接收尾；跑着的在下一个片段或下一步停下（见 StopCheck），已经流出来的正文留着。"""
         if self._stop_requested(thread_id):
             self._write_stop(thread_id, None)
@@ -325,6 +325,7 @@ class ResearchRunner(BaseRunner):
         if job is None:
             return
         turn_id, question, reply = job
+        yield {"event": "phase", "data": {"phase": "suggest"}}  # 页面在回答下面先说一声正在起
         try:
             items = self.planner.suggest(question, reply)[:3]
         except Exception:  # noqa: BLE001  推荐问题失败就不给

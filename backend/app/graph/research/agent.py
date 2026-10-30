@@ -2,6 +2,7 @@
 
 用户每说一句话：先写进消息（update_state，as_node=START），再接着跑（stream(None)），直到模型给出不带工具调用的回复。
 - TurnMiddleware：还没有标题时按第一句话起标题；每轮开始、结束时记下这一轮；模型每次调用前换上系统提示词（日期按当天）。
+  起标题、调模型之前往自定义流里写一个阶段（phase），页面在还没有字和步骤的空档里据此说明在等什么。
   推荐问题不在这一轮里起：正文写完这一轮就结束，运行器在结束之后再起（见 api.research_runner）。
 - ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度。
 - InvalidToolCallRetryMiddleware：模型返回无法解析的工具调用时，让它带着解析错误重发，最多几次。
@@ -58,6 +59,7 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         human = msgs[history.last_human(msgs)]
         out: dict[str, Any] = {"turns": list(state.get("turns", [])) + [Turn(id=human.id, started_at=now())]}
         if not state.get("title"):  # 按这段对话的第一句起（第一轮排队时就停了的，下一轮补上）
+            emit({"type": "phase", "phase": "title"})
             text = history.requests(msgs)[0]
             try:
                 title = self.planner.title(text).strip() or text[:TITLE_CHARS]
@@ -68,6 +70,7 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         return out
 
     def wrap_model_call(self, request: ModelRequest, handler):
+        emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
         return handler(request.override(system_message=SystemMessage(system_prompt())))
 
     def after_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
@@ -85,6 +88,13 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
                                                  "outcome": "blocked" if blocked else "ok" if reply else "no_reply"})
         out["turns"] = turns
         return out
+
+
+def _retrying(msgs: list) -> bool:
+    """这次调模型是让它重发：上一条模型消息之后只有系统替它补的纠错结果（InvalidToolCallRetryMiddleware 写的，标了 hidden）。"""
+    last = next((i for i in range(len(msgs) - 1, -1, -1) if isinstance(msgs[i], AIMessage)), None)
+    tail = msgs[last + 1:] if last is not None else []
+    return bool(tail) and all(isinstance(m, ToolMessage) for m in tail) and any(isinstance(m.artifact, dict) and m.artifact.get("hidden") for m in tail)
 
 
 def stop_turn(values: dict, partial: AIMessage | None) -> dict[str, Any]:
@@ -209,6 +219,7 @@ class ContentGuard(AgentMiddleware):
         reason = "material" if tail else "input"
         if not material:
             return _stop(reason)
+        emit({"type": "phase", "phase": "guard"})
         whole = {m.id: _withdrawn(m) for m in material}
         found = self._drop_blocked(material)
         tries = [found] if found else []

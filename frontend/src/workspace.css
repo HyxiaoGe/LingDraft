@@ -142,7 +142,8 @@
 .ws-live { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--accent); flex-wrap: wrap; }
 .ws-live .stage { color: var(--ink2); }
 .ws-live .hint { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.ws-live .stage + .hint::before { content: "·"; margin-right: 8px; color: var(--faint); }
+.ws-live .tip { color: var(--ink2); animation: ws-in .3s var(--ease); }
+.ws-live span + span::before { content: "·"; margin-right: 8px; color: var(--faint); }
 /* 一轮里的东西：思考、工具步骤、正文、来源、推荐问题 */
 .ws-think-head { border: 0; background: none; padding: 2px 6px 2px 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); border-radius: var(--r-sm); }
 .ws-think-head:hover { color: var(--ink); }
@@ -182,6 +183,8 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-mark.off { background: var(--hover); color: var(--faint); cursor: help; }
 
 .ws-suggest { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: -12px 0 26px; }
+.ws-suggest-wait { display: flex; align-items: center; gap: 6px; margin: -12px 0 26px; font-size: 12.5px; color: var(--accent); }
+.ws-suggest-wait span { color: var(--muted); }
 .ws-suggest-item { border: 1px solid var(--line2); background: var(--paper); border-radius: var(--r); padding: 6px 12px; font-size: 13px; color: var(--ink2); text-align: left; transition: border-color .15s, color .15s; }
 .ws-suggest-item:hover { border-color: var(--accent-line); color: var(--accent); }
 .ws-error { display: flex; gap: 8px; align-items: flex-start; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-line); border-radius: var(--r); padding: 9px 12px; font-size: 13px; margin: 0 0 16px; }
@@ -204,7 +207,8 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-examples { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 24px; }
 
 /* 输入框 */
-.ws-composer { padding: 10px 28px 18px; }
+.ws-composer { padding: 10px 28px 10px; }
+.ws-ai-note { max-width: 700px; margin: 6px auto 0; text-align: center; font-size: 11.5px; color: var(--faint); }
 .ws-input { max-width: 700px; margin: 0 auto; border: 1px solid var(--line2); border-radius: var(--r-lg); padding: 10px 12px 8px 14px; background: var(--paper); box-shadow: 0 2px 12px rgba(20, 24, 31, .06); transition: border-color .15s, box-shadow .15s; }
 .ws-input:focus-within { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft), 0 2px 12px rgba(20, 24, 31, .06); }
 .ws-input.off { background: var(--side); box-shadow: none; }

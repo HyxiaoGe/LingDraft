@@ -17,9 +17,10 @@ export default function Workspace() {
   const [threads, setThreads] = useState(null);
   const [tid, setTid] = useState(hashId);
   const [st, setSt] = useState(null);
-  // 这个页面发起或接上的那次执行：{said, sentAt, turnsAtStart, items, stage, title, stopping, hidden, edit}
+  // 这个页面发起或接上的那次执行：{said, sentAt, turnsAtStart, items, stage, phase, title, stopping, hidden, edit}
   // sentAt：这次说的话或改的话按本机时间记的发送时间，存下来的对话回来以前先显示它
   const [live, setLive] = useState(null);
+  const [suggesting, setSuggesting] = useState(false); // 这一轮结束了，推荐问题还在起（同一条事件流里还会再来一次状态）
   const [busy, setBusyState] = useState(false);
   const [error, setError] = useState(null);
   const gen = useRef(0); // 每切一次线程加一：旧线程的连接和回调发现对不上，就不再改页面
@@ -74,6 +75,7 @@ export default function Workspace() {
     setTid(id);
     setSt(null);
     setLive(null);
+    setSuggesting(false);
     setError(null);
     setBusy(false);
     history.replaceState(null, "", id ? `#r/${id}` : location.pathname);
@@ -104,10 +106,12 @@ export default function Workspace() {
     for (let fails = 0; ;) {
       try {
         await followResearchThread(id, lastEvent.current, onEvent(g, errs, r), r.sig);
-        if (g !== gen.current || r.done) return;
+        if (g !== gen.current) return;
+        if (r.done) return setSuggesting(false); // 流收完了：推荐问题要么已经到了，要么不会来了
         fails = 0; // 连得上，只是流又断了、或者执行刚开始：接着读
       } catch (e) {
-        if (e.aborted || g !== gen.current || r.done) return;
+        if (e.aborted || g !== gen.current) return;
+        if (r.done) return setSuggesting(false); // 等推荐问题时断了：不再接，下次打开线程能看到
         if (e.status === 404 || ++fails > 30) { // 线程不在了，或者几分钟都连不上；后端重启时代理回的 5xx 也按断线重连
           setError(`取回进度失败：${e.message || e}`);
           setBusy(false);
@@ -129,6 +133,7 @@ export default function Workspace() {
     setSt(s);
     setBusy(false);
     setLive(null);
+    setSuggesting(false);
     if (errs.length && s.status !== "failed") setError(errs.at(-1));
     refreshList();
   }
@@ -169,6 +174,9 @@ export default function Workspace() {
     } else if (ev === "delta" || ev === "step") {
       setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
       if (ev === "step" && !data.step.pending) refetch(g, 1500); // 新的来源
+    } else if (ev === "phase") {
+      if (data.phase === "suggest") setSuggesting(true); // 这一轮已经结束，live 已经清掉了
+      else setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
     } else if (ev === "node") {
       refetch(g, 150);
     } else if (ev === "state") {
@@ -191,15 +199,18 @@ export default function Workspace() {
     const r = { done: false, sig: ctl.current.signal }; // done：收到了这一轮结束的状态，之后连接断了也不用再接
     setBusy(true);
     setError(null);
+    setSuggesting(false);
     setLive({ items: [], said, sentAt: said || extra.edit ? new Date().toISOString() : undefined, turnsAtStart: st?.turns?.length || 0, stage: "正在准备…", ...extra });
     const errs = [];
     try {
       await fn(onEvent(g, errs, r), r.sig);
-      if (g !== gen.current || r.done) return;
+      if (g !== gen.current) return;
+      if (r.done) return setSuggesting(false); // 流收完了：推荐问题要么已经到了，要么不会来了
       if (tidRef.current) return await follow(tidRef.current, g, errs, r); // 流没收完就断了
       setBusy(false);
     } catch (e) {
-      if (e.aborted || g !== gen.current || r.done) return;
+      if (e.aborted || g !== gen.current) return;
+      if (r.done) return setSuggesting(false); // 等推荐问题时断了：不再接，下次打开线程能看到
       // 话被拒（400）、正在跑或上一轮没跑完（409）、连接断了（没有状态码）——都回服务器接上当前进度
       const recoverable = tidRef.current && (!e.status || e.status === 400 || e.status === 409);
       if (e.status || !recoverable) setError(String(e.message || e));
@@ -280,7 +291,7 @@ export default function Workspace() {
   return (
     <div className="ws">
       <Sidebar threads={threads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={select} manage={manage} />
-      <Conversation st={st} live={live} busy={busy} error={error} now={now} act={act} isNew={!tid} />
+      <Conversation st={st} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} isNew={!tid} />
     </div>
   );
 }
