@@ -1,47 +1,31 @@
-"""线程生命周期：并行执行、事件日志与断线续读、运行状态、失败后重试。只用假模型。"""
+"""线程生命周期：并行执行、运行占位、事件日志与断线续读、运行状态、失败后重试、停止和重新生成。只用假模型。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.constants import START
 
 from app.api import main as api_main
 from app.api import runner as runner_mod
 from app.api.research_runner import ResearchRunner
 from app.api.runner import LocalEventLog, LocalRunRegistry
-from app.graph.research.answers import user_message
-from tests.test_research_resume import (
-    ASKS,
-    SIMPLE,
-    _answer,
-    _asks,
-    _events,
-    _hold,
-    _last,
-    _new,
-    _run_async,
-    _state,
-    _to_ask,
-    _wait_until,
-    after_tool,
-    flaky_runner,
-)
+from tests.research_helpers import SIMPLE, after_tool, events, flaky_runner, hold, last, new, run_async, say, state, wait_until
 
 
 @pytest.fixture
 def rr(tmp_path):
-    return ResearchRunner(fake=True, data_dir=tmp_path / "data", out_dir=tmp_path / "out" / "research")
+    return ResearchRunner(fake=True, data_dir=tmp_path / "data")
 
 
 @pytest.fixture
 def client(rr):
-    api_main.set_research_runner(rr)
-    return TestClient(api_main.app)
+    return _client(rr)
 
 
 def _client(runner: ResearchRunner) -> TestClient:
@@ -79,38 +63,42 @@ def _retry(http: TestClient, tid: str):
     return http.post(f"/api/research/threads/{tid}/retry")
 
 
-def _say(http: TestClient, tid: str, text: str = "", **kw):
-    return http.post(f"/api/research/threads/{tid}/messages", json={"text": text, **kw})
+def _stop(http: TestClient, tid: str):
+    return http.post(f"/api/research/threads/{tid}/stop")
+
+
+def _regenerate(http: TestClient, tid: str):
+    return http.post(f"/api/research/threads/{tid}/regenerate")
 
 
 def _steps(st: dict, turn: int = -1) -> list[str]:
     return [i["kind"] for i in st["turns"][turn]["items"] if i["type"] == "step"]
 
 
-# ---- 并行执行 ----
+# ---- 并行执行与运行占位 ----
 
 
 def test_research_threads_run_in_parallel(tmp_path):
-    two = ResearchRunner(fake=True, data_dir=tmp_path / "data", out_dir=tmp_path / "out", workers=2)
+    two = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=2)
     tids = ("par00001", "par00002")
 
     async def go():
-        gate = _hold(two.planner, "title")
+        gate = hold(two.planner, "title")
         streams = [two.start(t, SIMPLE) for t in tids]
         try:
             # 两个都开跑了（停在同一道闸门上），不是一个跑、一个排队
-            assert _wait_until(lambda: all(two.state_view(t)["status"] == "running" for t in tids), 5)
+            assert wait_until(lambda: all(two.state_view(t)["status"] == "running" for t in tids), 5)
         finally:
             gate.set()
         for s in streams:
             await _drain(s)
         assert all(two.state_view(t)["status"] == "idle" for t in tids)
 
-    _run_async(go())
+    run_async(go())
 
 
 def test_failed_submit_gives_back_slots(tmp_path):
-    one = ResearchRunner(fake=True, data_dir=tmp_path / "data", out_dir=tmp_path / "out", workers=1)
+    one = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=1)
     real = one.executor._pool
     one.executor._pool = type("Down", (), {"submit": lambda self, fn: (_ for _ in ()).throw(RuntimeError("线程池已关闭"))})()
     with pytest.raises(RuntimeError):
@@ -118,9 +106,75 @@ def test_failed_submit_gives_back_slots(tmp_path):
     assert one.runs.get(one._run_key("sub00001")) is None  # 线程的占位退了
     one.executor._pool = real
     # 话已经落盘了：这时线程算没跑完，只能重试
-    ev = _run_async(_drain(one.retry("sub00001")))
+    ev = run_async(_drain(one.retry("sub00001")))
     assert ev[0][2]["queued"] is False  # 执行器的名额也退了，不会把下一次误报成排队
     assert ev[-2][2]["status"] == "idle"
+
+
+def test_nothing_else_while_running(client, rr):
+    """跑着的时候不能接着说、重新生成、重试；跑完照常。"""
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    gate = hold(rr.planner, "suggest")
+    first: dict = {}
+    t = threading.Thread(target=lambda: first.setdefault("resp", say(client, tid, SIMPLE)))
+    t.start()
+    try:
+        assert wait_until(lambda: state(client, tid)["status"] == "running")
+        assert say(client, tid, "插一句").status_code == 409
+        assert _regenerate(client, tid).status_code == 409
+        assert _retry(client, tid).status_code == 409
+    finally:
+        gate.set()
+        t.join(30)
+    events(first["resp"])
+    end = state(client, tid)
+    assert end["status"] == "idle" and len(end["turns"]) == 2 and end["turns"][1]["record"]["outcome"] == "ok"
+
+
+def test_disconnect_does_not_release_or_cancel_the_run(rr):
+    async def go():
+        gate = hold(rr.planner, "title")
+        try:
+            # 浏览器在响应开始前就断了：请求已被接受，后台照样跑
+            gone = rr.start("drop0001", SIMPLE)
+            await gone.aclose()
+            # 读到 thread 事件后断开
+            half = rr.start("drop0002", SIMPLE)
+            assert json.loads((await half.__anext__()).split("data: ", 1)[1])["thread_id"] == "drop0002"
+            await half.aclose()
+            for tid in ("drop0001", "drop0002"):
+                assert rr.state_view(tid)["status"] in ("queued", "running"), tid
+        finally:
+            gate.set()
+        assert wait_until(lambda: all(rr.state_view(t)["status"] == "idle" for t in ("drop0001", "drop0002")), 20)
+        assert all(rr.state_view(t)["turns"][0]["record"]["outcome"] == "ok" for t in ("drop0001", "drop0002"))
+
+    run_async(go())
+
+
+def test_queued_new_thread_is_visible_at_once(tmp_path):
+    rr = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=1)
+
+    async def go():
+        gate = hold(rr.planner, "title")
+        a = rr.start("queue001", SIMPLE)  # 占住唯一的执行线程
+        try:
+            ev = await asyncio.wait_for(a.__anext__(), 5)
+            assert '"queued": false' in ev
+            b = rr.start("queue002", SIMPLE)
+            ev = await asyncio.wait_for(b.__anext__(), 2)  # 排队中也要马上拿到 id
+            assert "event: thread" in ev and '"queued": true' in ev
+            v = rr.state_view("queue002")
+            assert v["exists"] and v["status"] == "queued" and v["title"] == SIMPLE and v["turns"][0]["user"] == SIMPLE
+        finally:
+            gate.set()
+        async for _ in a:
+            pass
+        async for _ in b:
+            pass
+        assert rr.state_view("queue002")["status"] == "idle"
+
+    run_async(go())
 
 
 # ---- 事件日志 ----
@@ -132,31 +186,32 @@ def test_reconnect_reads_only_what_was_missed(rr):
         first = _block(await s.__anext__())
         await s.aclose()  # 收到第一个事件就断线
         assert first[1] == "thread"
-        assert _wait_until(lambda: rr.state_view("evt00001")["status"] == "idle")
+        assert wait_until(lambda: rr.state_view("evt00001")["status"] == "idle")
         rest = await _drain(rr.follow("evt00001", first[0]))
         run = first[0].rsplit("-", 1)[0]
         assert all(eid.startswith(run + "-") for eid, _, _ in rest)
         assert [_seq(eid) for eid, _, _ in rest] == list(range(_seq(first[0]) + 1, _seq(first[0]) + 1 + len(rest)))  # 紧接断点，不重不漏
         kinds = [e for _, e, _ in rest]
         assert kinds[0] == "started" and "step" in kinds and "delta" in kinds and kinds[-2:] == ["state", "end"]
-        assert rest[-2][2]["status"] == "idle" and rest[-2][2]["report"]["version"] == 1
+        assert rest[-2][2]["status"] == "idle" and rest[-2][2]["turns"][0]["record"]["outcome"] == "ok"
         # 已经收全的页面、刷新后的页面（没有 id）、拿着别的执行的 id：执行已结束，都只拿当前状态
         for after in (rest[-1][0], None, "zzzzzzzz-3"):
             again = await _drain(rr.follow("evt00001", after))
             assert [e for _, e, _ in again] == ["state", "end"] and again[0][2]["status"] == "idle", after
 
-    _run_async(go())
+    run_async(go())
 
 
 def test_refresh_mid_run_replays_progress_so_far(rr):
     async def go():
-        gate = _hold(rr.planner, "consolidate")  # 停在写报告里：搜索、读页的进度已经发过了
+        gate = hold(rr.planner, "suggest")  # 停在这一轮收尾：搜索、读页、正文都发过了
         await rr.start("evt00002", SIMPLE).aclose()
         try:
-            assert _wait_until(lambda: any(e["event"] == "step" and e["data"]["step"]["kind"] == "report" for e in _logged(rr, "evt00002")))
+            assert wait_until(lambda: any(e["event"] == "node" and e["data"]["node"] == "model" for e in _logged(rr, "evt00002"))
+                              and len([e for e in _logged(rr, "evt00002") if e["event"] == "step"]) == 4)
             v = rr.state_view("evt00002")
-            steps = [(i["kind"], i["pending"]) for i in v["turns"][0]["items"] if i["type"] == "step"]
-            assert v["status"] == "running" and steps == [("search", False), ("read", False), ("report", True)]  # 正在写的那步是 pending
+            assert v["status"] == "running" and [(i["kind"], i["pending"]) for i in v["turns"][0]["items"] if i["type"] == "step"] == \
+                [("search", False), ("read", False)]
             live = asyncio.ensure_future(_drain(rr.follow("evt00002", None)))  # 刷新后的页面：手里没有事件 id
             await asyncio.sleep(0.3)
         finally:
@@ -166,22 +221,22 @@ def test_refresh_mid_run_replays_progress_so_far(rr):
         assert kinds[:2] == ["thread", "started"] and "step" in kinds and kinds[-2:] == ["state", "end"]
         assert [_seq(eid) for eid, _, _ in got] == list(range(1, len(got) + 1))
 
-    _run_async(go())
+    run_async(go())
 
 
 def test_follow_after_restart_sends_current_state(rr, tmp_path):
-    _run_async(_drain(rr.start("evt00003", ASKS)))
-    fresh = ResearchRunner(fake=True, data_dir=tmp_path / "data", out_dir=tmp_path / "out" / "research")
+    run_async(_drain(rr.start("evt00003", SIMPLE)))
+    fresh = ResearchRunner(fake=True, data_dir=tmp_path / "data")
     fresh.events, fresh.runs = LocalEventLog(), LocalRunRegistry()  # 重启后进程里什么都没有，只剩检查点
-    got = _run_async(_drain(fresh.follow("evt00003", "abcdef12-9")))
-    assert [e for _, e, _ in got] == ["state", "end"] and got[0][2]["interrupt"]["type"] == "research.ask"
+    got = run_async(_drain(fresh.follow("evt00003", "abcdef12-9")))
+    assert [e for _, e, _ in got] == ["state", "end"] and got[0][2]["status"] == "idle"
 
 
 def test_quiet_stream_sends_heartbeat(rr, monkeypatch):
     monkeypatch.setattr(runner_mod, "HEARTBEAT_S", 0.3)
 
     async def go():
-        gate = _hold(rr.planner, "title")
+        gate = hold(rr.planner, "title")
         s = rr.start("beat0001", SIMPLE)
         try:
             chunks = [await asyncio.wait_for(s.__anext__(), 3) for _ in range(4)]
@@ -190,62 +245,45 @@ def test_quiet_stream_sends_heartbeat(rr, monkeypatch):
         assert any(c.startswith(":") for c in chunks)  # 长时间没事件时发注释行，代理不会当成空闲连接掐掉
         await _drain(s)
 
-    _run_async(go())
+    run_async(go())
 
 
 # ---- 运行状态与失败出口 ----
 
 
 def test_failed_turn_keeps_content_and_can_retry(tmp_path):
-    """第二轮的模型调用出错：第 1 版、来源、第一轮的对话都在；不能接着说，只能重试；重试后这一轮做完。"""
+    """第二轮的模型调用出错：来源、第一轮的对话都在；不能接着说，只能重试；重试后这一轮做完。"""
     calls = {"turn2": False}
-
-    def second_turn(messages):
-        return calls["turn2"]
-
-    rr = flaky_runner(tmp_path, second_turn)
+    rr = flaky_runner(tmp_path, lambda messages: calls["turn2"])
     http = _client(rr)
-    st = _new(http, SIMPLE)
-    assert st["status"] == "idle" and st["report"]["version"] == 1
+    st = new(http, SIMPLE)
+    assert st["status"] == "idle"
     calls["turn2"] = True
-    sec = st["report"]["outline"][0]["id"]
-    ev = _events(_say(http, st["thread_id"], "重写", action={"type": "rewrite_section", "section_id": sec}))
-    failed = _last(ev, "state")
-    assert failed["status"] == "failed" and "网络断了" in failed["error"] and failed["interrupt"] is None
-    assert failed["report"]["version"] == 1 and failed["sources"] == st["sources"] and failed["turns"][0] == st["turns"][0]
-    assert len(failed["turns"]) == 2 and failed["turns"][1]["user"]["action"]["section_id"] == sec  # 用户的话留着
-    assert _state(http, st["thread_id"])["status"] == "failed"  # 刷新回来也一样
-    assert _say(http, st["thread_id"], "接着说").status_code == 409
-    end = _last(_events(_retry(http, st["thread_id"])), "state")
-    assert end["status"] == "idle" and end["report"]["version"] == 2 and len(end["turns"]) == 2
+    failed = last(events(say(http, st["thread_id"], "直接答：为什么")), "state")
+    assert failed["status"] == "failed" and "网络断了" in failed["error"]
+    assert failed["sources"] == st["sources"] and failed["turns"][0] == st["turns"][0]
+    assert len(failed["turns"]) == 2 and failed["turns"][1]["user"] == "直接答：为什么"  # 用户的话留着
+    assert state(http, st["thread_id"])["status"] == "failed"  # 刷新回来也一样
+    assert say(http, st["thread_id"], "接着说").status_code == 409
+    end = last(events(_retry(http, st["thread_id"])), "state")
+    assert end["status"] == "idle" and len(end["turns"]) == 2 and end["turns"][1]["record"]["outcome"] == "ok"
 
 
 def test_retry_does_not_redo_searches(tmp_path):
     rr = flaky_runner(tmp_path, after_tool("read_page"))  # 搜过、读过，下一次模型调用出错
     http = _client(rr)
-    ev = _events(http.post("/api/research/threads", json={"text": SIMPLE}))
-    st = _last(ev, "state")
+    ev = events(http.post("/api/research/threads", json={"text": SIMPLE}))
+    st = last(ev, "state")
     assert st["status"] == "failed" and _steps(st) == ["search", "read"]
-    ev = _events(_retry(http, st["thread_id"]))
-    assert [e["step"]["kind"] for n, e in ev if n == "step"] == ["report", "report"]  # 只有写报告的开始和完成
-    end = _last(ev, "state")
-    assert end["status"] == "idle" and _steps(end) == ["search", "read", "report"] and len(end["sources"]) == 3
-
-
-def test_answer_used_then_error_is_failed_and_retry_keeps_it(tmp_path):
-    rr = flaky_runner(tmp_path, after_tool("ask_user"))
-    http = _client(rr)
-    st = _to_ask(http)
-    after = _last(_events(_answer(http, st, {"answer": "包含 PPT"})), "state")
-    # agent 已经拿到回答、下一步才出错：不能再把这张卡当成在等人，否则改了的回答会被悄悄丢掉
-    assert after["status"] == "failed" and after["interrupt"] is None
-    assert _answer(http, st, {"answer": "不包含 PPT"}).status_code == 409
-    end = _last(_events(_retry(http, st["thread_id"])), "state")
-    assert end["status"] == "idle" and _asks(end) == [("范围包含 PPT 工具吗？", "包含 PPT")]
+    assert any(e == "error" for e, _ in ev) and rr.runs.get(rr._run_key(st["thread_id"])) is None  # 占位已释放
+    ev = events(_retry(http, st["thread_id"]))
+    assert [e for e, _ in ev if e == "step"] == []  # 搜索、读页不重来
+    end = last(ev, "state")
+    assert end["status"] == "idle" and _steps(end) == ["search", "read"] and len(end["sources"]) == 3
 
 
 def test_accepted_thread_survives_restart_before_running(tmp_path):
-    one = ResearchRunner(fake=True, data_dir=tmp_path / "data", out_dir=tmp_path / "out", workers=1)
+    one = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=1)
     one.executor._pool = type("Stuck", (), {"submit": lambda self, fn: None})()  # 收下了但一直没轮到，进程就停了
 
     async def go():
@@ -253,40 +291,125 @@ def test_accepted_thread_survives_restart_before_running(tmp_path):
         assert _block(await s.__anext__())[1] == "thread"  # 页面已经拿到线程 id
         await s.aclose()
 
-    _run_async(go())
+    run_async(go())
     assert one.state_view("acc00001")["status"] == "queued"
-    fresh = ResearchRunner(fake=True, data_dir=tmp_path / "data", out_dir=tmp_path / "out")
+    fresh = ResearchRunner(fake=True, data_dir=tmp_path / "data")
     fresh.events, fresh.runs = LocalEventLog(), LocalRunRegistry()
     v = fresh.state_view("acc00001")
-    assert v["exists"] and v["status"] == "failed" and v["turns"][0]["user"]["text"] == SIMPLE  # 重启后查得到，可以重试
-    end = _last([(e, d) for _, e, d in _run_async(_drain(fresh.retry("acc00001")))], "state")
-    assert end["status"] == "idle" and end["report"]["version"] == 1
+    assert v["exists"] and v["status"] == "failed" and v["error"] == "上次运行没跑完就停了" and v["turns"][0]["user"] == SIMPLE
+    end = last([(e, d) for _, e, d in run_async(_drain(fresh.retry("acc00001")))], "state")
+    assert end["status"] == "idle" and end["turns"][0]["record"]["outcome"] == "ok"
 
 
 def test_run_cut_short_is_failed_and_retryable(client, rr):
     # 进程在两步之间停了（比如重启）：检查点没走完，也没有记下错误
     cfg = {"configurable": {"thread_id": "cut00001"}}
-    rr.graph.update_state(cfg, {"messages": [user_message({}, SIMPLE)]}, as_node=START)
+    rr.graph.update_state(cfg, {"messages": [HumanMessage(SIMPLE)]}, as_node=START)
     rr.graph.invoke(None, cfg, interrupt_before=["tools"])
-    st = _state(client, "cut00001")
-    assert st["status"] == "failed" and "没跑完" in st["error"] and st["interrupt"] is None
-    end = _last(_events(_retry(client, "cut00001")), "state")
-    assert end["status"] == "idle" and end["report"]["version"] == 1
+    st = state(client, "cut00001")
+    assert st["status"] == "failed" and "没跑完" in st["error"]
+    end = last(events(_retry(client, "cut00001")), "state")
+    assert end["status"] == "idle" and end["turns"][0]["record"]["outcome"] == "ok"
 
 
 def test_retry_rejected_unless_failed(client):
-    st = _to_ask(client)
-    assert _retry(client, st["thread_id"]).status_code == 409  # 在等用户
-    _events(_answer(client, st, {"answer": "包含"}))
+    st = new(client, SIMPLE)
     assert _retry(client, st["thread_id"]).status_code == 409  # 这一轮跑完了
-    ev = _events(client.get(f"/api/research/threads/{st['thread_id']}/events"))
+    ev = events(client.get(f"/api/research/threads/{st['thread_id']}/events"))
     assert [e for e, _ in ev] == ["state", "end"] and ev[0][1]["status"] == "idle"
     assert _retry(client, "nope0000").status_code == 404
     assert client.get("/api/research/threads/nope0000/events").status_code == 404
+    assert client.get("/api/research/threads/%2e%2e/state").status_code == 404
 
 
 def test_tool_results_carry_retrieval_time(client, rr):
-    st = _new(client, SIMPLE)
+    st = new(client, SIMPLE)
     msgs = rr.graph.get_state({"configurable": {"thread_id": st["thread_id"]}}).values["messages"]
     search = next(m for m in msgs if isinstance(m, ToolMessage) and m.name == "search_web")
     assert search.artifact["retrieved_at"] and all(s["retrieved_at"] for s in st["sources"].values())
+
+
+# ---- 停止和重新生成 ----
+
+
+def test_stop_at_the_very_end_keeps_the_finished_answer(client, rr):
+    """正文已经写完、在起推荐问题时点停止：接口马上返回；没有下一步可停，这一轮照常结束；之后可以接着说。"""
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    gate = hold(rr.planner, "suggest")
+    first: dict = {}
+    t = threading.Thread(target=lambda: first.setdefault("resp", say(client, tid, SIMPLE)))
+    t.start()
+    try:
+        assert wait_until(lambda: state(client, tid)["status"] == "running")
+        assert _stop(client, tid).json() == {"ok": True}
+        assert state(client, tid)["stopping"] is True
+    finally:
+        gate.set()
+        t.join(30)
+    ev = events(first["resp"])
+    assert not any(e == "error" for e, _ in ev)
+    end = last(ev, "state")
+    assert end["status"] == "idle" and end["stopping"] is False and end["turns"][1]["items"][-1]["type"] == "text"
+    assert end["turns"][1]["record"]["outcome"] == "ok"
+    assert _stop(client, tid).status_code == 409  # 没在跑
+    assert say(client, tid, "直接答：好").status_code == 200
+
+
+def test_stop_before_the_model_answers(client, rr):
+    gate = hold(rr.planner, "title")
+    first: dict = {}
+    t = threading.Thread(target=lambda: first.setdefault("resp", client.post("/api/research/threads", json={"text": SIMPLE})))
+    t.start()
+    try:
+        assert wait_until(lambda: any(r["status"] == "running" for r in client.get("/api/research/threads").json()["threads"]))
+        tid = client.get("/api/research/threads").json()["threads"][0]["thread_id"]
+        assert _stop(client, tid).status_code == 200
+    finally:
+        gate.set()
+        t.join(30)
+    end = last(events(first["resp"]), "state")
+    (turn,) = end["turns"]
+    assert turn["items"] == [] and turn["record"]["outcome"] == "stopped" and end["status"] == "idle"
+
+
+def test_stop_queued_thread(tmp_path):
+    one = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=1)
+
+    async def go():
+        gate = hold(one.planner, "title")
+        a = one.start("stopq001", SIMPLE)
+        try:
+            await asyncio.wait_for(a.__anext__(), 5)
+            b = one.start("stopq002", SIMPLE)
+            await asyncio.wait_for(b.__anext__(), 2)
+            assert one.state_view("stopq002")["status"] == "queued" and one.stop("stopq002")
+        finally:
+            gate.set()
+        await _drain(a)
+        got = await _drain(b)
+        assert [e for _, e, _ in got if e in ("delta", "step", "title")] == []  # 没跑
+        v = got[-2][2]
+        assert v["status"] == "idle" and v["turns"][0]["record"]["outcome"] == "stopped" and v["turns"][0]["items"] == []
+        assert one.state_view("stopq001")["turns"][0]["record"]["outcome"] == "ok"  # 别的线程不受影响
+
+    run_async(go())
+
+
+def test_regenerate_over_http(client):
+    st = new(client, SIMPLE)
+    tid = st["thread_id"]
+    ev = events(_regenerate(client, tid))
+    names = [e for e, _ in ev]
+    assert names[:2] == ["thread", "started"] and "delta" in names and "title" not in names  # 标题不重起
+    end = last(ev, "state")
+    assert len(end["turns"]) == 1 and end["turns"][0]["id"] == st["turns"][0]["id"] and end["turns"][0]["record"]["outcome"] == "ok"
+    assert end["title"] == st["title"]
+    assert _regenerate(client, "nope0000").status_code == 404
+
+
+def test_regenerate_rejected_when_failed(tmp_path):
+    http = _client(flaky_runner(tmp_path, lambda messages: True))
+    st = last(events(http.post("/api/research/threads", json={"text": SIMPLE})), "state")
+    assert st["status"] == "failed"
+    r = _regenerate(http, st["thread_id"])
+    assert r.status_code == 409 and "重试" in r.json()["detail"]

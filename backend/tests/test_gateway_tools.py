@@ -59,7 +59,7 @@ def test_search_sends_auth_and_parses():
 
 
 def test_search_tool_passes_time_and_site_limits():
-    """recency_days 按搜索服务的四档向上取整；超出范围的数收进范围；没填就不传。"""
+    """recency_days 按搜索服务的四档向上取整；没填就不传；空白的站点去掉。"""
     bodies = []
 
     def handler(req: httpx.Request):
@@ -67,14 +67,32 @@ def test_search_tool_passes_time_and_site_limits():
         return httpx.Response(200, json={"results": []})
 
     search = next(t for t in make_research_tools(_client(handler)) if t.name == "search_web")
-    search.invoke(_call("search_web", query="q", recency_days=30, domains=["sqlite.org", " ", "a.org", "b", "c", "d", "e"]))
-    search.invoke(_call("search_web", query="q", count=50, recency_days=90))
-    search.invoke(_call("search_web", query="q", recency_days=0))
+    search.invoke(_call("search_web", query="q", recency_days=30, domains=["sqlite.org", " ", "a.org"]))
+    search.invoke(_call("search_web", query="q", count=10, recency_days=90))
+    search.invoke(_call("search_web", query="q", recency_days=1))
     search.invoke(_call("search_web", query="q"))
-    assert bodies[0] == {"query": "q", "type": "web", "count": 5, "freshness": "pm", "domain_filters": ["sqlite.org", "a.org", "b", "c", "d"]}
+    assert bodies[0] == {"query": "q", "type": "web", "count": 5, "freshness": "pm", "domain_filters": ["sqlite.org", "a.org"]}
     assert bodies[1] == {"query": "q", "type": "web", "count": 10, "freshness": "py"}
     assert bodies[2]["freshness"] == "pd"
     assert bodies[3] == {"query": "q", "type": "web", "count": 5}
+
+
+@pytest.mark.parametrize(("args", "said"), [
+    ({"count": 50}, "count 要在 1～10 之间，传的是 50"),
+    ({"count": 0}, "count 要在 1～10 之间，传的是 0"),
+    ({"recency_days": 0}, "recency_days 要在 1～365 之间"),
+    ({"recency_days": 400}, "recency_days 要在 1～365 之间"),
+    ({"domains": ["a", "b", "c", "d", "e", "f"]}, "domains 最多 5 个，传了 6 个"),
+])
+def test_search_args_out_of_range_go_back_to_the_agent(args, said):
+    """超出搜索服务支持的范围：不替模型改成别的数去搜，告诉它哪里不对，它自己重发。"""
+    sent = []
+    search = next(t for t in make_research_tools(_client(lambda req: sent.append(req) or httpx.Response(200, json={"results": []})))
+                  if t.name == "search_web")
+    msg = search.invoke(_call("search_web", query="q", **args))
+    data = json.loads(msg.content)
+    assert msg.status == "error" and data["kind"] == "bad_arguments" and said in data["message"] and not data["retryable"]
+    assert sent == []
 
 
 def test_search_error_raises():
@@ -115,13 +133,12 @@ def test_tools_wrap_client():
         return httpx.Response(200, json={"title": "T", "content": "body", "provider": "direct"})
 
     tools = {t.name: t for t in make_research_tools(_client(handler))}
-    assert set(tools) == {"search_web", "read_page", "ask_user", "load_skill"}
+    assert set(tools) == {"search_web", "read_page"}
     hit = json.loads(tools["search_web"].invoke(_call("search_web", query="q")).content)[0]
     assert hit["url"] == "https://a" and hit["id"].startswith("s")
     page = tools["read_page"].invoke(_call("read_page", url="https://a"))
     assert json.loads(page.content)["content"] == "body" and json.loads(page.content)["id"] == hit["id"]  # 同一个网址同一个 id
     assert page.artifact["retrieved_at"]
-    assert "拦截" in tools["ask_user"].invoke({"question": "?", "options": ["a"], "why": "w"})
 
 
 def test_missing_key():

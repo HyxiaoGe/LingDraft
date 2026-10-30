@@ -1,4 +1,4 @@
-// 调研工作台几处共用的小工具：状态文字、时间、来源的显示、实时片段和存下来的对话怎么合在一起。
+// 对话页几处共用的小工具：状态文字、时间、来源的显示、实时片段和存下来的对话怎么合在一起。
 import { useEffect, useState } from "react";
 
 export const ACTIVE = new Set(["queued", "running"]); // 服务器上还有执行没结束
@@ -39,36 +39,32 @@ export const domain = (url) => {
 };
 
 export const sourceName = (s) => s.title || domain(s.url);
-// 来源在这版报告里的编号（[3]）：后端按正文里第一次出现的先后编，每版重新编；报告没引用的来源没有编号
-export const sourceNumbers = (blocks) => Object.fromEntries((blocks || []).filter((b) => b.type === "source").map((b) => [b.source_id, b.label]));
-export const SSTATUS = { candidate: "候选", adopted: "报告引用", excluded: "你排除了" };
 
 // 正文里的引用：模型写的是来源 id，[s3fa9c1]
 export const CITE = /\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\]/g;
-// 一轮的正文里引用的来源，按第一次出现的先后编 1、2、3（和报告各自编号）
-export function citeNumbers(texts) {
+// 写到一半的引用（正文还在逐字出现，或者停在了半路）先不显示，免得露出 [sc91d6 这样的半截 id
+export const cutPartialCite = (text) => text.replace(/\[s[0-9a-f]{0,9}$/, "");
+// 一条回答引用的来源，按第一次出现的先后编 1、2、3，每条回答各自编号。不在这条对话来源里的 id 不编号（角标显示问号）
+export function citeNumbers(texts, sources) {
   const out = {};
-  for (const t of texts) for (const m of t.matchAll(CITE)) out[m[1]] ??= String(Object.keys(out).length + 1);
+  for (const t of texts) for (const m of t.matchAll(CITE)) if (sources?.[m[1]]) out[m[1]] ??= String(Object.keys(out).length + 1);
   return out;
 }
 
-export const CHECK_LABEL = {
-  claims_sourced: "论断有来源", no_excluded_sources: "没引用已排除的来源", sources_complete: "来源信息完整",
-  no_orphaned_claims: "没有失去来源的论断", scope_time: "时间在范围内", report_valid: "报告有带来源的论断",
-};
-export const checkLabel = (c) => CHECK_LABEL[c.name] || c.name;
+export const itemKey = (i) => `${i.type}:${i.id}`;
 
 // 这一轮的条目：存下来的（state.turns）为准，叠上还没存下来的实时片段。
 // 思考和正文按（消息 id，种类）对上，工具步骤按调用 id 对上；存下来的步骤还在等结果时，用实时收到的结果。
+// 重新回答时，旧回答的条目在新状态取回来之前就不显示了（live.hidden）
 export function mergeItems(saved, live) {
   if (!live) return saved;
-  const key = (i) => (i.type === "step" ? `step:${i.id}` : `${i.type}:${i.id}`);
-  const have = new Map(saved.map((i) => [key(i), i]));
-  const out = saved.map((i) => {
-    const l = i.type === "step" && i.pending ? live.items.find((x) => key(x) === key(i)) : null;
+  const kept = live.hidden ? saved.filter((i) => !live.hidden.has(itemKey(i))) : saved;
+  const have = new Map(kept.map((i) => [itemKey(i), i]));
+  const out = kept.map((i) => {
+    const l = i.type === "step" && i.pending ? live.items.find((x) => itemKey(x) === itemKey(i)) : null;
     return l && !l.pending ? l : i;
   });
-  for (const i of live.items) if (!have.has(key(i))) out.push(i);
+  for (const i of live.items) if (!have.has(itemKey(i))) out.push(i);
   return out;
 }
 
@@ -88,12 +84,10 @@ export function addLive(l, ev, data) {
     if (i < 0) items.push(s);
     else items[i] = s;
     stopThinking(items);
-  } else if (ev === "writing") {
-    return { ...l, writing: data.chars };
   } else {
     return l;
   }
-  return { ...l, items, writing: ev === "step" ? null : l.writing };
+  return { ...l, items };
 }
 
 function stopThinking(items) {

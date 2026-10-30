@@ -8,14 +8,14 @@
   每次运行到 interrupt 时打印确认点载荷；用 resume 回传答案继续。终审除了按钮的几种操作，
   也可以 {"action": "instruct", "text": "用户原话"}，由模型理解成改文案 / 改事实 / 换风格 / 导出。
 
-调研（--scenario research）：一条线程就是一段对话，和页面走同一个运行器、同一份校验。
+对话（--scenario research）：一条线程就是一段对话，和页面走同一个运行器。
   uv run python -m app.cli --scenario research new "第一句话" [--fake]
-  uv run python -m app.cli --scenario research say <thread_id> "接着说" [--quote '<json>'] [--action '<json>']
-  uv run python -m app.cli --scenario research resume <thread_id> '{"answer": "..."}'   （或 {"skip": true}）
+  uv run python -m app.cli --scenario research say <thread_id> "接着说"
   uv run python -m app.cli --scenario research retry <thread_id>
+  uv run python -m app.cli --scenario research regenerate <thread_id>
   uv run python -m app.cli --scenario research state <thread_id>
 
-  运行时逐字打印思考和正文、每一步工具；停在提问上时打印提问卡。
+  运行时逐字打印思考和正文、每一步工具。
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def poster(args) -> None:
 
 
 def _print_events(events) -> None:
-    """逐字打印：思考和正文按片段接着写，工具步骤、提问、出错各占一行。"""
+    """逐字打印：思考和正文按片段接着写，工具步骤、标题各占一行。"""
     current = None
     for ev in events:
         name, data = ev["event"], ev["data"]
@@ -85,39 +85,28 @@ def _print_events(events) -> None:
             print(f"\n[{s['kind']}] {s['text']}  {'✓' if s['ok'] else '✗ ' + s['message']}")
         elif name == "title":
             print(f"[标题] {data['title']}")
-        elif name == "interrupt" and data:
-            print("\n== 提问 ==\n" + json.dumps(data, ensure_ascii=False, indent=2))
     print()
 
 
 def research(args) -> None:
-    from app.api.research_runner import ResearchRunner, StaleInterrupt
-    from app.graph.research.answers import InvalidAnswer
+    from app.api.research_runner import ResearchRunner
 
     r = ResearchRunner(fake=args.fake)
     tid = getattr(args, "thread_id", None) or uuid.uuid4().hex[:8]
-    try:
-        if args.cmd == "new":
-            r.accept(tid, args.text)
-            inp = None
-        elif args.cmd == "say":
-            r.accept(tid, args.text, json.loads(args.quote) if args.quote else None, json.loads(args.action) if args.action else None)
-            inp = None
-        elif args.cmd == "resume":
-            it = r.pending(tid)
-            inp = r.resume_input(tid, json.loads(args.payload), it.id if it else None)
-        elif args.cmd == "retry":
-            inp = r.retry_input(tid)
-        else:
-            v = r.state_view(tid)
-            print(json.dumps({k: v.get(k) for k in ("status", "error", "title", "versions", "interrupt")}, ensure_ascii=False, indent=2))
-            return
-    except (InvalidAnswer, StaleInterrupt) as e:
-        raise SystemExit(f"不合法：{e}") from None
+    if args.cmd in ("new", "say"):
+        r.accept(tid, args.text)
+    elif args.cmd == "retry":
+        r.retry_input(tid)
+    elif args.cmd == "regenerate":
+        r.regenerate_input(tid)
+    else:
+        v = r.state_view(tid)
+        print(json.dumps({k: v.get(k) for k in ("status", "error", "title")}, ensure_ascii=False, indent=2))
+        return
     print(f"thread_id: {tid}")
-    _print_events(r._graph_events(tid, inp))
+    _print_events(r._graph_events(tid, None))
     v = r.state_view(tid)
-    print(f"== {v['status']}" + (f"：{v['error']}" if v.get("error") else "") + (f"，报告第 {v['report']['version']} 版" if v.get("report") else ""))
+    print(f"== {v['status']}" + (f"：{v['error']}" if v.get("error") else ""))
 
 
 def main() -> None:
@@ -131,13 +120,13 @@ def main() -> None:
     p_say = sub.add_parser("say")
     p_say.add_argument("thread_id")
     p_say.add_argument("text")
-    p_say.add_argument("--quote", default=None)
-    p_say.add_argument("--action", default=None)
-    p_res = sub.add_parser("resume")
+    p_res = sub.add_parser("resume")  # 海报场景
     p_res.add_argument("thread_id")
     p_res.add_argument("payload")
     p_retry = sub.add_parser("retry")
     p_retry.add_argument("thread_id")
+    p_regen = sub.add_parser("regenerate")
+    p_regen.add_argument("thread_id")
     p_state = sub.add_parser("state")
     p_state.add_argument("thread_id")
     args = ap.parse_args()

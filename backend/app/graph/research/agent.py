@@ -1,37 +1,38 @@
-"""调研 agent：一条线程就是一个 create_agent 的对话，检查点挂在 agent 上，没有外层的图。
+"""对话 agent：一条线程就是一个 create_agent 的对话，检查点挂在 agent 上，没有外层的图。
 
 用户每说一句话：先写进消息（update_state，as_node=START），再接着跑（stream(None)），直到模型给出不带工具调用的回复。
-- TurnMiddleware：第一轮开始前起标题；每轮开始、结束时记下这一轮；模型每次调用前换上系统提示词（日期按当天）；
-  一轮结束时工作稿有改动就落成新的一版，再要推荐问题。
-- ask_user 由 HumanInTheLoopMiddleware 在执行前拦截（respond），用户的回答直接成为工具结果。
-- ReportToolGuard：改报告的工具同一批里只执行第一个，后面的直接返回错误（并行执行会互相覆盖工作稿）。
+- TurnMiddleware：还没有标题时按第一句话起标题；每轮开始、结束时记下这一轮；模型每次调用前换上系统提示词（日期按当天）；
+  一轮结束时要推荐问题。
 - ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度。
 - InvalidToolCallRetryMiddleware：模型返回无法解析的工具调用时，让它带着解析错误重发，最多几次。
 - ContentGuard：模型服务的内容审核拦下请求时，去掉没通过的搜索、读页结果接着跑；去不掉就停下这一轮，之后不再带进上下文。
+用户点了停止时，运行器掐断这次运行，再用 stop_turn 把这一轮收尾（见 api.research_runner）。
 """
 
 from __future__ import annotations
 
 import json
-from datetime import date
-from pathlib import Path
+from datetime import UTC, date, datetime
 from typing import Any, NotRequired
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain.agents.middleware.types import AgentMiddleware, AgentState, ExtendedModelResponse, ModelRequest, hook_config
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.config import get_config, get_stream_writer
+from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
-from app.graph.research import history, prompts, skills, workbench
+from app.graph.research import history, prompts
 from app.graph.research.sources import parse
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Turn
-from app.graph.research.workbench import REPORT_TOOLS
 from app.model_guard import ContentBlocked
 
 TITLE_CHARS = 24  # 起标题失败时截取用户原话的长度
+TURN_END = "TurnMiddleware.after_agent"  # 一轮的最后一个节点：在它名下写状态，线程就停在这一轮结束的地方
+
+
+def now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def emit(event: dict) -> None:
@@ -42,31 +43,25 @@ def emit(event: dict) -> None:
 
 
 def system_prompt() -> str:
-    method = prompts.render("agent.skill_catalog", catalog=skills.catalog_text()) if skills.catalog() else ""
-    return prompts.render("agent.system", today=date.today().isoformat(), method=method)
-
-
-def _thread_id() -> str:
-    return str(get_config()["configurable"]["thread_id"])
+    return prompts.render("agent.system", today=date.today().isoformat())
 
 
 class TurnMiddleware(AgentMiddleware[ResearchState]):
     state_schema = ResearchState
 
-    def __init__(self, planner, out_dir: Path) -> None:
+    def __init__(self, planner) -> None:
         super().__init__()
         self.planner = planner
-        self.out_dir = Path(out_dir)
 
     def before_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         msgs = state["messages"]
         human = msgs[history.last_human(msgs)]
-        out: dict[str, Any] = {"turns": list(state.get("turns", [])) + [Turn(id=human.id, started_at=workbench.now())]}
-        if not state.get("title"):
-            text = history.said(human)["text"]
+        out: dict[str, Any] = {"turns": list(state.get("turns", [])) + [Turn(id=human.id, started_at=now())]}
+        if not state.get("title"):  # 按这段对话的第一句起（第一轮排队时就停了的，下一轮补上）
+            text = history.requests(msgs)[0]
             try:
                 title = self.planner.title(text).strip() or text[:TITLE_CHARS]
-            except Exception:  # noqa: BLE001  起标题失败不影响调研，截原话
+            except Exception:  # noqa: BLE001  起标题失败不影响回答，截原话
                 title = text[:TITLE_CHARS]
             out["title"] = title
             emit({"type": "title", "title": title})
@@ -80,47 +75,41 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         start = history.last_human(msgs)
         turn_msgs = msgs[start + 1:]
         turns = list(state.get("turns", []))
-        turn = turns[-1]
         out: dict[str, Any] = {}
         fixes = history.dangling(turn_msgs)
         if fixes:
             out["messages"] = fixes
-        version = None
-        if state.get("changes"):
-            out.update(workbench.publish(state, self.out_dir / _thread_id(), turn.id))
-            version = out["versions"][-1].n
         reply = history.final_text(turn_msgs)
         blocked = any(history.blocked_reason(m) for m in turn_msgs)
         suggestions: list[str] = []
         if reply:
             try:
-                suggestions = self.planner.suggest(history.said(msgs[start])["text"], reply, bool(state.get("outline")))[:3]
+                suggestions = self.planner.suggest(history.text_of(msgs[start]), reply)[:3]
             except Exception:  # noqa: BLE001  推荐问题失败就不给
                 suggestions = []
-        turns[-1] = turn.model_copy(update={"ended_at": workbench.now(), "version": version, "suggestions": suggestions,
-                                            "usage": history.usage_of(turn_msgs),
-                                            "outcome": "blocked" if blocked else "ok" if reply else "no_reply"})
+        turns[-1] = turns[-1].model_copy(update={"ended_at": now(), "suggestions": suggestions, "usage": history.usage_of(turn_msgs),
+                                                 "outcome": "blocked" if blocked else "ok" if reply else "no_reply"})
         out["turns"] = turns
         return out
 
 
-def _batch(messages: list, tool_call_id: str) -> list[dict]:
-    """这个工具调用所在的那一批。不一定是最后一条消息：提问回答后，HITL 会在它后面追加提问的结果，再执行同批其余的调用。"""
-    for m in reversed(messages):
-        if isinstance(m, AIMessage) and any(tc["id"] == tool_call_id for tc in m.tool_calls):
-            return list(m.tool_calls)
-    return []
+def stop_turn(values: dict, partial: AIMessage | None) -> dict[str, Any]:
+    """用户点了停止，这一轮到此为止：没跑完的工具调用补上结果，已经流出来的正文（partial）存成这一轮的回复，记下这一轮。
+    返回的更新以 TURN_END 的名义写进检查点。这一轮还没开始（排队时就停了）也要补一条记录。
 
-
-class ReportToolGuard(AgentMiddleware):
-    def wrap_tool_call(self, request, handler):
-        call = request.tool_call
-        if call["name"] in REPORT_TOOLS:
-            first = next((tc for tc in _batch(request.state.get("messages", []), call["id"]) if tc["name"] in REPORT_TOOLS), None)
-            if first is not None and first["id"] != call["id"]:
-                return ToolMessage(content=prompts.render("agent.report_tool_busy"), name=call["name"], tool_call_id=call["id"],
-                                   status="error", artifact={"hidden": True})
-        return handler(request)
+    values 是 get_state 拿到的：被掐断的那一步里已经做完的任务（比如并行的几个搜索里先回来的）的结果算在里面，
+    但还没落进检查点，update_state 时会被丢掉。所以这一轮的消息原样再写一遍（同一个 id 覆盖，不会重复）。"""
+    msgs = values["messages"]
+    start = history.last_human(msgs)
+    human, turn_msgs = msgs[start], msgs[start + 1:]
+    new: list = turn_msgs + history.dangling(turn_msgs, stopped=True)
+    if partial is not None and history.text_of(partial).strip():
+        new.append(partial)
+    turns = list(values.get("turns", []))
+    if not turns or turns[-1].id != human.id:
+        turns.append(Turn(id=human.id, started_at=now()))
+    turns[-1] = turns[-1].model_copy(update={"ended_at": now(), "suggestions": [], "usage": history.usage_of(new), "outcome": "stopped"})
+    return {"messages": new, "turns": turns}
 
 
 def _result_message(result) -> ToolMessage | None:
@@ -198,7 +187,7 @@ def _withdrawn(m: ToolMessage) -> ToolMessage:
 class ContentGuard(AgentMiddleware):
     """模型服务的内容审核拦下了请求（整个请求被拒）：
     - 新加进来的有搜索、读页的结果：一条条单独送审（搜索结果按条），去掉没通过的再试；单条都能过（合在一起才拦），这一批整个去掉再试；
-    - 新加进来的没有资料（用户的话、提问的回答、改报告返回的报告），或者去掉资料后还是拦：这一轮停下；
+    - 新加进来的是用户的话，或者去掉资料后还是拦：这一轮停下；
     - 模型的输出被截断：这一轮停下，已经流出去的思考和正文不留。
     去掉的结果写回消息（同一个 id 覆盖），之后的调用不会再带上。停下的那一轮整轮不再带进之后的上下文，
     不然以后每次请求都会被拦。停下时补一条不带工具调用的模型消息，agent 就此结束这一轮，页面据它显示固定的说明。
@@ -222,8 +211,8 @@ class ContentGuard(AgentMiddleware):
         start = next((i + 1 for i in range(len(msgs) - 1, -1, -1) if isinstance(msgs[i], AIMessage)), 0)
         tail = [m for m in msgs[start:] if isinstance(m, ToolMessage)]
         material = [m for m in tail if m.name in MATERIAL_TOOLS and m.status != "error" and m.id]
-        # 停下时的原因：新加进来的只有用户的话（这一轮的第一句、提问的回答）是 input，别的（资料、改报告返回的报告）是 material
-        reason = "input" if not tail or any(m.name == "ask_user" for m in tail) else "material"
+        # 停下时的原因：上一条模型消息之后只有用户的话（这一轮的第一句）是 input，有工具结果是 material
+        reason = "material" if tail else "input"
         if not material:
             return _stop(reason)
         whole = {m.id: _withdrawn(m) for m in material}
@@ -271,18 +260,15 @@ def _stop(reason: str) -> AIMessage:
     return AIMessage(content="", response_metadata={history.BLOCKED: reason})
 
 
-def build_agent(planner, checkpointer: BaseCheckpointSaver, out_dir: Path):
-    skills.catalog()  # 技能文件写坏了，构建时（服务启动）就报错
+def build_agent(planner, checkpointer: BaseCheckpointSaver):
     return create_agent(
         model=planner.agent_model(),
-        tools=planner.tools() + workbench.make_report_tools(planner),
+        tools=planner.tools(),
         state_schema=ResearchState,
         middleware=[
-            TurnMiddleware(planner, out_dir),
+            TurnMiddleware(planner),
             ContentGuard(planner),  # 在 TurnMiddleware 里面：重发的请求也带着换好的系统提示词
-            HumanInTheLoopMiddleware(interrupt_on={"ask_user": {"allowed_decisions": ["respond"]}}),
-            ReportToolGuard(),
-            ToolProgressMiddleware(),  # 在 ReportToolGuard 里面：被拦下的调用不报进度
+            ToolProgressMiddleware(),
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
         ],
         checkpointer=checkpointer,

@@ -1,4 +1,4 @@
-// 请求被拒（4xx/5xx）时抛出的错误带上状态码：页面据此区分“回答不对 / 卡已过期”和“连接断了”
+// 请求被拒（4xx/5xx）时抛出的错误带上状态码：页面据此区分“请求被拒”和“连接断了”
 async function httpError(resp) {
   let msg = await resp.text();
   try {
@@ -87,7 +87,7 @@ export async function getState(threadId) {
   return resp.json();
 }
 
-// ---- 调研场景 ----
+// ---- 对话 ----
 
 export async function listResearchThreads() {
   const resp = await fetch("/api/research/threads");
@@ -99,10 +99,9 @@ export async function createResearchThread(text, onEvent, signal) {
   return sse("/api/research/threads", postJson({ text }), onEvent, signal);
 }
 
-// 接着说：text 是用户的话，quote 是在报告里选中的文字，action 是报告上的按钮（排除来源、改论断、重写一节）。
-// 运行中、等提问的回答、上一轮没跑完时后端返回 409
-export async function sayResearch(threadId, { text = "", quote = null, action = null }, onEvent, signal) {
-  return sse(`/api/research/threads/${threadId}/messages`, postJson({ text, quote, action }), onEvent, signal);
+// 接着说。运行中、上一轮没跑完时后端返回 409
+export async function sayResearch(threadId, text, onEvent, signal) {
+  return sse(`/api/research/threads/${threadId}/messages`, postJson({ text }), onEvent, signal);
 }
 
 export async function getResearchState(threadId) {
@@ -111,9 +110,15 @@ export async function getResearchState(threadId) {
   return resp.json();
 }
 
-// interruptId 是这张卡的中断 id：线程已经往前走了（卡过期）或正在处理，后端返回 409
-export async function resumeResearchThread(threadId, interruptId, payload, onEvent, signal) {
-  return sse(`/api/research/threads/${threadId}/resume`, postJson({ interrupt_id: interruptId, payload }), onEvent, signal);
+// 让正在跑（或排队）的这一轮停下：只是提出请求，真正停下以后，原来那条事件流照常收到最终状态。没在跑的返回 409
+export async function stopResearchThread(threadId) {
+  const resp = await fetch(`/api/research/threads/${threadId}/stop`, { method: "POST" });
+  if (!resp.ok) throw await httpError(resp);
+}
+
+// 最后一轮重新回答：去掉这一轮的回答，从用户那句话重新跑。运行中、上一轮没跑完时后端返回 409
+export async function regenerateResearchThread(threadId, onEvent, signal) {
+  return sse(`/api/research/threads/${threadId}/regenerate`, { method: "POST" }, onEvent, signal);
 }
 
 // 失败的线程从断开的那一步接着跑；没失败的返回 409

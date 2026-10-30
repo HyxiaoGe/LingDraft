@@ -1,6 +1,6 @@
 """来源：从搜索、读页的工具结果里取出来，不另外存。
 
-每个网址的 id 由网址算出来（`s` 加 6 位十六进制），工具结果里直接带给模型，正文和报告草稿都用它引用。
+每个网址的 id 由网址算出来（`s` 加 6 位十六进制），工具结果里直接带给模型，正文里用它引用。
 同一个网址在整条线程里永远是同一个 id：并行的几次搜索各自算，也对得上。
 """
 
@@ -10,7 +10,6 @@ import hashlib
 import json
 import re
 import string
-from collections.abc import Iterable
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -18,8 +17,8 @@ from langchain_core.messages import BaseMessage, ToolMessage
 
 from app.graph.research.state import Source
 
-EXCERPT_CHARS = 400  # 来源卡和整理时看的原文开头；模型自己看的是完整的工具结果
-SOURCE_ID = re.compile(r"\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\]")  # 正文和草稿里的引用：[s3fa9c1]
+EXCERPT_CHARS = 400  # 来源卡上显示的原文开头；模型自己看的是完整的工具结果
+SOURCE_ID = re.compile(r"\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\]")  # 正文里的引用：[s3fa9c1]
 
 _DEFAULT_PORT = {"http": 80, "https": 443}
 _UNRESERVED = frozenset(string.ascii_letters + string.digits + "-._~")
@@ -71,8 +70,8 @@ def parse(msg: ToolMessage) -> Any:
         return None
 
 
-def collect_sources(messages: list[BaseMessage], excluded: Iterable[str] = ()) -> list[Source]:
-    """按第一次出现的先后列出所有来源。读到正文的来源用正文开头替换搜索摘要；用户排除的标成 excluded。"""
+def collect_sources(messages: list[BaseMessage]) -> list[Source]:
+    """按第一次出现的先后列出所有来源。读到正文的来源用正文开头替换搜索摘要。"""
     by_id: dict[str, Source] = {}
     for m in messages:
         if not isinstance(m, ToolMessage) or m.status == "error":
@@ -93,9 +92,7 @@ def collect_sources(messages: list[BaseMessage], excluded: Iterable[str] = ()) -
             src = by_id.get(data["id"]) or Source(id=data["id"], url=(data.get("url") or "").strip(), retrieved_at=when)
             by_id[src.id] = src.model_copy(update={"excerpt": content[:EXCERPT_CHARS], "excerpt_kind": "body",
                                                    "title": src.title or data.get("title") or ""})
-    out = list(by_id.values())
-    gone = set(excluded)
-    return [s.model_copy(update={"status": "excluded"}) if s.id in gone else s for s in out]
+    return list(by_id.values())
 
 
 def known_ids(messages: list[BaseMessage]) -> dict[str, str]:

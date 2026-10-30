@@ -73,7 +73,7 @@ def clock(monkeypatch) -> Clock:
 def test_reasons_come_from_the_protocol():
     assert unavailable_reason(openai.APITimeoutError(request=REQ)) == "超时"
     assert unavailable_reason(openai.APIConnectionError(request=REQ)) == "连接失败"
-    assert [unavailable_reason(status(c)) for c in (401, 402, 429, 500, 503)] == ["密钥无效", "余额不足", "请求太频繁", "服务端出错", "服务端出错"]
+    assert [unavailable_reason(status(c)) for c in (401, 402, 500, 503)] == ["密钥无效", "余额不足", "服务端出错", "服务端出错"]
     assert unavailable_reason(openai.APIError("流里的错误", REQ, body={"message": "boom"})) == "服务端出错"
     assert unavailable_reason(status(400)) is None and unavailable_reason(status(404)) is None and unavailable_reason(ValueError()) is None
 
@@ -138,3 +138,15 @@ def test_block_inside_the_stream_and_finish_reasons(clock):
     m.script = ["content_filter"]
     with pytest.raises(ContentBlocked):
         m.invoke("hi")
+
+
+def test_rate_limit_fails_the_call_but_does_not_open_the_breaker(clock):
+    m = Guarded(script=[status(500), status(429), status(429), status(500)])
+    with pytest.raises(ModelUnavailable, match="服务端出错"):
+        m.invoke("hi")
+    for _ in range(2):
+        with pytest.raises(ModelUnavailable, match="请求太频繁.*稍后再试"):
+            m.invoke("hi")
+    with pytest.raises(ModelUnavailable, match="服务端出错.*稍后再试"):  # 限流说明服务答复了：前面那次不可用不再接着算，没断开
+        m.invoke("hi")
+    assert m.invoke("hi").content == "好" and len(m.calls) == 5

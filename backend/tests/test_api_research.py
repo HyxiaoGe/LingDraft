@@ -1,4 +1,4 @@
-"""调研场景接口：建线程、接着说、回答提问、任务列表，以及几种拒绝（400 / 404 / 409）。只用假模型。"""
+"""对话场景接口：建线程、接着说、线程列表，以及几种拒绝（400 / 404 / 409）。只用假模型。"""
 
 from __future__ import annotations
 
@@ -12,100 +12,62 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
 from app.graph.research.graph import memory_checkpointer, open_sqlite_checkpointer, thread_ids
+from tests.research_helpers import events, last, say
 
 
 @pytest.fixture
 def client(tmp_path):
-    api_main.set_research_runner(ResearchRunner(fake=True, data_dir=tmp_path / "data", out_dir=tmp_path / "out"))
+    api_main.set_research_runner(ResearchRunner(fake=True, data_dir=tmp_path / "data"))
     return TestClient(api_main.app)
 
 
-def _events(resp) -> list[tuple[str, dict]]:
-    assert resp.status_code == 200, resp.text
-    out, ev = [], None
-    for line in resp.text.splitlines():
-        if line.startswith("event: "):
-            ev = line[7:]
-        elif line.startswith("data: "):
-            out.append((ev, json.loads(line[6:])))
-    return out
-
-
-def _last(events, name):
-    return [d for e, d in events if e == name][-1]
-
-
 def _new(client, text: str) -> list[tuple[str, dict]]:
-    return _events(client.post("/api/research/threads", json={"text": text}))
-
-
-def _say(client, tid: str, text: str = "", **kw):
-    return client.post(f"/api/research/threads/{tid}/messages", json={"text": text, **kw})
-
-
-def _resume(client, st: dict, payload: dict):
-    return client.post(f"/api/research/threads/{st['thread_id']}/resume", json={"interrupt_id": st["interrupt"]["id"], "payload": payload})
+    return events(client.post("/api/research/threads", json={"text": text}))
 
 
 def test_conversation_over_http(client):
-    ev = _new(client, "调研一下局部修改")
+    ev = _new(client, "查一下局部修改")
     names = [e for e, _ in ev]
     assert names[:2] == ["thread", "started"] and names[-2:] == ["state", "end"]
-    assert {"title", "step", "delta", "writing", "node"} <= set(names)
-    st = _last(ev, "state")
+    assert {"title", "step", "delta", "node"} <= set(names)
+    st = last(ev, "state")
     tid = st["thread_id"]
-    assert st["status"] == "idle" and st["report"]["version"] == 1 and st["title"] == _last(ev, "title")["title"]
+    assert st["status"] == "idle" and st["title"] == last(ev, "title")["title"] and len(st["sources"]) == 3
+    assert set(st) == {"thread_id", "exists", "scenario", "status", "error", "stopping", "title", "updated_at", "running_since", "turns", "sources"}
     assert client.get(f"/api/research/threads/{tid}/state").json() == st  # 刷新后看到的和刚才一样
 
-    ev = _events(_say(client, tid, "直接答：为什么不稳定？"))
-    st = _last(ev, "state")
-    assert len(st["turns"]) == 2 and st["turns"][1]["record"]["version"] is None and "title" not in [e for e, _ in ev]
-
-    src = next(s["id"] for s in st["sources"].values() if s["status"] == "adopted")
-    st = _last(_events(_say(client, tid, action={"type": "exclude_source", "source_id": src})), "state")
-    assert st["report"]["version"] == 2 and [x["n"] for x in st["versions"]] == [1, 2]
-
-
-def test_ask_over_http(client):
-    st = _last(_new(client, "问一下 直接答"), "state")
-    assert st["status"] == "waiting" and st["interrupt"]["type"] == "research.ask"
-    tid = st["thread_id"]
-    assert _say(client, tid, "先别问").status_code == 409  # 先回答或跳过
-    assert _resume(client, st, {"answer": "包含", "skip": True}).status_code == 400
-    r = client.post(f"/api/research/threads/{tid}/resume", json={"interrupt_id": "old", "payload": {"answer": "包含"}})
-    assert r.status_code == 409
-    end = _last(_events(_resume(client, st, {"answer": "包含"})), "state")
-    assert end["status"] == "idle" and end["interrupt"] is None
-    assert _resume(client, st, {"answer": "包含"}).status_code == 409  # 卡已经答过了
-    assert _say(client, tid, "直接答：好").status_code == 200
+    ev = events(say(client, tid, "直接答：为什么不稳定？"))
+    st = last(ev, "state")
+    assert len(st["turns"]) == 2 and st["turns"][1]["user"] == "直接答：为什么不稳定？" and "title" not in [e for e, _ in ev]
 
 
 def test_bad_messages_rejected(client):
     assert client.post("/api/research/threads", json={"text": "  "}).status_code == 400
     assert client.post("/api/research/threads", json={"request": "旧字段"}).status_code == 422
-    tid = _last(_new(client, "调研一下局部修改"), "state")["thread_id"]
-    assert _say(client, tid, "  ").status_code == 400
-    assert _say(client, tid, "看看", quote={"text": "x", "claim_ids": ["k99"], "section_ids": []}).status_code == 400
-    assert _say(client, tid, action={"type": "rewrite_section", "section_id": "c99"}).status_code == 400
-    assert _say(client, tid, "x", extra=1).status_code == 422
+    tid = last(_new(client, "直接答：好"), "state")["thread_id"]
+    assert say(client, tid, "  ").status_code == 400
+    assert say(client, tid, "看看", quote={"text": "x"}).status_code == 422  # 引用、按钮都拿掉了
+    assert say(client, tid, "x", extra=1).status_code == 422
+    assert client.post(f"/api/research/threads/{tid}/resume", json={"interrupt_id": "x", "payload": {}}).status_code == 404  # 没有这个接口了
 
 
 def test_unknown_thread_404(client):
-    for r in (client.get("/api/research/threads/nope0000/state"), _say(client, "nope0000", "x"),
-              client.post("/api/research/threads/nope0000/retry"), client.get("/api/research/threads/nope0000/events")):
+    for r in (client.get("/api/research/threads/nope0000/state"), say(client, "nope0000", "x"),
+              client.post("/api/research/threads/nope0000/retry"), client.get("/api/research/threads/nope0000/events"),
+              client.post("/api/research/threads/nope0000/stop"), client.post("/api/research/threads/nope0000/regenerate")):
         assert r.status_code == 404
 
 
 def test_list_threads_with_status(client):
-    waiting = _last(_new(client, "问一下 直接答"), "state")
-    done = _last(_new(client, "调研一下局部修改"), "state")
+    first = last(_new(client, "直接答：好"), "state")
+    done = last(_new(client, "查一下局部修改"), "state")
     rows = client.get("/api/research/threads").json()["threads"]
     by_id = {r["thread_id"]: r for r in rows}
-    assert set(by_id) == {waiting["thread_id"], done["thread_id"]}
+    assert set(by_id) == {first["thread_id"], done["thread_id"]}
     assert rows[0]["thread_id"] == done["thread_id"]  # 最近有动静的在前
-    w, d = by_id[waiting["thread_id"]], by_id[done["thread_id"]]
-    assert w["status"] == "waiting" and w["version"] is None and w["title"] == waiting["title"] and w["updated_at"]
-    assert d["status"] == "idle" and d["version"] == 1 and d["running_since"] is None
+    d = by_id[done["thread_id"]]
+    assert d == {"thread_id": done["thread_id"], "title": done["title"], "status": "idle", "updated_at": d["updated_at"], "running_since": None}
+    assert d["updated_at"]
 
 
 def test_thread_ids_without_reading_checkpoints(tmp_path):
@@ -165,6 +127,6 @@ def test_thinking_time_is_stored_with_the_message(tmp_path):
 
     p = FakeResearchPlanner()
     p._model = FakeToolModel(callbacks=[ThinkingTimer()])
-    v = Chat(tmp_path, p).say("直接答：好")
+    v = Chat(planner=p).say("直接答：好")
     thinking = next(i for i in v["turns"][0]["items"] if i["type"] == "thinking")
     assert isinstance(thinking["ms"], int)

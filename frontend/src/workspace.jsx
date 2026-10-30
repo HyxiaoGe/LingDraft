@@ -1,11 +1,11 @@
-// 调研工作台：左侧任务列表，中间对话，右侧交付面板。
-// 页面以服务器上的线程状态为准：对话、来源、报告都从状态里取。执行中的事件（思考和正文的逐字片段、工具步骤）
+// 对话页：左侧对话列表，右侧对话。
+// 页面以服务器上的线程状态为准：对话和来源都从状态里取。执行中的事件（思考和正文的逐字片段、工具步骤）
 // 叠在存下来的对话上实时显示，并提示该重新取一次状态了；所以刷新、换个页面打开、或者中途断线重连，看到的都一样。
 import { useEffect, useRef, useState } from "react";
-import { createResearchThread, followResearchThread, getResearchState, listResearchThreads, resumeResearchThread, retryResearchThread, sayResearch } from "./api.js";
+import { createResearchThread, followResearchThread, getResearchState, listResearchThreads, regenerateResearchThread, retryResearchThread, sayResearch,
+  stopResearchThread } from "./api.js";
 import { IconPlus } from "./icons.jsx";
-import { Deliverable } from "./report.jsx";
-import { ACTIVE, QUEUED, addLive, elapsed, useNow, when } from "./research.js";
+import { ACTIVE, QUEUED, addLive, elapsed, itemKey, useNow, when } from "./research.js";
 import { Conversation } from "./timeline.jsx";
 import "./workspace.css";
 
@@ -16,11 +16,10 @@ export default function Workspace() {
   const [threads, setThreads] = useState(null);
   const [tid, setTid] = useState(hashId);
   const [st, setSt] = useState(null);
-  // 这个页面发起或接上的那次执行：{said, turnsAtStart, items, writing, stage, title}
+  // 这个页面发起或接上的那次执行：{said, turnsAtStart, items, stage, title, stopping, hidden}
   const [live, setLive] = useState(null);
   const [busy, setBusyState] = useState(false);
   const [error, setError] = useState(null);
-  const [tab, setTab] = useState("report"); // 右栏的页签
   const gen = useRef(0); // 每切一次线程加一：旧线程的连接和回调发现对不上，就不再改页面
   const tidRef = useRef(tid);
   const ctl = useRef(new AbortController()); // 当前线程的连接；切走时断开（服务器上的执行照常跑）
@@ -57,7 +56,7 @@ export default function Workspace() {
     return () => clearInterval(t);
   }, [anyActive]);
   const title = st?.title || live?.title;
-  useEffect(() => { document.title = title ? `${title} · 灵稿` : tid ? "灵稿 · 调研" : "灵稿 · 新的调研"; }, [title, tid]);
+  useEffect(() => { document.title = title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : "灵稿 · 新对话"; }, [title, tid]);
 
   // ---- 切换线程 ----
 
@@ -75,7 +74,6 @@ export default function Workspace() {
     setLive(null);
     setError(null);
     setBusy(false);
-    setTab("report");
     history.replaceState(null, "", id ? `#r/${id}` : location.pathname);
     if (id) restore(id, gen.current);
   };
@@ -120,7 +118,7 @@ export default function Workspace() {
     }
   }
 
-  // 一次执行停下来了：以最终状态为准。执行中出过错但线程没算失败（比如回答提交后那一步出错，卡还在），把错误告诉用户
+  // 一次执行停下来了：以最终状态为准。执行中出过错但线程没算失败，把错误告诉用户
   function finish(g, s, errs) {
     if (g !== gen.current) return;
     clearTimeout(refetchTimer.current);
@@ -128,11 +126,11 @@ export default function Workspace() {
     setSt(s);
     setBusy(false);
     setLive(null);
-    if (errs.length && s.status !== "failed") setError(s.status === "waiting" ? `${errs.at(-1)}（这次的回答没用上，请重新回答）` : errs.at(-1));
+    if (errs.length && s.status !== "failed") setError(errs.at(-1));
     refreshList();
   }
 
-  // 执行中重新取一次状态（新存下来的对话、来源、报告）；几个事件挨着来时只取一次，最早要取的那次为准
+  // 执行中重新取一次状态（新存下来的对话、来源）；几个事件挨着来时只取一次，最早要取的那次为准
   function refetch(g, ms) {
     const due = Date.now() + ms;
     if (refetchAt.current && refetchAt.current <= due) return;
@@ -165,7 +163,7 @@ export default function Workspace() {
     } else if (ev === "title") {
       setLive((l) => (l ? { ...l, title: data.title } : l));
       refreshList();
-    } else if (ev === "delta" || ev === "step" || ev === "writing") {
+    } else if (ev === "delta" || ev === "step") {
       setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
       if (ev === "step" && !data.step.pending) refetch(g, 1500); // 新的来源
     } else if (ev === "node") {
@@ -175,13 +173,13 @@ export default function Workspace() {
     }
   };
 
-  // 跑一次（新建、接着说、回答提问或重试）：边收事件边显示，停下来以后以最终状态为准。
-  // said：用户这次说的话，存下来之前先在对话里显示
-  async function run(fn, said) {
+  // 跑一次（新建、接着说、重新回答或重试）：边收事件边显示，停下来以后以最终状态为准。
+  // said：用户这次说的话，存下来之前先在对话里显示；extra：这次执行的其他显示信息（重新回答时要藏起来的旧条目）
+  async function run(fn, said, extra = {}) {
     const g = gen.current;
     setBusy(true);
     setError(null);
-    setLive({ items: [], said, turnsAtStart: st?.turns?.length || 0, stage: "正在准备…" });
+    setLive({ items: [], said, turnsAtStart: st?.turns?.length || 0, stage: "正在准备…", ...extra });
     const errs = [];
     try {
       const s = await fn(onEvent(g, errs), ctl.current.signal);
@@ -191,7 +189,7 @@ export default function Workspace() {
       setBusy(false);
     } catch (e) {
       if (e.aborted || g !== gen.current) return;
-      // 话被拒（400）、正在跑或卡已过期（409）、连接断了（没有状态码）——都回服务器接上当前进度
+      // 话被拒（400）、正在跑或上一轮没跑完（409）、连接断了（没有状态码）——都回服务器接上当前进度
       const recoverable = tidRef.current && (!e.status || e.status === 400 || e.status === 409);
       if (e.status || !recoverable) setError(String(e.message || e));
       if (recoverable) {
@@ -203,27 +201,30 @@ export default function Workspace() {
     }
   }
 
-  // 报告上的操作也是用户的一句话：带上选中的文字或按钮操作，交给模型处理
-  const say = (text, extra = {}) => {
-    const id = tidRef.current;
-    return run((cb, sig) => sayResearch(id, { text, ...extra }, cb, sig), { text, ...extra });
-  };
   const act = {
-    start: (text) => run((cb, sig) => createResearchThread(text, cb, sig), { text }),
-    say: (text) => say(text),
-    // 回答绑定到当前这张卡：中断 id 取自出卡时的状态；卡过期了后端会拒（409），不会改到别的卡上
-    answerAsk: (answer) => {
-      const s = st;
-      return run((cb, sig) => resumeResearchThread(s.thread_id, s.interrupt?.id, answer == null ? { skip: true } : { answer }, cb, sig), null);
+    start: (text) => run((cb, sig) => createResearchThread(text, cb, sig), text),
+    say: (text) => {
+      const id = tidRef.current;
+      return run((cb, sig) => sayResearch(id, text, cb, sig), text);
     },
-    exclude: (sid) => say("", { action: { type: "exclude_source", source_id: sid } }),
-    editClaim: (kid, statement) => say("", { action: { type: "edit_claim", claim_id: kid, statement } }),
-    rewrite: (secId, text) => say(text || "", { action: { type: "rewrite_section", section_id: secId } }),
-    quote: (text, quote) => say(text, { quote }),
     retry: () => run((cb, sig) => retryResearchThread(tidRef.current, cb, sig), null),
-    openReport: () => {
-      setTab("report");
-      document.querySelector(".ws-panel")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    // 最后一轮的旧回答先藏起来，新回答在同一轮里接着出现
+    regenerate: () => {
+      const hidden = new Set((st?.turns?.at(-1)?.items || []).map(itemKey));
+      return run((cb, sig) => regenerateResearchThread(tidRef.current, cb, sig), null, { hidden });
+    },
+    // 只是提出停下：服务器在下一个字或下一步之前停，最终状态照常从这次执行的事件流里来
+    stop: async () => {
+      const g = gen.current;
+      if (!tidRef.current) return; // 新对话刚发出去，服务器还没给线程 id：这时还没开始跑
+      setLive((l) => (l ? { ...l, stopping: true } : l));
+      try {
+        await stopResearchThread(tidRef.current);
+      } catch (e) {
+        if (g !== gen.current || e.status === 409) return; // 409：这一轮刚好已经跑完
+        setLive((l) => (l ? { ...l, stopping: false } : l));
+        setError(`没停下来：${e.message || e}`);
+      }
     },
   };
 
@@ -231,16 +232,14 @@ export default function Workspace() {
     <div className="ws">
       <Sidebar threads={threads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={select} />
       <Conversation st={st} live={live} busy={busy} error={error} now={now} act={act} isNew={!tid} />
-      <Deliverable st={st} busy={busy} act={act} isNew={!tid} tab={tab} setTab={setTab} />
     </div>
   );
 }
 
-// ---------------- 左栏：任务列表 ----------------
+// ---------------- 左栏：对话列表 ----------------
 
 const GROUPS = [
   ["active", "进行中", (t) => ACTIVE.has(t.status)],
-  ["answer", "等你回答", (t) => t.status === "waiting"],
   ["failed", "没跑完", (t) => t.status === "failed"],
   ["idle", "最近", (t) => t.status === "idle"],
 ];
@@ -248,9 +247,8 @@ const GROUPS = [
 function rowSub(t, now) {
   if (t.status === "queued") return "排队中";
   if (t.status === "running") return t.running_since ? `进行中 · ${elapsed(t.running_since, now)}` : "进行中";
-  if (t.status === "waiting") return "有个问题等你回答";
   if (t.status === "failed") return "没跑完，可以重试";
-  return t.version ? `调研报告 · 第 ${t.version} 版` : "对话";
+  return "";
 }
 
 function Sidebar({ threads, current, st, live, busy, now, onSelect }) {
@@ -262,21 +260,21 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect }) {
     const patch = { ...(busy ? { status: "running", running_since: st?.running_since || mine?.running_since } : st ? { status: st.status } : {}),
       ...(title ? { title } : {}) };
     rows = mine ? rows.map((t) => (t.thread_id === current ? { ...t, ...patch } : t))
-      : [{ thread_id: current, title: live?.said?.text || "新的调研", status: "running", ...patch }, ...rows];
+      : [{ thread_id: current, title: live?.said || "新对话", status: "running", ...patch }, ...rows];
   }
   return (
     <aside className="ws-side">
       <div className="ws-brand">
         <span className="logo">灵</span>
         <span className="name">灵稿</span>
-        <span className="tag">调研</span>
+        <span className="tag">对话</span>
       </div>
       <button className="ws-new" onClick={() => onSelect(null)} aria-current={!current ? "page" : undefined}>
-        <IconPlus size={15} /> 新建调研
+        <IconPlus size={15} /> 新对话
       </button>
-      <nav className="ws-groups" aria-label="调研任务">
-        {threads === null && <div className="ws-side-empty">正在取任务列表…</div>}
-        {threads !== null && rows.length === 0 && <div className="ws-side-empty">还没有调研任务</div>}
+      <nav className="ws-groups" aria-label="对话列表">
+        {threads === null && <div className="ws-side-empty">正在取对话列表…</div>}
+        {threads !== null && rows.length === 0 && <div className="ws-side-empty">还没有对话</div>}
         {GROUPS.map(([key, name, test]) => {
           const items = rows.filter(test);
           if (!items.length) return null;
@@ -290,7 +288,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect }) {
                   <span className={"dot " + key} />
                   <span className="body">
                     <span className="title" title={t.title}>{t.title}</span>
-                    <span className="sub">{rowSub(t, now)}</span>
+                    {rowSub(t, now) && <span className="sub">{rowSub(t, now)}</span>}
                   </span>
                   <span className="time">{when(t.updated_at, now)}</span>
                 </a>

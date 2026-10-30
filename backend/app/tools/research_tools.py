@@ -1,7 +1,6 @@
-"""调研 agent 查资料的工具：搜索、读网页、问用户、读取调研方法。工具描述在 app/graph/research/prompts.toml 的 [tools.*]。
+"""agent 查资料的工具：搜索、读网页。工具描述在 app/graph/research/prompts.toml 的 [tools.*]。
 
-搜索和读页的结果里每个网址带一个来源 id（见 app.graph.research.sources），模型在正文和报告草稿里用它引用。
-ask_user 的函数体不会被执行，由 HumanInTheLoopMiddleware 在执行前拦截，用户的回答直接作为工具结果。
+搜索和读页的结果里每个网址带一个来源 id（见 app.graph.research.sources），模型在正文里用它引用。
 """
 
 from __future__ import annotations
@@ -13,11 +12,12 @@ from langchain.tools import ToolRuntime
 from langchain_core.tools import ToolException, tool
 from pydantic import BaseModel, Field
 
-from app.graph.research import prompts, skills
+from app.graph.research import prompts
 from app.graph.research.sources import known_ids, source_id, url_key
 from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError
 
 MAX_COUNT = 10
+MAX_DAYS = 365
 MAX_DOMAINS = 5
 
 
@@ -40,10 +40,6 @@ class ReadArgs(BaseModel):
     url: str = Field(description=_arg("read_page", "url"))
 
 
-class SkillArgs(BaseModel):
-    name: str = Field(description=_arg("load_skill", "name"))
-
-
 def freshness(recency_days: int | None) -> str | None:
     """搜索服务只认 Brave 风格的四档（天、周、月、年），向上取整。"""
     if recency_days is None:
@@ -54,35 +50,28 @@ def freshness(recency_days: int | None) -> str | None:
     return "py"
 
 
-@tool("ask_user", description=prompts.render("tools.ask_user.description"))
-def ask_user(question: str, options: list[str], why: str) -> str:
-    return "（由中间件拦截，不会执行）"
-
-
-@tool("load_skill", description=prompts.render("tools.load_skill.description"), args_schema=SkillArgs)
-def load_skill(name: str) -> str:
-    skill = skills.catalog().get(name.strip())
-    if skill is None:
-        raise ToolException(prompts.render("tools.load_skill.unknown", name=name, names="、".join(skills.catalog())))
-    return skill.content()
-
-
-load_skill.handle_tool_error = True
+def _bad_args(count: int, recency_days: int | None, sites: list[str]) -> str | None:
+    """参数超出搜索服务支持的范围：不替模型改，告诉它哪里不对，让它自己重发。"""
+    problems = []
+    if not 1 <= count <= MAX_COUNT:
+        problems.append(f"count 要在 1～{MAX_COUNT} 之间，传的是 {count}")
+    if recency_days is not None and not 1 <= recency_days <= MAX_DAYS:
+        problems.append(f"recency_days 要在 1～{MAX_DAYS} 之间（不限时间就不填），传的是 {recency_days}")
+    if len(sites) > MAX_DOMAINS:
+        problems.append(f"domains 最多 {MAX_DOMAINS} 个，传了 {len(sites)} 个")
+    return "；".join(problems) or None
 
 
 def make_research_tools(client: GatewayClient) -> list:
-    skills.catalog()  # 技能文件写坏了，在构建工具（服务启动）时就报错，不等 agent 读取时才发现
-
     @tool("search_web", description=prompts.render("tools.search_web.description"), args_schema=SearchArgs,
           response_format="content_and_artifact")
     def search_web(query: str, runtime: ToolRuntime, count: int = 5, recency_days: int | None = None,
                    domains: list[str] | None = None):
-        # 超出范围的取值收进范围，不为此多耗一轮模型调用
-        count = max(1, min(count, MAX_COUNT))
-        days = max(1, min(recency_days, 365)) if recency_days is not None else None
-        sites = [d.strip() for d in domains or [] if d.strip()][:MAX_DOMAINS]
+        sites = [d.strip() for d in domains or [] if d.strip()]
+        if problem := _bad_args(count, recency_days, sites):
+            raise ToolException(json.dumps({"ok": False, "kind": "bad_arguments", "message": problem, "retryable": False}, ensure_ascii=False))
         try:
-            hits = client.search(query, count=count, freshness=freshness(days), domains=sites)
+            hits = client.search(query, count=count, freshness=freshness(recency_days), domains=sites)
         except GatewayAuthError:
             raise  # 密钥配置问题：让这次运行失败、把错误亮出来，改好配置再重试
         except GatewayError as e:
@@ -109,4 +98,4 @@ def make_research_tools(client: GatewayClient) -> list:
             res = {"id": source_id((res.get("url") or url).strip(), known_ids(runtime.state.get("messages", []))), **res}
         return json.dumps(res, ensure_ascii=False), {"retrieved_at": _now()}
 
-    return [search_web, read_page, ask_user, load_skill]
+    return [search_web, read_page]

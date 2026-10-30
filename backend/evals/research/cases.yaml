@@ -1,87 +1,31 @@
-# 调研回放评测用例：每个用例是一段多轮对话。字段和检查方式见 app/evals/research.py，写用例的约定见 ../README.md。
-# 按位置写的选中、按钮（quote_sentence、exclude、rewrite_section）都对着上一轮结束时的报告。
+# 对话回放评测用例：每个用例是一段对话，每一项是用户说的一句话。字段和检查方式见 app/evals/research.py，写用例的约定见 ../README.md。
+# 2026-10-30 定的先只做 chat：用例都是日常会问的问题，只看回答好不好、来源对不对。
 
-- id: cost
-  source: 交互约定场景 1、3、4、6（docs/调研交互约定.md，2026-10-30）
+- id: ai-week
+  source: 先只做 chat（2026-10-30）：要查最新消息的日常问题
   turns:
-    - say: DeepSeek V3 的训练成本到底是多少？不同说法差在哪？
-      expect: {version: true, asked: false, min_reads: 1}
-      judge: 正文先给结论，说明了几种说法各自的口径和出处；正文没有把报告整篇复述一遍；正文和报告的结论一致。
-    - say: 为什么 SemiAnalysis 的估计比官方高这么多？
-      judge: 正文直接回答了差距从哪来，依据写了出处；如果正文说更新了报告，报告里确实有相应内容。
-    - say: 再查一下有没有第三方按 GPU 小时重新估算过。
-      expect: {version: true, searched: true}
-      judge: 正文说清了查到了什么、没查到什么；报告里有这次补查的内容。
-    - say: 这条来源不靠谱，去掉
-      exclude: "1"
-      expect: {version: true}
-      judge: 正文说明了排除这条来源影响了哪些结论。
-
-- id: simple
-  source: 交互约定场景 2（2026-10-30）：简单问题直接答，不出报告；要了才出
-  turns:
-    - say: 新加坡现在是什么季节？
-      expect: {version: false, asked: false}
-      judge: 正文直接回答了新加坡现在是什么季节（或气候特点），没有为了走流程写成长篇调研。
-    - say: 整理成一份报告
-      expect: {version: true}
-
-- id: rewrite
-  source: 交互约定场景 5（2026-10-30）：只改用户指的地方，而且改到位
-  turns:
-    - say: 调研一下 SQLite 的 WAL 模式和默认的回滚日志模式在并发读写上的区别，整理成报告。
-      expect: {version: true}
-    - say: 这里说得太绝对了
-      quote_sentence: 1
-      expect: {version: true, only_section: quoted}
-      judge: 报告里用户选中的那句话改得不再绝对（加了条件、范围或例外），不只是换了个说法。
-    - say: 第一节更简短
-      expect: {version: true, only_section: 1, shorter: 1}
-
-- id: ask
-  source: 交互约定场景 8；探针 ask（docs/probe/ask，2026-10-28）：要明确推荐，而数据能不能出网只有用户知道，应先问
-  turns:
-    - say: 我们公司要给内部员工上一个基于大模型的知识库问答。帮我在「直接调 DeepSeek 官方 API」和「私有化部署开源 DeepSeek 模型」之间选一个，给出明确推荐和理由。
-      answers:
-        - 内部文档不允许发给外部服务；公司有 GPU 服务器，也有人能运维。
-      expect: {asked: true, version: true, skill: comparison}
-      judge: 给出了一个明确的推荐（不是只说看情况），推荐和用户回答里说的条件一致，并说明了在什么情况下另一个选项更合适。
-
-- id: vague
-  source: 交互约定第 10 条（开头澄清进对话，2026-10-30）；探针 autonomy 例 3：需求太宽，应先问清行业或场景
-  turns:
-    - say: 帮我调研一下大模型的落地情况
-      answers:
-        - 制造业，主要看质检和设备运维这两类场景；地域以中国大陆为主。
-      expect: {asked: true}
-      judge: 围绕用户回答的行业和场景（制造业的质检、设备运维）展开，不是泛泛的大模型落地综述。
-
-# ---- 以前的单轮用例（2026-10-28、10-29），换成对话后保留，按需用 --case 跑 ----
+    - say: 最近一周AI圈发生了什么
+      expect: {searched: true}
+      judge: 正文列出了几件具体的事，每件写了大致的日期；都是最近一周左右的事，没有把明显更早的旧闻说成这周的；不是只空泛地概括趋势。
 
 - id: weather
-  source: 探针 autonomy 例 1（docs/probe/autonomy，2026-10-28）：简单事实题，应直接答
+  source: 先只做 chat（2026-10-30）：要查实时信息的日常问题
   turns:
-    - say: 最近新加坡的天气情况如何？
-      expect: {asked: false, skill: null, max_searches: 4}
-      judge: 正文给出了新加坡最近几天或接下来几天的具体天气（例如气温、降雨、天气现象）并写明对应的日期；已经发生的天气和预报分得清。
+    - say: 深圳这周会不会降温
+      expect: {searched: true}
+      judge: 正文直接回答了会不会降温，给了这几天的具体气温或变化并写明日期；预报和已经发生的分得清。
 
-- id: cost-conflict
-  source: 探针 autonomy 例 4（docs/probe/autonomy，2026-10-28）：来源说法不一致，应自己核对口径，不问用户
+- id: fact
+  source: 先只做 chat（2026-10-30）：简单事实题，应该简短直接地答
   turns:
-    - say: DeepSeek V3 的训练成本到底是多少？不同说法差很多
-      expect: {asked: false, skill: fact-check, min_reads: 1}
-      judge: 报告说明了不同说法各自算的是什么范围（口径）和各自的出处，没有把某一个口径的数字说成全部成本。
+    - say: 珠穆朗玛峰现在的官方高度是多少？
+      judge: 正文一开头就给出了一个具体的高度数字，并说明是哪次测量或谁公布的；回答简短，没有写成长篇。
 
-- id: wal-vs-rollback
-  source: 真实模型验收（2026-10-29，第一次搜索注入 502 那次）：技术机制对比，不用选择，应读官方文档
+- id: cost
+  source: 先只做 chat（2026-10-30）：说法不一的问题，第二句接着上一轮追问
   turns:
-    - say: SQLite 的 WAL 模式相比默认的回滚日志模式，在并发读写上有什么区别？
-      expect: {asked: false, skill: comparison, min_reads: 1, cites_domain: sqlite.org}
-      judge: 说明了两种模式下读和写会不会互相阻塞、同时能有几个写者（两种模式相同的地方合并说明也算）。
-
-- id: landscape-2026
-  source: 调研方法（技能）上线时新增（2026-10-29）：限定了时间的现状盘点，搜索应限定时间，清单应说明可能不全
-  turns:
-    - say: 2026 年以来国产开源大模型有哪些重要发布？
-      expect: {asked: false, skill: landscape, recency: true}
-      judge: 报告列出的发布都写了时间（到月即可），来源没给时间的写明了没查到；列出的发布都在 2026 年以内（更早的材料只作背景并说明了）；说明了清单可能不全。
+    - say: DeepSeek V3训练成本多少
+      expect: {searched: true, min_reads: 1}
+      judge: 正文给出了具体数字，并说明这个数字算的是什么范围和出处；有不同说法时说明了各自算的是什么；没有把某一种算法的数字说成全部成本。
+    - say: 为什么 SemiAnalysis 的估计比官方高这么多？
+      judge: 正文直接回答了差距从哪来，依据写了出处；接着上一轮说，没有把训练成本从头再讲一遍。

@@ -13,9 +13,8 @@ from pydantic import BaseModel, ConfigDict
 
 from app import config
 from app.api.favicon import Favicons
-from app.api.research_runner import NothingToRetry, NotIdle, ResearchRunner, StaleInterrupt
+from app.api.research_runner import NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
-from app.graph.research.answers import InvalidAnswer
 
 app = FastAPI(title="LingDraft PoC")
 _runner: GraphRunner | None = None
@@ -153,70 +152,62 @@ async def export_zip(thread_id: str):
     return _zip(tdir, tdir, f"poster-{thread_id}.zip")
 
 
-# ---- 调研场景 ----
+# ---- 对话场景（模块和接口路径沿用 research） ----
 
 
-class ResearchCreateBody(BaseModel):
+class ResearchMessageBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str
 
 
-class ResearchMessageBody(BaseModel):
-    """用户接着说的一句话。quote 是在报告里选中的文字，action 是报告上的按钮（排除来源、改论断、重写一节）；都和这句话一起交给模型。"""
-
-    model_config = ConfigDict(extra="forbid")
-    text: str = ""
-    quote: dict | None = None
-    action: dict | None = None
+def _text(body: ResearchMessageBody) -> str:
+    if not body.text.strip():
+        raise HTTPException(400, "说点什么再发送")
+    return body.text
 
 
 @app.get("/api/research/threads")
 async def research_list():
-    """任务列表：所有调研线程的标题和状态。"""
+    """线程列表：所有对话的标题和状态。"""
     return {"threads": research().list_threads()}
 
 
 @app.post("/api/research/threads")
-async def research_create(body: ResearchCreateBody):
-    if not body.text.strip():
-        raise HTTPException(400, "说点什么再发送")
-    try:
-        return _sse(research().start(uuid.uuid4().hex[:8], body.text))
-    except InvalidAnswer as e:
-        raise HTTPException(400, str(e)) from None
+async def research_create(body: ResearchMessageBody):
+    return _sse(research().start(uuid.uuid4().hex[:8], _text(body)))
 
 
 @app.post("/api/research/threads/{thread_id}/messages")
 async def research_say(thread_id: str, body: ResearchMessageBody):
-    """接着说。运行中、等提问的回答、上一轮没跑完时返回 409。"""
+    """接着说。运行中、上一轮没跑完时返回 409。"""
     r = research()
     _view(r, thread_id)
+    text = _text(body)
     try:
-        return _sse(r.say(thread_id, body.text, body.quote, body.action))
+        return _sse(r.say(thread_id, text))
     except (RunConflict, NotIdle) as e:
         raise HTTPException(409, str(e)) from None
-    except InvalidAnswer as e:
-        raise HTTPException(400, str(e)) from None
 
 
-class ResearchResumeBody(BaseModel):
-    """interrupt_id 是页面上这张卡的中断 id（state / interrupt 事件里给的）；对不上说明卡已过期。"""
+@app.post("/api/research/threads/{thread_id}/stop")
+async def research_stop(thread_id: str):
+    """让正在跑（或排队）的这一轮停下；停下的结果从事件流里来。没在跑的返回 409。"""
+    r = research()
+    _view(r, thread_id)
+    if not r.stop(thread_id):
+        raise HTTPException(409, "这个对话没有在运行")
+    return {"ok": True}
 
-    model_config = ConfigDict(extra="forbid")
-    interrupt_id: str
-    payload: dict
 
-
-@app.post("/api/research/threads/{thread_id}/resume")
-async def research_resume(thread_id: str, body: ResearchResumeBody):
+@app.post("/api/research/threads/{thread_id}/regenerate")
+async def research_regenerate(thread_id: str):
+    """最后一轮重新回答。运行中、上一轮没跑完、还没有回答时返回 409。"""
     r = research()
     _view(r, thread_id)
     try:
-        return _sse(r.resume(thread_id, body.payload, body.interrupt_id))
-    except (RunConflict, StaleInterrupt) as e:
+        return _sse(r.regenerate(thread_id))
+    except (RunConflict, NotIdle, NothingToRegenerate) as e:
         raise HTTPException(409, str(e)) from None
-    except InvalidAnswer as e:
-        raise HTTPException(400, str(e)) from None
 
 
 @app.post("/api/research/threads/{thread_id}/retry")

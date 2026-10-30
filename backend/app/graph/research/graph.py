@@ -1,4 +1,4 @@
-"""调研线程的存储：检查点（SQLite / 内存）和线程列表。图本身就是调研 agent（见 agent.build_agent）。"""
+"""对话线程的存储：检查点（SQLite / 内存）和线程列表。图本身就是对话 agent（见 agent.build_agent）。"""
 
 from __future__ import annotations
 
@@ -13,10 +13,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from app.graph.research.agent import build_agent
 from app.research_llm import ResearchPlanner
 
-ALLOWED_MODELS = [
-    ("app.graph.research.state", n)
-    for n in ("OutlineNode", "Claim", "SectionText", "Sentence", "ReportVersion", "CheckResult", "Turn", "Usage")
-]
+ALLOWED_MODELS = [("app.graph.research.state", n) for n in ("Turn", "Usage")]
 
 
 def make_serde() -> JsonPlusSerializer:
@@ -47,5 +44,5 @@ def thread_ids(checkpointer: BaseCheckpointSaver) -> list[str]:
     raise TypeError(f"不支持列出线程的检查点存储：{type(checkpointer).__name__}")
 
 
-def build_graph(planner: ResearchPlanner, checkpointer: BaseCheckpointSaver, out_dir: Path):
-    return build_agent(planner, checkpointer, Path(out_dir))
+def build_graph(planner: ResearchPlanner, checkpointer: BaseCheckpointSaver):
+    return build_agent(planner, checkpointer)

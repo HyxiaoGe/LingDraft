@@ -5,6 +5,7 @@
 
 熔断：同一个模型连续 FAILURES 次不可用就断开 COOLDOWN_S 秒，这期间的调用直接失败、不发请求；
 冷却完放一个调用去试，成功就恢复，失败接着断开。请求本身的错误（400 之类）说明服务答复了，不算不可用。
+429（限流）也是服务答复了：这次调用失败，但不算进熔断，不然请求一密就把所有线程一起断开几分钟。
 状态只在进程内存里，单进程部署够用。
 """
 
@@ -54,8 +55,6 @@ def unavailable_reason(e: BaseException) -> str | None:
             return "密钥无效"
         if code == 402:
             return "余额不足"
-        if code == 429:
-            return "请求太频繁"
         return "服务端出错" if code >= 500 else None
     if type(e) is openai.APIError:  # 流里的错误事件：生成到一半服务端出错
         return "服务端出错"
@@ -130,6 +129,9 @@ class GuardedChatModel:
         if is_blocked(e):
             self.breaker.success(key)  # 服务答复了
             return ContentBlocked(output=False)
+        if isinstance(e, openai.RateLimitError):  # SDK 重试完还是限流：这一次失败，服务本身是好的
+            self.breaker.success(key)
+            return ModelUnavailable(_message("请求太频繁", None))
         reason = unavailable_reason(e)
         if reason:
             return self.breaker.failure(key, reason, str(e))

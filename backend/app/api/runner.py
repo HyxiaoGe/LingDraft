@@ -43,12 +43,15 @@ class RunRegistry(Protocol):
     """线程的运行占位：页面刷新回来时据此判断“还在跑”，重复提交据此拒绝。
 
     admit 是原子的“占位成功 / 已被占用”，调用方不加锁；多 worker 部署时换成共享存储的实现（如 Redis SET NX），接口不变。
-    get 返回 {"queued": 是否还在排队, "since": 开始执行的时间（ISO，开始后才有）}。
+    get 返回 {"queued": 是否还在排队, "since": 开始执行的时间（ISO，开始后才有）, "stopping": 用户是不是点了停止}。
+    request_stop 给占着位的执行记一个“要停”，执行自己去查（stop_requested）、自己停；没有执行占着位返回 False。
     """
 
     def admit(self, key: str) -> bool: ...
     def started(self, key: str) -> None: ...
     def get(self, key: str) -> dict | None: ...
+    def request_stop(self, key: str) -> bool: ...
+    def stop_requested(self, key: str) -> bool: ...
     def release(self, key: str) -> None: ...
 
 
@@ -63,7 +66,7 @@ class LocalRunRegistry:
         with self._mu:
             if key in self._runs:
                 return False
-            self._runs[key] = {"queued": True}
+            self._runs[key] = {"queued": True, "stopping": False}
             return True
 
     def started(self, key: str) -> None:
@@ -75,6 +78,17 @@ class LocalRunRegistry:
         with self._mu:
             run = self._runs.get(key)
             return dict(run) if run else None
+
+    def request_stop(self, key: str) -> bool:
+        with self._mu:
+            if key not in self._runs:
+                return False
+            self._runs[key]["stopping"] = True
+            return True
+
+    def stop_requested(self, key: str) -> bool:
+        with self._mu:
+            return bool(self._runs.get(key, {}).get("stopping"))
 
     def release(self, key: str) -> None:
         with self._mu:

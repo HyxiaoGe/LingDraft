@@ -9,13 +9,13 @@ from app.prompting import ENV
 
 def test_every_prompt_parses():
     texts = prompts.texts()
-    assert {"agent.system", "consolidate.system", "tools.search_web.description"} <= texts.keys()
+    assert {"agent.system", "title.system", "suggest.system", "tools.search_web.description"} <= texts.keys()
     for src in texts.values():
         ENV.parse(src)
 
 
 def test_missing_variable_fails_loudly():
     with pytest.raises(UndefinedError):
-        prompts.render("consolidate.user")
+        prompts.render("agent.system")  # 少了 today
     with pytest.raises(KeyError, match="没有 agent.nope"):
         prompts.render("agent.nope")
