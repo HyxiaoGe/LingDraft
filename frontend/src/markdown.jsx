@@ -1,6 +1,7 @@
 // 正文的小 Markdown：段落、标题、列表、引用块、表格、粗体、行内代码、链接，再加上引用角标 [s3fa9c1]。
 // 只认这些常见写法，不认识的照原样显示；全部按文字渲染，不插入 HTML。
 import React from "react";
+import { isRule } from "./research.js";
 
 const INLINE = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\])/g;
 
@@ -22,15 +23,16 @@ function inline(text, cite, key = "") {
 }
 
 const cells = (line) => line.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
-const isRule = (line) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line);
 const ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
 
-// cite(sid) 返回引用角标；正文还在逐字出现时，最后一段可能写到一半，照常渲染
+// cite(sid) 返回引用角标；正文还在逐字出现时，最后一段可能写到一半，照常渲染。
+// 每块的 key 用它开始的那一行：逐字出现时段落、列表往下长，key 不变，已经显示的部分不会整块重建
 export function Markdown({ text, cite }) {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const blocks = [];
   for (let i = 0; i < lines.length;) {
     const line = lines[i];
+    const start = i;
     if (!line.trim()) { i++; continue; }
     const h = line.match(/^(#{1,4})\s+(.*)$/);
     if (h) {
@@ -59,7 +61,7 @@ export function Markdown({ text, cite }) {
     if (line.startsWith(">")) {
       const quote = [];
       for (; i < lines.length && lines[i].startsWith(">"); i++) quote.push(lines[i].replace(/^>\s?/, ""));
-      blocks.push(<blockquote key={`q${i}`}>{inline(quote.join(" "), cite, `q${i}`)}</blockquote>);
+      blocks.push(<blockquote key={`q${start}`}>{inline(quote.join(" "), cite, `q${start}`)}</blockquote>);
       continue;
     }
     if (ITEM.test(line)) {
@@ -74,8 +76,8 @@ export function Markdown({ text, cite }) {
       const base = Math.min(...items.map((x) => x.indent));
       const List = ordered ? "ol" : "ul";
       blocks.push(
-        <List key={`l${i}`}>
-          {items.map((x, k) => <li key={k} className={x.indent > base ? "sub" : undefined}>{inline(x.text, cite, `l${i}-${k}`)}</li>)}
+        <List key={`l${start}`}>
+          {items.map((x, k) => <li key={k} className={x.indent > base ? "sub" : undefined}>{inline(x.text, cite, `l${start}-${k}`)}</li>)}
         </List>,
       );
       continue;
@@ -85,7 +87,7 @@ export function Markdown({ text, cite }) {
       para.push(lines[i]);
     }
     if (!para.length) { para.push(lines[i]); i++; }
-    blocks.push(<p key={`p${i}`}>{para.flatMap((l, k) => (k ? [<br key={`br${k}`} />, ...inline(l, cite, `p${i}-${k}`)] : inline(l, cite, `p${i}-${k}`)))}</p>);
+    blocks.push(<p key={`p${start}`}>{para.flatMap((l, k) => (k ? [<br key={`br${k}`} />, ...inline(l, cite, `p${start}-${k}`)] : inline(l, cite, `p${start}-${k}`)))}</p>);
   }
   return <div className="md">{blocks}</div>;
 }

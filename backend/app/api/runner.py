@@ -27,7 +27,6 @@ from app.graph.poster.nodes import _element_view
 from app.llm import ArkPlanner, FakePlanner
 
 _THREAD_ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
-POLL_S = 0.2  # 连接查日志的间隔
 HEARTBEAT_S = 15  # 这么久没有事件就发一行注释保活：nginx 之类的代理默认 60 秒没数据就断开
 
 
@@ -102,7 +101,8 @@ class EventLog(Protocol):
     """每个线程最近一次执行的事件，按序号编号（1 起）；页面断线或刷新后从序号接着读。
 
     open 开始一次执行并把它记成这个线程的当前执行；append / close 只写自己那次执行，旧执行收尾时写不进新执行。
-    close 追加一个 end 事件。多 worker 部署时换成共享存储的实现（如 Redis Stream），接口不变。
+    close 追加一个 end 事件。wait 让连接等到有新事件再读，不轮询：逐字的片段一写进来就发出去。
+    多 worker 部署时换成共享存储的实现（如 Redis Stream，wait 用阻塞读），接口不变。
     """
 
     def open(self, key: str) -> str: ...
@@ -110,6 +110,7 @@ class EventLog(Protocol):
     def close(self, run: str) -> None: ...
     def current(self, key: str) -> str | None: ...
     def read(self, run: str, after: int) -> tuple[list[tuple[int, dict]], bool]: ...  # (序号大于 after 的事件, 是否已结束)
+    async def wait(self, run: str, after: int, timeout: float) -> bool: ...  # 等到有序号大于 after 的事件或已结束；超时返回 False
 
 
 class LocalEventLog:
@@ -124,7 +125,7 @@ class LocalEventLog:
     def open(self, key: str) -> str:
         run = uuid.uuid4().hex[:8]
         with self._mu:
-            self._runs[run] = {"key": key, "events": [], "ended": False}
+            self._runs[run] = {"key": key, "events": [], "ended": False, "waiters": []}
             self._current[key] = run
             ended = [r for r, log in self._runs.items() if log["ended"]]
             for r in ended[: max(0, len(self._runs) - self._max)]:  # 只丢已结束的，最早的先丢
@@ -136,15 +137,21 @@ class LocalEventLog:
     def append(self, run: str, event: dict) -> None:
         with self._mu:
             log = self._runs.get(run)
-            if log and not log["ended"]:
-                log["events"].append(event)
+            if not log or log["ended"]:
+                return
+            log["events"].append(event)
+            waiters, log["waiters"] = log["waiters"], []
+        _wake(waiters)
 
     def close(self, run: str) -> None:
         with self._mu:
             log = self._runs.get(run)
-            if log and not log["ended"]:
-                log["events"].append({"event": "end", "data": {}})
-                log["ended"] = True
+            if not log or log["ended"]:
+                return
+            log["events"].append({"event": "end", "data": {}})
+            log["ended"] = True
+            waiters, log["waiters"] = log["waiters"], []
+        _wake(waiters)
 
     def current(self, key: str) -> str | None:
         with self._mu:
@@ -156,6 +163,33 @@ class LocalEventLog:
             if log is None:
                 return [], True
             return list(enumerate(log["events"][after:], start=after + 1)), log["ended"]
+
+    async def wait(self, run: str, after: int, timeout: float) -> bool:
+        # 写日志的是工作线程，等的是事件循环里的连接：登记一个 asyncio.Event，写的时候从工作线程叫醒它
+        waiter = (asyncio.get_running_loop(), asyncio.Event())
+        with self._mu:
+            log = self._runs.get(run)
+            if log is None or log["ended"] or len(log["events"]) > after:
+                return True
+            log["waiters"].append(waiter)
+        try:
+            await asyncio.wait_for(waiter[1].wait(), timeout)
+            return True
+        except TimeoutError:
+            return False
+        finally:
+            with self._mu:
+                log = self._runs.get(run)
+                if log and waiter in log["waiters"]:
+                    log["waiters"].remove(waiter)
+
+
+def _wake(waiters: list) -> None:
+    for loop, ev in waiters:
+        try:
+            loop.call_soon_threadsafe(ev.set)
+        except RuntimeError:  # 那个连接的事件循环已经关了
+            pass
 
 
 _log = LocalEventLog()
@@ -319,8 +353,7 @@ class BaseRunner:
         return self._stream(run)
 
     async def _stream(self, run: str, after: int = 0) -> AsyncIterator[str]:
-        """把一次执行里序号大于 after 的事件吐成 SSE（id 是“执行-序号”），读到 end 为止；安静太久就发注释行保活。"""
-        quiet = 0.0
+        """把一次执行里序号大于 after 的事件吐成 SSE（id 是“执行-序号”），读到 end 为止；有新事件马上发，安静太久就发注释行保活。"""
         while True:
             evs, ended = self.events.read(run, after)
             for n, ev in evs:
@@ -328,10 +361,7 @@ class BaseRunner:
                 yield _sse_text(ev, f"{run}-{n}")
             if ended:
                 return
-            await asyncio.sleep(POLL_S)
-            quiet = 0.0 if evs else quiet + POLL_S
-            if quiet >= HEARTBEAT_S:
-                quiet = 0.0
+            if not await self.events.wait(run, after, HEARTBEAT_S):
                 yield ": ping\n\n"
 
     def follow(self, thread_id: str, after: str | None = None) -> AsyncIterator[str]:

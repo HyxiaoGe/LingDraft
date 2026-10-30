@@ -55,6 +55,70 @@ export const sourceName = (s) => s.title || domain(s.url);
 export const CITE = /\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\]/g;
 // 写到一半的引用（正文还在逐字出现，或者停在了半路）先不显示，免得露出 [sc91d6 这样的半截 id
 export const cutPartialCite = (text) => text.replace(/\[(s[0-9a-f]{0,9})?$/, "");
+
+// 表格表头下面的分隔行：| --- | :---: |
+export const isRule = (line) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line);
+const TABLE_LINE = /^\s*\|/;
+
+// 逐字出现时不该一个字一个字放的，显示到的位置 n 直接跳过去：
+// - 引用 [s3fa9c1] 和链接的网址 ](https://…)：本身不显示，一个个字放只会让正文停一下。收全了整块跳过
+// - 表格的分隔行 | --- | --- |：不显示，收全了整行跳过
+// - 紧跟着的不显示的 Markdown 符号：换行、行首的列表符号 / # / >、** 和 `
+export function typingUnit(text, n) {
+  for (let next = unitEnd(text, n); next > n; next = unitEnd(text, n)) n = next;
+  return n;
+}
+
+function unitEnd(text, n) {
+  const k = text.lastIndexOf("[", n - 1);
+  if (k >= 0 && n - k < 12) {
+    const m = text.slice(k, k + 12).match(/^\[s[0-9a-f]{6}(?:[0-9a-f]{4})?\]/);
+    if (m && k + m[0].length > n) return k + m[0].length;
+  }
+  const u = text.lastIndexOf("](", n - 1);
+  if (u >= 0 && n - u < 300) {
+    const m = text.slice(u, u + 300).match(/^\]\(https?:\/\/[^)\s]+\)/); // 和 Markdown 里认的链接一样
+    if (m && u + m[0].length > n) return u + m[0].length;
+  }
+  const b = text.lastIndexOf("\n", n - 1) + 1;
+  if (n > b && TABLE_LINE.test(text.slice(b, n)) && tableLinesAbove(text, b) === 1) {
+    const e = text.indexOf("\n", n);
+    if (e >= n) return e + 1; // 连换行一起：这一行不再是“正在写的那一行”
+  }
+  const m = text.slice(n, n + 8).match(n === b ? /^(\n+|[ \t]*(\d+[.)]|[-*+])[ \t]+|#{1,4}[ \t]+|>[ \t]?|\*\*|`)/ : /^(\n+|\*\*|`)/);
+  return m ? n + m[0].length : n;
+}
+
+// 从 b 开始的这一行上面紧挨着几行表格（数到 2 为止）：0 是表头，1 是分隔行，2 起是数据行
+function tableLinesAbove(text, b) {
+  let c = 0;
+  for (let e = b - 1; c < 2 && e > 0; c++) {
+    const s = text.lastIndexOf("\n", e - 1) + 1;
+    if (!TABLE_LINE.test(text.slice(s, e))) break;
+    e = s - 1;
+  }
+  return c;
+}
+
+// 正在逐字出现的文字，最后一行可能停在半截的 Markdown 上：没配对的 ** 和 ` 先补上（刚出来的半个先去掉），
+// 写到一半的链接先只显示文字，只有 # 或列表符号的行先不显示。表头一出来就按表格显示：分隔行还没写完时先补一行，
+// 不然先露出一行竖线、等分隔行写完再突然变成表格。字出来时不先露出符号、等配上了再突然变样式
+export function tidyTyping(text) {
+  const lines = cutPartialCite(text).split("\n");
+  const end = lines.length - (lines.length > 1 && !lines.at(-1).trim() ? 1 : 0); // 刚换行、新的一行还没字
+  let j = end;
+  while (j > 0 && TABLE_LINE.test(lines[j - 1])) j--;
+  if (end - j === 1) lines.splice(j + 1, 0, "| --- |");
+  else if (end - j === 2 && (end === lines.length || !isRule(lines[j + 1]))) lines[j + 1] = "| --- |"; // 分隔行还在写
+  const t = lines.join("\n");
+  const k = t.lastIndexOf("\n") + 1;
+  let line = t.slice(k);
+  if (/^\s*(#{1,4}|\d+[.)]?|[-*+])$/.test(line)) return t.slice(0, k);
+  line = line.replace(/\[(?!s[0-9a-f]{6}(?:[0-9a-f]{4})?\])([^\]\n]*)(?:\](?:\([^)\s]*)?)?$/, "$1").replace(/([^*\s])\*$/, "$1");
+  if ((line.split("**").length - 1) % 2) line = line.endsWith("**") ? line.slice(0, -2) : `${line}**`;
+  if ((line.split("`").length - 1) % 2) line = line.endsWith("`") ? line.slice(0, -1) : `${line}\``;
+  return t.slice(0, k) + line;
+}
 // 一条回答引用的来源，按第一次出现的先后编 1、2、3，每条回答各自编号。不在这条对话来源里的 id 不编号（角标显示问号）
 export function citeNumbers(texts, sources) {
   const out = {};

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -76,6 +77,24 @@ def _steps(st: dict, turn: int = -1) -> list[str]:
 
 
 # ---- 并行执行与运行占位 ----
+
+
+def test_event_log_wait_wakes_on_append():
+    log = LocalEventLog()
+    run = log.open("k")
+
+    async def go():
+        assert await log.wait(run, 0, 0.05) is False  # 没有新事件，等到超时
+        t0 = time.monotonic()
+        threading.Timer(0.05, log.append, (run, {"event": "x", "data": {}})).start()  # 像工作线程写进来
+        assert await log.wait(run, 0, 5) is True and time.monotonic() - t0 < 1  # 一写进来就醒，不等到超时
+        assert await log.wait(run, 0, 5) is True  # 已经有序号大于 0 的事件，马上返回
+        threading.Timer(0.05, log.close, (run,)).start()
+        assert await log.wait(run, 1, 5) is True and log.read(run, 1)[1]  # 结束也叫醒
+        assert await log.wait("nope", 0, 5) is True  # 没有这次执行（日志丢了），不等
+
+    run_async(go())
+    assert not log._runs[run]["waiters"]
 
 
 def test_research_threads_run_in_parallel(tmp_path):

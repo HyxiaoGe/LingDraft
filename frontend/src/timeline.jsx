@@ -5,7 +5,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { IconArrowUp, IconCheck, IconChevron, IconCopy, IconEdit, IconLoop, IconPage, IconRetry, IconSearch, IconStop, IconWarn, Spinner } from "./icons.jsx";
 import { Markdown } from "./markdown.jsx";
-import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn, stamp } from "./research.js";
+import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Mark } from "./sources.jsx";
 
 const EXAMPLES = [
@@ -19,11 +19,20 @@ export function Conversation({ st, live, busy, error, now, act, isNew }) {
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
   const fresh = isNew && !live;
 
-  useEffect(() => { stick.current = true; }, [st?.thread_id]);
+  // 换了对话就到底；之后内容变高（字一个个出来、过程展开）或可视区变矮时，贴着底的跟到底。
+  // 看的是尺寸变化，不靠这里重新渲染：逐字出现只重新渲染那一段，每帧也跟得上
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  });
+    stick.current = true;
+    el.scrollTop = el.scrollHeight;
+  }, [st?.thread_id]);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const ro = new ResizeObserver(() => { if (stick.current) el.scrollTop = el.scrollHeight; });
+    ro.observe(el);
+    ro.observe(el.firstElementChild);
+    return () => ro.disconnect();
+  }, []);
 
   const mode = fresh ? "new" : st?.status === "queued" ? "queued" : busy || ACTIVE.has(st?.status) ? "busy" : st?.status || "busy";
   const stopping = !!(live?.stopping || st?.stopping);
@@ -213,7 +222,7 @@ function Process({ items, st, nums, rec, running, failed, now }) {
         <div className="ws-proc-body">
           {items.map((it) => (it.type === "step" ? <ToolRow key={`step:${it.id}`} s={it} />
             : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} thinking={running && it.live && !it.ms} />
-              : <div key={`text:${it.id}`} className="ws-proc-text"><Markdown text={cutPartialCite(it.text)} cite={(sid) => <Mark n={nums[sid]} s={st?.sources?.[sid]} />} /></div>))}
+              : <ProcText key={`text:${it.id}`} it={it} cite={(sid) => <Mark n={nums[sid]} s={st?.sources?.[sid]} />} />))}
         </div>
       )}
     </div>
@@ -236,15 +245,70 @@ function Item({ it, st, nums, running, lastItem }) {
       </div>
     );
   }
+  return <Reply it={it} cite={(sid) => <Mark n={nums[sid]} s={st?.sources?.[sid]} />} caret={running && lastItem} />;
+}
+
+// 正文：逐字出现，正在写的时候末尾有光标
+function Reply({ it, cite, caret }) {
+  const text = useTyped(`text:${it.id}`, it.text, it.live, typingUnit);
   return (
-    <div className={"ws-reply" + (running && lastItem ? " typing" : "")}>
-      <Markdown text={cutPartialCite(it.text)} cite={(sid) => <Mark n={nums[sid]} s={st?.sources?.[sid]} />} />
+    <div className={"ws-reply" + (caret || text.length < it.text.length ? " typing" : "")}>
+      <Markdown text={mdText(it, text)} cite={cite} />
     </div>
   );
 }
 
+// 过程里中途说的话（之后又去搜了、读了），一样逐字出现
+function ProcText({ it, cite }) {
+  const text = useTyped(`text:${it.id}`, it.text, it.live, typingUnit);
+  return <div className="ws-proc-text"><Markdown text={mdText(it, text)} cite={cite} /></div>;
+}
+
+// 还在出现的，最后一行半截的 Markdown 先收拾一下（见 tidyTyping）；写完的只去掉末尾半个引用
+const mdText = (it, text) => (it.live || text.length < it.text.length ? tidyTyping(text) : cutPartialCite(text));
+
+// ---------------- 逐字出现 ----------------
+// 后端约每 80ms 发来一批字（几个到十几个），直接显示是一跳一跳的。这里按帧把收到的字一点点放出来：
+// 每秒放“还没显示的字数 / LAG_S”这么多，最少 MIN_CPS 个。收得快就放得快，不会越落越远；一批字也不会一下子全冒出来。
+// 显示到第几个字按条目记在 typed 里：条目在过程和正文之间挪动、重新挂载时接着往下显示，不从头再来。
+// 打开时就已经写完的（存下来的对话）直接整段显示。unit(text, n) 给出 n 所在的那一整块的末尾（见 typingUnit），整块一起出来。
+const LAG_S = 0.18;
+const MIN_CPS = 20;
+const typed = new Map();
+
+function useTyped(key, text, live, unit) {
+  const pos = useRef(null);
+  pos.current ??= live || typed.has(key) ? Math.min(typed.get(key) ?? 0, text.length) : text.length;
+  const [, setShown] = useState(0);
+  useEffect(() => {
+    if (pos.current >= text.length) {
+      if (!live) typed.delete(key);
+      return undefined;
+    }
+    let raf = 0;
+    let last = performance.now();
+    const frame = (t) => {
+      const left = text.length - pos.current;
+      pos.current = Math.min(text.length, pos.current + (Math.max(MIN_CPS, left / LAG_S) * Math.max(0, t - last)) / 1000);
+      if (unit) pos.current = Math.max(pos.current, unit(text, Math.floor(pos.current)));
+      last = t;
+      typed.set(key, pos.current);
+      setShown(Math.floor(pos.current)); // 整数没变就不重新渲染
+      if (pos.current < text.length) raf = requestAnimationFrame(frame);
+      else if (!live) typed.delete(key);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [key, text, live]);
+  let n = Math.floor(pos.current);
+  if (n >= text.length) return text;
+  if (/[\uD800-\uDBFF]/.test(text[n - 1] || "")) n++; // 不把占两个码元的字（emoji 之类）切成两半
+  return text.slice(0, n);
+}
+
 // 思考：正在想的时候展开、逐字出现；想完折叠成一行，点开看原文
 function Thinking({ it, thinking }) {
+  const text = useTyped(`thinking:${it.id}`, it.text, it.live);
   const [open, setOpen] = useState(null); // null：按默认（正在想就展开）
   const shown = open ?? thinking;
   const box = useRef(null);
@@ -259,7 +323,7 @@ function Thinking({ it, thinking }) {
         {thinking ? <Spinner size={12} /> : <IconChevron size={13} className={"chev" + (shown ? " up" : "")} />}
         <span>{label}</span>
       </button>
-      {shown && <div ref={box} className="ws-think-text">{it.text}</div>}
+      {shown && <div ref={box} className="ws-think-text">{text}</div>}
     </div>
   );
 }
