@@ -16,6 +16,6 @@ def test_every_prompt_parses():
 
 def test_missing_variable_fails_loudly():
     with pytest.raises(UndefinedError):
-        prompts.render("intake.user")
+        prompts.render("consolidate.user")
     with pytest.raises(KeyError, match="没有 agent.nope"):
         prompts.render("agent.nope")

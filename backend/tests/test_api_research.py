@@ -1,14 +1,17 @@
-"""调研场景接口：SSE 事件、动态提问的整形与回传、文件与导出。"""
+"""调研场景接口：建线程、接着说、回答提问、任务列表，以及几种拒绝（400 / 404 / 409）。只用假模型。"""
 
 from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
+from app.graph.research.graph import memory_checkpointer, open_sqlite_checkpointer, thread_ids
 
 
 @pytest.fixture
@@ -32,104 +35,136 @@ def _last(events, name):
     return [d for e, d in events if e == name][-1]
 
 
+def _new(client, text: str) -> list[tuple[str, dict]]:
+    return _events(client.post("/api/research/threads", json={"text": text}))
+
+
+def _say(client, tid: str, text: str = "", **kw):
+    return client.post(f"/api/research/threads/{tid}/messages", json={"text": text, **kw})
+
+
 def _resume(client, st: dict, payload: dict):
-    """回答当前这张卡：带上它的中断 id。"""
     return client.post(f"/api/research/threads/{st['thread_id']}/resume", json={"interrupt_id": st["interrupt"]["id"], "payload": payload})
 
 
-def test_research_flow_over_http(client):
-    ev = _events(client.post("/api/research/threads", json={"request": "AI 海报工具在局部修改上的现状（2026）"}))
-    kinds = [e for e, _ in ev]
-    assert kinds[:3] == ["thread", "started", "progress"] and kinds[-4:] == ["node", "interrupt", "state", "end"]
+def test_conversation_over_http(client):
+    ev = _new(client, "调研一下局部修改")
+    names = [e for e, _ in ev]
+    assert names[:2] == ["thread", "started"] and names[-2:] == ["state", "end"]
+    assert {"title", "step", "delta", "writing", "node"} <= set(names)
     st = _last(ev, "state")
     tid = st["thread_id"]
-    assert st["scenario"] == "research" and st["interrupt"]["type"] == "research.scope"
-    assert st["status"] == "waiting"
+    assert st["status"] == "idle" and st["report"]["version"] == 1 and st["title"] == _last(ev, "title")["title"]
+    assert client.get(f"/api/research/threads/{tid}/state").json() == st  # 刷新后看到的和刚才一样
 
-    assert [q["id"] for q in st["interrupt"]["questions"]] == ["q1"] and st["scope"]["question"]
-    ev = _events(_resume(client, st, {"answers": {"q1": "改文字"}}))
-    assert any(e == "node" and d["node"] == "confirm_scope" and d["scope"]["extra"] for e, d in ev)
-    # 调研期间每次搜索 / 读页都有进度事件（来自 agent 子图），页面据此显示在做什么
-    acts = [d for e, d in ev if e == "progress" and d.get("kind")]
-    assert {a["kind"] for a in acts} >= {"search", "read"} and all(a["stage"].startswith(("搜索：", "读取：")) for a in acts)
-    ask = _last(ev, "interrupt")
-    assert ask["type"] == "research.ask" and ask["options"] == ["包含", "不包含"] and ask["why"]
+    ev = _events(_say(client, tid, "直接答：为什么不稳定？"))
     st = _last(ev, "state")
-    assert st["interrupt"]["type"] == "research.ask" and st["answer"] is None
+    assert len(st["turns"]) == 2 and st["turns"][1]["record"]["version"] is None and "title" not in [e for e, _ in ev]
 
-    ev = _events(_resume(client, st, {"answer": "包含"}))
-    review = _last(ev, "interrupt")
-    assert review["type"] == "research.review" and review["version"] == 1
-    research = next(d for e, d in ev if e == "node" and d["node"] == "research")
-    assert research["sources"] == 3 and research["answer_how"] == "agent"
-    cons = next(d for e, d in ev if e == "node" and d["node"] == "consolidate")
-    assert cons["sections"] == 2 and cons["claims"] == 3 and cons["gap"] is None
-    assert any(e == "node" and d["node"] == "write" and d["version"] == 1 for e, d in ev)
-    assert not any(e == "node" and d["node"] == "export" for e, d in ev)  # 没有单独的“导出”步骤
-    # 下载已停掉（2026-10-29）：状态里没有下载地址，原来的下载接口也不在了
-    assert "package" not in _last(ev, "state") and "md_url" not in review
-    for path in ("files/report_v1.md", "package/report.md", "export"):
-        assert client.get(f"/api/research/threads/{tid}/{path}").status_code == 404
-
-    sid = review["claims"][0]["source_ids"][0]
-    ev = _events(_resume(client, _last(ev, "state"), {"action": "exclude_source", "target": sid}))
-    assert _last(ev, "interrupt")["version"] == 2
-    st = client.get(f"/api/research/threads/{tid}/state").json()
-    assert st["next"] == ["review"] and len(st["versions"]) == 2
-
-    assert st["interrupt"]["type"] == "research.review"
-    ev = _events(_resume(client, st, {"action": "approve"}))
-    st = _last(ev, "state")
-    assert st["next"] == [] and len(st["versions"]) == 2 and st["interrupt"] is None
+    src = next(s["id"] for s in st["sources"].values() if s["status"] == "adopted")
+    st = _last(_events(_say(client, tid, action={"type": "exclude_source", "source_id": src})), "state")
+    assert st["report"]["version"] == 2 and [x["n"] for x in st["versions"]] == [1, 2]
 
 
-def test_free_text_review_over_http(client):
-    """终审时直接说的话原样回传（instruct），后端交给模型理解；页面用的报告块在卡和线程状态里都有。"""
-    from app.research_llm import ReviewOp, ReviewPlan
-
-    runner = api_main.research()
-    ev = _events(client.post("/api/research/threads", json={"request": "AI 海报工具在局部修改上的现状（2026）"}))
-    ev = _events(_resume(client, _last(ev, "state"), {"answers": {"q1": "改文字"}}))
-    ev = _events(_resume(client, _last(ev, "state"), {"answer": "包含"}))
-    st = _last(ev, "state")
-    blocks = st["interrupt"]["blocks"]
-    assert blocks == st["report_blocks"] and blocks[0]["type"] == "title" and any(b["type"] == "sentence" for b in blocks)
-
-    runner.planner.review_plans = [ReviewPlan(ops=[], reply="你说的是哪一节？")]
-    ev = _events(_resume(client, st, {"action": "instruct", "text": "改短点"}))
-    st = _last(ev, "state")
-    assert any(e == "node" and d["node"] == "interpret" for e, d in ev)
-    assert st["interrupt"]["version"] == 1 and st["interrupt"]["reply"] == "你说的是哪一节？"
-
-    runner.planner.review_plans = [ReviewPlan(ops=[ReviewOp(action="rewrite_section", target="c1", content=None, instruction="更简短")],
-                                              reply=None)]
-    ev = _events(_resume(client, st, {"action": "instruct", "text": "第一节"}))
-    st = _last(ev, "state")
-    assert st["interrupt"]["version"] == 2 and st["interrupt"]["reply"] is None and len(st["versions"]) == 2
+def test_ask_over_http(client):
+    st = _last(_new(client, "问一下 直接答"), "state")
+    assert st["status"] == "waiting" and st["interrupt"]["type"] == "research.ask"
+    tid = st["thread_id"]
+    assert _say(client, tid, "先别问").status_code == 409  # 先回答或跳过
+    assert _resume(client, st, {"answer": "包含", "skip": True}).status_code == 400
+    r = client.post(f"/api/research/threads/{tid}/resume", json={"interrupt_id": "old", "payload": {"answer": "包含"}})
+    assert r.status_code == 409
+    end = _last(_events(_resume(client, st, {"answer": "包含"})), "state")
+    assert end["status"] == "idle" and end["interrupt"] is None
+    assert _resume(client, st, {"answer": "包含"}).status_code == 409  # 卡已经答过了
+    assert _say(client, tid, "直接答：好").status_code == 200
 
 
-def test_invalid_answer_rejected_before_graph(client):
-    st = _last(_events(client.post("/api/research/threads", json={"request": "AI 海报工具在局部修改上的现状"})), "state")
-    r = _resume(client, st, {"answers": {"nope": "x"}})
-    assert r.status_code == 400 and "不是当前问题" in r.json()["detail"]
-    after = client.get(f"/api/research/threads/{st['thread_id']}/state").json()
-    assert after["interrupt"]["type"] == "research.scope" and after["interrupt"]["id"] == st["interrupt"]["id"]
+def test_bad_messages_rejected(client):
+    assert client.post("/api/research/threads", json={"text": "  "}).status_code == 400
+    assert client.post("/api/research/threads", json={"request": "旧字段"}).status_code == 422
+    tid = _last(_new(client, "调研一下局部修改"), "state")["thread_id"]
+    assert _say(client, tid, "  ").status_code == 400
+    assert _say(client, tid, "看看", quote={"text": "x", "claim_ids": ["k99"], "section_ids": []}).status_code == 400
+    assert _say(client, tid, action={"type": "rewrite_section", "section_id": "c99"}).status_code == 400
+    assert _say(client, tid, "x", extra=1).status_code == 422
 
 
-def test_clear_request_has_no_scope_card(client):
-    ev = _events(client.post("/api/research/threads", json={"request": "最近新加坡的天气情况如何？"}))
-    assert not any(e == "interrupt" and d["type"] in ("research.scope", "research.ask") for e, d in ev)
-    st = _last(ev, "state")
-    assert st["scope_confirmed"] and st["interrupt"]["type"] == "research.review" and st["answer_how"] == "agent"
+def test_unknown_thread_404(client):
+    for r in (client.get("/api/research/threads/nope0000/state"), _say(client, "nope0000", "x"),
+              client.post("/api/research/threads/nope0000/retry"), client.get("/api/research/threads/nope0000/events")):
+        assert r.status_code == 404
 
 
-def test_research_step_tells_how_each_round_ended(client):
-    """进度里每一轮调研怎么收尾的都要说清：补查没拿到新答案、沿用上一轮结果的那一轮记作 kept，页面不能写成“调研完了”。"""
-    ev = _events(client.post("/api/research/threads", json={"request": "某题（回补，补查失败）"}))
-    steps = [(d["node"], d.get("answer_how") or d.get("gap")) for e, d in ev if e == "node" and d["node"] in ("research", "consolidate")]
-    assert steps == [("research", "agent"), ("consolidate", "缺价格数据"), ("research", "kept")]
+def test_list_threads_with_status(client):
+    waiting = _last(_new(client, "问一下 直接答"), "state")
+    done = _last(_new(client, "调研一下局部修改"), "state")
+    rows = client.get("/api/research/threads").json()["threads"]
+    by_id = {r["thread_id"]: r for r in rows}
+    assert set(by_id) == {waiting["thread_id"], done["thread_id"]}
+    assert rows[0]["thread_id"] == done["thread_id"]  # 最近有动静的在前
+    w, d = by_id[waiting["thread_id"]], by_id[done["thread_id"]]
+    assert w["status"] == "waiting" and w["version"] is None and w["title"] == waiting["title"] and w["updated_at"]
+    assert d["status"] == "idle" and d["version"] == 1 and d["running_since"] is None
 
 
-def test_unknown_research_thread_404(client):
-    assert client.get("/api/research/threads/nope/state").status_code == 404
-    assert client.post("/api/research/threads", json={"request": "  "}).status_code == 400
+def test_thread_ids_without_reading_checkpoints(tmp_path):
+    assert thread_ids(open_sqlite_checkpointer(tmp_path / "c.sqlite")) == []  # 表还没建
+    assert thread_ids(memory_checkpointer()) == []
+
+
+# ---- 真实模型的适配（不发请求） ----
+
+
+@pytest.fixture
+def deepseek(monkeypatch):
+    from app import config
+    from app.research_llm import make_chat_model
+
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "k")
+    return make_chat_model("deepseek", "m", thinking=True)
+
+
+def test_deepseek_passes_back_only_this_turns_reasoning(deepseek):
+    """同一轮里的工具调用要把思考原样传回；之前几轮的不传（传了接口也不用，白占上下文）。"""
+    call = [{"name": "search_web", "args": {"query": "q"}, "id": "c1", "type": "tool_call"}]
+    msgs = [HumanMessage("第一轮"), AIMessage(content="", tool_calls=call, additional_kwargs={"reasoning_content": "旧思考"}),
+            ToolMessage(content="[]", tool_call_id="c1"), AIMessage(content="答", additional_kwargs={"reasoning_content": "旧结论"}),
+            HumanMessage("第二轮"), AIMessage(content="", tool_calls=[{**call[0], "id": "c2"}], additional_kwargs={"reasoning_content": "新思考"}),
+            ToolMessage(content="[]", tool_call_id="c2")]
+    payload = deepseek._get_request_payload(msgs)
+    assert [m.get("reasoning_content") for m in payload["messages"]] == [None, None, None, None, None, "新思考", None]
+
+
+def test_reply_without_structured_output_raises():
+    """模型直接回一段文字、没调结构化输出的工具：要报错交给调用方，不能返回 None。"""
+    from langchain_deepseek import ChatDeepSeek
+
+    from app.research_llm import Suggestions, _structured
+
+    def reply(content: str | None, tool_args: dict | None = None):
+        msg = {"role": "assistant", "content": content}
+        if tool_args is not None:
+            msg["tool_calls"] = [{"id": "t1", "type": "function", "function": {"name": "Suggestions", "arguments": json.dumps(tool_args)}}]
+        return {"id": "x", "object": "chat.completion", "created": 0, "model": "m",
+                "choices": [{"index": 0, "message": msg, "finish_reason": "tool_calls" if tool_args else "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}
+
+    answers = [reply("好的。"), reply(None, {"questions": ["a", "b", "c"]})]
+    transport = httpx.MockTransport(lambda req: httpx.Response(200, json=answers.pop(0)))
+    llm = ChatDeepSeek(model="m", api_key="k", api_base="http://model.test/v1", max_retries=0, http_client=httpx.Client(transport=transport))
+    chain = _structured(llm, Suggestions)
+    with pytest.raises(RuntimeError, match="没有按结构返回"):
+        chain.invoke("推荐")
+    assert chain.invoke("推荐") == Suggestions(questions=["a", "b", "c"])
+
+
+def test_thinking_time_is_stored_with_the_message(tmp_path):
+    from app.research_llm import FakeResearchPlanner, FakeToolModel, ThinkingTimer
+    from tests.test_research import Chat
+
+    p = FakeResearchPlanner()
+    p._model = FakeToolModel(callbacks=[ThinkingTimer()])
+    v = Chat(tmp_path, p).say("直接答：好")
+    thinking = next(i for i in v["turns"][0]["items"] if i["type"] == "thinking")
+    assert isinstance(thinking["ms"], int)

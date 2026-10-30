@@ -1,4 +1,4 @@
-"""调研方法（技能）：目录解析、load_skill 工具，以及选定的方法怎么带到补查、整理和重写。"""
+"""调研方法（技能）：目录解析、load_skill 工具，以及读过的方法怎么带到整理。"""
 
 from __future__ import annotations
 
@@ -8,32 +8,9 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
 from app.graph.research import skills
-from app.graph.research.agent import collect_skills
-from app.graph.research.graph import build_graph, memory_checkpointer
-from app.graph.research.nodes import research_system
-from app.graph.research.state import Scope
-from app.research_llm import FakeResearchPlanner
+from app.graph.research.history import collect_skills
 from app.tools.research_tools import load_skill
-
-
-def cfg(tid: str) -> dict:
-    return {"configurable": {"thread_id": tid}}
-
-
-def review_card(result: dict) -> dict:
-    p = result["__interrupt__"][0].value
-    assert p["type"] == "research.review"
-    return p
-
-
-@pytest.fixture
-def planner() -> FakeResearchPlanner:
-    return FakeResearchPlanner()
-
-
-@pytest.fixture
-def graph(planner, tmp_path: Path):
-    return build_graph(planner, memory_checkpointer(), tmp_path / "out")
+from tests.test_research import Chat
 
 
 def test_catalog_lists_every_skill_with_report():
@@ -84,40 +61,22 @@ def test_collect_skills_only_counts_successful_loads():
     assert collect_skills(msgs) == ["comparison"]
 
 
-def test_system_prompt_lists_catalog_until_a_method_is_picked():
-    scope = Scope(question="选哪个？")
-    first = research_system(scope, allow_ask=True)
-    assert skills.catalog_text() in first and "load_skill" in first
-    again = research_system(scope, allow_ask=True, loaded=["comparison"])
-    assert skills.catalog()["comparison"].content() in again and skills.catalog_text() not in again
+def test_picked_method_reaches_consolidate_and_later_turns(tmp_path):
+    c = Chat(tmp_path)
+    v = c.say("调研向量库选型")
+    steps = [i for i in v["turns"][0]["items"] if i["type"] == "step"]
+    assert steps[0]["kind"] == "skill" and steps[0]["text"] == "对比与选型" and steps[0]["ok"]
+    guide = skills.catalog()["comparison"].report.strip()
+    assert [x["report"] for n, x in c.planner.calls if n == "consolidate"] == [guide]
+    # 下一轮改报告不用再读一遍方法，整理照样按它的报告结构
+    c.say("重写", action={"type": "rewrite_section", "section_id": v["report"]["outline"][0]["id"]})
+    assert [x["report"] for n, x in c.planner.calls if n == "consolidate"] == [guide, guide]
 
 
-def test_picked_method_reaches_consolidate_and_rewrite(graph, planner):
-    p = review_card(graph.invoke({"request": "向量库选型"}, cfg("t1")))
-    v = graph.get_state(cfg("t1")).values
-    report = skills.catalog()["comparison"].report.strip()
-    assert v["skills"] == ["comparison"] and planner.consolidate_reports == [report]
-    assert "调研方法：对比与选型" in p["notes"]
-    graph.invoke(_rewrite(graph, "t1"), cfg("t1"))
-    assert planner.write_inputs[-1]["report"] == report
-
-
-def test_gap_round_keeps_method_without_reloading(graph, planner):
-    review_card(graph.invoke({"request": "向量库选型（回补）"}, cfg("t1")))
-    v = graph.get_state(cfg("t1")).values
-    assert v["gap_rounds"] == 1 and v["skills"] == ["comparison"]
-    assert planner.consolidate_reports == [skills.catalog()["comparison"].report.strip()] * 2
-    assert v["notes"].count("调研方法：对比与选型") == 1
-
-
-def test_no_method_or_unknown_method_keeps_plain_flow(graph, planner):
-    review_card(graph.invoke({"request": "最近新加坡的天气情况如何？"}, cfg("t1")))
-    review_card(graph.invoke({"request": "错方法的题"}, cfg("t2")))
-    assert graph.get_state(cfg("t1")).values["skills"] == [] and graph.get_state(cfg("t2")).values["skills"] == []
-    assert planner.consolidate_reports == [None, None]
-
-
-def _rewrite(graph, tid: str):
-    from app.cli import research_resume
-
-    return research_resume(graph, cfg(tid), {"action": "rewrite_section", "target": "c1", "instruction": "更简短"})
+def test_unknown_method_is_a_failed_step_and_plain_consolidate(tmp_path):
+    c = Chat(tmp_path)
+    v = c.say("调研 错方法")
+    (step,) = [i for i in v["turns"][0]["items"] if i["type"] == "step" and i["kind"] == "skill"] or [None]
+    assert step is None  # 不存在的方法没有中文名，不列成一步
+    assert [x["report"] for n, x in c.planner.calls if n == "consolidate"] == [None]
+    assert v["report"]["version"] == 1

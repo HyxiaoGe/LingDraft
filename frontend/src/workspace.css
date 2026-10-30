@@ -85,11 +85,10 @@
 .ws-alt { font-size: 12px; color: var(--muted) !important; padding: 8px 8px 2px; border-top: 1px solid var(--line); }
 .ws-alt:hover { color: var(--ink) !important; }
 
-/* ---------- 中栏：调研记录 ---------- */
+/* ---------- 中栏：对话 ---------- */
 .ws-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
 .ws-head { padding: 0 28px; border-bottom: 1px solid var(--line); height: 58px; flex: none; display: flex; flex-direction: column; justify-content: center; }
 .ws-head-title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ws-head-sub { font-size: 12px; color: var(--muted); }
 .ws-scroll { flex: 1; overflow-y: auto; }
 .ws-flow { max-width: 700px; margin: 0 auto; padding: 28px 28px 32px; }
 .ws-user { display: flex; justify-content: flex-end; margin: 0 0 22px; }
@@ -99,30 +98,9 @@
 .ws-ai-head .name { font-weight: 600; font-size: 13px; }
 .ws-avatar { width: 22px; height: 22px; border-radius: 6px; background: var(--ink); color: #fff; font: 600 12.5px/1 var(--serif); display: inline-flex; align-items: center; justify-content: center; }
 .ws-ai-body { min-width: 0; padding-left: 30px; display: flex; flex-direction: column; gap: 12px; }
-.ws-text { margin: 0; color: var(--ink2); }
 
-/* 过程：一步一行，竖线串起来 */
-.ws-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
-.ws-step { position: relative; display: flex; gap: 10px; padding: 3px 0; }
-.ws-step:not(:last-child)::before { content: ""; position: absolute; left: 9.5px; top: 27px; bottom: -6px; width: 1px; background: var(--line2); }
-.ws-step-icon { width: 20px; height: 20px; flex: none; border-radius: 50%; background: var(--paper); border: 1px solid var(--line2); color: var(--muted); display: inline-flex; align-items: center; justify-content: center; margin-top: 1px; }
-.ws-step.ok .ws-step-icon { border-color: var(--ok-line); background: var(--ok-soft); color: var(--ok); }
-.ws-step.warn .ws-step-icon { border-color: var(--warn-line); background: var(--warn-soft); color: var(--warn); }
-.ws-step.ask .ws-step-icon, .ws-step.live .ws-step-icon { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); }
-.ws-step-body { flex: 1; min-width: 0; }
-.ws-step-title { font-size: 13px; color: var(--ink); padding: 1px 0; line-height: 1.6; text-align: left; overflow-wrap: anywhere; }
-.ws-step-title .detail { color: var(--muted); }
-.ws-step-title.fold { border: 0; background: none; padding: 1px 6px 1px 0; border-radius: var(--r-sm); display: inline; }
-.ws-step-title.fold:hover > span:first-child { text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; }
-.ws-step-title .chev { vertical-align: -3px; margin-left: 4px; color: var(--faint); transition: transform .2s var(--ease); }
-.ws-step-title .chev.up { transform: rotate(180deg); }
 
-.ws-qa { margin: 6px 0 4px; padding: 2px 0 2px 12px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 8px; }
-.ws-qa-row .q { font-size: 12px; color: var(--muted); }
-.ws-qa-row .a { font-size: 13px; }
-.ws-qa-row .a.skipped { color: var(--faint); }
 
-.ws-tools { list-style: none; margin: 6px 0 4px; padding: 2px 0; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 1px; }
 .ws-tool { display: flex; gap: 8px; align-items: baseline; padding: 3px 10px 3px 12px; font-size: 12.5px; color: var(--ink2); animation: ws-in .25s var(--ease); }
 .ws-tool > svg { flex: none; color: var(--faint); transform: translateY(2px); }
 .ws-tool .main { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -131,19 +109,63 @@
 .ws-tool.bad .sub { color: var(--warn); }
 .ws-tool.pending { color: var(--accent); }
 .ws-tool.pending .spin { transform: translateY(2px); }
-.ws-more button { border: 0; background: none; color: var(--muted); font-size: 12px; padding: 2px 12px; }
-.ws-more button:hover { color: var(--ink); }
 
 .ws-live { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--accent); flex-wrap: wrap; }
 .ws-live .stage { color: var(--ink2); }
 .ws-live .time, .ws-live .hint { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .ws-live .hint::before { content: "·"; margin-right: 8px; color: var(--faint); }
-.ws-understood { font-size: 13px; color: var(--ink2); padding-left: 12px; border-left: 2px solid var(--accent-line); }
-.ws-understood span { display: block; color: var(--muted); font-size: 12px; }
-.ws-end { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ok); }
-.ws-reply { background: var(--warn-soft); border: 1px solid var(--warn-line); color: #6a3e0a; border-radius: var(--r); padding: 9px 12px; font-size: 13.5px; }
-.ws-closing { display: flex; gap: 14px; align-items: center; border-top: 1px solid var(--line); padding: 12px 0 0; }
-.ws-closing-text { flex: 1; font-size: 12.5px; color: var(--muted); }
+/* 一轮里的东西：思考、工具步骤、提问、正文、版本卡、推荐问题 */
+.ws-bubble-quote { font-size: 12.5px; color: var(--muted); border-left: 2px solid var(--accent-line); padding-left: 8px; margin-bottom: 5px; }
+.ws-bubble-act { font-size: 12.5px; color: var(--accent); margin-bottom: 2px; }
+.ws-bubble-act:last-child { margin-bottom: 0; }
+.ws-think-head { border: 0; background: none; padding: 2px 6px 2px 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); border-radius: var(--r-sm); }
+.ws-think-head:hover { color: var(--ink); }
+.ws-think-head .chev { transition: transform .2s var(--ease); transform: rotate(-90deg); }
+.ws-think-head .chev.up { transform: none; }
+.ws-think.live .ws-think-head { color: var(--accent); }
+.ws-think-text { margin-top: 4px; padding: 2px 0 2px 12px; border-left: 2px solid var(--line); font-size: 12.5px; line-height: 1.7; color: var(--muted);
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; }
+.ws-tools { margin: 0; padding: 2px 0; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 1px; }
+.ws-asked { padding: 2px 0 2px 12px; border-left: 2px solid var(--accent-line); font-size: 13px; }
+.ws-asked .q { display: flex; gap: 6px; align-items: flex-start; color: var(--ink2); }
+.ws-asked .q svg { flex: none; margin-top: 4px; color: var(--accent); }
+.ws-asked .a { color: var(--muted); font-size: 12.5px; margin-top: 2px; padding-left: 19px; }
+.ws-asked .a.skipped { color: var(--faint); }
+
+/* 正文：Markdown */
+.ws-reply { font-size: 14.5px; line-height: 1.8; color: var(--ink); overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p, .md ul, .md ol, .md blockquote, .md .md-table { margin: 0 0 10px; }
+.md h3, .md h4, .md h5, .md h6 { font-weight: 600; margin: 16px 0 6px; line-height: 1.5; }
+.md h3 { font-size: 16px; }
+.md h4, .md h5, .md h6 { font-size: 14.5px; }
+.md ul, .md ol { padding-left: 22px; }
+.md li { margin: 2px 0; }
+.md li.sub { margin-left: 18px; list-style-type: circle; }
+.md blockquote { border-left: 3px solid var(--line2); padding: 0 0 0 12px; color: var(--ink2); }
+.md code { font: 12.5px/1.5 ui-monospace, Menlo, monospace; background: var(--hover); border-radius: 4px; padding: 1px 5px; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+.md .md-table { overflow-x: auto; }
+.md table { border-collapse: collapse; font-size: 13px; line-height: 1.6; min-width: 100%; }
+.md th, .md td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; vertical-align: top; }
+.md th { background: var(--side); font-weight: 600; }
+.ws-reply.typing .md > :last-child::after { content: ""; display: inline-block; width: 7px; height: 1.05em; margin-left: 2px; vertical-align: -2px; background: var(--accent); border-radius: 1px; animation: ws-blink 1s steps(2) infinite; }
+@keyframes ws-blink { to { opacity: 0; } }
+.ws-mark.off { background: var(--hover); color: var(--faint); cursor: help; }
+
+.ws-vcard { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 1px solid var(--line2); background: var(--paper); border-radius: var(--r); padding: 10px 14px; transition: border-color .15s, box-shadow .15s; }
+.ws-vcard:hover { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
+.ws-vcard .icon { width: 32px; height: 32px; flex: none; border-radius: var(--r-sm); background: var(--accent-soft); color: var(--accent); display: inline-flex; align-items: center; justify-content: center; }
+.ws-vcard .body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ws-vcard .t { font-weight: 600; font-size: 13.5px; }
+.ws-vcard .t .old { font-weight: 400; color: var(--muted); font-size: 12px; margin-left: 4px; }
+.ws-vcard .d { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-vcard .go { flex: none; font-size: 12px; color: var(--accent); }
+.ws-usage { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.ws-suggest { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: -12px 0 26px 30px; }
+.ws-suggest-item { border: 1px solid var(--line2); background: var(--paper); border-radius: var(--r); padding: 6px 12px; font-size: 13px; color: var(--ink2); text-align: left; transition: border-color .15s, color .15s; }
+.ws-suggest-item:hover { border-color: var(--accent-line); color: var(--accent); }
 .ws-error { display: flex; gap: 8px; align-items: flex-start; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-line); border-radius: var(--r); padding: 9px 12px; font-size: 13px; margin: 0 0 16px 30px; }
 .ws-error svg { flex: none; margin-top: 2px; }
 
@@ -169,8 +191,6 @@
 .ws-chip { border: 1px solid var(--line2); background: var(--paper); border-radius: 999px; padding: 4px 12px; font-size: 13px; transition: border-color .15s, background .15s, color .15s; }
 .ws-chip:hover { border-color: var(--faint); }
 .ws-chip.sel { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
-.ws-chip-input { border: 1px dashed var(--line2); border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 13px; min-width: 150px; flex: 1; outline: none; background: var(--paper); }
-.ws-chip-input:focus { border-style: solid; border-color: var(--accent); }
 
 /* 欢迎页：标题用和报告一样的宋体 */
 .ws-welcome { padding: 9vh 2px 0; }
@@ -221,12 +241,6 @@
 .ws-empty li svg { color: var(--faint); }
 
 /* 纸面：范围、已找到的来源、论断和来源列表都放在同样的白纸上 */
-.ws-scope, .ws-found ul, .ws-claim-group, .ws-sources ul { background: var(--paper); border: 1px solid var(--line); border-radius: var(--r); }
-.ws-scope { margin: 24px auto; width: min(640px, calc(100% - 48px)); padding: 22px 26px; }
-.ws-scope-q { font: 600 19px/1.5 var(--serif); margin-bottom: 14px; }
-.ws-scope dl { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin: 0 0 14px; font-size: 13px; }
-.ws-scope dt { color: var(--muted); }
-.ws-scope dd { margin: 0; }
 
 .ws-found { padding: 22px 24px; max-width: 760px; margin: 0 auto; }
 .ws-found-head { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-bottom: 10px; font-variant-numeric: tabular-nums; }
@@ -248,9 +262,6 @@
 .ws-report { background: var(--paper); border: 1px solid var(--line); border-radius: 3px; box-shadow: 0 1px 2px rgba(20, 24, 31, .04), 0 10px 30px rgba(20, 24, 31, .06);
   padding: 48px 56px 52px; font: 16px/1.95 var(--serif); color: var(--ink); counter-reset: sec; }
 .ws-report h1 { font: 700 25px/1.45 var(--serif); letter-spacing: .01em; margin: 0 0 12px; }
-.ws-rscope { font: 12.5px/1.6 var(--sans); color: var(--muted); margin: 0; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
-.ws-notice { display: flex; gap: 8px; align-items: flex-start; background: var(--warn-soft); color: #6a3e0a; border-radius: var(--r-sm); padding: 8px 12px; font: 13px/1.6 var(--sans); margin: 16px 0 0; }
-.ws-notice svg { flex: none; margin-top: 3px; }
 .ws-h2 { display: flex; align-items: baseline; gap: 8px; margin: 34px 0 10px; }
 .ws-report h2 { font: 700 18px/1.5 var(--serif); margin: 0; }
 .ws-h2[data-section] h2::before { counter-increment: sec; content: counter(sec, simp-chinese-informal) "、"; }

@@ -5,8 +5,20 @@ import json
 import httpx
 import pytest
 
+from langchain.tools import ToolRuntime
+
 from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError, tidy_title
 from app.tools.research_tools import make_research_tools
+
+
+def _rt(messages=()) -> ToolRuntime:
+    """工具执行时 ToolNode 注入的运行时：搜索、读页从里面的消息查已有的来源 id。"""
+    return ToolRuntime(state={"messages": list(messages)}, context=None, config={}, stream_writer=lambda _: None,
+                       tool_call_id="c1", store=None)
+
+
+def _call(name: str, **args) -> dict:
+    return {"name": name, "args": {**args, "runtime": _rt()}, "id": "c1", "type": "tool_call"}
 
 
 def _client(handler):
@@ -55,10 +67,10 @@ def test_search_tool_passes_time_and_site_limits():
         return httpx.Response(200, json={"results": []})
 
     search = next(t for t in make_research_tools(_client(handler)) if t.name == "search_web")
-    search.invoke({"query": "q", "recency_days": 30, "domains": ["sqlite.org", " ", "a.org", "b", "c", "d", "e"]})
-    search.invoke({"query": "q", "count": 50, "recency_days": 90})
-    search.invoke({"query": "q", "recency_days": 0})
-    search.invoke({"query": "q"})
+    search.invoke(_call("search_web", query="q", recency_days=30, domains=["sqlite.org", " ", "a.org", "b", "c", "d", "e"]))
+    search.invoke(_call("search_web", query="q", count=50, recency_days=90))
+    search.invoke(_call("search_web", query="q", recency_days=0))
+    search.invoke(_call("search_web", query="q"))
     assert bodies[0] == {"query": "q", "type": "web", "count": 5, "freshness": "pm", "domain_filters": ["sqlite.org", "a.org", "b", "c", "d"]}
     assert bodies[1] == {"query": "q", "type": "web", "count": 10, "freshness": "py"}
     assert bodies[2]["freshness"] == "pd"
@@ -104,8 +116,11 @@ def test_tools_wrap_client():
 
     tools = {t.name: t for t in make_research_tools(_client(handler))}
     assert set(tools) == {"search_web", "read_page", "ask_user", "load_skill"}
-    assert json.loads(tools["search_web"].invoke({"query": "q"}))[0]["url"] == "https://a"
-    assert json.loads(tools["read_page"].invoke({"url": "https://a"}))["content"] == "body"
+    hit = json.loads(tools["search_web"].invoke(_call("search_web", query="q")).content)[0]
+    assert hit["url"] == "https://a" and hit["id"].startswith("s")
+    page = tools["read_page"].invoke(_call("read_page", url="https://a"))
+    assert json.loads(page.content)["content"] == "body" and json.loads(page.content)["id"] == hit["id"]  # 同一个网址同一个 id
+    assert page.artifact["retrieved_at"]
     assert "拦截" in tools["ask_user"].invoke({"question": "?", "options": ["a"], "why": "w"})
 
 
@@ -142,7 +157,7 @@ def test_read_non_json_is_a_failed_read():
 
 def test_search_tool_hands_service_errors_to_agent():
     """搜索服务出错变成给 agent 的工具结果（status=error），不让整次调研失败；密钥问题照常抛出。"""
-    call = {"name": "search_web", "args": {"query": "q"}, "id": "c1", "type": "tool_call"}
+    call = _call("search_web", query="q")
     tools = {t.name: t for t in make_research_tools(_client(lambda req: httpx.Response(503, text="down")))}
     msg = tools["search_web"].invoke(call)
     assert msg.status == "error"
@@ -168,7 +183,7 @@ def test_malformed_responses_are_failures():
         r = _client(lambda req, body=body: httpx.Response(200, json=body)).read("https://a")
         assert not r.ok and r.kind == "bad_response" and not r.retryable, body
     tools = {t.name: t for t in make_research_tools(_client(lambda req: httpx.Response(200, json={"results": 1})))}
-    msg = tools["search_web"].invoke({"name": "search_web", "args": {"query": "q"}, "id": "c1", "type": "tool_call"})
+    msg = tools["search_web"].invoke(_call("search_web", query="q"))
     assert msg.status == "error" and json.loads(msg.content)["kind"] == "bad_response"
 
 

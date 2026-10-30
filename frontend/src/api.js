@@ -95,8 +95,14 @@ export async function listResearchThreads() {
   return (await resp.json()).threads;
 }
 
-export async function createResearchThread(request, onEvent, signal) {
-  return sse("/api/research/threads", postJson({ request }), onEvent, signal);
+export async function createResearchThread(text, onEvent, signal) {
+  return sse("/api/research/threads", postJson({ text }), onEvent, signal);
+}
+
+// 接着说：text 是用户的话，quote 是在报告里选中的文字，action 是报告上的按钮（排除来源、改论断、重写一节）。
+// 运行中、等提问的回答、上一轮没跑完时后端返回 409
+export async function sayResearch(threadId, { text = "", quote = null, action = null }, onEvent, signal) {
+  return sse(`/api/research/threads/${threadId}/messages`, postJson({ text, quote, action }), onEvent, signal);
 }
 
 export async function getResearchState(threadId) {

@@ -1,3 +1,5 @@
+"""调研线程的存储：检查点（SQLite / 内存）和线程列表。图本身就是调研 agent（见 agent.build_agent）。"""
+
 from __future__ import annotations
 
 import sqlite3
@@ -7,16 +9,13 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
-from langgraph.graph import END, START, StateGraph
 
-from app.graph.research import nodes as N
-from app.graph.research.state import ResearchState
+from app.graph.research.agent import build_agent
 from app.research_llm import ResearchPlanner
 
 ALLOWED_MODELS = [
     ("app.graph.research.state", n)
-    for n in ("Scope", "ClarifyQuestion", "OutlineNode", "Source", "Claim", "SectionText", "Sentence", "ReportVersion", "CheckResult", "AskRecord",
-              "ToolStep", "ResearchRound")
+    for n in ("OutlineNode", "Claim", "SectionText", "Sentence", "ReportVersion", "CheckResult", "Turn", "Usage")
 ]
 
 
@@ -35,7 +34,7 @@ def memory_checkpointer() -> InMemorySaver:
 
 
 def thread_ids(checkpointer: BaseCheckpointSaver) -> list[str]:
-    """检查点里有哪些线程（只看外层图）。checkpointer.list(None) 会把所有检查点都反序列化一遍，这里直接查表。
+    """检查点里有哪些线程。checkpointer.list(None) 会把所有检查点都反序列化一遍，这里直接查表。
 
     换成 Postgres 时它的 checkpoints 表也有 thread_id、checkpoint_ns 两列，照这条 SQL 写一份即可。
     """
@@ -49,20 +48,4 @@ def thread_ids(checkpointer: BaseCheckpointSaver) -> list[str]:
 
 
 def build_graph(planner: ResearchPlanner, checkpointer: BaseCheckpointSaver, out_dir: Path):
-    """按需澄清 → 全局调研 agent → 结构化整理（缺口回补一轮）→ 拼装（每版写出来就是交付物）→ 校验（只是说明）→ 终审（可选的修改，改完出新一版）。
-
-终审时用户直接说的话先经 interpret 交给模型理解成具体操作。"""
-    fns = N.make_nodes(planner, Path(out_dir))
-    g = StateGraph(ResearchState)
-    for name, fn in fns.items():
-        g.add_node(name, fn)
-    g.add_edge(START, "intake")
-    g.add_edge("intake", "confirm_scope")
-    g.add_edge("confirm_scope", "research")
-    g.add_conditional_edges("research", N.route_after_research, ["consolidate", "write"])
-    g.add_conditional_edges("consolidate", N.route_after_consolidate, ["research", "write"])
-    g.add_edge("write", "check")
-    g.add_edge("check", "review")
-    g.add_conditional_edges("review", N.route_after_review, ["interpret", "write", "review", END])
-    g.add_conditional_edges("interpret", N.route_after_interpret, ["write", "review", END])
-    return g.compile(checkpointer=checkpointer)
+    return build_agent(planner, checkpointer, Path(out_dir))

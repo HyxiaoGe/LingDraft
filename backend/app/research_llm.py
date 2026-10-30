@@ -1,35 +1,31 @@
 """调研场景的模型接入层：ResearchPlanner 协议，LiveResearchPlanner（DeepSeek / 豆包，按配置）与 FakeResearchPlanner（离线）。
 
-agent 本身由 app.graph.research.agent 构建，这里只提供它要的聊天模型和工具，以及无工具的结构化步骤（intake、整理、重写）。
+agent 本身由 app.graph.research.agent 构建，这里提供它要的聊天模型和查资料的工具，以及几个不带工具的快模型步骤：
+整理报告草稿、起标题、推荐问题。
 """
 
 from __future__ import annotations
 
 import json
 import re
+import threading
+import time
+from collections.abc import Iterator, Sequence
 from datetime import date
 from typing import Any, Literal, Protocol
+from uuid import UUID
 
 import httpx
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import config
 from app.graph.research import prompts
-from app.graph.research.state import (
-    CONSOLIDATE_RETRIES,
-    Claim,
-    ClarifyQuestion,
-    IntakeResult,
-    OutlineNode,
-    Quote,
-    Scope,
-    SectionText,
-    Sentence,
-    Source,
-)
+from app.graph.research.sources import SOURCE_ID, cited
+from app.graph.research.state import CONSOLIDATE_RETRIES, Source
 from app.tools.gateway import GatewayClient
 from app.tools.research_tools import make_research_tools
 
@@ -68,95 +64,95 @@ class ConsolidateResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     sections: list[SectionDraft]
     claims: list[ClaimDraft]
-    assumptions: list[str] = Field(description="候选答案里没有来源支撑的说法、自行采用的取舍")
-    answered: bool = Field(description="候选答案是否已经回答了研究问题（哪怕不完美）；true 时 gap 必须为 null")
-    gap: str | None = Field(description="缺少的关键证据，一句话；没有则 null")
+    assumptions: list[str] = Field(description="草稿里没有来源支撑的说法、自行采用的取舍")
     time_issues: list[TimeIssue] = Field(description="论断引用的来源里，发布时间不在用户要的时间范围里的；用户没限定时间或都在范围内则为空")
 
 
-class RewriteDraft(BaseModel):
+class Suggestions(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    sentences: list[SentenceDraftById]
-
-
-class SentenceDraftById(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    text: str
-    claim_id: str | None
-
-
-RewriteDraft.model_rebuild()
-
-
-class ReviewOp(BaseModel):
-    """终审时用户的话对应的一个操作，字段和按钮回传的一样，由同一套校验检查。"""
-
-    model_config = ConfigDict(extra="forbid")
-    action: Literal["approve", "exclude_source", "edit_claim", "rewrite_section"]
-    target: str | None = Field(description="exclude_source 填来源 id（s 开头），edit_claim 填论断 id（k 开头），rewrite_section 填节 id（c 开头），approve 为 null")
-    content: str | None = Field(description="edit_claim 时论断的新表述，其余为 null")
-    instruction: str | None = Field(description="rewrite_section 时对这一节的要求，其余为 null")
-
-
-class ReviewPlan(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    ops: list[ReviewOp] = Field(description="用户这句话要做的操作，按用户说的顺序；对不上任何操作时为空")
-    reply: str | None = Field(description="ops 为空、或有部分要求做不到时，用一句话告诉用户哪里没对上、需要他补充什么；全部对上时为 null")
+    questions: list[str] = Field(description="3 个用户接下来可能会问的问题")
 
 
 # ---- 协议 ----
 
 
 class ResearchPlanner(Protocol):
-    def intake(self, request: str) -> IntakeResult: ...
-
-    def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = (),
-                    report: str | None = None) -> ConsolidateResult: ...
-
-    def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
-                      user_facts: list[str] = (), report: str | None = None) -> SectionText: ...
-
-    def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
-                         text: str, quote: Quote | None = None, numbers: dict[str, str] | None = None) -> ReviewPlan: ...
-
     def agent_model(self) -> BaseChatModel: ...
 
     def tools(self) -> list: ...
 
+    def consolidate(self, requests: Sequence[str], draft: str, sources: Sequence[Source], user_facts: Sequence[str] = (),
+                    report: str | None = None, part: str | None = None) -> ConsolidateResult: ...
 
-def _claims_block(claims: list[Claim]) -> str:
-    return "\n".join(f"- {c.id} [{c.kind}] {c.statement}" for c in claims) or "（无）"
+    def title(self, text: str) -> str: ...
+
+    def suggest(self, question: str, reply: str, has_report: bool) -> list[str]: ...
 
 
-def _facts_block(user_facts: list[str]) -> str:
+def _facts_block(user_facts: Sequence[str]) -> str:
     return prompts.render("shared.user_facts", facts=list(user_facts)) if user_facts else ""
 
 
 def _report_block(report: str | None) -> str:
-    """所选调研方法的报告结构；没选方法时整段不出现。"""
+    """读过的调研方法的报告结构；没读方法时整段不出现。"""
     return prompts.render("shared.report_guide", report=report) if report else ""
 
 
-_SOURCE_STATUS = {"adopted": "报告里引用了", "candidate": "搜到但报告没引用", "excluded": "用户已排除"}
-
-
-def _sources_block(sources: list[Source]) -> str:
-    lines = []
-    for s in sources:
-        if s.status == "excluded":
-            continue
-        lines.append(f"- {s.id} | {s.url} | {s.title or '（无标题）'} | {s.published_at or '未知'} | {s.excerpt_kind} | {s.excerpt.replace(chr(10), ' ')[:300]}")
+def _sources_block(sources: Sequence[Source]) -> str:
+    lines = [f"- {s.id} | {s.url} | {s.title or '（无标题）'} | {s.published_at or '未知'} | {s.excerpt_kind} | {s.excerpt.replace(chr(10), ' ')[:300]}"
+             for s in sources]
     return "\n".join(lines) or "（无）"
+
+
+# ---- 思考计时 ----
+
+
+class ThinkingTimer(BaseCallbackHandler):
+    """记下每次模型调用思考了多久：从第一个思考片段到第一个正文或工具调用片段（没有就到结束），
+    写进这条消息的 response_metadata["thinking_ms"]，随消息存进检查点。只有流式调用才有片段，才计时。"""
+
+    def __init__(self) -> None:
+        self._mu = threading.Lock()
+        self._runs: dict[UUID, list[float | None]] = {}
+
+    def on_chat_model_start(self, serialized, messages, *, run_id: UUID, **kwargs: Any) -> None:
+        pass  # 不实现的话回调管理器会退回 on_llm_start，把消息全转成字符串
+
+    def on_llm_new_token(self, token, *, chunk=None, run_id: UUID, **kwargs: Any) -> None:
+        msg = getattr(chunk, "message", None)
+        if msg is None:
+            return
+        t = time.monotonic()
+        with self._mu:
+            r = self._runs.setdefault(run_id, [None, None])
+            if msg.additional_kwargs.get("reasoning_content"):
+                r[0] = r[0] or t
+            elif r[0] is not None and r[1] is None and (msg.content or getattr(msg, "tool_call_chunks", None)):
+                r[1] = t
+
+    def on_llm_end(self, response, *, run_id: UUID, **kwargs: Any) -> None:
+        with self._mu:
+            r = self._runs.pop(run_id, None)
+        if not r or r[0] is None or not response.generations or not response.generations[0]:
+            return
+        msg = getattr(response.generations[0][0], "message", None)
+        if msg is not None:  # 就是最后存进 state 的那个消息对象
+            msg.response_metadata["thinking_ms"] = int(((r[1] or time.monotonic()) - r[0]) * 1000)
+
+    def on_llm_error(self, error, *, run_id: UUID, **kwargs: Any) -> None:
+        with self._mu:
+            self._runs.pop(run_id, None)
 
 
 # ---- 聊天模型工厂 ----
 
 
-def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: str = "high", timeout: int = 180) -> BaseChatModel:
+def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: str = "high", timeout: int = 180,
+                    callbacks: list | None = None) -> BaseChatModel:
     """按提供方构造聊天模型。
 
-    DeepSeek 思考模式下：多轮工具调用必须把 reasoning_content 原样传回（langchain-openai / langchain-deepseek 都不做，这里补）；
-    不接受强制 tool_choice（with_structured_output / ToolStrategy 会设），这里去掉；temperature 无效。
+    DeepSeek 思考模式下：同一轮里的多次工具调用必须把 reasoning_content 原样传回（langchain-openai / langchain-deepseek 都不做，这里补），
+    之前几轮的不传；不接受强制 tool_choice（with_structured_output 会设），这里去掉；temperature 无效。
     """
     if provider == "ark":
         from langchain_openai import ChatOpenAI
@@ -166,6 +162,7 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
         return ChatOpenAI(
             model=model or config.ARK_MODEL, base_url=config.ARK_BASE_URL, api_key=config.ARK_API_KEY,
             extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}}, timeout=timeout, max_retries=2, temperature=0,
+            stream_usage=True, callbacks=callbacks,
         )
     if provider != "deepseek":
         raise ValueError(f"未知的模型提供方：{provider}")
@@ -181,7 +178,8 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
                 payload.pop("tool_choice")
             msgs = self._convert_input(input_).to_messages()
             if len(msgs) == len(payload.get("messages", [])):
-                for m, d in zip(msgs, payload["messages"]):
+                turn = next((i for i in range(len(msgs) - 1, -1, -1) if isinstance(msgs[i], HumanMessage)), -1)
+                for m, d in list(zip(msgs, payload["messages"]))[turn + 1:]:
                     if isinstance(m, AIMessage) and m.additional_kwargs.get("reasoning_content") is not None:
                         d["reasoning_content"] = m.additional_kwargs["reasoning_content"]
             return payload
@@ -189,107 +187,69 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
     kw: dict[str, Any] = {"reasoning_effort": effort} if thinking else {"temperature": 0}
     return ChatDeepSeekRT(
         model=model or config.DEEPSEEK_MODEL, api_key=config.DEEPSEEK_API_KEY, api_base=config.DEEPSEEK_BASE_URL,
-        extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}}, timeout=timeout, max_retries=2, **kw,
+        extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}}, timeout=timeout, max_retries=2,
+        stream_usage=True, callbacks=callbacks, **kw,
     )
 
 
 # ---- 真实模型 ----
 
 
+def _structured(llm, schema):
+    """DeepSeek 的 json_schema 实际走工具调用；模型偶尔直接回一段文字、不调工具，langchain 这时给 None 而不报错。
+    转成异常，交给调用方的重试或失败处理，不让 None 流进后面的步骤。"""
+
+    def parsed(out: dict):
+        if out["parsed"] is None:
+            raise RuntimeError(f"模型没有按结构返回：{out['parsing_error'] or '没有调用结构化输出'}")
+        return out["parsed"]
+
+    return llm.with_structured_output(schema, method="json_schema", strict=True, include_raw=True) | parsed
+
+
+def consolidate_messages(requests: Sequence[str], draft: str, sources: Sequence[Source], user_facts: Sequence[str] = (),
+                         report: str | None = None, part: str | None = None) -> list:
+    user = prompts.render("consolidate.user", today=date.today().isoformat(), requests="\n".join(f"- {r}" for r in requests),
+                          user_facts=_facts_block(user_facts), guide=_report_block(report), part=part, draft=draft,
+                          sources=_sources_block(sources))
+    return [("system", prompts.render("consolidate.system")), ("user", user)]
+
+
 class LiveResearchPlanner:
     def __init__(self, gateway: GatewayClient | None = None) -> None:
         provider, model = config.RESEARCH_PROVIDER, config.RESEARCH_MODEL
-        self._agent = make_chat_model(provider, model, thinking=config.RESEARCH_THINKING, effort=config.RESEARCH_EFFORT)
-        # 结构化步骤（intake、整理、重写）不开思考：思考模式下整理一次要 100 秒以上，比调研本身还慢；
-        # 结构化输出走 json_schema strict，JSON 合法性由服务端保证，字段与引用再由代码校验
+        self._agent = make_chat_model(provider, model, thinking=config.RESEARCH_THINKING, effort=config.RESEARCH_EFFORT,
+                                      callbacks=[ThinkingTimer()])
+        # 快模型步骤不开思考：思考模式下整理一次要 100 秒以上；结构化输出走 json_schema strict，字段与引用再由代码校验
         self._fast = make_chat_model(provider, model, thinking=False, timeout=120)
         self._gateway = gateway or GatewayClient(config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY, scene="research")
         self._tools = make_research_tools(self._gateway)
-
-    @staticmethod
-    def _structured(llm, schema):
-        """DeepSeek 的 json_schema 实际走工具调用；模型偶尔直接回一段文字、不调工具，langchain 这时给 None 而不报错。
-        转成异常，交给调用方的重试或失败处理，不让 None 流进后面的步骤。"""
-
-        def parsed(out: dict):
-            if out["parsed"] is None:
-                raise RuntimeError(f"模型没有按结构返回：{out['parsing_error'] or '没有调用结构化输出'}")
-            return out["parsed"]
-
-        return llm.with_structured_output(schema, method="json_schema", strict=True, include_raw=True) | parsed
-
-    @staticmethod
-    def _intake_messages(request: str) -> list:
-        return [("system", prompts.render("intake.system")), ("user", prompts.render("intake.user", request=request))]
-
-    def intake(self, request: str) -> IntakeResult:
-        return self._structured(self._fast, IntakeResult).invoke(self._intake_messages(request))
-
-    @staticmethod
-    def _consolidate_messages(scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = (),
-                              report: str | None = None) -> list:
-        user = prompts.render("consolidate.user", today=date.today().isoformat(), question=scope.question,
-                              scope=scope.model_dump_json(exclude_none=True), user_facts=_facts_block(user_facts),
-                              guide=_report_block(report), answer=answer, sources=_sources_block(sources))
-        return [("system", prompts.render("consolidate.system")), ("user", user)]
-
-    def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = (),
-                    report: str | None = None) -> ConsolidateResult:
-        chain = self._structured(self._fast, ConsolidateResult)
-        last: Exception | None = None
-        for _ in range(CONSOLIDATE_RETRIES):
-            try:
-                return chain.invoke(self._consolidate_messages(scope, answer, sources, user_facts, report))
-            except Exception as e:  # noqa: BLE001
-                last = e
-        raise RuntimeError(f"整理失败：{last}")
-
-    @staticmethod
-    def _write_messages(scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
-                        user_facts: list[str] = (), report: str | None = None) -> list:
-        """范围（含澄清卡的回答）和用户途中的回答也带上：重写不能写出和用户已确认的前提冲突的内容。"""
-        user = prompts.render("write.user", question=scope.question, scope=scope.model_dump_json(exclude_none=True),
-                              user_facts=_facts_block(user_facts), guide=_report_block(report), title=node.title,
-                              section_question=node.question,
-                              claims=_claims_block(claims), instruction=instruction)
-        return [("system", prompts.render("write.system")), ("user", user)]
-
-    def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
-                      user_facts: list[str] = (), report: str | None = None) -> SectionText:
-        draft = self._structured(self._fast, RewriteDraft).invoke(
-            self._write_messages(scope, node, claims, instruction, user_facts, report))
-        return SectionText(outline_id=node.id, sentences=[Sentence(text=s.text, claim_id=s.claim_id) for s in draft.sentences])
-
-    @staticmethod
-    def _interpret_messages(scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
-                            text: str, quote: Quote | None = None, numbers: dict[str, str] | None = None) -> list:
-        """用户看到的报告原样给模型，再附上节、论断、来源的 id，模型才能把用户的说法对到具体对象上。
-        numbers 是来源在这版报告里的编号（报告里的 [3]），报告没引用的来源没有编号。
-
-        用户先在报告里选中一段再说的话：选中的原文和它落在哪些论断、哪些节上一起给模型（位置由页面按报告块算出）。
-        """
-        claim_lines = [f"- {c.id} | {c.outline_id} | {c.kind} | {c.statement} | {', '.join(c.source_ids) or '无'}"
-                       for c in claims if not c.orphaned]
-        numbers = numbers or {}
-        source_lines = [f"- {s.id} | {numbers.get(s.id, '无')} | {s.title or '（无标题）'} | {s.url} | {_SOURCE_STATUS[s.status]}"
-                        for s in sources]
-        user = prompts.render("interpret.user", question=scope.question, report=report,
-                              outline="\n".join(f"- {n.id} | {n.title}" for n in outline),
-                              claims="\n".join(claim_lines) or "（无）", sources="\n".join(source_lines) or "（无）", text=text,
-                              quote=quote.text if quote else None, quote_claims="、".join(quote.claim_ids) if quote else "",
-                              quote_sections="、".join(quote.section_ids) if quote else "")
-        return [("system", prompts.render("interpret.system")), ("user", user)]
-
-    def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
-                         text: str, quote: Quote | None = None, numbers: dict[str, str] | None = None) -> ReviewPlan:
-        return self._structured(self._fast, ReviewPlan).invoke(
-            self._interpret_messages(scope, report, outline, claims, sources, text, quote, numbers))
 
     def agent_model(self) -> BaseChatModel:
         return self._agent
 
     def tools(self) -> list:
         return self._tools
+
+    def consolidate(self, requests: Sequence[str], draft: str, sources: Sequence[Source], user_facts: Sequence[str] = (),
+                    report: str | None = None, part: str | None = None) -> ConsolidateResult:
+        chain = _structured(self._fast, ConsolidateResult)
+        last: Exception | None = None
+        for _ in range(CONSOLIDATE_RETRIES):
+            try:
+                return chain.invoke(consolidate_messages(requests, draft, sources, user_facts, report, part))
+            except Exception as e:  # noqa: BLE001
+                last = e
+        raise RuntimeError(f"整理失败：{last}")
+
+    def title(self, text: str) -> str:
+        out = self._fast.invoke([("system", prompts.render("title.system")), ("user", prompts.render("title.user", text=text))])
+        return str(out.content).strip().strip("「」“”\"'《》。.").strip()
+
+    def suggest(self, question: str, reply: str, has_report: bool) -> list[str]:
+        res = _structured(self._fast, Suggestions).invoke([("system", prompts.render("suggest.system", report=has_report)),
+                                                           ("user", prompts.render("suggest.user", question=question, reply=reply))])
+        return [q.strip() for q in res.questions if q.strip()]
 
 
 # ---- 离线假实现 ----
@@ -323,17 +283,21 @@ def fake_gateway_client() -> GatewayClient:
     return GatewayClient("http://fake-gw", "fake-key", scene="research", transport=httpx.MockTransport(handler))
 
 
-class FakeToolModel(BaseChatModel):
-    """按对话进度发固定的工具调用：搜 → 读 → （海报题问一次）→ 文字答案。
+FAKE_USAGE = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
+              "input_token_details": {"cache_read": 60}, "output_token_details": {"reasoning": 5}}
+_BAD_ARGS = '{"query": "a" x}'  # 解析不了的参数
 
-    需求里的关键字控制特殊路径：
-    - “坏JSON”：第一步先发一个参数无法解析的工具调用，看重试中间件；
-    - “不收尾”：有搜索额度就一直搜，看额度用尽后工具被摘掉；
-    - “无答案”：工具被摘掉后也不给文字，看受控收尾。
-    - “连发”：第一步同一批发 10 个搜索（“连发带问”再夹一个提问），看同批调用的额度；
-    - “双问”：第一步同一批发两个提问（只有第一个呈现给用户），之后再问一个，看没呈现的提问占不占额度；
-    - “补查失败”：回补那一轮既不调工具也不给文字，收尾也失败，看补查失败时第一轮的结果还在不在。
-    - “选型”：第一步先读 comparison 这个调研方法；“错方法”：先读一个不存在的方法。
+
+class FakeToolModel(BaseChatModel):
+    """按这一轮的进度发固定的工具调用：搜 → 读 → （要报告时）写报告 → 文字回复。每次回复都带一段假思考和用量。
+
+    用户的话里的关键字控制特殊路径：
+    - “直接答”：不调工具直接回复；“不回复”：最后不给文字；
+    - “问一下”：先问一次；“双问”：同一批发两个提问；
+    - “报告”“调研”：查完写报告；“连写”：同一批发两个 write_report；
+    - “坏JSON”：第一步先发一个参数无法解析的工具调用；“一直坏”：每次都发；
+    - “选型”：先读“对比与选型”的调研方法；“错方法”：先读一个不存在的方法；
+    - 系统附注里的排除来源、改论断、重写一节：调对应的工具，改完回复。
     """
 
     bound: list[str] = Field(default_factory=list)
@@ -345,179 +309,144 @@ class FakeToolModel(BaseChatModel):
     def bind_tools(self, tools: Any, **kwargs: Any) -> FakeToolModel:
         return self.model_copy(update={"bound": [getattr(t, "name", getattr(t, "__name__", "")) for t in tools]})
 
-    def _generate(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> ChatResult:
-        last = messages[-1]
-        req = _request_of(messages)
+    def _decide(self, messages: list[BaseMessage]) -> tuple[str, list[dict]]:
+        i = next(i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], HumanMessage))
+        text, turn = str(messages[i].content), messages[i + 1:]
+        names = [tc["name"] for m in turn if isinstance(m, AIMessage) for tc in m.tool_calls]
+        bad = [tc for m in turn if isinstance(m, AIMessage) for tc in m.invalid_tool_calls]
+        hits = _hits(messages)
+        ids = [h["id"] for h in hits]
         n = len(messages)
-        n_ai = sum(1 for m in messages if isinstance(m, AIMessage))
-        if "补查失败" in req and "[c1|" in req:  # 回补那一轮：用户消息里带着上一轮的假答案
-            msg = AIMessage(content="")
-        elif isinstance(last, HumanMessage) and last.content == prompts.render("agent.close"):
-            msg = AIMessage(content=_answer_text(req, _hits(messages), _answer(messages), how="收尾"))
-        elif "连发" in req and not n_ai:
-            calls = [{"name": "search_web", "args": {"query": f"{req} {i}", "count": 3}, "id": f"call_batch_{i}", "type": "tool_call"}
-                     for i in range(10)]
-            if "带问" in req:
-                calls.append({"name": "ask_user", "args": {"question": "范围是否包含 PPT 工具？", "options": ["包含", "不包含"], "why": "测试"},
-                              "id": "call_batch_ask", "type": "tool_call"})
-            msg = AIMessage(content="", tool_calls=calls)
-        elif "连发带问" in req:
-            msg = AIMessage(content=_answer_text(req, _hits(messages), _answer(messages)))
-        elif "双问" in req:
-            if not n_ai:
-                msg = AIMessage(content="", tool_calls=[
-                    {"name": "ask_user", "args": {"question": f"同批第 {i} 问？", "options": ["A", "B"], "why": "测试"},
-                     "id": f"call_pair_{i}", "type": "tool_call"} for i in (1, 2)])
-            elif n_ai == 1 and "ask_user" in self.bound:
-                msg = _call("ask_user", {"question": "后来又问一个？", "options": ["A", "B"], "why": "测试"}, n)
-            else:
-                msg = AIMessage(content=_answer_text(req, _hits(messages), _answer(messages)))
-        elif ("选型" in req or "错方法" in req) and not n_ai and "load_skill" in self.bound:
-            msg = _call("load_skill", {"name": "comparison" if "选型" in req else "nope"}, n)
-        elif isinstance(last, ToolMessage) and last.name == "load_skill" and last.status != "error":
-            msg = _call("search_web", {"query": f"{req} 对比", "count": 3}, n)
-        elif "多问" in req and n_ai < 4:
-            # 无视绑定列表，每轮都问：看提问额度能不能在产生问题卡之前拦住
-            msg = _call("ask_user", {"question": f"第 {n_ai + 1} 个问题？", "options": ["A", "B"], "why": "测试"}, n)
-        elif isinstance(last, HumanMessage):
-            if "坏JSON" in req and not n_ai:
-                msg = AIMessage(content="", invalid_tool_calls=[{"name": "search_web", "args": '{"query": "坏', "id": f"bad_{n}",
-                                                                   "error": "Expecting ',' delimiter", "type": "invalid_tool_call"}])
-            else:
-                msg = _call("search_web", {"query": f"{req} 现状", "count": 3}, n)
-        elif isinstance(last, ToolMessage) and last.status == "error":
-            msg = _call("search_web", {"query": f"{req} 再查", "count": 3}, n) if "search_web" in self.bound else AIMessage(content="")
-        elif isinstance(last, ToolMessage) and last.name == "search_web":
-            if "不收尾" in req or "无答案" in req:
-                msg = _call("search_web", {"query": f"{req} 继续 {n}", "count": 3}, n) if "search_web" in self.bound else (
-                    AIMessage(content="") if "无答案" in req else AIMessage(content=_answer_text(req, _hits(messages), None)))
-            else:
-                msg = _call("read_page", {"url": json.loads(last.content)[0]["url"]}, n)
-        elif isinstance(last, ToolMessage) and last.name == "read_page" and "海报" in req and "ask_user" in self.bound and not _asked(messages):
-            msg = _call("ask_user", {"question": "范围是否包含 PPT 工具？", "options": ["包含", "不包含"], "why": "不问会混入 PPT 工具的结论"}, n)
-        else:
-            msg = AIMessage(content=_answer_text(req, _hits(messages), _answer(messages)))
-        return ChatResult(generations=[ChatGeneration(message=msg)])
 
+        def call(tool: str, **args) -> tuple[str, list[dict]]:
+            return "", [{"name": tool, "args": args, "id": f"call_{tool}_{n}"}]
 
-def _call(name: str, args: dict, n: int) -> AIMessage:
-    return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": f"call_{name}_{n}", "type": "tool_call"}])
+        if m := re.search(r"要排除的是来源 (s[0-9a-f]+)", text):
+            return call("exclude_source", source_id=m.group(1), change="排除了一条来源") if "exclude_source" not in names else ("排除好了。", [])
+        if m := re.search(r"把论断 (k\d+)「.*?」改成了：「(.+?)」", text):
+            return call("edit_claim", claim_id=m.group(1), statement=m.group(2), change="按你的说法改了一句") if "edit_claim" not in names else ("改好了。", [])
+        if m := re.search(r"点了节 (c\d+)「", text):
+            if "revise_section" in names:
+                return "这一节重写好了。", []
+            sid = _report_ids(messages)[:1] or ids[:1]
+            return call("revise_section", section_id=m.group(1), title="重写的节", draft=f"重写后的说法。[{sid[0]}]", change="重写了一节")
+        if "坏JSON" in text and (not bad or "一直坏" in text) and not names:
+            return "", [{"name": "search_web", "args": _BAD_ARGS, "id": f"bad_{n}", "invalid": True}]
+        if "双问" in text and "ask_user" not in names:
+            return "", [{"name": "ask_user", "args": {"question": f"同批第 {k} 问？", "options": ["A", "B"], "why": "测试"},
+                         "id": f"call_pair_{k}"} for k in (1, 2)]
+        if "问一下" in text and "ask_user" not in names:
+            return call("ask_user", question="范围包含 PPT 工具吗？", options=["包含", "不包含"], why="不问会混进 PPT 工具的结论")
+        if "直接答" in text:
+            return "直接回答：这个问题不用查。", []
+        if ("选型" in text or "错方法" in text) and "load_skill" not in names:
+            return call("load_skill", name="comparison" if "选型" in text else "nope")
+        if "search_web" not in names:
+            return call("search_web", query=text.splitlines()[0][:20], count=3)
+        if "read_page" not in names and hits:
+            return call("read_page", url=hits[0]["url"])
+        wants_report = "报告" in text or "调研" in text
+        if wants_report and "write_report" not in names:
+            draft = (f"## 结论\n局部修改已经可用但不稳定。[{ids[0]}]\n稳定性仍是短板。（推断）[{ids[1]}]\n没有来源的说法。\n"
+                     f"## 事实准确性\n事实准确性靠模板兜底。[{ids[1]}][{ids[0]}]\n引用不存在的来源。[s000000]")
+            args = {"title": "局部修改调研", "draft": draft, "change": "第一版"}
+            if "连写" in text:
+                return "", [{"name": "write_report", "args": args, "id": f"call_w1_{n}"}, {"name": "write_report", "args": args, "id": f"call_w2_{n}"}]
+            return "", [{"name": "write_report", "args": args, "id": f"call_write_report_{n}"}]
+        if "不回复" in text:
+            return "", []
+        return f"结论：可以用但不稳定 [{ids[0]}]。详细的看报告。" if ids else "没查到。", []
 
+    def _message(self, messages: list[BaseMessage]) -> AIMessage:
+        content, calls = self._decide(messages)
+        valid = [{**c, "type": "tool_call"} for c in calls if not c.get("invalid")]
+        invalid = [{"name": c["name"], "args": c["args"], "id": c["id"], "error": "bad json", "type": "invalid_tool_call"}
+                   for c in calls if c.get("invalid")]
+        return AIMessage(content=content, tool_calls=valid, invalid_tool_calls=invalid, id=f"fake-{len(messages)}",
+                         additional_kwargs={"reasoning_content": "（假思考）先想一想。"}, usage_metadata=FAKE_USAGE)
 
-def _request_of(messages: list[BaseMessage]) -> str:
-    for m in messages:
-        if isinstance(m, HumanMessage):
-            return str(m.content)
-    return ""
+    def _generate(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> ChatResult:
+        return ChatResult(generations=[ChatGeneration(message=self._message(messages))])
 
-
-def _asked(messages: list[BaseMessage]) -> bool:
-    return any(isinstance(m, AIMessage) and any(tc["name"] == "ask_user" for tc in m.tool_calls) for m in messages)
-
-
-def _answer(messages: list[BaseMessage]) -> str | None:
-    for m in messages:
-        if isinstance(m, ToolMessage) and m.name == "ask_user":
-            return str(m.content)
-    return None
+    def _stream(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> Iterator[ChatGenerationChunk]:
+        """流式：先吐思考，再分两段吐正文，最后吐工具调用（参数整段）和用量。"""
+        msg = self._message(messages)
+        half = len(msg.content) // 2
+        chunks = [AIMessageChunk(content="", id=msg.id, additional_kwargs={"reasoning_content": msg.additional_kwargs["reasoning_content"]})]
+        chunks += [AIMessageChunk(content=part, id=msg.id) for part in (msg.content[:half], msg.content[half:]) if part]
+        tcc = [{"name": tc["name"], "args": json.dumps(tc["args"], ensure_ascii=False), "id": tc["id"], "index": k, "type": "tool_call_chunk"}
+               for k, tc in enumerate(msg.tool_calls)]
+        tcc += [{"name": tc["name"], "args": tc["args"], "id": tc["id"], "index": len(tcc) + k, "type": "tool_call_chunk"}
+                for k, tc in enumerate(msg.invalid_tool_calls)]
+        chunks.append(AIMessageChunk(content="", id=msg.id, tool_call_chunks=tcc, usage_metadata=FAKE_USAGE, chunk_position="last"))
+        for c in chunks:  # 回调（on_llm_new_token）由 BaseChatModel 发
+            yield ChatGenerationChunk(message=c)
 
 
 def _hits(messages: list[BaseMessage]) -> list[dict]:
-    for m in messages:
+    """最近一次成功搜索的结果。"""
+    for m in reversed(messages):
         if isinstance(m, ToolMessage) and m.name == "search_web" and m.status != "error":
             return json.loads(m.content)
     return []
 
 
-def _answer_text(req: str, hits: list[dict], answer: str | None, how: str = "") -> str:
-    """假的候选答案：每条带 [节|类别|网址] 标记，FakeResearchPlanner.consolidate 按它整理。"""
-    u = [h["url"] for h in hits] + ["https://nowhere.test/x"] * 3
-    # 只取需求第一行：回补时 req 里带着上一轮答案，原样嵌进来就会连上一轮的引用一起继承
-    lines = [f"结论：{(req.splitlines() or [''])[0]} 已经可用但不稳定。{how}"]
-    lines.append(f"- [c1|fact|{u[0]}] 来源 1 明确写了局部修改要多轮。")
-    lines.append(f"- [c1|inference|{u[1]}] 按来源 2 推测稳定性仍是短板。")
-    if "事实准确性" in req or "海报" in req:
-        lines.append(f"- [c2|fact|{u[1]}] 事实准确性靠模板兜底。")
-    lines.append("- [c1|fact|https://nowhere.test/x] 没有来源的论断应被丢弃。")
-    if answer:
-        lines.append(f"用户回答：{answer}")
-    return "\n".join(lines)
+def _report_ids(messages: list[BaseMessage]) -> list[str]:
+    """最近一次改报告的工具返回的报告里引用的来源。"""
+    for m in reversed(messages):
+        if isinstance(m, ToolMessage) and m.name in ("write_report", "revise_section", "edit_claim", "exclude_source") and m.status != "error":
+            return cited(str(m.content))
+    return []
 
 
 class FakeResearchPlanner:
     def __init__(self, gateway: GatewayClient | None = None) -> None:
         self.calls: list[tuple[str, Any]] = []
-        self.write_inputs: list[dict] = []  # 重写时拿到的范围、用户回答和报告结构
-        self.consolidate_reports: list[str | None] = []  # 整理时拿到的报告结构
         self.time_issues: list[TimeIssue] = []  # 整理时要报告的时间范围问题（测试按需设）
-        self.review_plans: list[ReviewPlan] = []  # 终审时用户的话依次被理解成什么（测试按需设）；没有预设就是没对上
+        self.fail_consolidate = False
+        self.fail_title = False
         self._gateway = gateway or fake_gateway_client()
         self._tools = make_research_tools(self._gateway)
         self._model = FakeToolModel()
-
-    def intake(self, request: str) -> IntakeResult:
-        self.calls.append(("intake", request))
-        scope = Scope(question=request, time_range="2026" if "2026" in request else None)
-        # 模拟“需求模糊才问”：提到局部修改但没说是改文字还是换图时问一个；其余需求直接通过
-        questions = []
-        if "局部修改" in request and not any(k in request for k in ("改文字", "换图")):
-            questions.append(ClarifyQuestion(id="q1", title="局部修改指的是哪种？", options=["改文字", "换图"], why="两种方向的检索词和评测标准不同"))
-        return IntakeResult(scope=scope, questions=questions)
-
-    def consolidate(self, scope: Scope, answer: str, sources: list[Source], user_facts: list[str] = (),
-                    report: str | None = None) -> ConsolidateResult:
-        self.consolidate_reports.append(report)
-        again = any(c[0] == "consolidate" for c in self.calls)
-        if "整理失败" in scope.question and (again or "二次整理失败" not in scope.question):
-            self.calls.append(("consolidate", scope.question))
-            raise RuntimeError("假模型：整理失败")
-        self.calls.append(("consolidate", answer))
-        by_url = {s.url: s.id for s in sources if s.status != "excluded"}
-        titles = {"c1": ("局部修改机制", "主流工具怎么做局部修改？"), "c2": ("事实准确性", "价格日期这类事实怎么保证？")}
-        claims: list[ClaimDraft] = []
-        per_sec: dict[str, list[str]] = {}
-        for i, m in enumerate(re.finditer(r"- \[(c\d)\|(fact|inference)\|(\S+)\] (.+)", answer), start=1):
-            sec, kind, url, text = m.groups()
-            claims.append(ClaimDraft(ref=f"k{i}", statement=text.strip(), kind=kind, source_ids=[by_url[url]] if url in by_url else [],
-                                     confidence="high" if kind == "fact" else "medium"))
-            per_sec.setdefault(sec, []).append(f"k{i}")
-        sections = []
-        for sec, refs in per_sec.items():
-            title, q = titles[sec]
-            sents = [SentenceDraft(text=f"{title}概述。", claim_ref=None)]
-            for ref in refs:
-                c = next(x for x in claims if x.ref == ref)
-                sents.append(SentenceDraft(text=c.statement, claim_ref=ref))
-            sections.append(SectionDraft(title=title, question=q, sentences=sents))
-        assumptions = ["候选答案里没有来源支撑的说法：稳定性仍是短板的程度"]
-        first = sum(1 for c in self.calls if c[0] == "consolidate") == 1
-        gap = "缺价格数据" if ("回补" in scope.question and first) else None
-        if "没回答" in scope.question and first:
-            return ConsolidateResult(sections=sections, claims=claims, assumptions=assumptions, answered=False, gap=None, time_issues=[])
-        return ConsolidateResult(sections=sections, claims=claims, assumptions=assumptions, answered=gap is None, gap=gap,
-                                 time_issues=list(self.time_issues))
-
-    def write_section(self, scope: Scope, node: OutlineNode, claims: list[Claim], instruction: str | None,
-                      user_facts: list[str] = (), report: str | None = None) -> SectionText:
-        self.calls.append(("write", node.id, instruction))
-        self.write_inputs.append({"scope": scope, "user_facts": list(user_facts), "report": report})
-        sentences = [Sentence(text=f"{node.title}概述。", claim_id=None)]
-        for c in claims:
-            text = c.statement
-            if instruction:
-                text += f"（{instruction}）"
-            sentences.append(Sentence(text=text, claim_id=c.id))
-        return SectionText(outline_id=node.id, sentences=sentences)
-
-    def interpret_review(self, scope: Scope, report: str, outline: list[OutlineNode], claims: list[Claim], sources: list[Source],
-                         text: str, quote: Quote | None = None, numbers: dict[str, str] | None = None) -> ReviewPlan:
-        self.calls.append(("interpret", text) if quote is None else ("interpret", text, quote.model_dump()))
-        if self.review_plans:
-            return self.review_plans.pop(0)
-        return ReviewPlan(ops=[], reply="（假模型）没有预设怎么理解这句话")
 
     def agent_model(self) -> BaseChatModel:
         return self._model
 
     def tools(self) -> list:
         return self._tools
+
+    def consolidate(self, requests: Sequence[str], draft: str, sources: Sequence[Source], user_facts: Sequence[str] = (),
+                    report: str | None = None, part: str | None = None) -> ConsolidateResult:
+        """按草稿的写法整理：“## 标题”分节，一行一句；带来源 id 的行是论断，标了“（推断）”的是推断。"""
+        self.calls.append(("consolidate", {"requests": list(requests), "draft": draft, "sources": [s.id for s in sources],
+                                           "user_facts": list(user_facts), "report": report, "part": part}))
+        if self.fail_consolidate:
+            raise RuntimeError("假模型：整理失败")
+        sections: list[SectionDraft] = []
+        claims: list[ClaimDraft] = []
+        for line in (x.strip() for x in draft.splitlines()):
+            if line.startswith("## "):
+                sections.append(SectionDraft(title=line[3:].strip(), question=f"{line[3:].strip()}是什么情况？", sentences=[]))
+                continue
+            if not line or not sections:
+                continue
+            ids = cited(line)
+            text = SOURCE_ID.sub("", line).replace("（推断）", "").strip()
+            ref = None
+            if ids:
+                ref = f"k{len(claims) + 1}"
+                claims.append(ClaimDraft(ref=ref, statement=text, kind="inference" if "（推断）" in line else "fact", source_ids=ids,
+                                         confidence="medium"))
+            sections[-1].sentences.append(SentenceDraft(text=text, claim_ref=ref))
+        assumptions = [s.text for sd in sections for s in sd.sentences if s.claim_ref is None and "没有来源" in s.text]
+        return ConsolidateResult(sections=sections, claims=claims, assumptions=assumptions, time_issues=list(self.time_issues))
+
+    def title(self, text: str) -> str:
+        self.calls.append(("title", text))
+        if self.fail_title:
+            raise RuntimeError("假模型：起标题失败")
+        return f"标题：{text[:8]}"
+
+    def suggest(self, question: str, reply: str, has_report: bool) -> list[str]:
+        self.calls.append(("suggest", question))
+        return [f"追问{k}：{question[:6]}" for k in (1, 2, 3)]

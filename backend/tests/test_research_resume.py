@@ -1,4 +1,4 @@
-"""确认卡回传的安全性：文件路径、严格载荷、中断 id、运行占位、断线与排队。只用假模型。"""
+"""提问卡回传的安全性：文件路径、严格载荷、中断 id、运行占位、断线与排队。只用假模型。"""
 
 from __future__ import annotations
 
@@ -10,16 +10,15 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
-from langgraph.types import Command
+from langchain_core.messages import BaseMessage, ToolMessage
 
 from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
 from app.api.runner import GraphRunner
-from app.graph.research.graph import build_graph, memory_checkpointer
-from app.research_llm import FakeResearchPlanner
+from app.research_llm import FakeResearchPlanner, FakeToolModel
 
-AMBIGUOUS = "AI 海报工具在局部修改上的现状"  # 会弹澄清卡，答完再问一次
-SIMPLE = "最近新加坡的天气情况如何？"  # 不弹卡，直接到终审
+ASKS = "问一下 调研局部修改"  # 先问一次，答完接着查、写报告
+SIMPLE = "调研一下局部修改"  # 不问，直接查完写第 1 版
 
 
 @pytest.fixture
@@ -32,6 +31,26 @@ def client(rr, tmp_path):
     api_main.set_research_runner(rr)
     api_main.set_runner(GraphRunner(fake=True, data_dir=tmp_path / "pdata", out_dir=tmp_path / "out" / "poster"))
     return TestClient(api_main.app)
+
+
+def flaky_runner(tmp_path, fail) -> ResearchRunner:
+    """模型在 fail(messages) 为真的那次调用上抛错（只抛一次）。agent 建好后换不了模型，所以在建运行器之前装上。"""
+    state = {"armed": True}
+
+    class Flaky(FakeToolModel):
+        def _message(self, messages: list[BaseMessage]):
+            if state["armed"] and fail(messages):
+                state["armed"] = False
+                raise RuntimeError("假模型：网络断了")
+            return super()._message(messages)
+
+    p = FakeResearchPlanner()
+    p._model = Flaky()
+    return ResearchRunner(planner=p, data_dir=tmp_path / "data", out_dir=tmp_path / "out" / "research")
+
+
+def after_tool(name: str):
+    return lambda messages: isinstance(messages[-1], ToolMessage) and messages[-1].name == name
 
 
 def _events(resp) -> list[tuple[str, dict]]:
@@ -59,15 +78,18 @@ def _answer(client, st: dict, payload: dict):
                        json={"interrupt_id": st["interrupt"]["id"], "payload": payload})
 
 
-def _new(client, request: str) -> dict:
-    return _last(_events(client.post("/api/research/threads", json={"request": request})), "state")
+def _new(client, text: str) -> dict:
+    return _last(_events(client.post("/api/research/threads", json={"text": text})), "state")
 
 
 def _to_ask(client) -> dict:
-    st = _new(client, AMBIGUOUS)
-    st = _last(_events(_answer(client, st, {"answers": {"q1": "改文字"}})), "state")
-    assert st["interrupt"]["type"] == "research.ask"
+    st = _new(client, ASKS)
+    assert st["status"] == "waiting" and st["interrupt"]["type"] == "research.ask"
     return st
+
+
+def _asks(st: dict) -> list[tuple[str, str | None]]:
+    return [(i["question"], i["answer"]) for t in st["turns"] for i in t["items"] if i["type"] == "ask" and not i["pending"]]
 
 
 def _hold(planner, name: str) -> threading.Event:
@@ -117,105 +139,44 @@ def test_thread_id_cannot_escape_output_dir(client, rr, tmp_path):
 # ---- 严格载荷 ----
 
 
-@pytest.mark.parametrize("bad", [
-    {"action": "approve"},
-    {},
-    {"answer": "包含", "skip": True},
-    {"answer": "   "},
-    {"skip": False},
-])
+@pytest.mark.parametrize("bad", [{"action": "approve"}, {}, {"answer": "包含", "skip": True}, {"answer": "   "}, {"skip": False}])
 def test_ask_rejects_malformed_answer(client, bad):
     st = _to_ask(client)
     r = _answer(client, st, bad)
     assert r.status_code == 400, r.text
     after = _state(client, st["thread_id"])
-    assert after["interrupt"]["id"] == st["interrupt"]["id"] and after["asks"] == [] and after["next"] == st["next"]
-
-
-def test_rejected_scope_answer_does_not_block_correct_one(client):
-    st = _new(client, AMBIGUOUS)
-    for bad in ({"answers": {"nope": "x"}}, {"answers": {"q1": "  "}}, {"answers": {"q1": "改文字"}, "extra": 1}):
-        r = _answer(client, st, bad)
-        assert r.status_code == 400, r.text
-    ev = _events(_answer(client, st, {"answers": {"q1": "改文字"}}))
-    assert not any(e == "error" for e, _ in ev)
-    assert _last(ev, "state")["interrupt"]["type"] == "research.ask"
-
-
-def test_rejected_review_decision_does_not_block_approve(client):
-    st = _new(client, SIMPLE)
-    assert st["interrupt"]["type"] == "research.review"
-    for bad in ({"action": "edit_claim", "target": st["claims"][0]["id"]},
-                {"action": "edit_claim", "target": "k999", "content": "x"},
-                {"action": "exclude_source", "target": "s999"},
-                {"action": "rewrite_section", "target": "c9", "instruction": "短一点"},
-                {"action": "approve", "content": "x"},
-                {"action": "publish"}):
-        r = _answer(client, st, bad)
-        assert r.status_code == 400, (bad, r.text)
-    ev = _events(_answer(client, st, {"action": "approve"}))
-    assert not any(e == "error" for e, _ in ev)
-    end = _last(ev, "state")
-    assert end["next"] == [] and end["interrupt"] is None
-
-
-def test_node_schema_rejects_without_poisoning(tmp_path):
-    """绕过接口直接把坏回答交给图（节点的兜底校验）：被拒后，同一张卡仍能用正确的回答继续。"""
-    g = build_graph(FakeResearchPlanner(), memory_checkpointer(), tmp_path / "out")
-
-    def pending(cfg):
-        return next(it for t in g.get_state(cfg).tasks for it in t.interrupts)
-
-    cfg = {"configurable": {"thread_id": "scope"}}
-    g.invoke({"request": AMBIGUOUS}, cfg)
-    it = pending(cfg)
-    with pytest.raises(ValueError):
-        g.invoke(Command(resume={it.id: {"answers": {"nope": "x"}}}), cfg)
-    g.invoke(Command(resume={it.id: {"answers": {"q1": "改文字"}}}), cfg)
-    assert "action_requests" in pending(cfg).value
-
-    cfg = {"configurable": {"thread_id": "review"}}
-    g.invoke({"request": SIMPLE}, cfg)
-    it = pending(cfg)
-    with pytest.raises(ValueError):
-        g.invoke(Command(resume={it.id: {"action": "edit_claim", "target": "k1"}}), cfg)
-    g.invoke(Command(resume={it.id: {"action": "approve"}}), cfg)
-    assert g.get_state(cfg).next == ()
+    assert after["interrupt"]["id"] == st["interrupt"]["id"] and _asks(after) == [] and after["status"] == "waiting"
+    ev = _events(_answer(client, st, {"answer": "包含"}))  # 被拒以后同一张卡照样能答
+    assert not any(e == "error" for e, _ in ev) and _last(ev, "state")["status"] == "idle"
 
 
 # ---- 中断 id ----
 
 
 def test_interrupt_events_carry_the_state_id_once(client):
-    ev = _events(client.post("/api/research/threads", json={"request": AMBIGUOUS}))
+    ev = _events(client.post("/api/research/threads", json={"text": ASKS}))
     ints = [d for e, d in ev if e == "interrupt"]
     st = _last(ev, "state")
-    assert len(ints) == 1 and ints[0]["id"] == st["interrupt"]["id"]
-    ev = _events(_answer(client, st, {"answers": {"q1": "改文字"}}))
-    ints = [d for e, d in ev if e == "interrupt"]
-    assert len(ints) == 1 and ints[0]["type"] == "research.ask" and ints[0]["id"] == _last(ev, "state")["interrupt"]["id"]
-    ev = _events(_answer(client, _last(ev, "state"), {"answer": "包含"}))
-    ints = [d for e, d in ev if e == "interrupt"]
-    assert len(ints) == 1 and ints[0]["type"] == "research.review" and ints[0]["id"] == _last(ev, "state")["interrupt"]["id"]
+    assert len(ints) == 1 and ints[0]["id"] == st["interrupt"]["id"] and ints[0]["title"] == "范围包含 PPT 工具吗？"
+    ev = _events(_answer(client, st, {"answer": "包含"}))
+    assert not [d for e, d in ev if e == "interrupt"] and _last(ev, "state")["interrupt"] is None
 
 
 def test_stale_interrupt_id_conflicts_and_leaves_state(client):
-    scope = _new(client, AMBIGUOUS)
-    ask = _last(_events(_answer(client, scope, {"answers": {"q1": "改文字"}})), "state")
-    # 页面拿着旧的澄清卡又提交了一次（比如断线后重发）：不能落到新的提问卡上
-    r = _answer(client, scope, {"answer": "包含"})
+    st = _to_ask(client)
+    r = client.post(f"/api/research/threads/{st['thread_id']}/resume", json={"interrupt_id": "old", "payload": {"answer": "包含"}})
     assert r.status_code == 409, r.text
-    after = _state(client, ask["thread_id"])
-    assert after["interrupt"]["id"] == ask["interrupt"]["id"] and after["asks"] == []
+    after = _state(client, st["thread_id"])
+    assert after["interrupt"]["id"] == st["interrupt"]["id"] and _asks(after) == []
     # 不带 id 的请求不接受
-    r = client.post(f"/api/research/threads/{ask['thread_id']}/resume", json={"payload": {"answer": "包含"}})
+    r = client.post(f"/api/research/threads/{st['thread_id']}/resume", json={"payload": {"answer": "包含"}})
     assert r.status_code == 422
 
 
 def test_resume_finished_thread_conflicts(client):
-    st = _new(client, SIMPLE)
-    _events(_answer(client, st, {"action": "approve"}))
-    assert _answer(client, st, {"action": "approve"}).status_code == 409
+    st = _to_ask(client)
+    _events(_answer(client, st, {"answer": "包含"}))
+    assert _answer(client, st, {"answer": "包含"}).status_code == 409
 
 
 # ---- 运行占位 ----
@@ -230,26 +191,26 @@ def test_concurrent_duplicate_resume_only_one_applies(client, rr):
     t.start()
     try:
         assert _wait_until(lambda: _state(client, tid)["status"] == "running")
-        r = _answer(client, st, {"answer": "包含"})
-        assert r.status_code == 409, r.text
+        assert _answer(client, st, {"answer": "包含"}).status_code == 409
+        r = client.post(f"/api/research/threads/{tid}/messages", json={"text": "插一句"})
+        assert r.status_code == 409  # 跑着的时候不能接着说
     finally:
         gate.set()
         t.join(30)
     _events(first["resp"])
     end = _state(client, tid)
-    assert [(a["question"], a["answer"]) for a in end["asks"]] == [("范围是否包含 PPT 工具？", "包含")]
-    assert end["interrupt"]["type"] == "research.review" and end["status"] == "waiting"
+    assert _asks(end) == [("范围包含 PPT 工具吗？", "包含")] and end["status"] == "idle" and end["report"]["version"] == 1
 
 
 def test_disconnect_does_not_release_or_cancel_the_run(rr):
     async def go():
-        gate = _hold(rr.planner, "intake")
+        gate = _hold(rr.planner, "title")
         try:
             # 浏览器在响应开始前就断了：请求已被接受，后台照样跑
             gone = rr.start("drop0001", SIMPLE)
             await gone.aclose()
             # 读到 thread 事件后断开
-            half = rr.start("drop0002", AMBIGUOUS)
+            half = rr.start("drop0002", ASKS)
             assert json.loads((await half.__anext__()).split("data: ", 1)[1])["thread_id"] == "drop0002"
             await half.aclose()
             for tid in ("drop0001", "drop0002"):
@@ -257,12 +218,11 @@ def test_disconnect_does_not_release_or_cancel_the_run(rr):
         finally:
             gate.set()
         for _ in range(400):
-            if all(rr.state_view(t)["status"] == "waiting" for t in ("drop0001", "drop0002")):
+            if rr.state_view("drop0001")["status"] == "idle" and rr.state_view("drop0002")["status"] == "waiting":
                 break
             await asyncio.sleep(0.05)
-        assert rr.state_view("drop0001")["interrupt"]["type"] == "research.review"
-        assert rr.state_view("drop0002")["interrupt"]["type"] == "research.scope"
-
+        assert rr.state_view("drop0001")["report"]["version"] == 1
+        assert rr.state_view("drop0002")["interrupt"]["type"] == "research.ask"
 
     _run_async(go())
 
@@ -271,7 +231,7 @@ def test_queued_new_thread_is_visible_at_once(tmp_path):
     rr = ResearchRunner(fake=True, data_dir=tmp_path / "data", out_dir=tmp_path / "out", workers=1)
 
     async def go():
-        gate = _hold(rr.planner, "intake")
+        gate = _hold(rr.planner, "title")
         a = rr.start("queue001", SIMPLE)  # 占住唯一的执行线程
         try:
             ev = await asyncio.wait_for(a.__anext__(), 5)
@@ -280,32 +240,28 @@ def test_queued_new_thread_is_visible_at_once(tmp_path):
             ev = await asyncio.wait_for(b.__anext__(), 2)  # 排队中也要马上拿到 id
             assert "event: thread" in ev and '"queued": true' in ev
             v = rr.state_view("queue002")
-            assert v["exists"] and v["status"] == "queued" and v["request"] == SIMPLE and v["interrupt"] is None
+            assert v["exists"] and v["status"] == "queued" and v["title"] == SIMPLE and v["turns"][0]["user"]["text"] == SIMPLE
+            assert v["interrupt"] is None
         finally:
             gate.set()
         async for _ in a:
             pass
         async for _ in b:
             pass
-        v = rr.state_view("queue002")
-        assert v["status"] == "waiting" and v["interrupt"]["type"] == "research.review"
+        assert rr.state_view("queue002")["status"] == "idle"
 
     _run_async(go())
 
 
-def test_failed_run_releases_slot(client, rr):
+def test_failed_run_releases_slot(tmp_path):
+    rr = flaky_runner(tmp_path, after_tool("ask_user"))
+    api_main.set_research_runner(rr)
+    client = TestClient(api_main.app)
     st = _to_ask(client)
-    orig = rr.planner.agent_model
-
-    def boom(*a, **kw):
-        raise RuntimeError("假模型：网络断了")
-
-    rr.planner.agent_model = boom  # 恢复时 research 节点重建 agent 就失败，异常冒出图
     ev = _events(_answer(client, st, {"answer": "包含"}))
     assert any(e == "error" for e, _ in ev)
-    # 回答没被用上：还是这张卡、在等用户（不算失败，不用重试），占位已释放，重新回答就能接着走
     after = _last(ev, "state")
-    assert after["status"] == "waiting" and after["interrupt"]["id"] == st["interrupt"]["id"] and after["asks"] == []
-    rr.planner.agent_model = orig
-    end = _last(_events(_answer(client, after, {"answer": "包含"})), "state")
-    assert end["interrupt"]["type"] == "research.review" and [a["answer"] for a in end["asks"]] == ["包含"]
+    assert after["status"] == "failed" and "网络断了" in after["error"]
+    assert rr.runs.get(rr._run_key(st["thread_id"])) is None  # 占位已释放
+    end = _last(_events(client.post(f"/api/research/threads/{st['thread_id']}/retry")), "state")
+    assert end["status"] == "idle" and _asks(end) == [("范围包含 PPT 工具吗？", "包含")]

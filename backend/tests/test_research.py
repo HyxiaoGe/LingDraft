@@ -1,4 +1,4 @@
-"""调研场景离线测试：假模型按固定脚本调工具，网关用 MockTransport。"""
+"""调研 agent：多轮对话、提问、写报告和改报告、出版本、流式事件、检查点往返。只用假模型（FakeToolModel 的关键字见它的说明）。"""
 
 from __future__ import annotations
 
@@ -7,669 +7,434 @@ from pathlib import Path
 
 import httpx
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
-from app.cli import interrupt_view, pending, research_resume
-from app.graph.research.agent import (
-    ASK_BLOCKED,
-    DANGLING_NOTE,
-    LIMIT_MARK,
-    CallLimitMiddleware,
-    answer_dangling_calls,
-    ask_resume,
-    ask_result,
-    build_agent,
-    collect_asks,
-    collect_sources,
-    final_answer_text,
-    is_ask_interrupt,
-    url_key,
-)
-from app.graph.research.graph import build_graph, memory_checkpointer, open_sqlite_checkpointer
-from app.graph.research.state import MAX_ASKS, MAX_SEARCHES
-from app.research_llm import FakeResearchPlanner
+from app.api.research_runner import NotIdle, ResearchRunner, StaleInterrupt, StreamBuffer
+from app.graph.research import history
+from app.graph.research.agent import system_prompt
+from app.graph.research.answers import InvalidAnswer, ask_resume
+from app.graph.research.graph import memory_checkpointer, open_sqlite_checkpointer
+from app.graph.research.report import report_blocks, run_checks, to_markdown
+from app.graph.research.sources import collect_sources, url_key
+from app.graph.research.state import Claim, OutlineNode, SectionText, Sentence, Source
+from app.research_llm import ClaimDraft, ConsolidateResult, FakeResearchPlanner, FakeToolModel, SectionDraft, SentenceDraft, TimeIssue
 from app.tools.gateway import GatewayAuthError, GatewayClient
 from app.tools.research_tools import make_research_tools
 
-REQUEST = "AI 海报工具在局部修改上的现状（2026）"
+ASK = "范围包含 PPT 工具吗？"
 
 
-def cfg(tid: str) -> dict:
-    return {"configurable": {"thread_id": tid}}
+class Chat:
+    """像页面那样一句一句说：写进检查点 → 跑到这一轮结束或停在提问上。不经过执行器，事件同步拿到。"""
 
+    def __init__(self, tmp_path: Path, planner: FakeResearchPlanner | None = None, saver=None, tid: str = "t1") -> None:
+        self.planner = planner or FakeResearchPlanner()
+        self.saver = saver or memory_checkpointer()
+        self.r = ResearchRunner(planner=self.planner, checkpointer=self.saver, out_dir=tmp_path / "out")
+        self.tid = tid
+        self.events: list[dict] = []
 
-def intr(result: dict) -> dict | None:
-    ints = result.get("__interrupt__") or []
-    return ints[0].value if ints else None
+    def say(self, text: str, quote: dict | None = None, action: dict | None = None) -> dict:
+        self.r.accept(self.tid, text, quote, action)
+        return self.run(None)
+
+    def run(self, inp) -> dict:
+        self.events = list(self.r._graph_events(self.tid, inp))
+        return self.view()
+
+    def answer(self, payload: dict) -> dict:
+        it = self.r.pending(self.tid)
+        return self.run(self.r.resume_input(self.tid, payload, it.id))
+
+    def view(self) -> dict:
+        return self.r.state_view(self.tid)
+
+    def values(self) -> dict:
+        return self.r.graph.get_state({"configurable": {"thread_id": self.tid}}).values
 
 
 @pytest.fixture
-def planner() -> FakeResearchPlanner:
-    return FakeResearchPlanner()
+def chat(tmp_path) -> Chat:
+    return Chat(tmp_path)
 
 
-@pytest.fixture
-def graph(planner, tmp_path: Path):
-    return build_graph(planner, memory_checkpointer(), tmp_path / "out")
+def _kinds(turn: dict) -> list[str]:
+    return [i["type"] if i["type"] != "step" else f"step:{i['kind']}" for i in turn["items"]]
 
 
-def resume(graph, tid: str, payload: dict) -> dict:
-    """像 CLI / 接口层那样：先过同一份校验、转成图要的格式，再按中断 id 恢复。"""
-    return graph.invoke(research_resume(graph, cfg(tid), payload), cfg(tid))
+def _labels(report: dict) -> dict[str, str]:
+    return {b["source_id"]: b["label"] for b in report["blocks"] if b["type"] == "source"}
 
 
-def run_to_review(graph, tid: str = "t1", answer: dict | None = None) -> dict:
-    r = graph.invoke({"request": REQUEST}, cfg(tid))
-    p = intr(r)
-    assert p["type"] == "research.scope"
-    assert p["scope"]["question"] and [q["id"] for q in p["questions"]] == ["q1"] and p["questions"][0]["why"]
-    r = resume(graph, tid, {"answers": {"q1": "改文字"}})
-    p = intr(r)
-    assert is_ask_interrupt(p)
-    view = interrupt_view(p)
-    assert view["type"] == "research.ask" and view["options"] == ["包含", "不包含"] and view["why"]
-    r = resume(graph, tid, answer or {"answer": "包含"})
-    p = intr(r)
-    assert p["type"] == "research.review"
-    return p
+def _sentences(report: dict) -> list[str]:
+    return [b["text"] for b in report["blocks"] if b["type"] == "sentence"]
 
 
-def test_full_flow_traceable_and_delivered(graph, tmp_path):
-    p = run_to_review(graph)
-    assert p["version"] == 1 and p["answer_how"] == "agent"
-    assert all(c["passed"] for c in p["checks"]), p["checks"]
-    sources = {s["id"]: s for s in p["sources"]}
-    claims = p["claims"]
-    # 整理步骤按候选答案分了两节；每条论断都能回指到系统选用的来源；事实 / 推断可辨
-    assert [s["id"] for s in p["sections"]] == ["c1", "c2"]
-    assert len(claims) == 3 and {c["outline_id"] for c in claims} == {"c1", "c2"}
-    for c in claims:
-        assert c["source_ids"] and all(sources[s]["status"] == "adopted" for s in c["source_ids"])
-    assert {c["kind"] for c in claims} == {"fact", "inference"}
-    # 读过正文的来源用正文片段，其他是搜索摘要
-    assert {s["excerpt_kind"] for s in sources.values()} == {"body", "summary"}
-    # 无来源的论断被丢弃并记录；挂在它上面的句子也从正文移除，不能变成“不需要引用的过渡句”
-    assert any("丢弃无来源论断" in n for n in p["notes"])
-    assert "没有来源的论断应被丢弃" not in p["report"] and any("一起从正文移除" in n for n in p["notes"])
-    # 报告里推断句带标记并带引用标号；来源表完整
-    report = p["report"]
-    assert "推断：" in report and "[1]" in report and "## 来源" in report
-    # 动态提问的回答原样进报告单独一节、不进假设；澄清的回答进了范围
-    assert "## 用户的回答" in report and "范围是否包含 PPT 工具？ → 包含" in report
-    assert not any("包含" in a for a in p["assumptions"])
-    assert "改文字" in report
-
-    # 每版只写报告本身，下载包已停掉（2026-10-29）
-    tdir = Path(p["report_path"]).parent
-    assert {f.name for f in tdir.iterdir()} == {"report_v1.md"} and Path(p["report_path"]).read_text() == p["report"]
-    # “不用改了”只是结束：论断状态照实保留（系统交付不等于人工确认）
-    r = resume(graph, "t1", {"action": "approve"})
-    assert r["approved"] and graph.get_state(cfg("t1")).next == ()
-    assert all(c.status == "draft" for c in graph.get_state(cfg("t1")).values["claims"])
+# ---- 一轮 ----
 
 
-def test_exclude_source_orphans_dependent_claim(graph):
-    p = run_to_review(graph)
-    fact = next(c for c in p["claims"] if c["kind"] == "fact" and c["outline_id"] == "c1")
-    sid = fact["source_ids"][0]
-    r = resume(graph, "t1", {"action": "exclude_source", "target": sid})
-    p2 = intr(r)
-    assert p2["type"] == "research.review" and p2["version"] == 2
-    src = next(s for s in p2["sources"] if s["id"] == sid)
-    assert src["status"] == "excluded"
-    orphan = next(c for c in p2["claims"] if c["id"] == fact["id"])
-    assert orphan["orphaned"] and orphan["status"] == "draft" and orphan["source_ids"] == []
-    assert any(fact["id"] in n and "失去来源支撑" in n for n in p2["notes"])
-    # 报告里不再出现这条论断，校验仍全部通过；只重写了受影响的节
-    assert fact["statement"] not in p2["report"]
-    assert all(c["passed"] for c in p2["checks"]), p2["checks"]
-    # 改完出第 2 版；被排除的来源不在报告的来源表里
-    assert f"[{sid.upper()}]" not in p2["report"]
+def test_first_turn_researches_writes_v1_and_replies(chat, tmp_path):
+    v = chat.say("调研一下 AI 海报工具的局部修改")
+    assert v["status"] == "idle" and v["title"] == "标题：调研一下 AI" and v["interrupt"] is None
+    (turn,) = v["turns"]
+    assert turn["user"] == {"text": "调研一下 AI 海报工具的局部修改"}
+    # 思考、步骤、正文按发生的先后穿插
+    assert _kinds(turn) == ["thinking", "step:search", "thinking", "step:read", "thinking", "step:report", "thinking", "text"]
+    assert turn["items"][-1]["text"].startswith("结论：")
+    rec = turn["record"]
+    assert rec["version"] == 1 and rec["outcome"] == "ok" and len(rec["suggestions"]) == 3 and rec["ended_at"]
+    assert rec["usage"]["model_calls"] == 4 and rec["usage"]["cached_tokens"] == 240 and rec["usage"]["searches"] == 1
+    r = v["report"]
+    assert r["version"] == 1 and not r["draft"] and r["title"] == "局部修改调研"
+    assert v["versions"] == [{"n": 1, "note": "第一版", "turn": turn["id"]}]
+    assert to_markdown(r["blocks"]) == (tmp_path / "out" / "t1" / "report_v1.md").read_text()
+    # 草稿里引用了不存在的来源：那句连同论断一起去掉；没有来源的句子留作过渡句，并记成假设
+    assert "引用不存在的来源。" not in _sentences(r) and "没有来源的说法。" in _sentences(r) and r["assumptions"] == ["没有来源的说法。"]
+    # 推断句的标记由代码按论断类型加
+    kind = {c["id"]: c["kind"] for c in r["claims"]}
+    sents = [b for b in r["blocks"] if b["type"] == "sentence" and b["claim_id"]]
+    assert sents and all(b["text"].startswith("推断：") == b["inference"] == (kind[b["claim_id"]] == "inference") for b in sents)
+    assert {c["name"]: c["passed"] for c in r["checks"]}["report_valid"]
+    # 来源：搜到 3 条，读到第 1 条的正文；报告引用了 2 条
+    status = {s["id"]: (s["status"], s["excerpt_kind"]) for s in v["sources"].values()}
+    assert sorted(status.values()) == [("adopted", "body"), ("adopted", "summary"), ("candidate", "summary")]
 
 
-def test_edit_claim_marks_user_edited_and_rewrites(graph, planner):
-    p = run_to_review(graph)
-    target = p["claims"][0]
-    r = resume(graph, "t1", {"action": "edit_claim", "target": target["id"], "content": "用户改过的论断"})
-    p2 = intr(r)
-    c = next(c for c in p2["claims"] if c["id"] == target["id"])
-    assert c["status"] == "user_edited" and c["statement"] == "用户改过的论断"
-    assert "用户改过的论断" in p2["report"]
-    assert [x for x in planner.calls if x[0] == "write"][-1][1] == target["outline_id"]
+def test_events_stream_title_steps_text_and_writing(chat):
+    chat.say("调研一下局部修改")
+    names = [e["event"] for e in chat.events]
+    assert names.index("title") < names.index("step") and "writing" in names and "node" in names
+    steps = [e["data"]["step"] for e in chat.events if e["event"] == "step"]
+    # 每个工具开始一次、完成一次，两次 id 一样
+    assert [(s["kind"], s["pending"]) for s in steps] == [("search", True), ("search", False), ("read", True), ("read", False),
+                                                           ("report", True), ("report", False)]
+    assert steps[0]["id"] == steps[1]["id"] and steps[-1]["message"] == "整理成 2 节、3 条论断"
+    writing = [e["data"] for e in chat.events if e["event"] == "writing"]
+    assert writing and writing[-1]["tool"] == "write_report" and writing[-1]["chars"] > 0
+    deltas = [e["data"] for e in chat.events if e["event"] == "delta"]
+    assert {d["kind"] for d in deltas} == {"thinking", "text"}
+    # 实时片段的消息 id 和存下来的对得上：页面按 id 把片段叠在已存的 state 上
+    stored = {i["id"] for i in chat.view()["turns"][0]["items"] if i["type"] in ("thinking", "text")}
+    assert {d["id"] for d in deltas} == stored
+    text = "".join(d["text"] for d in deltas if d["kind"] == "text")
+    assert text == chat.view()["turns"][0]["items"][-1]["text"]
 
 
-def test_rewrite_section_with_instruction(graph, planner):
-    run_to_review(graph)
-    r = resume(graph, "t1", {"action": "rewrite_section", "target": "c2", "instruction": "更简短"})
-    p = intr(r)
-    assert p["version"] == 2 and "更简短" in p["report"]
-    writes = [x for x in planner.calls if x[0] == "write"]
-    assert writes[-1] == ("write", "c2", "更简短")
-    # 初稿没有调用重写：直接拼装整理结果
-    assert len(writes) == 1
+def test_simple_question_answers_without_report(chat):
+    v = chat.say("直接答：新加坡现在是什么季节？")
+    (turn,) = v["turns"]
+    assert _kinds(turn) == ["thinking", "text"] and turn["record"]["version"] is None
+    assert v["report"] is None and v["versions"] == [] and v["status"] == "idle"
+    assert len(turn["record"]["suggestions"]) == 3
 
 
-def test_free_text_answer_kept_verbatim(graph):
-    # 自由文本不做关键词判断：原样记录，“不确定预算，但禁止出网”这种混合回答不会被当成跳过
-    p = run_to_review(graph, answer={"answer": "不确定预算，但公司明确禁止合同内容出网"})
-    assert "范围是否包含 PPT 工具？ → 不确定预算，但公司明确禁止合同内容出网" in p["report"]
-    assert not any("跳过" in a for a in p["assumptions"])
+def test_later_turns_keep_report_unless_changed(chat):
+    chat.say("调研一下局部修改")
+    before = chat.view()["report"]
+    v = chat.say("直接答：为什么不稳定？")
+    assert len(v["turns"]) == 2 and v["turns"][1]["record"]["version"] is None
+    assert v["report"]["blocks"] == before["blocks"] and len(v["versions"]) == 1
+    assert [t for _, t in chat.planner.calls if _ == "title"] == ["调研一下局部修改"]  # 标题只在第一轮起
 
 
-def test_skip_ask_records_assumption(graph):
-    p = run_to_review(graph, answer={"skip": True})
-    assert any("用户跳过了" in a and "PPT" in a for a in p["assumptions"])
-    assert "## 用户的回答" not in p["report"]
+def test_no_reply_is_recorded(chat):
+    v = chat.say("调研 不回复")
+    assert v["status"] == "idle" and v["turns"][0]["record"]["outcome"] == "no_reply" and v["turns"][0]["record"]["suggestions"] == []
+    assert v["report"]["version"] == 1  # 报告照样落成一版
 
 
-def test_invalid_scope_rejected(graph):
-    graph.invoke({"request": REQUEST}, cfg("t1"))
-    with pytest.raises(ValueError, match="不是当前问题"):
-        resume(graph, "t1", {"answers": {"nope": "x"}})
-    assert is_ask_interrupt(intr(resume(graph, "t1", {"answers": {"q1": "改文字"}})))  # 被拒的回答不留痕，正确的照常继续
+def test_title_falls_back_to_the_words(tmp_path):
+    p = FakeResearchPlanner()
+    p.fail_title = True
+    text = "直接答：这是一个超过二十四个字的问题，用来测试起标题失败时的截断"
+    assert Chat(tmp_path, p).say(text)["title"] == text[:24]
 
 
-def test_simple_question_one_section_no_cards(graph):
-    """需求清楚、问题简单：不弹范围卡，agent 不提问，整理成一节，直接到终审。"""
-    r = graph.invoke({"request": "最近新加坡的天气情况如何？"}, cfg("t1"))
-    p = intr(r)
-    assert p["type"] == "research.review"
-    v = graph.get_state(cfg("t1")).values
-    assert v["scope_confirmed"] and v["clarify"] == [] and v["asks_used"] == 0
-    assert [s["id"] for s in p["sections"]] == ["c1"] and len(p["claims"]) == 2
+def test_system_prompt_has_today_and_methods():
+    from datetime import date
+
+    text = system_prompt()
+    assert date.today().isoformat() in text and "load_skill" in text
 
 
-def test_clarify_skip_records_assumption(graph):
-    r = graph.invoke({"request": REQUEST}, cfg("t2"))
-    r = resume(graph, "t2", {"answers": {"q1": None}})
-    assert is_ask_interrupt(intr(r))
-    assert any("未回答" in a for a in graph.get_state(cfg("t2")).values["assumptions"])
+# ---- 按钮和选中 ----
 
 
-def test_gap_fill_runs_research_once_more(graph, planner):
-    r = graph.invoke({"request": "某题（回补）"}, cfg("t1"))
-    p = intr(r)
-    assert p["type"] == "research.review"
-    v = graph.get_state(cfg("t1")).values
-    assert v["gap_rounds"] == 1 and v["gap"] is None
-    assert sum(1 for c in planner.calls if c[0] == "consolidate") == 2
-    assert any("回研究环节补一轮" in n for n in p["notes"])
+def test_exclude_source_drops_sentences_and_renumbers(chat):
+    v1 = chat.say("调研一下局部修改")["report"]
+    first = next(sid for sid, n in _labels(v1).items() if n == "1")
+    only_first = [c["statement"] for c in v1["claims"] if c["source_ids"] == [first]]
+    v = chat.say("这条来源不靠谱", action={"type": "exclude_source", "source_id": first})
+    turn = v["turns"][-1]
+    assert turn["user"] == {"text": "这条来源不靠谱", "action": {"type": "exclude_source", "source_id": first}}
+    assert turn["record"]["version"] == 2 and v["versions"][-1]["note"] == "排除了一条来源"
+    r = v["report"]
+    assert r["excluded"] == [first] and v["sources"][first]["status"] == "excluded"
+    assert only_first and not any(s in t for s in only_first for t in _sentences(r))  # 只靠它的句子删了
+    assert first not in _labels(r) and list(_labels(r).values()) == ["1"]  # 重新从 1 编
+    assert all(first not in c["source_ids"] for c in r["claims"])
+    assert {c["name"]: c["passed"] for c in r["checks"]}["no_excluded_sources"]
 
 
-def test_budget_exhausted_tool_removed_and_still_answers(graph):
-    """模型一直搜：搜够上限后工具被摘掉，模型只能作答；执行层没有多执行一次。"""
-    r = graph.invoke({"request": "一直搜（不收尾）"}, cfg("t1"))
-    p = intr(r)
-    assert p["type"] == "research.review" and p["answer_how"] == "agent"
-    v = graph.get_state(cfg("t1")).values
-    assert len(v["sources"]) == 3 * MAX_SEARCHES
+def test_exclude_uncited_source_makes_no_version(chat):
+    v1 = chat.say("调研一下局部修改")
+    uncited = next(s["id"] for s in v1["sources"].values() if s["status"] == "candidate")
+    v = chat.say("", action={"type": "exclude_source", "source_id": uncited})
+    assert v["turns"][-1]["record"]["version"] is None and len(v["versions"]) == 1
+    assert v["report"]["excluded"] == [uncited] and v["report"]["blocks"] == v1["report"]["blocks"]
+    with pytest.raises(InvalidAnswer, match="排除过"):
+        chat.r.accept("t1", "", None, {"type": "exclude_source", "source_id": uncited})
 
 
-def test_no_text_triggers_controlled_close_out(graph):
-    r = graph.invoke({"request": "一直搜（无答案）"}, cfg("t1"))
-    p = intr(r)
-    assert p["type"] == "research.review" and p["answer_how"] == "close"
-    assert any("没有给出文字答案" in n for n in p["notes"])
-    check = next(c for c in p["checks"] if c["name"] == "answer_present")
-    assert check["passed"] and "收尾" in check["detail"]
-    assert "收尾" in graph.get_state(cfg("t1")).values["answer"]
+def test_claim_the_model_rewords_is_not_marked_as_yours(tmp_path):
+    """用户选中一句说太绝对，模型自己用 edit_claim 改了说法：这不是用户的话，不显示“你改过”。"""
+
+    class Rewords(FakeToolModel):
+        def _decide(self, messages):
+            if "太绝对" in history.text_of(messages[history.last_human(messages)]):
+                done = any(isinstance(m, ToolMessage) and m.name == "edit_claim" for m in messages[history.last_human(messages):])
+                if not done:
+                    return "", [{"name": "edit_claim", "args": {"claim_id": "k1", "statement": "模型改的说法。", "change": "改得不那么绝对"}, "id": "e1"}]
+                return "改好了。", []
+            return super()._decide(messages)
+
+    p = FakeResearchPlanner()
+    p._model = Rewords()
+    chat = Chat(tmp_path, p)
+    r1 = chat.say("调研一下局部修改")["report"]
+    k1 = next(c for c in r1["claims"] if c["id"] == "k1")
+    r = chat.say("这里说得太绝对了", quote={"text": k1["statement"], "claim_ids": ["k1"], "section_ids": [k1["outline_id"]]})["report"]
+    claim = next(c for c in r["claims"] if c["id"] == "k1")
+    assert claim["statement"] == "模型改的说法。" and claim["status"] == "draft"
 
 
-def test_invalid_tool_call_is_retried(graph):
-    r = graph.invoke({"request": "题（坏JSON）"}, cfg("t1"))
-    p = intr(r)
-    assert p["type"] == "research.review" and p["answer_how"] == "agent" and p["claims"]
+def test_edit_claim_replaces_the_sentence(chat):
+    r1 = chat.say("调研一下局部修改")["report"]
+    k = r1["claims"][0]
+    v = chat.say("改一下", action={"type": "edit_claim", "claim_id": k["id"], "statement": "局部修改基本可用。"})
+    r = v["report"]
+    claim = next(c for c in r["claims"] if c["id"] == k["id"])
+    assert claim["statement"] == "局部修改基本可用。" and claim["status"] == "user_edited"
+    assert "局部修改基本可用。" in _sentences(r) and k["statement"] not in " ".join(_sentences(r))
+    assert v["turns"][-1]["record"]["version"] == 2
 
 
-def test_resume_across_graph_instances_with_sqlite(planner, tmp_path):
-    """中断在子图里发生；换一个进程（新的图实例、同一个 sqlite）也要能接着跑。"""
-    db = tmp_path / "cp.sqlite"
-    g1 = build_graph(planner, open_sqlite_checkpointer(db), tmp_path / "out")
-    r = g1.invoke({"request": REQUEST}, cfg("t1"))
-    r = resume(g1, "t1", {"answers": {"q1": "改文字"}})
-    assert is_ask_interrupt(intr(r))
-    g2 = build_graph(FakeResearchPlanner(), open_sqlite_checkpointer(db), tmp_path / "out")
-    assert is_ask_interrupt(pending(g2, cfg("t1")).value)
-    r = resume(g2, "t1", {"answer": "包含"})
-    assert intr(r)["type"] == "research.review"
+def test_rewrite_section_changes_only_that_section(chat):
+    r1 = chat.say("调研一下局部修改")["report"]
+    first, second = r1["outline"]
+    v = chat.say("重写", action={"type": "rewrite_section", "section_id": first["id"]})
+    r = v["report"]
+    assert [n["id"] for n in r["outline"]] == [first["id"], second["id"]] and r["outline"][0]["title"] == "重写的节"
+    assert [s["text"] for s in r["sections"][first["id"]]["sentences"]] == ["重写后的说法。"]
+    assert r["sections"][second["id"]] == r1["sections"][second["id"]]
+    assert v["versions"][-1]["note"] == "重写了一节"
 
 
-def test_build_agent_without_ask_drops_tool(planner):
-    agent = build_agent(planner.agent_model(), planner.tools(), "sys", ask_limit=0)
-    names = {t.name for t in agent.get_graph().nodes["tools"].data.tools_by_name.values()} if "tools" in agent.get_graph().nodes else set()
-    assert "ask_user" not in names
+class SharedClaim(FakeResearchPlanner):
+    """整理时一条论断用在两节里（结论节复述正文的发现）。"""
+
+    def consolidate(self, requests, draft, sources, user_facts=(), report=None, part=None):
+        if part is not None:
+            return super().consolidate(requests, draft, sources, user_facts, report, part)
+        sid = sources[0].id
+        return ConsolidateResult(
+            sections=[SectionDraft(title="结论", question="?", sentences=[SentenceDraft(text="X 的成功率是 90%。", claim_ref="k1")]),
+                      SectionDraft(title="细节", question="?", sentences=[SentenceDraft(text="实测中 X 的成功率达到 90%。", claim_ref="k1")])],
+            claims=[ClaimDraft(ref="k1", statement="X 成功率 90%", kind="fact", source_ids=[sid], confidence="high")],
+            assumptions=[], time_issues=[])
 
 
-def test_final_answer_text_ignores_limit_message_and_tool_calls():
-    """超限消息靠中间件打的标记识别，不看文字：模型自己写的同样开头的话照样是答案。"""
-    limit = CallLimitMiddleware(run_limit=30, exit_behavior="end").before_model({"messages": [], "run_model_call_count": 30}, None)
-    marked = limit["messages"][0]
-    assert limit["jump_to"] == "end" and marked.response_metadata[LIMIT_MARK]
-    msgs = [
-        AIMessage(content="答案", ),
-        AIMessage(content="", tool_calls=[{"name": "search_web", "args": {}, "id": "1", "type": "tool_call"}]),
-        marked,
-    ]
-    assert final_answer_text(msgs) == "答案"
-    assert final_answer_text(msgs[1:]) is None
-    assert final_answer_text([AIMessage(content="Model call limits exceeded 是这个库的提示语")]) == "Model call limits exceeded 是这个库的提示语"
+def test_rewriting_one_section_keeps_claims_other_sections_cite(tmp_path):
+    chat = Chat(tmp_path, SharedClaim())
+    r1 = chat.say("调研一下局部修改")["report"]
+    first, second = r1["outline"]
+    r = chat.say("重写", action={"type": "rewrite_section", "section_id": first["id"]})["report"]
+    detail = next(b for b in r["blocks"] if b["type"] == "sentence" and b["text"] == "实测中 X 的成功率达到 90%。")
+    assert detail["claim_id"] == "k1" and detail["marks"] == ["1"]  # 还挂着来源，不是变成了过渡句
+    assert next(c for c in r["claims"] if c["id"] == "k1")["outline_id"] == second["id"]
+    assert all(c["passed"] for c in r["checks"])
 
 
-def test_agent_hitting_call_limit_has_no_answer(planner, monkeypatch):
-    import app.graph.research.agent as agent_mod
-
-    monkeypatch.setattr(agent_mod, "MAX_MODEL_CALLS", 2)
-    agent = build_agent(planner.agent_model(), planner.tools(), "sys", ask_limit=0)
-    res = agent.invoke({"messages": [("user", "一直搜（不收尾）")]})
-    assert res["messages"][-1].response_metadata.get(LIMIT_MARK)
-    assert final_answer_text(res["messages"]) is None
-    assert "ModelCallLimitMiddleware.before_model" in agent.get_graph().nodes  # 节点名沿用父类，旧检查点能接着跑
+def test_edit_claim_used_in_two_sections_tells_the_model_about_the_other(tmp_path):
+    chat = Chat(tmp_path, SharedClaim())
+    chat.say("调研一下局部修改")
+    r = chat.say("改一下", action={"type": "edit_claim", "claim_id": "k1", "statement": "X 的成功率约 90%。"})["report"]
+    assert _sentences(r)[:2] == ["X 的成功率约 90%。", "实测中 X 的成功率达到 90%。"]
+    result = next(m for m in reversed(chat.values()["messages"]) if isinstance(m, ToolMessage) and m.name == "edit_claim")
+    assert "还有 1 句也引用了它" in result.content and "实测中 X 的成功率达到 90%。" in result.content
 
 
-def test_collect_sources_prefers_body_excerpt():
-    hits = [{"url": "https://a.test/1", "title": "A", "description": "摘要", "published_at": "2026-01-01"}]
-    msgs = [
-        ToolMessage(content=json.dumps(hits), name="search_web", tool_call_id="1"),
-        ToolMessage(content=json.dumps({"ok": True, "url": "https://a.test/1", "title": "A", "content": "正文" * 300}), name="read_page", tool_call_id="2"),
-        ToolMessage(content=json.dumps({"ok": False, "url": "https://a.test/2", "error": "x"}), name="read_page", tool_call_id="3"),
-    ]
-    new, mapping = collect_sources(msgs, [], 1)
-    assert [s.id for s in new] == ["s1"] and mapping == {"https://a.test/1": "s1"}
-    assert new[0].excerpt_kind == "body" and len(new[0].excerpt) == 400 and new[0].published_at == "2026-01-01"
+def test_check_fails_when_a_sentence_points_at_a_missing_claim():
+    src = Source(id="s000001", url="https://a.test/1", title="A", retrieved_at="2026-10-30", status="adopted")
+    claims = [Claim(id="k1", statement="a", kind="fact", source_ids=[src.id], outline_id="c1")]
+    sections = {"c1": SectionText(outline_id="c1", sentences=[Sentence(text="a", claim_id="k1"), Sentence(text="b", claim_id="k9")])}
+    check = next(c for c in run_checks(sections, claims, [src]) if c.name == "claims_sourced")
+    assert not check.passed and "论断不存在：k9" in check.detail
 
 
-def test_read_without_body_keeps_search_excerpt():
-    """读页结果没有正文时不算读到：搜索摘要留着，不标成正文，也不为没见过的网址新建来源。"""
-    hits = [{"url": "https://a.test/1", "title": "A", "description": "摘要"}]
-    msgs = [
-        ToolMessage(content=json.dumps(hits), name="search_web", tool_call_id="1"),
-        ToolMessage(content=json.dumps({"ok": True, "url": "https://a.test/1", "content": ""}), name="read_page", tool_call_id="2"),
-        ToolMessage(content=json.dumps({"ok": True, "url": "https://a.test/2", "title": "B", "content": " "}), name="read_page", tool_call_id="3"),
-    ]
-    new, mapping = collect_sources(msgs, [], 1)
-    assert mapping == {"https://a.test/1": "s1"} and new[0].excerpt == "摘要" and new[0].excerpt_kind == "summary"
+def test_report_change_without_a_note_is_still_published(tmp_path):
+    """模型改了报告却没写改动说明：照样出版、跑校验，说明用这一步的结果代替。"""
+
+    class NoNote(FakeToolModel):
+        def _decide(self, messages):
+            content, calls = super()._decide(messages)
+            return content, [{**c, "args": {**c["args"], "change": ""}} if isinstance(c["args"], dict) and "change" in c["args"] else c
+                             for c in calls]
+
+    p = FakeResearchPlanner()
+    p._model = NoNote()
+    chat = Chat(tmp_path, p)
+    v1 = chat.say("调研一下局部修改")
+    assert [x["n"] for x in v1["versions"]] == [1] and v1["versions"][0]["note"].startswith("整理成 2 节")
+    first = next(sid for sid, n in _labels(v1["report"]).items() if n == "1")
+    v = chat.say("", action={"type": "exclude_source", "source_id": first})
+    assert v["turns"][-1]["record"]["version"] == 2 and not v["report"]["draft"] and v["report"]["checks"]
+    assert first not in Path(chat.values()["versions"][-1].path).read_text()
+
+
+def test_quote_goes_to_the_model_and_is_kept_for_the_page(chat):
+    r1 = chat.say("调研一下局部修改")["report"]
+    k = r1["claims"][0]
+    quote = {"text": k["statement"], "claim_ids": [k["id"]], "section_ids": [k["outline_id"]]}
+    chat.say("直接答：这里说得太绝对了", quote=quote)
+    human = [m for m in chat.values()["messages"] if isinstance(m, HumanMessage)][-1]
+    assert k["statement"] in human.content and k["id"] in human.content  # 模型看到选中的句子和它的 id
+    assert history.said(human) == {"text": "直接答：这里说得太绝对了", "quote": quote}  # 页面显示原话和选中
+
+
+@pytest.mark.parametrize("quote, action, match", [
+    ({"text": "x", "claim_ids": ["k99"], "section_ids": []}, None, "不在当前报告"),
+    ({"text": "x", "claim_ids": [], "section_ids": ["c99"]}, None, "不在当前报告"),
+    (None, {"type": "exclude_source", "source_id": "s000000"}, "来源不存在"),
+    (None, {"type": "edit_claim", "claim_id": "k1"}, "statement"),
+    (None, {"type": "edit_claim", "claim_id": "k99", "statement": "x"}, "论断不存在"),
+    (None, {"type": "rewrite_section", "section_id": "c99"}, "章节不存在"),
+    (None, {"type": "publish"}, "type"),
+])
+def test_bad_quote_or_action_rejected_before_anything_changes(chat, quote, action, match):
+    chat.say("调研一下局部修改")
+    n = len(chat.values()["messages"])
+    with pytest.raises(InvalidAnswer, match=match):
+        chat.r.accept("t1", "看看", quote, action)
+    assert len(chat.values()["messages"]) == n
+
+
+def test_empty_message_rejected(chat):
+    with pytest.raises(InvalidAnswer):
+        chat.r.accept("t1", "  ")
+
+
+# ---- 提问 ----
+
+
+def test_ask_waits_then_answer_continues(chat):
+    v = chat.say("问一下 调研局部修改")
+    assert v["status"] == "waiting" and v["interrupt"]["type"] == "research.ask" and v["interrupt"]["title"] == ASK
+    assert [e["event"] for e in chat.events].count("interrupt") == 1
+    ask = [i for i in v["turns"][0]["items"] if i["type"] == "ask"]
+    assert ask[0]["question"] == ASK and ask[0]["pending"] and not v["turns"][0]["record"]["ended_at"]
+    with pytest.raises(NotIdle):
+        chat.r.accept("t1", "接着说")
+    v = chat.answer({"answer": "包含"})
+    assert v["status"] == "idle" and v["report"]["version"] == 1
+    (turn,) = v["turns"]  # 回答不另起一轮
+    ask = next(i for i in turn["items"] if i["type"] == "ask")
+    assert ask["answer"] == "包含" and not ask["pending"] and not ask["skipped"]
+    assert _kinds(turn)[:2] == ["thinking", "ask"] and turn["record"]["version"] == 1
+    assert {"type": "item", "text": f"{ASK} → 包含"} in v["report"]["blocks"]  # 用户的回答写进报告
+
+
+def test_skipped_ask_is_kept(chat):
+    chat.say("问一下 直接答")
+    v = chat.answer({"skip": True})
+    ask = next(i for i in v["turns"][0]["items"] if i["type"] == "ask")
+    assert ask["skipped"] and ask["answer"] is None and v["status"] == "idle"
+
+
+def test_two_asks_in_one_batch_only_first_shown(chat):
+    v = chat.say("双问 直接答")
+    assert v["interrupt"]["title"] == "同批第 1 问？"
+    v = chat.answer({"answer": "A"})
+    asks = [i for i in v["turns"][0]["items"] if i["type"] == "ask"]
+    assert [(a["question"], a["answer"]) for a in asks] == [("同批第 1 问？", "A")] and v["status"] == "idle"
+
+
+@pytest.mark.parametrize("bad", [{"action": "approve"}, {}, {"answer": "包含", "skip": True}, {"answer": "   "}, {"skip": False}])
+def test_malformed_answer_rejected(chat, bad):
+    chat.say("问一下 直接答")
+    it = chat.r.pending("t1")
+    with pytest.raises(InvalidAnswer):
+        chat.r.resume_input("t1", bad, it.id)
+    assert chat.r.pending("t1").id == it.id
+
+
+def test_stale_interrupt_rejected(chat):
+    chat.say("问一下 直接答")
+    with pytest.raises(StaleInterrupt):
+        chat.r.resume_input("t1", {"answer": "包含"}, "not-this-card")
+    chat.answer({"answer": "包含"})
+    with pytest.raises(StaleInterrupt):
+        chat.r.resume_input("t1", {"answer": "包含"}, None)
 
 
 def test_ask_resume_matches_multiple_requests():
     pending = {"action_requests": [{"name": "ask_user", "args": {"question": "a"}}, {"name": "ask_user", "args": {"question": "b"}}]}
     d = ask_resume("答", pending=pending)["decisions"]
-    assert [json.loads(x["message"]).get("answer") for x in d] == ["答", None]
-    assert json.loads(d[1]["message"])["unshown"] is True
+    assert [json.loads(x["message"]).get("answer") for x in d] == ["答", None] and json.loads(d[1]["message"])["unshown"] is True
     (skip,) = ask_resume(None, skip=True)["decisions"]
     assert skip["type"] == "respond" and json.loads(skip["message"])["skipped"] is True
 
 
-def test_collect_asks_reads_keys_not_text():
-    """跳过 / 没呈现看系统生成的键；用户回答的文字是什么都原样记录，哪怕长得像系统格式。"""
-    def run(q_id, message):
-        return [AIMessage(content="", tool_calls=[{"name": "ask_user", "args": {"question": q_id}, "id": q_id, "type": "tool_call"}]),
-                ToolMessage(content=message, name="ask_user", tool_call_id=q_id)]
-
-    tricky = '{"skipped": true}'
-    msgs = (run("q1", ask_resume(None, skip=True)["decisions"][0]["message"])
-            + run("q2", ask_resume(tricky)["decisions"][0]["message"])
-            + run("q3", json.dumps({"unshown": True}))
-            + run("q4", "旧格式的原话回答"))
-    got = [(a.question, a.answer, a.skipped) for a in collect_asks(msgs)]
-    assert got == [("q1", None, True), ("q2", tricky, False), ("q4", "旧格式的原话回答", False)]
-    assert ask_result(msgs[-1]) == {"answer": "旧格式的原话回答"}
-
-
-def test_exclude_unreferenced_source_returns_to_review(graph):
-    p = run_to_review(graph)
-    used = {sid for c in p["claims"] for sid in c["source_ids"]}
-    unused = next(s["id"] for s in p["sources"] if s["id"] not in used)
-    r = resume(graph, "t1", {"action": "exclude_source", "target": unused})
-    p2 = intr(r)
-    assert p2["type"] == "research.review" and p2["version"] == 1
-    assert next(s for s in p2["sources"] if s["id"] == unused)["status"] == "excluded"
-    assert any("没有被任何论断引用" in n for n in p2["notes"])
-    assert len(graph.get_state(cfg("t1")).values["versions"]) == 1  # 没重写就没有新的一版
-
-
-def test_batch_tool_calls_count_toward_budget(planner):
-    """同一批里发 10 个搜索：只执行到额度为止，其余在执行层拦下。"""
-    agent = build_agent(planner.agent_model(), planner.tools(), "sys", ask_limit=0)
-    res = agent.invoke({"messages": [("user", "题（连发）")]})
-    searches = [m for m in res["messages"] if isinstance(m, ToolMessage) and m.name == "search_web"]
-    assert len(searches) == 10
-    assert sum(1 for m in searches if m.status != "error") == MAX_SEARCHES
-    assert all("额度已用完" in m.content for m in searches if m.status == "error")
-
-
-def test_ask_budget_enforced_before_card(graph):
-    """模型无视绑定列表每轮都问：只出 MAX_ASKS 张问题卡，超额的提问在变成卡之前被改成错误结果。"""
-    r = graph.invoke({"request": "题（多问）"}, cfg("t1"))
-    cards = 0
-    while is_ask_interrupt(intr(r)):
-        cards += 1
-        assert cards <= MAX_ASKS + 1
-        r = resume(graph, "t1", {"answer": f"答 {cards}"})
-    assert cards == MAX_ASKS
-    p = intr(r)
-    assert p["type"] == "research.review"
-    v = graph.get_state(cfg("t1")).values
-    assert v["asks_used"] == MAX_ASKS
-    assert all(c["passed"] for c in p["checks"]), p["checks"]
-
-
-def test_unanswered_without_gap_text_still_refills(graph, planner):
-    r = graph.invoke({"request": "题（没回答）"}, cfg("t1"))
-    p = intr(r)
-    assert p["type"] == "research.review"
-    v = graph.get_state(cfg("t1")).values
-    assert v["gap_rounds"] == 1 and v["answered"] is True
-    assert sum(1 for c in planner.calls if c[0] == "consolidate") == 2
-    assert next(c for c in p["checks"] if c["name"] == "question_answered")["passed"]
-
-
-def test_close_out_history_answers_dangling_tool_calls():
-    msgs = [
-        HumanMessage("题"),
-        AIMessage(content="", tool_calls=[{"name": "search_web", "args": {}, "id": "ok1", "type": "tool_call"}]),
-        ToolMessage(content="[]", name="search_web", tool_call_id="ok1"),
-        AIMessage(content="", invalid_tool_calls=[{"name": "search_web", "args": "{bad", "id": "bad1", "error": "x", "type": "invalid_tool_call"}]),
-    ]
-    out = answer_dangling_calls(msgs)
-    assert len(out) == 5 and isinstance(out[-1], ToolMessage) and out[-1].tool_call_id == "bad1" and out[-1].content == DANGLING_NOTE
-    assert answer_dangling_calls(msgs[:3]) == msgs[:3]
-    assert ASK_BLOCKED != "ask_user"
-
-
-# ---- 第 3 批：预算、回补、重写、提问计数、来源状态、交付 ----
-
-
-def test_batch_with_ask_still_counts_toward_budget(graph):
-    """同一批 10 个搜索里夹一个提问：回答提问后执行剩下的调用，额度照样按批算，不会因为提问而全放过。"""
-    r = graph.invoke({"request": "题（连发带问）"}, cfg("t1"))
-    assert is_ask_interrupt(intr(r))
-    p = intr(resume(graph, "t1", {"answer": "包含"}))
-    assert p["type"] == "research.review"
-    v = graph.get_state(cfg("t1")).values
-    assert len(v["sources"]) == 3 * MAX_SEARCHES  # 每次成功的搜索带回 3 条候选
-
-
-def test_unshown_ask_does_not_use_budget(graph):
-    """模型同一批发两个提问，只有第一个呈现给用户；没呈现的不占额度，之后还能再问一次。"""
-    r = graph.invoke({"request": "题（双问）"}, cfg("t1"))
-    titles = []
-    while is_ask_interrupt(intr(r)):
-        titles.append(interrupt_view(intr(r))["title"])
-        assert len(titles) <= MAX_ASKS
-        r = resume(graph, "t1", {"answer": f"答 {len(titles)}"})
-    assert titles == ["同批第 1 问？", "后来又问一个？"]
-    v = graph.get_state(cfg("t1")).values
-    assert v["asks_used"] == 2 and [a.question for a in v["asks"]] == titles
-
-
-def test_gap_round_without_answer_keeps_first_result(graph):
-    """回补那一轮没拿到答案：第一轮的答案和论断都留着，报告照常给出，并写明还缺什么。"""
-    r = graph.invoke({"request": "某题（回补，补查失败）"}, cfg("t1"))
-    p = intr(r)
-    assert p["type"] == "research.review" and p["claims"]
-    v = graph.get_state(cfg("t1")).values
-    assert v["answer"] and "补查失败" in v["answer"] and v["answered"] is False
-    assert any("沿用上一轮" in n for n in p["notes"])
-    check = next(c for c in p["checks"] if c["name"] == "question_answered")
-    assert not check["passed"] and "缺价格数据" in check["detail"]
-    assert "没有完全回答" in p["report"] and "缺价格数据" in p["report"]
-    assert Path(p["report_path"]).read_text() == p["report"]
-
-
-def test_gap_round_consolidate_failure_keeps_first_result(graph, planner):
-    r = graph.invoke({"request": "某题（回补，二次整理失败）"}, cfg("t1"))
-    p = intr(r)
-    assert sum(1 for c in planner.calls if c[0] == "consolidate") == 2
-    assert p["type"] == "research.review" and p["claims"] and p["sections"]
-    assert any("保留上一轮" in n for n in p["notes"])
-    assert graph.get_state(cfg("t1")).values["answered"] is False
-    assert "缺价格数据" in p["report"]
-
-
-def test_source_status_follows_current_report(graph):
-    """回补后重新整理：只有现在报告里引用的来源算系统选用，第一轮引用、这一轮没用上的退回候选。"""
-    p = intr(graph.invoke({"request": "某题（回补）"}, cfg("t1")))
-    cited = {sid for c in p["claims"] if not c["orphaned"] for sid in c["source_ids"]}
-    adopted = {s["id"] for s in p["sources"] if s["status"] == "adopted"}
-    assert cited and adopted == cited
-
-
-def test_source_status_recomputed_from_sections():
-    from app.graph.research.report import source_status
-    from app.graph.research.state import Claim, SectionText, Sentence, Source
-
-    sources = [Source(id="s1", url="u1", status="adopted"), Source(id="s2", url="u2", status="adopted"),
-               Source(id="s3", url="u3", status="excluded"), Source(id="s4", url="u4")]
-    claims = [Claim(id="k1", statement="a", kind="fact", source_ids=["s1"], outline_id="c1"),
-              Claim(id="k2", statement="b", kind="fact", source_ids=["s2"], outline_id="c1")]
-    sections = {"c1": SectionText(outline_id="c1", sentences=[Sentence(text="a", claim_id="k1")])}  # 重写后 k2 不在正文里了
-    assert [s.status for s in source_status(sources, sections, claims)] == ["adopted", "candidate", "excluded", "candidate"]
-
-
-def test_rewrite_gets_user_constraints(graph, planner):
-    """重写某一节时带上范围和用户的回答，不会写出和用户已确认的前提冲突的内容。"""
-    run_to_review(graph)
-    resume(graph, "t1", {"action": "rewrite_section", "target": "c1", "instruction": "更简短"})
-    got = planner.write_inputs[-1]
-    assert "改文字" in (got["scope"].extra or "")
-    assert got["user_facts"] == ["范围是否包含 PPT 工具？ → 包含"]
-
-
-def test_live_rewrite_prompt_carries_scope_and_user_facts():
-    from app.graph.research.state import Claim, OutlineNode, Scope
-    from app.research_llm import LiveResearchPlanner
-
-    scope = Scope(question="选哪个向量库？", time_range="2026", extra="部署方式：只能私有化")
-    msgs = LiveResearchPlanner._write_messages(
-        scope, OutlineNode(id="c1", title="结论", question="选哪个？"),
-        [Claim(id="k1", statement="A 支持私有化", kind="fact", source_ids=["s1"], outline_id="c1")],
-        "更简短", ["数据能不能出网？ → 不能出网"],
-    )
-    user = msgs[-1][1]
-    assert "只能私有化" in user and "2026" in user and "不能出网" in user and "更简短" in user and "k1" in user
-
-
-def test_invalid_report_is_still_delivered(graph):
-    """整理失败、报告里没有带来源的论断：照样给出这一版，校验结果只是说明。"""
-    p = intr(graph.invoke({"request": "题（整理失败）"}, cfg("t1")))
-    assert p["type"] == "research.review" and p["version"] == 1 and p["claims"] == []
-    failed = {c["name"] for c in p["checks"] if not c["passed"]}
-    assert {"report_valid", "question_answered"} <= failed
-    assert any("整理失败" in n for n in p["notes"]) and "没有完全回答" in p["report"]
-    assert graph.get_state(cfg("t1")).values["answered"] is False
-    r = resume(graph, "t1", {"action": "approve"})  # “不用改了”只是结束
-    assert r["approved"] and graph.get_state(cfg("t1")).next == ()
-
-
-# ---- 用户的话交给模型理解；标记、时间范围不靠代码匹配文字 ----
-
-
-def _plan(*ops, reply=None):
-    from app.research_llm import ReviewOp, ReviewPlan
-
-    return ReviewPlan(ops=[ReviewOp(**{"target": None, "content": None, "instruction": None, **o}) for o in ops], reply=reply)
-
-
-def test_free_text_goes_to_model_and_is_applied(graph, planner):
-    """终审时用户直接说的话原样交给模型；模型理解出的操作和按钮走同一套校验和应用。"""
-    run_to_review(graph)
-    planner.review_plans = [_plan({"action": "rewrite_section", "target": "c1", "instruction": "更简短"})]
-    p = intr(resume(graph, "t1", {"action": "instruct", "text": "第一节更简短"}))
-    assert ("interpret", "第一节更简短") in planner.calls
-    assert p["version"] == 2 and ("write", "c1", "更简短") in planner.calls
-    assert graph.get_state(cfg("t1")).values["versions"][-1].note == "重写「局部修改机制」：更简短"
-    assert not any(c[0] == "write" and c[1] == "c2" for c in planner.calls)
-    assert any(n.startswith("按你的话（第一节更简短）理解为：重写「局部修改机制」：更简短") for n in p["notes"])
-    assert p["reply"] is None
-
-
-def test_free_text_with_two_requests(graph, planner):
-    p = run_to_review(graph)
-    sid = next(c["source_ids"][0] for c in p["claims"] if c["outline_id"] == "c2")
-    planner.review_plans = [_plan({"action": "exclude_source", "target": sid},
-                                  {"action": "rewrite_section", "target": "c1", "instruction": "先给结论"})]
-    p2 = intr(resume(graph, "t1", {"action": "instruct", "text": "排掉那条来源，第一节先给结论"}))
-    assert p2["version"] == 2
-    assert next(s for s in p2["sources"] if s["id"] == sid)["status"] == "excluded"
-    writes = [c for c in planner.calls if c[0] == "write"]
-    assert writes == [("write", "c1", "先给结论")]  # 要求只给 c1；c2 唯一的论断失去来源，正文留空不调模型
-    assert any("「事实准确性」没有可用论断" in n for n in p2["notes"])
-
-
-def test_free_text_not_understood_returns_reply(graph, planner):
-    """模型对不上（比如用户的话有歧义）：不改报告，带着模型的回复回到终审，回复只出现在下一张卡上。"""
-    run_to_review(graph)
-    planner.review_plans = [_plan(reply="S2 和 s2 指的不是同一条来源，你要排除的是哪一条？")]
-    p = intr(resume(graph, "t1", {"action": "instruct", "text": "排除 S2"}))
-    assert p["type"] == "research.review" and p["version"] == 1
-    assert p["reply"] == "S2 和 s2 指的不是同一条来源，你要排除的是哪一条？"
-    assert all(s["status"] != "excluded" for s in p["sources"])
-    p2 = intr(resume(graph, "t1", {"action": "rewrite_section", "target": "c1"}))
-    assert p2["version"] == 2 and p2["reply"] is None
-
-
-def test_free_text_with_bad_target_keeps_valid_ops(graph, planner):
-    """模型给的对象不存在：那一条不做并告诉用户，其余照做。"""
-    run_to_review(graph)
-    planner.review_plans = [_plan({"action": "exclude_source", "target": "s99"},
-                                  {"action": "rewrite_section", "target": "c2", "instruction": "多说明局限"})]
-    p = intr(resume(graph, "t1", {"action": "instruct", "text": "去掉第九十九条来源，第二节多说局限"}))
-    assert p["version"] == 2 and ("write", "c2", "多说明局限") in planner.calls
-    assert "s99" in (p["reply"] or "")
-
-
-def test_free_text_approve_alone_ends_but_not_with_changes(graph, planner):
-    run_to_review(graph, "t1")
-    planner.review_plans = [_plan({"action": "approve"})]
-    r = resume(graph, "t1", {"action": "instruct", "text": "可以了"})
-    assert r["approved"] and graph.get_state(cfg("t1")).next == ()
-
-    run_to_review(graph, "t2")
-    planner.review_plans = [_plan({"action": "approve"}, {"action": "rewrite_section", "target": "c1", "instruction": "更简短"})]
-    p = intr(resume(graph, "t2", {"action": "instruct", "text": "挺好，不过第一节再短点"}))
-    assert p["type"] == "research.review" and p["version"] == 2  # 有修改就只做修改，用户看过新一版再说结束
-
-
-def test_free_text_model_failure_returns_to_review(graph, planner, monkeypatch):
-    run_to_review(graph)
-
-    def boom(*a, **k):
-        raise RuntimeError("超时")
-
-    monkeypatch.setattr(planner, "interpret_review", boom)
-    p = intr(resume(graph, "t1", {"action": "instruct", "text": "第一节更简短"}))
-    assert p["type"] == "research.review" and p["version"] == 1 and "没能处理" in p["reply"]
-
-
-def test_instruct_requires_text(graph):
-    from app.graph.research.answers import InvalidAnswer
-
-    run_to_review(graph)
-    with pytest.raises(InvalidAnswer):
-        resume(graph, "t1", {"action": "instruct", "text": "  "})
-    with pytest.raises(InvalidAnswer):
-        resume(graph, "t1", {"action": "instruct", "text": "x", "target": "c1"})
-
-
-def test_live_interpret_prompt_carries_ids_and_report_numbers():
-    from app.graph.research.state import Claim, OutlineNode, Scope, Source
-    from app.research_llm import LiveResearchPlanner
-
-    msgs = LiveResearchPlanner._interpret_messages(
-        Scope(question="问题"), "# 问题\n\n## 结论\n\n一句话[1]\n",
-        [OutlineNode(id="c1", title="结论", question="?")],
-        [Claim(id="k1", statement="一句话", kind="fact", source_ids=["s3"], outline_id="c1")],
-        [Source(id="s3", url="https://a.test", title="A", status="adopted"), Source(id="s1", url="https://b.test", title="B")],
-        "排除第 1 条来源", numbers={"s3": "1"},
-    )
-    user = msgs[-1][1]
-    assert "- c1 | 结论" in user and "- k1 | c1 | fact | 一句话 | s3" in user
-    # 报告里的 [1] 是 s3：模型拿编号对到 id
-    assert "- s3 | 1 | A | https://a.test | 报告里引用了" in user and "- s1 | 无 | B | https://b.test | 搜到但报告没引用" in user
-    assert "用户说：排除第 1 条来源" in user
-
-
-def test_inference_marked_from_claim_kind_not_text(graph):
-    """推断句的标记由代码按论断类型加（假模型不写前缀）；页面用的块和下载的 report.md 出自同一份数据。"""
-    from app.graph.research.report import to_markdown
-
-    p = run_to_review(graph)
-    kind = {c["id"]: c["kind"] for c in p["claims"]}
-    sents = [s for sec in p["sections"] for s in sec["sentences"] if s["claim_id"]]
-    assert sents and all(s["text"].startswith("推断：") == (kind[s["claim_id"]] == "inference") for s in sents)
-    blocks = [b for b in p["blocks"] if b["type"] == "sentence" and b["claim_id"]]
-    assert all(b["inference"] == (kind[b["claim_id"]] == "inference") and b["marks"] for b in blocks)
-    assert to_markdown(p["blocks"]) == p["report"] == Path(p["report_path"]).read_text()
-    # 来源按正文里第一次出现的先后编 1、2、3；排除一条后这版重新编，仍从 1 连着编
-    labels = {b["source_id"]: b["label"] for b in p["blocks"] if b["type"] == "source"}
-    assert list(labels.values()) == [str(i) for i in range(1, len(labels) + 1)]
-    marks = [m for b in blocks for m in b["marks"]]
-    assert sorted(set(marks), key=int) == list(labels.values()) and [m for i, m in enumerate(marks) if m not in marks[:i]] == list(labels.values())
-    first = next(iter(labels))
-    p2 = intr(resume(graph, "t1", {"action": "exclude_source", "target": first}))
-    labels2 = {b["source_id"]: b["label"] for b in p2["blocks"] if b["type"] == "source"}
-    assert first not in labels2 and list(labels2.values()) == [str(i) for i in range(1, len(labels2) + 1)]
-    assert "inference_marked" not in {c["name"] for c in p["checks"]}
-
-
-def test_time_range_judged_by_model(graph, planner):
-    """来源在不在时间范围里由整理步骤的模型判断；校验只看正文用到的、被标出来的来源。"""
-    from app.research_llm import TimeIssue
-
-    planner.time_issues = [TimeIssue(source_id="s1", reason="发布于 2023 年，不在 2026 年内"),
-                           TimeIssue(source_id="s99", reason="不存在的来源")]
-    p = run_to_review(graph)
-    cited = {sid for c in p["claims"] for sid in c["source_ids"]}
-    check = next(c for c in p["checks"] if c["name"] == "scope_time")
-    assert ("s1" in cited) and not check["passed"] and "2023" in check["detail"] and "s99" not in check["detail"]
-    assert graph.get_state(cfg("t1")).values["time_issues"] == {"s1": "发布于 2023 年，不在 2026 年内"}
-
-
-def test_time_check_ignores_uncited_sources():
-    from app.graph.research.report import run_checks
-    from app.graph.research.state import Claim, SectionText, Sentence, Source
-
-    sources = [Source(id="s1", url="u1", title="t", retrieved_at="x", status="adopted"), Source(id="s2", url="u2")]
-    claims = [Claim(id="k1", statement="a", kind="fact", source_ids=["s1"], outline_id="c1")]
-    sections = {"c1": SectionText(outline_id="c1", sentences=[Sentence(text="a", claim_id="k1")])}
-    res = {c.name: c for c in run_checks(sections, claims, sources, {"s2": "太旧"})}
-    assert res["scope_time"].passed
-    res = {c.name: c for c in run_checks(sections, claims, sources, {"s1": "太旧"}, {"s1": "1"})}
-    assert not res["scope_time"].passed and res["scope_time"].detail == "[1]：太旧；"  # 写报告里的编号，不写来源 id
-
-
-def test_untitled_source_listed_once():
-    """来源没有标题时报告的来源表只写网址，不把网址当标题再写一遍。"""
-    from app.graph.research.report import report_blocks, to_markdown
-    from app.graph.research.state import Claim, OutlineNode, Scope, SectionText, Sentence, Source
-
-    sources = [Source(id="s1", url="https://a.test/x.pdf"), Source(id="s2", url="https://b.test/", title="B 站")]
-    claims = [Claim(id="k1", statement="a", kind="fact", source_ids=["s1", "s2"], outline_id="c1")]
-    sections = {"c1": SectionText(outline_id="c1", sentences=[Sentence(text="a", claim_id="k1")])}
-    blocks = report_blocks(Scope(question="q"), [OutlineNode(id="c1", title="一", question="?")], sections, claims, sources, [])
-    lines = [ln for ln in to_markdown(blocks).splitlines() if ln.startswith("[")]
-    assert lines == ["[1] https://a.test/x.pdf", "[2] B 站 — https://b.test/"]
-
-
-def test_sources_numbered_by_first_appearance():
-    """编号按正文里第一次出现的先后（节按大纲顺序），不按来源 id；没被正文引用的来源不编号。"""
-    from app.graph.research.report import report_blocks
-    from app.graph.research.state import Claim, OutlineNode, Scope, SectionText, Sentence, Source
-
-    sources = [Source(id=f"s{i}", url=f"https://{i}.test/", status="adopted") for i in range(1, 6)]
-    claims = [Claim(id="k1", statement="a", kind="fact", source_ids=["s4", "s2"], outline_id="c2"),
-              Claim(id="k2", statement="b", kind="fact", source_ids=["s5"], outline_id="c1"),
-              Claim(id="k3", statement="c", kind="fact", source_ids=["s1", "s2"], outline_id="c2")]  # s1 编 4、s2 编 3，角标排成 [3][4]
-    # 节的字典顺序和大纲顺序故意不一样：c2 先放进去，但大纲里 c1 在前
-    sections = {"c2": SectionText(outline_id="c2", sentences=[Sentence(text="a", claim_id="k1"), Sentence(text="c", claim_id="k3")]),
-                "c1": SectionText(outline_id="c1", sentences=[Sentence(text="b", claim_id="k2")])}
-    outline = [OutlineNode(id="c1", title="一", question="?"), OutlineNode(id="c2", title="二", question="?")]
-    blocks = report_blocks(Scope(question="q"), outline, sections, claims, sources, [])
-    assert [b["marks"] for b in blocks if b["type"] == "sentence" and b.get("claim_id")] == [["1"], ["2", "3"], ["3", "4"]]
-    assert [(b["label"], b["source_id"]) for b in blocks if b["type"] == "source"] == [("1", "s5"), ("2", "s4"), ("3", "s2"), ("4", "s1")]
-
-
-# ---- 后端流程：搜索服务出错、来源去重、报告不依赖磁盘文件 ----
+# ---- 工具出错、模型出错 ----
+
+
+def test_two_report_writes_in_one_batch_only_first_runs(chat):
+    v = chat.say("调研 连写")
+    results = [m for m in chat.values()["messages"] if isinstance(m, ToolMessage) and m.name == "write_report"]
+    assert [m.status for m in results] == ["success", "error"] and v["report"]["version"] == 1
+    # 被拦下的那个是系统替模型纠错：实时没报进度，存下来的对话里也不列
+    assert [i["kind"] for i in v["turns"][0]["items"] if i["type"] == "step"] == ["search", "read", "report"]
+    assert [e["data"]["step"]["kind"] for e in chat.events if e["event"] == "step"].count("report") == 2
+
+
+def test_consolidate_failure_is_a_tool_error_not_a_failed_run(tmp_path):
+    p = FakeResearchPlanner()
+    p.fail_consolidate = True
+    v = Chat(tmp_path, p).say("调研一下局部修改")
+    step = next(i for i in v["turns"][0]["items"] if i["type"] == "step" and i["kind"] == "report")
+    assert not step["ok"] and "整理失败" in step["message"]
+    assert v["status"] == "idle" and v["report"] is None and v["versions"] == []
+
+
+def test_invalid_tool_call_is_retried_with_the_error(chat):
+    v = chat.say("坏JSON 直接答")
+    msgs = chat.values()["messages"]
+    bad = next(m for m in msgs if isinstance(m, AIMessage) and m.invalid_tool_calls)
+    # 无效的调用在下一次请求里仍是 tool_calls：重发前先有一条带解析错误的结果，接口才不报错
+    res = next(m for m in msgs if isinstance(m, ToolMessage) and m.tool_call_id == bad.invalid_tool_calls[0]["id"])
+    assert res.status == "error" and "不是合法的 JSON" in res.content
+    assert msgs.index(res) == msgs.index(bad) + 1
+    assert v["status"] == "idle" and v["turns"][0]["items"][-1]["text"] == "直接回答：这个问题不用查。"
+    assert not [i for i in v["turns"][0]["items"] if i["type"] == "step"]
+
+
+def test_invalid_tool_call_gives_up_after_retries(chat):
+    v = chat.say("坏JSON 一直坏")
+    msgs = chat.values()["messages"]
+    calls = [tc["id"] for m in msgs if isinstance(m, AIMessage) for tc in m.invalid_tool_calls]
+    answered = {m.tool_call_id for m in msgs if isinstance(m, ToolMessage)}
+    assert len(calls) == 3 and set(calls) <= answered  # 重试两次；最后一次的也补了结果，下一轮的历史合法
+    assert v["status"] == "idle" and v["turns"][0]["record"]["outcome"] == "no_reply"
+    v = chat.say("直接答：再说一遍")
+    assert v["turns"][-1]["record"]["outcome"] == "ok"
+
+
+def test_dangling_calls_get_error_results():
+    ai = AIMessage(content="", tool_calls=[{"name": "search_web", "args": {"query": "q"}, "id": "c1", "type": "tool_call"},
+                                           {"name": "read_page", "args": {"url": "u"}, "id": "c2", "type": "tool_call"}])
+    done = ToolMessage(content="[]", name="search_web", tool_call_id="c1")
+    (fix,) = history.dangling([HumanMessage("x"), ai, done])
+    assert fix.tool_call_id == "c2" and fix.status == "error"
 
 
 def _with_gateway(planner: FakeResearchPlanner, handler) -> FakeResearchPlanner:
@@ -678,82 +443,176 @@ def _with_gateway(planner: FakeResearchPlanner, handler) -> FakeResearchPlanner:
     return planner
 
 
-def _search_hits(req: httpx.Request, tag: str) -> httpx.Response:
-    return httpx.Response(200, json={"results": [
-        {"title": f"{tag} {i}", "url": f"https://x.test/{tag}/{i}", "description": "d", "content": "c", "published_at": None}
-        for i in (1, 2)]})
+def test_search_outage_goes_to_the_agent(tmp_path):
+    """搜索服务出错变成给 agent 的工具结果：这一步显示失败，这一轮照常结束。"""
+    p = _with_gateway(FakeResearchPlanner(), lambda req: httpx.Response(502, text="bad gateway"))
+    v = Chat(tmp_path, p).say("比较两款笔记软件")
+    step = next(i for i in v["turns"][0]["items"] if i["type"] == "step")
+    assert step["kind"] == "search" and not step["ok"] and "502" in step["message"]
+    assert v["status"] == "idle" and v["turns"][0]["items"][-1]["text"] == "没查到。"
 
 
-def test_search_outage_does_not_fail_research(planner, tmp_path):
-    """第一次搜索返回 502：agent 拿到出错的工具结果后换个搜索继续，照常出报告，并记下搜索出过错。"""
-    calls = {"n": 0}
+def test_search_auth_error_fails_the_run(tmp_path):
+    """密钥问题不交给 agent：这次运行失败、错误记在检查点里，改好配置后可以重试。"""
+    c = Chat(tmp_path, _with_gateway(FakeResearchPlanner(), lambda req: httpx.Response(401, json={"error": "unauthorized"})))
+    with pytest.raises(GatewayAuthError):
+        c.say("比较两款笔记软件")
+    v = c.view()
+    assert v["status"] == "failed" and "401" in v["error"]
+
+
+# ---- 检查点 ----
+
+
+def test_sqlite_round_trip_and_continue(tmp_path):
+    db = tmp_path / "data" / "r.sqlite"
+    c = Chat(tmp_path, saver=open_sqlite_checkpointer(db))
+    c.say("问一下 调研局部修改")
+    c.answer({"answer": "包含"})
+    before = c.view()
+    again = Chat(tmp_path, saver=open_sqlite_checkpointer(db))  # 像服务重启：新的连接、新的 agent
+    after = again.view()
+    for key in ("title", "turns", "sources", "report", "versions", "status"):
+        assert after[key] == before[key], key
+    v = again.say("重写", action={"type": "rewrite_section", "section_id": after["report"]["outline"][0]["id"]})
+    assert v["report"]["version"] == 2 and len(v["turns"]) == 2
+
+
+def test_report_view_does_not_depend_on_the_file(chat, tmp_path):
+    chat.say("调研一下局部修改")
+    (tmp_path / "out" / "t1" / "report_v1.md").unlink()
+    v = chat.view()
+    assert v["report"]["version"] == 1 and v["report"]["blocks"]
+    v = chat.say("重写", action={"type": "rewrite_section", "section_id": v["report"]["outline"][0]["id"]})
+    assert (tmp_path / "out" / "t1" / "report_v2.md").exists()
+
+
+# ---- 流式片段合并 ----
+
+
+def test_stream_buffer_merges_deltas_and_counts_report_chars():
+    buf = StreamBuffer()
+    out = []
+    for part in ("一", "二", "三"):
+        out += buf.add(AIMessageChunk(content=part, id="m1"))
+    out += buf.add(AIMessageChunk(content="", id="m1", tool_call_chunks=[
+        {"name": "write_report", "args": '{"draft": "## 一节', "id": "w1", "index": 0, "type": "tool_call_chunk"}]))
+    out += buf.flush()
+    deltas = [e["data"] for e in out if e["event"] == "delta"]
+    assert "".join(d["text"] for d in deltas) == "一二三" and len(deltas) == 1  # 80ms 内的片段并成一条
+    (w,) = [e["data"] for e in out if e["event"] == "writing"]
+    assert w["tool"] == "write_report" and w["chars"] == len('{"draft": "## 一节')
+    assert buf.flush() == []
+
+
+# ---- 来源 ----
+
+
+def _search(hits) -> ToolMessage:
+    return ToolMessage(content=json.dumps(hits, ensure_ascii=False), name="search_web", tool_call_id="1", artifact={"retrieved_at": "2026-10-30"})
+
+
+def _read(data, cid="2") -> ToolMessage:
+    return ToolMessage(content=json.dumps(data, ensure_ascii=False), name="read_page", tool_call_id=cid)
+
+
+def test_collect_sources_prefers_body_excerpt():
+    msgs = [_search([{"id": "s111111", "url": "https://a.test/1", "title": "A", "description": "摘要", "published_at": "2026-01-01"}]),
+            _read({"ok": True, "id": "s111111", "url": "https://a.test/1", "title": "A", "content": "正文" * 300}),
+            _read({"ok": False, "url": "https://a.test/2", "error": "x"}, "3")]
+    (s,) = collect_sources(msgs)
+    assert s.id == "s111111" and s.excerpt_kind == "body" and len(s.excerpt) == 400 and s.published_at == "2026-01-01"
+    assert s.retrieved_at == "2026-10-30"
+
+
+def test_read_without_body_keeps_search_excerpt():
+    msgs = [_search([{"id": "s111111", "url": "https://a.test/1", "title": "A", "description": "摘要"}]),
+            _read({"ok": True, "id": "s111111", "url": "https://a.test/1", "content": ""}),
+            _read({"ok": True, "id": "s222222", "url": "https://a.test/2", "title": "B", "content": " "}, "3")]
+    (s,) = collect_sources(msgs)
+    assert s.excerpt == "摘要" and s.excerpt_kind == "summary"
+
+
+def test_url_variants_get_one_id(chat):
+    """读页时网址只是写法不同（域名大小写、锚点、默认端口、编码）：还是搜到的那个来源。"""
+    from langchain.tools import ToolRuntime
 
     def handler(req):
         if req.url.path == "/search/search":
-            calls["n"] += 1
-            return httpx.Response(502, text="bad gateway") if calls["n"] == 1 else _search_hits(req, f"q{calls['n']}")
-        return httpx.Response(200, json={"title": "正文", "content": "正文内容"})
+            return httpx.Response(200, json={"results": [{"url": "https://Example.test/文档/a", "title": "A"},
+                                                         {"url": "https://example.test/%E6%96%87%E6%A1%A3/a#top", "title": "A 重复"}]})
+        return httpx.Response(200, json={"title": "A", "content": "正文"})
 
-    g = build_graph(_with_gateway(planner, handler), memory_checkpointer(), tmp_path / "out")
-    p = intr(g.invoke({"request": "比较两款笔记软件的同步能力"}, cfg("t1")))
-    assert p["type"] == "research.review" and calls["n"] == 2
-    assert any("搜索服务出错 1 次" in n and "502" in n for n in p["notes"])
-    assert p["claims"] and all(s["url"].startswith("https://x.test/q2/") for s in p["sources"])
+    tools = {t.name: t for t in make_research_tools(GatewayClient("http://gw", "k", scene="t", transport=httpx.MockTransport(handler)))}
 
+    def call(name, msgs, **args):
+        rt = ToolRuntime(state={"messages": msgs}, context=None, config={}, stream_writer=lambda _: None, tool_call_id="c", store=None)
+        return tools[name].invoke({"name": name, "args": {**args, "runtime": rt}, "id": f"c{len(msgs)}", "type": "tool_call"})
 
-def test_search_auth_error_fails_the_run(planner, tmp_path):
-    """密钥问题不交给 agent：这次运行失败、错误记在检查点里，改好配置后可以重试。"""
-    g = build_graph(_with_gateway(planner, lambda req: httpx.Response(401, json={"error": "unauthorized"})),
-                    memory_checkpointer(), tmp_path / "out")
-    with pytest.raises(GatewayAuthError):
-        g.invoke({"request": "比较两款笔记软件的同步能力"}, cfg("t1"))
-    snap = g.get_state(cfg("t1"))
-    assert snap.next == ("research",) and any("401" in str(t.error) for t in snap.tasks if t.error)
-
-
-def test_url_variants_are_one_source():
-    """读页时网址只是写法不同（域名大小写、锚点、默认端口、编码）：还是搜到的那个来源，发布时间保留。"""
-    hits = [{"url": "https://Example.test/文档/a", "title": "A", "description": "摘要", "published_at": "2026-01-01"},
-            {"url": "https://example.test/%E6%96%87%E6%A1%A3/a#top", "title": "A 重复", "description": "摘要"}]
-    msgs = [
-        ToolMessage(content=json.dumps(hits), name="search_web", tool_call_id="1"),
-        ToolMessage(content=json.dumps({"ok": True, "url": "https://example.test:443/%e6%96%87%e6%a1%a3/a", "title": "A", "content": "正文"}),
-                    name="read_page", tool_call_id="2"),
-    ]
-    new, mapping = collect_sources(msgs, [], 1)
-    assert [(s.id, s.url, s.excerpt_kind, s.published_at) for s in new] == [("s1", "https://Example.test/文档/a", "body", "2026-01-01")]
-    assert mapping == {"https://Example.test/文档/a": "s1"}
-    # 上一轮已有的来源也一样：补查时换个写法读同一页，不新增来源
-    again, _ = collect_sources([ToolMessage(content=json.dumps({"ok": True, "url": "https://example.test/文档/a?", "content": "新正文"}),
-                                            name="read_page", tool_call_id="3")], new, 2)
-    assert again == [] and new[0].excerpt == "新正文"
+    found = call("search_web", [], query="q")
+    hits = json.loads(found.content)
+    assert hits[0]["id"] == hits[1]["id"]
+    page = call("read_page", [found], url="https://example.test:443/%e6%96%87%e6%a1%a3/a")
+    assert json.loads(page.content)["id"] == hits[0]["id"]
+    (s,) = collect_sources([found, page])
+    assert s.url == "https://Example.test/文档/a" and s.excerpt_kind == "body"
 
 
 def test_different_pages_are_not_merged():
     """可能是不同页面的写法不合并：误合并会把 B 的正文挂到 A 的网址和标题上。"""
     pairs = [
-        ("https://a.test/x?id=contract%26version=1", "https://a.test/x?id=contract&version=1"),  # %26 不是参数分隔
-        ("https://a.test/customer%2Fcontract", "https://a.test/customer/contract"),  # %2F 不是路径分隔
-        ("http://docs.test:443/a", "http://docs.test/a"),  # 443 不是 http 的默认端口
+        ("https://a.test/x?id=contract%26version=1", "https://a.test/x?id=contract&version=1"),
+        ("https://a.test/customer%2Fcontract", "https://a.test/customer/contract"),
+        ("http://docs.test:443/a", "http://docs.test/a"),
         ("https://www.a.test/a", "https://a.test/a"), ("http://a.test/a", "https://a.test/a"), ("https://a.test/a/", "https://a.test/a"),
         ("https://a.test/a?x=1", "https://a.test/a?x=2"), ("https://a.test/A", "https://a.test/a"),
     ]
     for a, b in pairs:
         assert url_key(a) != url_key(b), (a, b)
-        msgs = [ToolMessage(content=json.dumps([{"url": a, "title": "A"}, {"url": b, "title": "B"}]), name="search_web", tool_call_id="1"),
-                ToolMessage(content=json.dumps({"ok": True, "url": b, "content": "B 的正文"}), name="read_page", tool_call_id="2")]
-        new, _ = collect_sources(msgs, [], 1)
-        assert [(s.title, s.excerpt_kind) for s in new] == [("A", "summary"), ("B", "body")], (a, b)
 
 
-def test_review_does_not_depend_on_report_file(graph):
-    """终审卡和理解用户的话用的报告从检查点里的数据生成：磁盘上的 report_vN.md 没了，线程照样能接着改。"""
-    from app.graph.research.report import to_markdown
+# ---- 报告的编号和校验 ----
 
-    p = run_to_review(graph)
-    Path(p["report_path"]).unlink()
-    p2 = intr(resume(graph, "t1", {"action": "instruct", "text": "第一节写短一点"}))  # 假模型没预设理解结果：带着回复回到终审
-    assert p2["type"] == "research.review" and p2["reply"] and p2["report"] == p["report"] == to_markdown(p2["blocks"])
-    sec = p["sections"][0]["id"]
-    p3 = intr(resume(graph, "t1", {"action": "rewrite_section", "target": sec, "instruction": "短一点"}))
-    assert p3["version"] == 2 and p3["report"] == to_markdown(p3["blocks"])
+
+def test_sources_numbered_by_first_appearance():
+    """编号按正文里第一次出现的先后（节按大纲顺序），不按来源 id；没被正文引用的来源不编号。"""
+    sources = [Source(id=f"s{i}", url=f"https://{i}.test/", status="adopted") for i in range(1, 6)]
+    claims = [Claim(id="k1", statement="a", kind="fact", source_ids=["s4", "s2"], outline_id="c2"),
+              Claim(id="k2", statement="b", kind="fact", source_ids=["s5"], outline_id="c1"),
+              Claim(id="k3", statement="c", kind="fact", source_ids=["s1", "s2"], outline_id="c2")]
+    sections = {"c2": SectionText(outline_id="c2", sentences=[Sentence(text="a", claim_id="k1"), Sentence(text="c", claim_id="k3")]),
+                "c1": SectionText(outline_id="c1", sentences=[Sentence(text="b", claim_id="k2")])}
+    outline = [OutlineNode(id="c1", title="一", question="?"), OutlineNode(id="c2", title="二", question="?")]
+    blocks = report_blocks("T", outline, sections, claims, sources, [])
+    assert [b["marks"] for b in blocks if b["type"] == "sentence" and b.get("claim_id")] == [["1"], ["2", "3"], ["3", "4"]]
+    assert [(b["label"], b["source_id"]) for b in blocks if b["type"] == "source"] == [("1", "s5"), ("2", "s4"), ("3", "s2"), ("4", "s1")]
+
+
+def test_untitled_source_listed_once():
+    sources = [Source(id="s1", url="https://a.test/x.pdf"), Source(id="s2", url="https://b.test/", title="B 站")]
+    claims = [Claim(id="k1", statement="a", kind="fact", source_ids=["s1", "s2"], outline_id="c1")]
+    sections = {"c1": SectionText(outline_id="c1", sentences=[Sentence(text="a", claim_id="k1")])}
+    blocks = report_blocks("T", [OutlineNode(id="c1", title="一", question="?")], sections, claims, sources, [])
+    assert [ln for ln in to_markdown(blocks).splitlines() if ln.startswith("[")] == ["[1] https://a.test/x.pdf", "[2] B 站 — https://b.test/"]
+
+
+def test_time_issues_judged_by_model(tmp_path):
+    """来源在不在时间范围里由整理的模型判断；校验只看正文用到的，说明里写报告里的编号。"""
+    p = FakeResearchPlanner()
+    c = Chat(tmp_path, p)
+    first = c.say("调研一下局部修改")["report"]
+    sid = next(iter(_labels(first)))
+    p.time_issues = [TimeIssue(source_id=sid, reason="发布于 2023 年，不在 2026 年内"), TimeIssue(source_id="s000000", reason="不存在")]
+    r = c.say("重写", action={"type": "rewrite_section", "section_id": first["outline"][0]["id"]})["report"]
+    check = next(x for x in r["checks"] if x["name"] == "scope_time")
+    assert not check["passed"] and check["detail"] == f"[{_labels(r)[sid]}]：发布于 2023 年，不在 2026 年内；"
+    assert r["time_issues"] == {sid: "发布于 2023 年，不在 2026 年内"}
+
+
+def test_time_check_ignores_uncited_sources():
+    sources = [Source(id="s1", url="u1", title="t", retrieved_at="x", status="adopted"), Source(id="s2", url="u2")]
+    claims = [Claim(id="k1", statement="a", kind="fact", source_ids=["s1"], outline_id="c1")]
+    sections = {"c1": SectionText(outline_id="c1", sentences=[Sentence(text="a", claim_id="k1")])}
+    assert {c.name: c for c in run_checks(sections, claims, sources, {"s2": "太旧"})}["scope_time"].passed
+    res = {c.name: c for c in run_checks(sections, claims, sources, {"s1": "太旧"}, {"s1": "1"})}
+    assert not res["scope_time"].passed and res["scope_time"].detail == "[1]：太旧；"

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.graph.research.state import CheckResult, Claim, OutlineNode, Scope, SectionText, Source
+from app.graph.research.state import CheckResult, Claim, OutlineNode, SectionText, Source
 
 INFERENCE_PREFIX = "推断："  # 推断句的标记：写句子时按论断类型由代码加上，模型不写
 
@@ -43,30 +43,20 @@ def source_status(sources: list[Source], sections: dict[str, SectionText], claim
 
 
 def report_blocks(
-    scope: Scope,
+    title: str,
     outline: list[OutlineNode],
     sections: dict[str, SectionText],
     claims: list[Claim],
     sources: list[Source],
     assumptions: list[str],
     user_answers: list[str] = (),
-    answered: bool = True,
-    open_gap: str | None = None,
 ) -> list[dict]:
     """报告的结构化内容：页面按它渲染，Markdown 也由它生成。每句是不是推断、挂哪些来源都来自论断，不看句子文字。"""
     by_claim = {c.id: c for c in claims}
     by_source = {s.id: s for s in sources}
     num = source_numbers(outline, sections, claims, sources)
 
-    blocks: list[dict] = [{"type": "title", "text": scope.question}]
-    if not answered:  # 没答完也照常交付，但报告自己要说清楚
-        blocks.append({"type": "notice", "text": "注意：这份报告没有完全回答研究问题" + (f"，还缺：{open_gap}" if open_gap else "") + "。"})
-    bounds = [f"{label}：{val}" for label, val in (
-        ("时间", scope.time_range), ("地域", scope.region), ("信源语言", scope.lang), ("不含", scope.exclude),
-        ("补充", scope.extra),
-    ) if val]
-    if bounds:
-        blocks.append({"type": "scope", "text": "范围：" + "；".join(bounds)})
+    blocks: list[dict] = [{"type": "title", "text": title}]
     for node in outline:
         sec = sections.get(node.id)
         if sec is None:
@@ -102,10 +92,6 @@ def to_markdown(blocks: list[dict]) -> str:
         t = b["type"]
         if t == "title":
             out += [f"# {b['text']}", ""]
-        elif t == "notice":
-            out += [f"> {b['text']}", ""]
-        elif t == "scope":
-            out += [b["text"], ""]
         elif t == "heading":
             if out and out[-1] != "":
                 out.append("")
@@ -119,25 +105,10 @@ def to_markdown(blocks: list[dict]) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
-def assemble(*args, **kwargs) -> str:
-    return to_markdown(report_blocks(*args, **kwargs))
-
-
-def answer_check(answer: str | None, how: str) -> CheckResult:
-    """没有有效候选答案就不能算成功；受控收尾得到的答案要标出来。"""
-    if not answer:
-        return CheckResult(name="answer_present", passed=False, detail="调研没有产出答案；")
-    return CheckResult(name="answer_present", passed=True, detail="由受控收尾补得；" if how == "close" else "")
-
-
-def report_check(sections: dict[str, SectionText], claims: list[Claim], answered: bool, open_gap: str | None = None) -> list[CheckResult]:
-    """交付物本身怎么样：至少一句挂着有来源的论断；整理步骤认为问题被回答了。只是说明，不拦交付。"""
+def report_check(sections: dict[str, SectionText], claims: list[Claim]) -> CheckResult:
+    """交付物本身：至少一句挂着有来源的论断。只是说明，不拦交付。"""
     linked = bool(cited_claim_ids(sections, claims))
-    missing = "整理步骤判断候选答案没有回答研究问题" + (f"，还缺：{open_gap}" if open_gap else "") + "；"
-    return [
-        CheckResult(name="report_valid", passed=linked, detail="" if linked else "报告里没有任何带来源的论断；"),
-        CheckResult(name="question_answered", passed=answered, detail="" if answered else missing),
-    ]
+    return CheckResult(name="report_valid", passed=linked, detail="" if linked else "报告里没有任何带来源的论断；")
 
 
 def run_checks(
@@ -149,12 +120,14 @@ def run_checks(
     cite = {sid: f"[{n}]" for sid, n in (numbers or {}).items()}
     by_source = {s.id: s for s in sources}
     used_claims = [by_claim[s.claim_id] for sec in sections.values() for s in sec.sentences if s.claim_id in by_claim]
+    # 句子挂着的论断不在了：页面上会显示成不带角标的话，等于事实没挂来源
+    missing = list(dict.fromkeys(s.claim_id for sec in sections.values() for s in sec.sentences if s.claim_id and s.claim_id not in by_claim))
     results: list[CheckResult] = []
 
     unsourced = [c.id for c in used_claims if not c.source_ids or any(by_source.get(sid) is None for sid in c.source_ids)]
     not_adopted = [c.id for c in used_claims if any(by_source[sid].status != "adopted" for sid in c.source_ids if sid in by_source)]
-    results.append(CheckResult(name="claims_sourced", passed=not unsourced and not not_adopted,
-                               detail=_join("无来源", unsourced) + _join("来源未采纳", not_adopted)))
+    results.append(CheckResult(name="claims_sourced", passed=not unsourced and not not_adopted and not missing,
+                               detail=_join("无来源", unsourced) + _join("来源未采纳", not_adopted) + _join("论断不存在", missing)))
 
     excluded = [c.id for c in used_claims if any(by_source.get(sid) and by_source[sid].status == "excluded" for sid in c.source_ids)]
     results.append(CheckResult(name="no_excluded_sources", passed=not excluded, detail=_join("引用了已排除来源", excluded)))

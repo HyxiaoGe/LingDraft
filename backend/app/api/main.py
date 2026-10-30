@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app import config
 from app.api.favicon import Favicons
-from app.api.research_runner import NothingToRetry, ResearchRunner, StaleInterrupt
+from app.api.research_runner import NothingToRetry, NotIdle, ResearchRunner, StaleInterrupt
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 from app.graph.research.answers import InvalidAnswer
 
@@ -157,7 +157,17 @@ async def export_zip(thread_id: str):
 
 
 class ResearchCreateBody(BaseModel):
-    request: str
+    model_config = ConfigDict(extra="forbid")
+    text: str
+
+
+class ResearchMessageBody(BaseModel):
+    """用户接着说的一句话。quote 是在报告里选中的文字，action 是报告上的按钮（排除来源、改论断、重写一节）；都和这句话一起交给模型。"""
+
+    model_config = ConfigDict(extra="forbid")
+    text: str = ""
+    quote: dict | None = None
+    action: dict | None = None
 
 
 @app.get("/api/research/threads")
@@ -168,9 +178,25 @@ async def research_list():
 
 @app.post("/api/research/threads")
 async def research_create(body: ResearchCreateBody):
-    if not body.request.strip():
-        raise HTTPException(400, "需求不能为空")
-    return _sse(research().start(uuid.uuid4().hex[:8], body.request.strip()))
+    if not body.text.strip():
+        raise HTTPException(400, "说点什么再发送")
+    try:
+        return _sse(research().start(uuid.uuid4().hex[:8], body.text))
+    except InvalidAnswer as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.post("/api/research/threads/{thread_id}/messages")
+async def research_say(thread_id: str, body: ResearchMessageBody):
+    """接着说。运行中、等提问的回答、上一轮没跑完时返回 409。"""
+    r = research()
+    _view(r, thread_id)
+    try:
+        return _sse(r.say(thread_id, body.text, body.quote, body.action))
+    except (RunConflict, NotIdle) as e:
+        raise HTTPException(409, str(e)) from None
+    except InvalidAnswer as e:
+        raise HTTPException(400, str(e)) from None
 
 
 class ResearchResumeBody(BaseModel):

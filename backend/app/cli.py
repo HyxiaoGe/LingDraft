@@ -1,27 +1,28 @@
 """命令行驱动。
 
-  uv run python -m app.cli new "需求" [--fake] [--image 路径] [--scenario poster|research]
-  uv run python -m app.cli resume <thread_id> '<json>' [--fake] [--scenario ...]
-  uv run python -m app.cli state <thread_id> [--scenario ...]
+海报：
+  uv run python -m app.cli new "需求" [--fake] [--image 路径]
+  uv run python -m app.cli resume <thread_id> '<json>' [--fake]
+  uv run python -m app.cli state <thread_id>
 
-每次运行到 interrupt 时打印确认点载荷；用 resume 回传答案继续。
+  每次运行到 interrupt 时打印确认点载荷；用 resume 回传答案继续。终审除了按钮的几种操作，
+  也可以 {"action": "instruct", "text": "用户原话"}，由模型理解成改文案 / 改事实 / 换风格 / 导出。
 
-调研场景的回传格式（与接口层同一份校验，不合法的不会交给图）：
-  澄清问题   {"answers": {"q1": "..."}}（null 或不传的记为假设）
-  动态提问   {"answer": "..."} 或 {"skip": true}，二选一
-  终审       每一版报告写出来就是交付物；这里是可选的修改，改完出新一版
-             {"action": "approve"}（不用改了，结束） | {"action": "exclude_source", "target": "s2"}
-             | {"action": "edit_claim", "target": "k1", "content": "..."}
-             | {"action": "rewrite_section", "target": "c1", "instruction": "..."}
-             | {"action": "instruct", "text": "用户原话"}（交给模型理解成上面几种操作）
+调研（--scenario research）：一条线程就是一段对话，和页面走同一个运行器、同一份校验。
+  uv run python -m app.cli --scenario research new "第一句话" [--fake]
+  uv run python -m app.cli --scenario research say <thread_id> "接着说" [--quote '<json>'] [--action '<json>']
+  uv run python -m app.cli --scenario research resume <thread_id> '{"answer": "..."}'   （或 {"skip": true}）
+  uv run python -m app.cli --scenario research retry <thread_id>
+  uv run python -m app.cli --scenario research state <thread_id>
 
-海报终审除了按钮的几种操作，也可以 {"action": "instruct", "text": "用户原话"}，由模型理解成改文案 / 改事实 / 换风格 / 导出。
+  运行时逐字打印思考和正文、每一步工具；停在提问上时打印提问卡。
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 import uuid
 
 from langgraph.types import Command
@@ -29,55 +30,15 @@ from langgraph.types import Command
 from app import config
 from app.graph.poster.graph import build_graph as build_poster
 from app.graph.poster.graph import open_sqlite_checkpointer as open_poster_saver
-from app.graph.research.agent import ask_view, is_ask_interrupt
-from app.graph.research.answers import InvalidAnswer, resume_value
-from app.graph.research.graph import build_graph as build_research
-from app.graph.research.graph import open_sqlite_checkpointer as open_research_saver
 from app.llm import ArkPlanner, FakePlanner
-from app.research_llm import FakeResearchPlanner, LiveResearchPlanner
 
 
-def _graph(scenario: str, fake: bool):
-    if scenario == "research":
-        planner = FakeResearchPlanner() if fake else LiveResearchPlanner()
-        saver = open_research_saver(config.DATA_DIR / "checkpoints_research.sqlite")
-        return build_research(planner, saver, config.OUTPUT_DIR / "research")
-    planner = FakePlanner() if fake else ArkPlanner()
-    saver = open_poster_saver(config.DATA_DIR / "checkpoints.sqlite")
-    return build_poster(planner, saver, config.OUTPUT_DIR)
-
-
-def pending(graph, cfg: dict):
-    """当前挂起的中断（带 id 和 value）；没有就是 None。"""
-    for task in graph.get_state(cfg).tasks:
-        for it in task.interrupts:
-            return it
-    return None
-
-
-def research_resume(graph, cfg: dict, payload: dict) -> Command:
-    """校验回答并按中断 id 恢复；校验不过抛 InvalidAnswer，图看不到这个回答。"""
-    it = pending(graph, cfg)
-    if it is None:
-        raise InvalidAnswer("这个线程没有在等回答")
-    return Command(resume={it.id: resume_value(it.value, payload)})
-
-
-def interrupt_view(value: dict) -> dict:
-    return ask_view(value) if is_ask_interrupt(value) else value
-
-
-def _report(result: dict, thread_id: str) -> None:
+def _poster_report(result: dict, thread_id: str) -> None:
     print(f"thread_id: {thread_id}")
     interrupts = result.get("__interrupt__") or []
     if interrupts:
-        view = dict(interrupt_view(interrupts[0].value))
-        report = view.pop("report", None)
         print("== 等待你的输入 ==")
-        print(json.dumps(view, ensure_ascii=False, indent=2))
-        if report:
-            print("---- 报告 ----")
-            print(report)
+        print(json.dumps(interrupts[0].value, ensure_ascii=False, indent=2))
     elif result.get("exported"):
         print("== 已导出 ==")
         print(json.dumps(result["exported"], ensure_ascii=False, indent=2))
@@ -85,31 +46,78 @@ def _report(result: dict, thread_id: str) -> None:
         print("== 运行结束，无待确认项 ==")
 
 
-def _state_view(scenario: str, snap) -> dict:
-    v = snap.values
-    if scenario == "research":
-        return {
-            "next": snap.next,
-            "scope": v.get("scope").model_dump() if v.get("scope") else None,
-            "outline": [n.model_dump() for n in v.get("outline", [])],
-            "answer": v.get("answer"),
-            "answer_how": v.get("answer_how"),
-            "sources": [s.model_dump(exclude={"excerpt"}) for s in v.get("sources", [])],
-            "claims": [c.model_dump() for c in v.get("claims", [])],
-            "assumptions": v.get("assumptions", []),
-            "asks_used": v.get("asks_used", 0),
-            "versions": [x.model_dump() for x in v.get("versions", [])],
-            "checks": [c.model_dump() for c in v.get("check_results", [])],
-            "notes": v.get("notes", []),
-        }
-    return {
-        "next": snap.next,
-        "facts": {k: f.model_dump() for k, f in v.get("facts", {}).items()},
-        "style": v.get("style").model_dump() if v.get("style") else None,
-        "elements": [e.model_dump() for e in v.get("elements", [])],
-        "versions": [{"n": x.n, "note": x.note, "png": x.png_path} for x in v.get("versions", [])],
-        "notes": v.get("notes", []),
-    }
+def poster(args) -> None:
+    planner = FakePlanner() if args.fake else ArkPlanner()
+    graph = build_poster(planner, open_poster_saver(config.DATA_DIR / "checkpoints.sqlite"), config.OUTPUT_DIR)
+    if args.cmd == "new":
+        thread_id = uuid.uuid4().hex[:8]
+        cfg = {"configurable": {"thread_id": thread_id}}
+        _poster_report(graph.invoke({"request": args.text, "product_image": args.image}, cfg), thread_id)
+    elif args.cmd == "resume":
+        cfg = {"configurable": {"thread_id": args.thread_id}}
+        _poster_report(graph.invoke(Command(resume=json.loads(args.payload)), cfg), args.thread_id)
+    elif args.cmd == "state":
+        snap = graph.get_state({"configurable": {"thread_id": args.thread_id}})
+        v = snap.values
+        print(json.dumps({"next": snap.next, "facts": {k: f.model_dump() for k, f in v.get("facts", {}).items()},
+                          "versions": [{"n": x.n, "note": x.note, "png": x.png_path} for x in v.get("versions", [])],
+                          "notes": v.get("notes", [])}, ensure_ascii=False, indent=2))
+    else:
+        raise SystemExit(f"海报场景没有 {args.cmd}")
+
+
+def _print_events(events) -> None:
+    """逐字打印：思考和正文按片段接着写，工具步骤、提问、出错各占一行。"""
+    current = None
+    for ev in events:
+        name, data = ev["event"], ev["data"]
+        if name == "delta":
+            key = (data["id"], data["kind"])
+            if key != current:
+                sys.stdout.write("\n[思考] " if data["kind"] == "thinking" else "\n[正文] ")
+                current = key
+            sys.stdout.write(data["text"])
+            sys.stdout.flush()
+            continue
+        current = None
+        if name == "step" and not data["step"]["pending"]:
+            s = data["step"]
+            print(f"\n[{s['kind']}] {s['text']}  {'✓' if s['ok'] else '✗ ' + s['message']}")
+        elif name == "title":
+            print(f"[标题] {data['title']}")
+        elif name == "interrupt" and data:
+            print("\n== 提问 ==\n" + json.dumps(data, ensure_ascii=False, indent=2))
+    print()
+
+
+def research(args) -> None:
+    from app.api.research_runner import ResearchRunner, StaleInterrupt
+    from app.graph.research.answers import InvalidAnswer
+
+    r = ResearchRunner(fake=args.fake)
+    tid = getattr(args, "thread_id", None) or uuid.uuid4().hex[:8]
+    try:
+        if args.cmd == "new":
+            r.accept(tid, args.text)
+            inp = None
+        elif args.cmd == "say":
+            r.accept(tid, args.text, json.loads(args.quote) if args.quote else None, json.loads(args.action) if args.action else None)
+            inp = None
+        elif args.cmd == "resume":
+            it = r.pending(tid)
+            inp = r.resume_input(tid, json.loads(args.payload), it.id if it else None)
+        elif args.cmd == "retry":
+            inp = r.retry_input(tid)
+        else:
+            v = r.state_view(tid)
+            print(json.dumps({k: v.get(k) for k in ("status", "error", "title", "versions", "interrupt")}, ensure_ascii=False, indent=2))
+            return
+    except (InvalidAnswer, StaleInterrupt) as e:
+        raise SystemExit(f"不合法：{e}") from None
+    print(f"thread_id: {tid}")
+    _print_events(r._graph_events(tid, inp))
+    v = r.state_view(tid)
+    print(f"== {v['status']}" + (f"：{v['error']}" if v.get("error") else "") + (f"，报告第 {v['report']['version']} 版" if v.get("report") else ""))
 
 
 def main() -> None:
@@ -118,35 +126,22 @@ def main() -> None:
     ap.add_argument("--fake", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_new = sub.add_parser("new")
-    p_new.add_argument("request")
+    p_new.add_argument("text")
     p_new.add_argument("--image", default=None)
+    p_say = sub.add_parser("say")
+    p_say.add_argument("thread_id")
+    p_say.add_argument("text")
+    p_say.add_argument("--quote", default=None)
+    p_say.add_argument("--action", default=None)
     p_res = sub.add_parser("resume")
     p_res.add_argument("thread_id")
     p_res.add_argument("payload")
+    p_retry = sub.add_parser("retry")
+    p_retry.add_argument("thread_id")
     p_state = sub.add_parser("state")
     p_state.add_argument("thread_id")
     args = ap.parse_args()
-
-    graph = _graph(args.scenario, args.fake)
-    if args.cmd == "new":
-        thread_id = uuid.uuid4().hex[:8]
-        cfg = {"configurable": {"thread_id": thread_id}}
-        inp = {"request": args.request} if args.scenario == "research" else {"request": args.request, "product_image": args.image}
-        _report(graph.invoke(inp, cfg), thread_id)
-    elif args.cmd == "resume":
-        cfg = {"configurable": {"thread_id": args.thread_id}}
-        payload = json.loads(args.payload)
-        if args.scenario == "research":
-            try:
-                cmd = research_resume(graph, cfg, payload)
-            except InvalidAnswer as e:
-                raise SystemExit(f"回答不合法：{e}") from None
-        else:
-            cmd = Command(resume=payload)
-        _report(graph.invoke(cmd, cfg), args.thread_id)
-    else:
-        cfg = {"configurable": {"thread_id": args.thread_id}}
-        print(json.dumps(_state_view(args.scenario, graph.get_state(cfg)), ensure_ascii=False, indent=2))
+    (research if args.scenario == "research" else poster)(args)
 
 
 if __name__ == "__main__":

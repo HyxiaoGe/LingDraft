@@ -1,4 +1,4 @@
-// 调研工作台几处共用的小工具：状态文字、时间、来源的合并与显示。
+// 调研工作台几处共用的小工具：状态文字、时间、来源的显示、实时片段和存下来的对话怎么合在一起。
 import { useEffect, useState } from "react";
 
 export const ACTIVE = new Set(["queued", "running"]); // 服务器上还有执行没结束
@@ -30,13 +30,6 @@ export function when(iso, now = Date.now()) {
   return d.toDateString() === today.toDateString() ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-export function scopeLine(scope) {
-  if (!scope) return "";
-  const parts = [["时间", scope.time_range], ["地域", scope.region], ["信源", scope.lang], ["不含", scope.exclude], ["交付", scope.deliverable], ["补充", scope.extra]]
-    .filter(([, v]) => v).map(([k, v]) => `${k} ${v}`);
-  return parts.length ? parts.join(" · ") : "按需求原话定了，没有额外限制";
-}
-
 export const domain = (url) => {
   try {
     return new URL(url).hostname.replace(/^www\./, "");
@@ -46,36 +39,73 @@ export const domain = (url) => {
 };
 
 export const sourceName = (s) => s.title || domain(s.url);
-// 报告块：交付以后存在 report_blocks 里，终审时随提问一起来
-export const reportBlocks = (st) => (st?.report_blocks?.length ? st.report_blocks : st?.interrupt?.blocks || []);
 // 来源在这版报告里的编号（[3]）：后端按正文里第一次出现的先后编，每版重新编；报告没引用的来源没有编号
-export const sourceNumbers = (blocks) => Object.fromEntries(blocks.filter((b) => b.type === "source").map((b) => [b.source_id, b.label]));
-export const SSTATUS = { candidate: "候选", adopted: "系统选用", excluded: "你排除了" };
+export const sourceNumbers = (blocks) => Object.fromEntries((blocks || []).filter((b) => b.type === "source").map((b) => [b.source_id, b.label]));
+export const SSTATUS = { candidate: "候选", adopted: "报告引用", excluded: "你排除了" };
+
+// 正文里的引用：模型写的是来源 id，[s3fa9c1]
+export const CITE = /\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\]/g;
+// 一轮的正文里引用的来源，按第一次出现的先后编 1、2、3（和报告各自编号）
+export function citeNumbers(texts) {
+  const out = {};
+  for (const t of texts) for (const m of t.matchAll(CITE)) out[m[1]] ??= String(Object.keys(out).length + 1);
+  return out;
+}
 
 export const CHECK_LABEL = {
-  answer_present: "调研有答案", claims_sourced: "论断有来源", no_excluded_sources: "没引用已排除的来源", inference_marked: "推断已标记",
-  sources_complete: "来源信息完整", no_orphaned_claims: "没有失去来源的论断", scope_time: "时间在范围内",
-  report_valid: "报告有带来源的论断", question_answered: "回答了研究问题",
+  claims_sourced: "论断有来源", no_excluded_sources: "没引用已排除的来源", sources_complete: "来源信息完整",
+  no_orphaned_claims: "没有失去来源的论断", scope_time: "时间在范围内", report_valid: "报告有带来源的论断",
 };
 export const checkLabel = (c) => CHECK_LABEL[c.name] || c.name;
 
-// 这一轮调研已经做过的步骤（服务器存下来的）+ 还没存下来的实时进度（按工具调用 id 合并，存下来的为准）
-export function roundSteps(saved, acts) {
-  const ids = new Set(saved.map((s) => s.id));
-  const pending = acts.filter((a) => !ids.has(a.id)).map((a) => a.step || { id: a.id, kind: a.kind, text: a.stage, pending: true });
-  return [...saved, ...pending];
+// 这一轮的条目：存下来的（state.turns）为准，叠上还没存下来的实时片段。
+// 思考和正文按（消息 id，种类）对上，工具步骤按调用 id 对上；存下来的步骤还在等结果时，用实时收到的结果。
+export function mergeItems(saved, live) {
+  if (!live) return saved;
+  const key = (i) => (i.type === "step" ? `step:${i.id}` : `${i.type}:${i.id}`);
+  const have = new Map(saved.map((i) => [key(i), i]));
+  const out = saved.map((i) => {
+    const l = i.type === "step" && i.pending ? live.items.find((x) => key(x) === key(i)) : null;
+    return l && !l.pending ? l : i;
+  });
+  for (const i of live.items) if (!have.has(key(i))) out.push(i);
+  return out;
 }
 
-// 还没有报告时右栏列的来源：已入库的 + 这一轮先算出编号的 + 实时进度里刚找到的（按网址去重，读到正文的优先）
-export function foundSources(st, acts) {
-  const out = new Map();
-  const put = (s) => {
-    const prev = out.get(s.url);
-    if (!prev) out.set(s.url, s);
-    else if (s.body && !prev.body) out.set(s.url, { ...prev, body: true, title: prev.title || s.title });
-  };
-  for (const s of st?.sources || []) put({ id: s.id, url: s.url, title: s.title, body: s.excerpt_kind === "body", published_at: s.published_at });
-  for (const s of st?.current_round?.sources || []) put({ id: s.id, url: s.url, title: s.title, body: s.excerpt_kind === "body", published_at: s.published_at });
-  for (const a of acts || []) for (const f of a.found || []) put({ id: null, url: f.url, title: f.title, body: f.body });
-  return [...out.values()];
+// 实时事件 → 这次执行里的条目（只记还在路上的；存下来以后 mergeItems 以存下来的为准）
+export function addLive(l, ev, data) {
+  if (!l) return l;
+  const items = l.items.slice();
+  if (ev === "delta") {
+    const i = items.findIndex((x) => x.type === data.kind && x.id === data.id);
+    if (i < 0) items.push({ type: data.kind, id: data.id, text: data.text, live: true, t0: Date.now() });
+    else items[i] = { ...items[i], text: items[i].text + data.text };
+    // 正文或下一步一开始，前面的思考就算想完了：记下用了多久
+    if (data.kind === "text") stopThinking(items);
+  } else if (ev === "step") {
+    const s = { type: "step", ...data.step };
+    const i = items.findIndex((x) => x.type === "step" && x.id === s.id);
+    if (i < 0) items.push(s);
+    else items[i] = s;
+    stopThinking(items);
+  } else if (ev === "writing") {
+    return { ...l, writing: data.chars };
+  } else {
+    return l;
+  }
+  return { ...l, items, writing: ev === "step" ? null : l.writing };
+}
+
+function stopThinking(items) {
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].type === "thinking" && items[i].live && !items[i].ms) items[i] = { ...items[i], ms: Date.now() - items[i].t0 };
+  }
+}
+
+// 用量：一行浅色小字
+export function usageLine(u) {
+  if (!u || !u.model_calls) return "";
+  const k = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : String(n));
+  return [`模型 ${u.model_calls} 次`, `输入 ${k(u.input_tokens)}${u.cached_tokens ? `（缓存 ${k(u.cached_tokens)}）` : ""}`, `输出 ${k(u.output_tokens)}`,
+    u.searches && `搜索 ${u.searches}`, u.reads && `读页 ${u.reads}`].filter(Boolean).join(" · ");
 }
