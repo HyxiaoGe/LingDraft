@@ -22,7 +22,7 @@ from app.graph.research.agent import TURN_END, now, stop_turn
 from app.graph.research.graph import build_graph, open_sqlite_checkpointer, thread_ids
 from app.graph.research.sources import collect_sources
 from app.graph.research.state import Turn
-from app.research_llm import FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner
+from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
 
 
 class NothingToRetry(Exception):
@@ -76,7 +76,7 @@ class StopCheck(BaseCallbackHandler):
 
 class StreamBuffer:
     """把模型的流式片段攒成事件：思考和正文按（消息 id，种类）合并，约每 80ms 发一次。
-    同时记着最后一条消息流出来的全部思考和正文：停止时存成这一轮的回复。"""
+    同时记着最后一条消息流出来的全部思考和正文，以及思考了多久：停止时存成这一轮的回复。"""
 
     def __init__(self) -> None:
         self._deltas: list[dict] = []
@@ -84,11 +84,13 @@ class StreamBuffer:
         self._mid = ""
         self._text = ""
         self._thinking = ""
+        self._clock = ThinkingClock()
 
     def add(self, chunk: AIMessageChunk) -> list[dict]:
         mid = chunk.id or ""
         if mid != self._mid:
-            self._mid, self._text, self._thinking = mid, "", ""
+            self._mid, self._text, self._thinking, self._clock = mid, "", "", ThinkingClock()
+        self._clock.see(chunk)
         thinking = chunk.additional_kwargs.get("reasoning_content") or ""
         text = chunk.content if isinstance(chunk.content, str) else ""
         self._thinking += thinking
@@ -110,8 +112,11 @@ class StreamBuffer:
     def partial(self) -> AIMessage | None:
         if not self._mid:
             return None
+        meta: dict[str, Any] = {history.STOPPED: True}
+        if (ms := self._clock.ms()) is not None:
+            meta[THINKING_MS] = ms
         return AIMessage(id=self._mid, content=self._text, additional_kwargs={"reasoning_content": self._thinking} if self._thinking else {},
-                         response_metadata={history.STOPPED: True})
+                         response_metadata=meta)
 
 
 def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
@@ -135,7 +140,7 @@ def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
             items.append({"type": "blocked", "id": m.id, "reason": reason})
             continue
         if thinking := m.additional_kwargs.get("reasoning_content"):
-            items.append({"type": "thinking", "id": m.id, "text": thinking, "ms": m.response_metadata.get("thinking_ms")})
+            items.append({"type": "thinking", "id": m.id, "text": thinking, "ms": m.response_metadata.get(THINKING_MS)})
         if text := history.text_of(m).strip():
             items.append({"type": "text", "id": m.id, "text": text})
         for tc in m.tool_calls:

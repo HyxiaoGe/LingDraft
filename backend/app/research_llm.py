@@ -55,38 +55,55 @@ class ResearchPlanner(Protocol):
 
 # ---- 思考计时 ----
 
+THINKING_MS = "thinking_ms"  # 思考用时记在消息的 response_metadata 里的键
+
+
+class ThinkingClock:
+    """一次模型调用思考了多久：从第一个思考片段到第一个正文或工具调用片段，还没等到就算到现在。"""
+
+    def __init__(self) -> None:
+        self._start: float | None = None
+        self._end: float | None = None
+
+    def see(self, msg: AIMessageChunk) -> None:
+        t = time.monotonic()
+        if msg.additional_kwargs.get("reasoning_content"):
+            self._start = self._start or t
+        elif self._start is not None and self._end is None and (msg.content or msg.tool_call_chunks):
+            self._end = t
+
+    def ms(self) -> int | None:
+        """没有思考片段就是 None。"""
+        return None if self._start is None else int(((self._end or time.monotonic()) - self._start) * 1000)
+
 
 class ThinkingTimer(BaseCallbackHandler):
-    """记下每次模型调用思考了多久：从第一个思考片段到第一个正文或工具调用片段（没有就到结束），
-    写进这条消息的 response_metadata["thinking_ms"]，随消息存进检查点。只有流式调用才有片段，才计时。"""
+    """记下每次模型调用思考了多久（见 ThinkingClock），写进这条消息的 response_metadata[THINKING_MS]，随消息存进检查点。
+    只有流式调用才有片段，才计时。用户点了停止、调用没跑完的，由运行器存那半截消息时一起记（见 api.research_runner.StreamBuffer）。"""
 
     def __init__(self) -> None:
         self._mu = threading.Lock()
-        self._runs: dict[UUID, list[float | None]] = {}
+        self._runs: dict[UUID, ThinkingClock] = {}
 
     def on_chat_model_start(self, serialized, messages, *, run_id: UUID, **kwargs: Any) -> None:
         pass  # 不实现的话回调管理器会退回 on_llm_start，把消息全转成字符串
 
     def on_llm_new_token(self, token, *, chunk=None, run_id: UUID, **kwargs: Any) -> None:
         msg = getattr(chunk, "message", None)
-        if msg is None:
+        if not isinstance(msg, AIMessageChunk):
             return
-        t = time.monotonic()
         with self._mu:
-            r = self._runs.setdefault(run_id, [None, None])
-            if msg.additional_kwargs.get("reasoning_content"):
-                r[0] = r[0] or t
-            elif r[0] is not None and r[1] is None and (msg.content or getattr(msg, "tool_call_chunks", None)):
-                r[1] = t
+            self._runs.setdefault(run_id, ThinkingClock()).see(msg)
 
     def on_llm_end(self, response, *, run_id: UUID, **kwargs: Any) -> None:
         with self._mu:
-            r = self._runs.pop(run_id, None)
-        if not r or r[0] is None or not response.generations or not response.generations[0]:
+            clock = self._runs.pop(run_id, None)
+        ms = clock.ms() if clock else None
+        if ms is None or not response.generations or not response.generations[0]:
             return
         msg = getattr(response.generations[0][0], "message", None)
         if msg is not None:  # 就是最后存进 state 的那个消息对象
-            msg.response_metadata["thinking_ms"] = int(((r[1] or time.monotonic()) - r[0]) * 1000)
+            msg.response_metadata[THINKING_MS] = ms
 
     def on_llm_error(self, error, *, run_id: UUID, **kwargs: Any) -> None:
         with self._mu:

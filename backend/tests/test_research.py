@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from app.graph.research.agent import system_prompt
 from app.graph.research.graph import memory_checkpointer, open_sqlite_checkpointer
 from app.graph.research.sources import cited, collect_sources, url_key
 from app.model_guard import ModelUnavailable
-from app.research_llm import FAKE_BLOCKED, FakeResearchPlanner, FakeToolModel, LiveResearchPlanner
+from app.research_llm import FAKE_BLOCKED, THINKING_MS, FakeResearchPlanner, FakeToolModel, LiveResearchPlanner
 from app.tools.gateway import GatewayAuthError, GatewayClient
 from app.tools.research_tools import make_research_tools
 
@@ -249,12 +250,14 @@ def _first(event: str, node: str | None = None, kind: str | None = None):
 
 
 def test_stop_while_writing_keeps_what_was_streamed(chat, monkeypatch):
-    """正文流到一半点停止：模型的流在下一个片段就断开，已经流出来的思考和正文存成这一轮的回复。"""
+    """正文流到一半点停止：模型的流在下一个片段就断开，已经流出来的思考和正文存成这一轮的回复，思考用时也存下来。"""
     orig, once = FakeToolModel._chunks, [True]
 
     def chunks(self, msg):
         for c in orig(self, msg):
             yield c
+            if c.additional_kwargs.get("reasoning_content"):
+                time.sleep(0.05)  # 想了一会儿才开始写正文
             if c.content and once:  # 第一段正文发出去以后，用户点了停止
                 once.clear()
                 chat.r.stop(chat.tid)
@@ -268,6 +271,7 @@ def test_stop_while_writing_keeps_what_was_streamed(chat, monkeypatch):
     assert [n for n, _ in chat.planner.calls if n == "suggest"] == []
     (partial,) = _turn_messages(chat)
     assert partial.response_metadata[history.STOPPED] and partial.additional_kwargs["reasoning_content"]
+    assert turn["items"][0]["ms"] == partial.response_metadata[THINKING_MS] >= 30  # 重新打开也是“思考了 N 秒”
     assert turn["record"]["usage"]["model_calls"] == 0  # 没跑完的那次不知道用量，不算
     assert chat.events[-1] == {"event": "node", "data": {"node": "TurnMiddleware.after_agent"}}
     v = chat.say("直接答：接着说")  # 停下以后可以接着说

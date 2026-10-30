@@ -196,10 +196,6 @@ export function mergeItems(saved, live) {
   const kept = live.hidden ? saved.filter((i) => !live.hidden.has(itemKey(i))) : saved;
   const have = new Map(kept.map((i) => [itemKey(i), i]));
   const out = kept.map((i) => {
-    if (i.type === "thinking" && !i.ms) { // 存下来的思考没有用时：这次实时算的带过去，不然“思考了 2 秒”会跳回“思考过程”
-      const ms = live.items.find((x) => itemKey(x) === itemKey(i))?.ms;
-      return ms ? { ...i, ms } : i;
-    }
     const l = i.type === "step" && i.pending ? live.items.find((x) => itemKey(x) === itemKey(i)) : null;
     return l && !l.pending ? l : i;
   });
