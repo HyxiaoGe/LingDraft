@@ -104,7 +104,7 @@ function FoundSources({ st, live, busy }) {
         {found.map((s) => (
           <li key={s.url} className="ws-found-row">
             <span className={"kind" + (s.body ? " body" : "")}>{s.body ? "正文" : "摘要"}</span>
-            <a href={s.url} target="_blank" rel="noreferrer" title={s.url}>
+            <a href={s.url} target="_blank" rel="noreferrer" title={s.title ? `${s.title}\n${s.url}` : s.url}>
               <span className="t">{s.title || domain(s.url)}</span>
               <span className="d">{domain(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""}</span>
             </a>
@@ -407,7 +407,7 @@ function SourceList({ st, canEdit, act }) {
       <li key={s.id} className={"ws-src " + s.status}>
         <span className="lb">{label(s.id)}</span>
         <div className="body">
-          <a href={s.url} target="_blank" rel="noreferrer" className="t">{sourceName(s)}</a>
+          <a href={s.url} target="_blank" rel="noreferrer" className="t" title={sourceName(s)}>{sourceName(s)}</a>
           <div className="meta">
             {domain(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""} · {s.excerpt_kind === "body" ? "读到正文" : "只读到搜索摘要"}
             {st.time_issues?.[s.id] && <span className="warn"> · 发布时间可能不在范围内</span>}

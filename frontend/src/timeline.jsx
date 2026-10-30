@@ -2,7 +2,7 @@
 // 正在做的那一步叠上实时进度；问题卡就放在对话里它出现的位置。
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  IconArrowUp, IconAsk, IconBook, IconCheck, IconChevron, IconLayers, IconLoop, IconPage, IconReport, IconRetry, IconSearch, IconShield, IconSparkle, IconWarn, Spinner,
+  IconArrowUp, IconAsk, IconBook, IconCheck, IconChevron, IconLayers, IconLoop, IconPage, IconReport, IconRetry, IconSearch, IconShield, IconWarn, Spinner,
 } from "./icons.jsx";
 import { ACTIVE, checkLabel, domain, elapsed, label, roundSteps, scopeLine } from "./research.js";
 
@@ -63,7 +63,6 @@ export function Conversation({ st, live, busy, error, now, act, isNew }) {
 function Welcome({ onPick }) {
   return (
     <div className="ws-welcome">
-      <div className="ws-welcome-mark"><IconSparkle size={22} /></div>
       <h2>想研究什么？</h2>
       <p>说一句要研究什么。需求清楚就直接查，真有歧义才问你；简单问题直接给答案，复杂问题多方查证、读原文核实。</p>
       <p>报告里每句话都能回指来源，事实和推断分开标；你排除一条来源，只靠它的论断会自动移出报告。</p>
@@ -298,8 +297,8 @@ function ToolRow({ s }) {
   return (
     <li className={"ws-tool" + (bad ? " bad" : "")}>
       <Icon size={12} />
-      <span className="main">{main}</span>
-      {sub && <span className="sub">{sub}</span>}
+      <span className="main" title={s.text}>{main}</span>
+      {sub && <span className="sub" title={sub}>{sub}</span>}
       {s.source_ids.length > 0 && <span className="ids">{s.source_ids.map(label).join(" ")}</span>}
     </li>
   );

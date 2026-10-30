@@ -26,7 +26,6 @@ export const IconExternal = (p) => svg(<path d="M7 17L17 7M9 7h8v8" />, p);
 export const IconX = (p) => svg(<path d="M6 6l12 12M18 6L6 18" />, p);
 export const IconEdit = (p) => svg(<><path d="M4 20h4L19 9l-4-4L4 16z" /><path d="M14 6l4 4" /></>, p);
 export const IconRetry = (p) => svg(<><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.5" /><path d="M4 4v4.5h4.5" /></>, p);
-export const IconSparkle = (p) => svg(<path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5L18 18M6 18l2.5-2.5M15.5 8.5L18 6" />, p);
 
 // 转圈：正在进行的步骤
 export const Spinner = ({ size = 16, className = "" }) => (
