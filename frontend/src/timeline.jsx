@@ -4,7 +4,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { IconArrowUp, IconAsk, IconBook, IconChevron, IconPage, IconReport, IconRetry, IconSearch, IconWarn, Spinner } from "./icons.jsx";
 import { Markdown } from "./markdown.jsx";
 import { Mark } from "./report.jsx";
-import { ACTIVE, QUEUED, citeNumbers, domain, elapsed, mergeItems, usageLine } from "./research.js";
+import { ACTIVE, QUEUED, citeNumbers, domain, elapsed, mergeItems } from "./research.js";
 
 const EXAMPLES = [
   ["简单问题", "新加坡现在是什么季节？"],
@@ -100,7 +100,6 @@ function Turn({ t, st, live, running, last, now, act }) {
         {rec?.version && <VersionCard n={rec.version} st={st} onOpen={act.openReport} />}
         {!running && rec?.ended_at && rec.outcome === "no_reply" && <p className="ws-muted">这一轮没有给出文字回复。</p>}
         {last && !running && st?.status === "failed" && <Failed st={st} act={act} />}
-        {rec?.ended_at && usageLine(rec.usage) && <div className="ws-usage">{usageLine(rec.usage)}</div>}
       </AiMsg>
       {last && idle && rec?.suggestions?.length > 0 && <Suggestions items={rec.suggestions} onPick={act.say} />}
     </>

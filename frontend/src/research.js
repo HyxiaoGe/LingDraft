@@ -101,11 +101,3 @@ function stopThinking(items) {
     if (items[i].type === "thinking" && items[i].live && !items[i].ms) items[i] = { ...items[i], ms: Date.now() - items[i].t0 };
   }
 }
-
-// 用量：一行浅色小字
-export function usageLine(u) {
-  if (!u || !u.model_calls) return "";
-  const k = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 100000 ? 0 : 1)}k` : String(n));
-  return [`模型 ${u.model_calls} 次`, `输入 ${k(u.input_tokens)}${u.cached_tokens ? `（缓存 ${k(u.cached_tokens)}）` : ""}`, `输出 ${k(u.output_tokens)}`,
-    u.searches && `搜索 ${u.searches}`, u.reads && `读页 ${u.reads}`].filter(Boolean).join(" · ");
-}
