@@ -1,7 +1,8 @@
 // 画的图：generate_image 的结果（image-service，见 app/tools/images.py），照 Fusion 的图片卡片（GeneratedImages.tsx）：
-// 生成中按要的比例显示点阵占位和用了几秒，出图后原位淡入；卡片下写明哪个模型画的，可以看描述、下载、再画一张，点图看大图
+// 生成中按要的比例占好位置，出图后原位淡入；卡片下写明哪个模型画的，可以看描述、下载、再画一张，点图看大图。
+// 占位没照搬 Fusion 的点阵：灰底上一道斜光扫过，中间写正在生成和用了几秒（2026-10-31 Sean 定）
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { IconClose, IconDownload, IconLoop } from "./icons.jsx";
+import { IconClose, IconDownload, IconLoop, Spinner } from "./icons.jsx";
 
 const MAX_W = 640;
 const MAX_H = 560;
@@ -78,10 +79,12 @@ function PendingCard({ s }) {
   const f = frame(w, h);
   return (
     <figure className="ws-image" style={{ width: f.width }}>
-      <div className="ws-image-frame" style={f} role={running ? "status" : undefined} aria-live={running ? "polite" : undefined}>
-        <Dots elapsed={secs} active={running} />
-        <span className={running ? "sr" : "ws-image-note"}>{running ? "正在生成图片" : s.message || "图片生成失败"}</span>
-        {running && <span className="ws-image-secs">{secs} 秒</span>}
+      <div className={"ws-image-frame" + (running ? " busy" : "")} style={f}>
+        {running ? (
+          <div className="ws-image-wait" role="status">
+            <Spinner size={13} /><span>正在生成图片</span><span className="secs" aria-hidden="true">· {secs} 秒</span>
+          </div>
+        ) : <span className="ws-image-note">{s.message || "图片生成失败"}</span>}
       </div>
     </figure>
   );
@@ -103,8 +106,7 @@ function ImageCard({ img, src, onOpen, onRegenerate }) {
   }, []);
   return (
     <figure className="ws-image" style={{ width: f.width }}>
-      <div className="ws-image-frame" style={f}>
-        {state === "loading" && <Dots elapsed={0} active />}
+      <div className={"ws-image-frame" + (state === "loading" ? " busy" : "")} style={f}>
         {state === "failed" ? (
           <div className="ws-image-failed">
             <span>图片加载失败</span>
@@ -145,91 +147,4 @@ function Viewer({ img, src, onClose }) {
       <button ref={close} className="ws-viewer-close" aria-label="关闭" onClick={onClose}><IconClose size={20} /></button>
     </div>
   );
-}
-
-// 生图占位点阵（照 Fusion 的 ImageGenerationDots）：每个点按位置错开明暗，形成斜着扫过的波纹；
-// 一块主色光斑在框里游走，范围随用时变大。只是让人看着在动，不代表真实进度。没画成、停了只留暗点
-const SPACING = 12;
-const FRAME_MS = 1000 / 30;
-
-function cssColor(el, name, fallback) {
-  return getComputedStyle(el).getPropertyValue(name).trim() || fallback;
-}
-
-function Dots({ elapsed, active }) {
-  const ref = useRef(null);
-  const elapsedRef = useRef(elapsed);
-  useEffect(() => { elapsedRef.current = elapsed; }, [elapsed]);
-  useEffect(() => {
-    const canvas = ref.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const base = cssColor(canvas, "--muted", "#535b66");
-    const glow = cssColor(canvas, "--accent", "#2c4f95");
-    let width = 0;
-    let height = 0;
-    let raf = 0;
-    let drawnAt = 0;
-    const t0 = performance.now();
-    const resize = () => {
-      const r = canvas.getBoundingClientRect();
-      const dpr = devicePixelRatio || 1;
-      width = r.width;
-      height = r.height;
-      canvas.width = Math.max(1, Math.round(width * dpr));
-      canvas.height = Math.max(1, Math.round(height * dpr));
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    const draw = (now) => {
-      const t = reduced ? 0 : (now - t0) / 1000;
-      ctx.clearRect(0, 0, width, height);
-      const cols = Math.floor(width / SPACING);
-      const rows = Math.floor(height / SPACING);
-      const ox = (width - (cols - 1) * SPACING) / 2;
-      const oy = (height - (rows - 1) * SPACING) / 2;
-      const sx = 0.5 + 0.32 * Math.sin(t * 0.9);
-      const sy = 0.5 + 0.32 * Math.cos(t * 0.7);
-      const spread = 0.16 + 0.22 * (1 - Math.exp(-elapsedRef.current / 20));
-      const twoSq = 2 * spread * spread;
-      for (let row = 0; row < rows; row += 1) {
-        for (let col = 0; col < cols; col += 1) {
-          const x = ox + col * SPACING;
-          const y = oy + row * SPACING;
-          ctx.globalAlpha = 0.28;
-          ctx.fillStyle = base;
-          ctx.beginPath();
-          ctx.arc(x, y, 1.1, 0, Math.PI * 2);
-          ctx.fill();
-          if (!active) continue;
-          const u = x / width;
-          const v = y / height;
-          const spot = Math.exp(-((u - sx) ** 2 + (v - sy) ** 2) / twoSq);
-          const wave = 0.5 + 0.5 * Math.sin((u * 0.8 + v) * Math.PI * 2.4 - t * 2.6);
-          const k = Math.min(1, 0.08 + 0.6 * spot + 0.45 * wave * (0.25 + 0.75 * spot));
-          if (k < 0.06) continue;
-          ctx.globalAlpha = k;
-          ctx.fillStyle = glow;
-          ctx.beginPath();
-          ctx.arc(x, y, 1 + 1.4 * k, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-      ctx.globalAlpha = 1;
-    };
-    const loop = (now) => {
-      if (now - drawnAt >= FRAME_MS) {
-        drawnAt = now;
-        draw(now);
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    resize();
-    const ro = new ResizeObserver(() => { resize(); draw(performance.now()); });
-    ro.observe(canvas);
-    if (active && !reduced) raf = requestAnimationFrame(loop);
-    else draw(performance.now());
-    return () => { cancelAnimationFrame(raf); ro.disconnect(); };
-  }, [active]);
-  return <canvas ref={ref} className="ws-image-dots" aria-hidden="true" />;
 }

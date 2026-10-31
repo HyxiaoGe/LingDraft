@@ -231,14 +231,17 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-hourly text { font: 11px var(--sans); text-anchor: middle; fill: var(--muted); }
 .ws-hourly text.t { fill: var(--ink2); }
 
-/* 画的图（照 Fusion 的图片卡片）：按图的比例定宽，生成中是点阵占位，出图后淡入；下面一行是哪个模型画的和几个按钮 */
+/* 画的图（照 Fusion 的图片卡片）：按图的比例定宽，生成中是灰底上一道斜光扫过（busy），出图后淡入；下面一行是哪个模型画的和几个按钮 */
 .ws-images { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; margin: 2px 0 4px; }
 .ws-image { margin: 0; max-width: 100%; display: flex; flex-direction: column; gap: 6px; animation: ws-in .25s var(--ease); }
 .ws-image-frame { position: relative; max-width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r); background: var(--side); }
-.ws-image-dots { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.ws-image-frame.busy { background: var(--hover); }
+.ws-image-frame.busy::before { content: ""; position: absolute; inset: 0; pointer-events: none; transform: translateX(-100%);
+  background: linear-gradient(105deg, transparent 30%, rgba(255, 255, 255, .7) 50%, transparent 70%); animation: ws-sheen 2.2s ease-in-out infinite; }
+@keyframes ws-sheen { 70%, 100% { transform: translateX(100%); } } /* 扫过去以后停一下再来 */
+.ws-image-wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.ws-image-wait .secs { font-variant-numeric: tabular-nums; }
 .ws-image-note { position: absolute; left: 12px; right: 12px; top: 50%; transform: translateY(-50%); text-align: center; font-size: 13px; color: var(--muted); }
-.ws-image-secs { position: absolute; right: 10px; bottom: 9px; padding: 1px 8px; border-radius: 99px; background: rgba(255, 255, 255, .85);
-  font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; box-shadow: 0 1px 2px rgba(20, 24, 31, .08); }
 .ws-image-failed { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .ws-image-open { position: absolute; inset: 0; padding: 0; border: 0; background: none; cursor: zoom-in; }
 .ws-image-open img { width: 100%; height: 100%; object-fit: cover; display: block;
@@ -259,9 +262,9 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-viewer-close { position: absolute; top: 14px; right: 16px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
   border: 0; border-radius: 99px; background: rgba(255, 255, 255, .12); color: #fff; }
 .ws-viewer-close:hover { background: rgba(255, 255, 255, .22); }
-.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) {
   .ws-image-open img { transition: opacity .2s linear; filter: none; transform: none; }
+  .ws-image-frame.busy::before { display: none; }
 }
 .ws-hourly text.none { fill: var(--faint); }
 .ws-card-title { font-weight: 600; font-size: 14px; display: flex; gap: 8px; align-items: flex-start; }
