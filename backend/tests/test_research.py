@@ -29,12 +29,12 @@ from app.tools.research_tools import make_research_tools
 
 class Chat:
     """像页面那样一句一句说：写进检查点 → 跑到这一轮结束。不经过执行器，事件同步拿到。
-    运行占位用自己的一份：停止靠它传话（stop_on 在收到某个事件时点停止）。"""
+    运行占位用自己的一份：停止靠它传话（stop_on 在收到某个事件时点停止）。会画图的要给 tmp_path，图存在那里。"""
 
     def __init__(self, tmp_path: Path | None = None, planner: FakeResearchPlanner | None = None, saver=None, tid: str = "t1") -> None:
         self.planner = planner or FakeResearchPlanner()
         self.saver = saver or memory_checkpointer()
-        self.r = ResearchRunner(planner=self.planner, checkpointer=self.saver)
+        self.r = ResearchRunner(planner=self.planner, checkpointer=self.saver, data_dir=tmp_path / "data" if tmp_path else None)
         self.r.runs = LocalRunRegistry()
         self.tid = tid
         self.events: list[dict] = []

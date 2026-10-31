@@ -18,11 +18,12 @@ from langgraph.graph import START
 from app import config
 from app.api.runner import BaseRunner, Executor, RunConflict, jsonable
 from app.graph.research import history
-from app.graph.research.agent import TURN_END, now, stop_turn
+from app.graph.research.agent import TURN_END, ChatContext, now, stop_turn
 from app.graph.research.graph import build_graph, open_sqlite_checkpointer, thread_ids
 from app.graph.research.sources import collect_sources
 from app.graph.research.state import Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
+from app.tools.images import ImageStore
 
 
 class NothingToRetry(Exception):
@@ -52,7 +53,8 @@ def _said(text: str, **kw: Any) -> HumanMessage:
 
 class StopCheck(BaseCallbackHandler):
     """用户点了停止就在下一个回调里抛 Stopped：模型每吐一个片段、每个节点开始都查一次。
-    在模型的流里抛出，HTTP 流随之关掉，不再生成；正在跑的工具不打断，等它返回、下一步开始时停。
+    在模型的流里抛出，HTTP 流随之关掉，不再生成；正在跑的工具一般不打断，等它返回、下一步开始时停。
+    画图要等很久，它边等边调 check（经 ChatContext），点了停止就不等了。
     （只在外面不读流了不行：图的执行器关掉时会等正在跑的任务做完，模型照样生成到底。）"""
 
     raise_error = True
@@ -60,18 +62,18 @@ class StopCheck(BaseCallbackHandler):
     def __init__(self, stopped: Callable[[], bool]) -> None:
         self.stopped = stopped
 
-    def _check(self) -> None:
+    def check(self) -> None:
         if self.stopped():
             raise Stopped()
 
     def on_chat_model_start(self, *args: Any, **kwargs: Any) -> None:
-        self._check()
+        self.check()
 
     def on_llm_new_token(self, *args: Any, **kwargs: Any) -> None:
-        self._check()
+        self.check()
 
     def on_chain_start(self, *args: Any, **kwargs: Any) -> None:
-        self._check()
+        self.check()
 
 
 class StreamBuffer:
@@ -169,8 +171,10 @@ class ResearchRunner(BaseRunner):
                  planner: ResearchPlanner | None = None, checkpointer: BaseCheckpointSaver | None = None):
         fake = config.USE_FAKE_PLANNER if fake is None else fake
         self.planner = planner or (FakeResearchPlanner() if fake else LiveResearchPlanner())
-        saver = checkpointer or open_sqlite_checkpointer(Path(data_dir or config.DATA_DIR) / "checkpoints_research.sqlite")
+        data = Path(data_dir or config.DATA_DIR)
+        saver = checkpointer or open_sqlite_checkpointer(data / "checkpoints_research.sqlite")
         self.graph = build_graph(self.planner, saver)
+        self.images = ImageStore(data / "images")  # 画好的图，按对话分目录
         # 对话不碰浏览器，几个线程各跑各的；检查点共用一个连接，SqliteSaver 自己加锁
         self.executor = Executor(workers or config.RESEARCH_WORKERS, "research")
         # 正文写完这一轮就结束，推荐问题在结束之后才起（见 _after_run）。线程 → 等着起推荐问题的那一轮（轮 id, 用户的话, 回复）。
@@ -232,6 +236,7 @@ class ResearchRunner(BaseRunner):
         edited = [_said(text, id=human.id)] if text is not None else []
         self.graph.update_state(self._cfg(thread_id), {"messages": edited + [RemoveMessage(id=m.id) for m in msgs[start + 1:]], "turns": turns},
                                 as_node=START)
+        self.images.remove(thread_id, [img.file for m in msgs[start + 1:] if (img := history.image_of(m))])  # 这一轮原来画的图不要了
         return None
 
     @contextmanager
@@ -253,10 +258,11 @@ class ResearchRunner(BaseRunner):
             self.graph.update_state(self._cfg(thread_id), {"title": title}, as_node=TURN_END)
 
     def delete(self, thread_id: str) -> None:
-        """删掉整段对话（这个线程的所有检查点），找不回来。"""
+        """删掉整段对话（这个线程的所有检查点和画的图），找不回来。"""
         with self._hold(thread_id):
             self._drop_suggestions(thread_id)
             self.graph.checkpointer.delete_thread(thread_id)
+            self.images.drop(thread_id)
 
     def stop(self, thread_id: str) -> bool:
         """让这个线程正在跑（或排队）的这一轮停下；没有在跑的返回 False。真正停下由执行自己做（见 _graph_events）。"""
@@ -282,9 +288,11 @@ class ResearchRunner(BaseRunner):
             yield {"event": "node", "data": {"node": TURN_END}}
             return
         buf = StreamBuffer()
-        cfg = {**self._cfg(thread_id), "callbacks": [StopCheck(lambda: self._stop_requested(thread_id))]}
+        stop = StopCheck(lambda: self._stop_requested(thread_id))
+        cfg = {**self._cfg(thread_id), "callbacks": [stop]}
+        ctx = ChatContext(images=self.images, check_stop=stop.check)
         try:
-            for mode, chunk in self.graph.stream(inp, cfg, stream_mode=["messages", "updates", "custom"]):
+            for mode, chunk in self.graph.stream(inp, cfg, context=ctx, stream_mode=["messages", "updates", "custom"]):
                 if mode == "messages":
                     msg, meta = chunk
                     if meta.get("langgraph_node") == "model" and isinstance(msg, AIMessageChunk):

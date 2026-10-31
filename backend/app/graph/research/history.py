@@ -1,4 +1,4 @@
-"""从对话消息里读出来的东西：用户的原话、工具步骤、每轮的用量。
+"""从对话消息里读出来的东西：用户的原话、工具步骤、画好的图、每轮的用量。
 
 消息是唯一的记录，这些都现算，不另外存。
 """
@@ -12,12 +12,22 @@ from pydantic import ValidationError
 
 from app.graph.research import prompts
 from app.graph.research.sources import parse
-from app.graph.research.state import Forecast, ToolStep, Usage
+from app.graph.research.state import Forecast, GeneratedImage, ToolStep, Usage
 
 BLOCKED = "lingdraft_blocked"  # 一轮因内容审核停下时，系统补的那条模型消息 response_metadata 里的键，值是原因（见 agent.ContentGuard）
 STOPPED = "lingdraft_stopped"  # 用户点了停止时，已经流出来的那部分正文存成的模型消息 response_metadata 里的键
-STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather"}
+IMAGE_TOOL = "generate_image"
+STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", IMAGE_TOOL: "image"}
 BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
+# 没画成的原因在页面上的说法（照 Fusion 的图片卡片），没列的都说“图片生成失败”
+IMAGE_FAILURES = {
+    "content_filtered": "图片内容未通过模型审核",
+    "upstream_timeout": "生成超时",
+    "generation_in_progress": "相同的请求正在生成",
+    "source_image_unavailable": "这张图片无法直接编辑",
+    "run_image_limit_reached": "这一轮画的图已经到上限",
+}
+IMAGE_FAILED = "图片生成失败"
 
 
 def text_of(m: BaseMessage) -> str:
@@ -90,12 +100,17 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         return None
     if kind == "search":
         text, extra = str(args.get("query", "")), {"limits": search_limits(args)}
+    elif kind == "image":
+        text = str(args.get("prompt", ""))
+        extra = {"aspect_ratio": str(args.get("aspect_ratio") or ""), "edit": bool(args.get("source_image_id"))}
     else:
         text, extra = str(args.get("url" if kind == "read" else "location", "")), {}
     if result is None:
         return ToolStep(id=cid, kind=kind, text=text, pending=True, **extra)
     if isinstance(result.artifact, dict) and result.artifact.get("stopped"):
-        return ToolStep(id=cid, kind=kind, text=text, ok=False, message="停止了，没有做完", **extra)
+        return ToolStep(id=cid, kind=kind, text=text, ok=False, message="已停止生成" if kind == "image" else "停止了，没有做完", **extra)
+    if kind == "image":
+        return _image_step(cid, text, extra, result)
     data = parse(result)
     if kind == "weather":
         return _weather_step(cid, text, data, result)
@@ -130,6 +145,24 @@ def _weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> ToolSt
     return ToolStep(id=cid, kind="weather", text=text, ok=False, message=_failure(data, result) or "没查到")
 
 
+def image_of(m: BaseMessage) -> GeneratedImage | None:
+    """一条生图结果里画好的图；没画成是 None。模型看的只是一句话，图的信息在 artifact 里（见 research_tools.generate_image）。"""
+    art = m.artifact if isinstance(m, ToolMessage) and m.name == IMAGE_TOOL else None
+    if not isinstance(art, dict) or not art.get("image"):
+        return None
+    try:
+        return GeneratedImage.model_validate(art["image"])
+    except ValidationError:
+        return None
+
+
+def _image_step(cid: str, text: str, extra: dict, result: ToolMessage) -> ToolStep:
+    if img := image_of(result):
+        return ToolStep(id=cid, kind="image", text=text, image=img, **{**extra, "aspect_ratio": img.aspect_ratio})
+    code = result.artifact.get("error_code") if isinstance(result.artifact, dict) else None  # 参数没通过校验的没有 artifact
+    return ToolStep(id=cid, kind="image", text=text, ok=False, message=IMAGE_FAILURES.get(code, IMAGE_FAILED), **extra)
+
+
 def collect_steps(messages: list[BaseMessage]) -> list[ToolStep]:
     results = {m.tool_call_id: m for m in messages if isinstance(m, ToolMessage)}
     steps = (step_of(tc, results.get(tc["id"])) for m in messages if isinstance(m, AIMessage) for tc in m.tool_calls)
@@ -140,7 +173,7 @@ def collect_steps(messages: list[BaseMessage]) -> list[ToolStep]:
 
 
 def usage_of(messages: list[BaseMessage]) -> Usage:
-    """一轮里 agent 的模型调用和搜索、读页、查天气次数。token 来自模型返回的用量（流式要开 stream_usage）。"""
+    """一轮里 agent 的模型调用和搜索、读页、查天气次数，画成了几张图。token 来自模型返回的用量（流式要开 stream_usage）。"""
     u = Usage()
     for m in messages:
         if isinstance(m, AIMessage) and not blocked_reason(m) and not m.response_metadata.get(STOPPED):  # 系统补的消息不是一次完整的模型调用
@@ -156,4 +189,6 @@ def usage_of(messages: list[BaseMessage]) -> Usage:
             u.reads += 1
         elif isinstance(m, ToolMessage) and m.name == "get_weather":
             u.weather += 1
+        elif image_of(m):
+            u.images += 1
     return u

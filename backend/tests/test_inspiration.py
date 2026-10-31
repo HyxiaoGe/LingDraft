@@ -30,14 +30,14 @@ class Clock:
         return self.t
 
 
-def test_pick_keeps_the_four_kinds_and_drops_bad_items():
+def test_pick_keeps_the_five_kinds_and_drops_bad_items():
     got = pick({"data": {"examples": [
         ex("news", "币安被盗最新进展"), ex("image", "画一张中秋壁纸"), ex("map", "西安一日游怎么走"),
         ex("research", " 折叠屏和旗舰怎么选 "), ex("knowledge", "喝咖啡影响睡眠吗"), ex("weather", "上海明天冷不冷"),
         ex("document", "写一份周报"), ex("code", "解释闭包"),
         ex("news", "币安被盗最新进展"), ex("news", ""), ex("news", "长" * 41), {"category": "news"}, "坏数据",
     ]}})
-    assert got == ["币安被盗最新进展", "折叠屏和旗舰怎么选", "喝咖啡影响睡眠吗", "上海明天冷不冷"]
+    assert got == ["币安被盗最新进展", "画一张中秋壁纸", "折叠屏和旗舰怎么选", "喝咖啡影响睡眠吗", "上海明天冷不冷"]
 
 
 def test_pick_rejects_wrong_shape():
@@ -83,7 +83,7 @@ def test_failure_keeps_old_questions_and_waits_before_retrying():
 def test_endpoint_returns_questions_or_502():
     calls: list[str] = []
     try:
-        api_main.set_inspirations(Inspirations("https://fusion.test", fusion([ex("weather", "广州今天下雨吗"), ex("image", "画个头像")], calls)))
+        api_main.set_inspirations(Inspirations("https://fusion.test", fusion([ex("weather", "广州今天下雨吗"), ex("map", "西安一日游怎么走")], calls)))
         c = TestClient(api_main.app)
         r = c.get("/api/inspirations")
         assert r.status_code == 200 and r.json() == {"questions": ["广州今天下雨吗"]}

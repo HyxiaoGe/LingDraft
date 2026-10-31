@@ -1,8 +1,8 @@
 """新对话页的“今日灵感”：从 Fusion 的公开接口取它每天出的示例问题，只留这边答得了的几类。
 
 Fusion 每天凌晨用辅助模型按功能目录出题（新闻、调研题照当天热榜出），首页从 /api/prompts/examples 拿，
-不用登录，每次随机抽一批，最多 50 条。这边只会搜、读、在对话里回答：生图、地图题答不了，文档、编程题显不出
-搜索和标来源，所以只留新闻、调研、常识、天气四类（天气只能靠搜，不如 Fusion 的天气工具准）（2026-10-31 Sean 定）。
+不用登录，每次随机抽一批，最多 50 条。这边能搜、读、查天气、画图：地图题答不了，文档、编程题显不出
+搜索和标来源，所以只留新闻、调研、常识、天气、生图五类（2026-10-31 Sean 定，能画图后加上生图）。
 取到的在内存里放半小时；再取没取到，先接着用旧的，过半小时再试；一次都没取到就报错，页面显示固定的几个例子。
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ from collections.abc import Callable
 
 import httpx
 
-KEEP = {"news", "research", "knowledge", "weather"}
+KEEP = {"news", "research", "knowledge", "weather", "image"}
 LIMIT = 50  # Fusion 一次最多给这么多
 FRESH = 30 * 60
 TIMEOUT = 5

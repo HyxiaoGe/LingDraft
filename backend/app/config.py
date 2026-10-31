@@ -51,6 +51,9 @@ MAX_CHECK_RETRIES = 2
 # dev 上的 agent-tools 网关：搜索 / 网页读取，Bearer 产品密钥
 AGENT_TOOLS_URL = os.environ.get("AGENT_TOOLS_URL", "http://agent-tools-gateway:8100")
 AGENT_TOOLS_API_KEY = os.environ.get("AGENT_TOOLS_API_KEY", "")
+# image-service 自己的地址，要和它的 SERVICE_BASE_URL 一样：改图时把原图的地址交回去，它认出是自己生成的图才直接读本地文件
+# （别的地址它当成外部图片去下载，内网地址一律拒绝）。生图本身和取图都走上面的网关
+IMAGE_SERVICE_URL = os.environ.get("IMAGE_SERVICE_URL", "http://image-service.dev.seanfield.org")
 
 # 新对话页的“今日灵感”从 Fusion 的公开接口取（不用登录），见 app/api/inspiration.py
 FUSION_URL = os.environ.get("FUSION_URL", "https://fusion.seanfield.org")

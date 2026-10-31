@@ -1,10 +1,11 @@
-// 对话。一轮是用户的一句话加上模型这一轮做的事：先是过程（思考、搜索、读页按发生的先后），然后是正文和这条回答用到的来源；
+// 对话。一轮是用户的一句话加上模型这一轮做的事：先是过程（思考、搜索、读页按发生的先后），然后是天气卡片、画的图，再是正文和这条回答用到的来源；
 // 最后一轮下面是推荐问题（起的时候先说一声）。过程正在跑时展开，这一轮结束后收成一行“已完成 25 秒”，点开看每一步。
 // 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。最后一轮的这些一直显示，之前的悬停才出现。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
-import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconLoop, IconPage, IconRetry, IconSearch, IconSparkle, IconStop, IconWarn, Spinner } from "./icons.jsx";
+import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconImage, IconLoop, IconPage, IconRetry, IconSearch, IconSparkle, IconStop, IconWarn, Spinner } from "./icons.jsx";
+import { ImageCards, imagesOf } from "./images.jsx";
 import { Markdown } from "./markdown.jsx";
 import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Mark } from "./sources.jsx";
@@ -90,12 +91,12 @@ function Welcome() {
   return (
     <div className="ws-welcome">
       <h2>想问什么？</h2>
-      <p>直接问。需要查的会上网搜、读原文，回答里标出处，鼠标放在角标上能看到是哪条来源。</p>
+      <p>直接问。需要查的会上网搜、读原文，回答里标出处，鼠标放在角标上能看到是哪条来源。也能按描述画图、改图。</p>
     </div>
   );
 }
 
-// 今日灵感：Fusion 每天照热榜出的题（后端代取，只留新闻、调研、常识、天气），每次打开新对话打乱顺序。
+// 今日灵感：Fusion 每天照热榜出的题（后端代取，只留新闻、调研、常识、天气、生图），每次打开新对话打乱顺序。
 // 照 Fusion 的样子：排两行，放得下几个放几个；每 6 秒一个接一个翻过去，换成接下来的一批；鼠标放在上面、键盘停在上面时不翻。
 // 取不到就显示固定的几个例子，不写“今日灵感”。取回来之前先空着占好位置，出来时页面不跳
 const ROTATE_MS = 6000;
@@ -233,6 +234,7 @@ function Turn({ t, st, live, running, suggesting, stopping, last, now, act }) {
       <div className="ws-ai">
         {(running || rec) && <Process items={process} st={st} nums={nums} rec={rec} running={running} failed={failed} now={now} />}
         {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
+        <ImageCards steps={imagesOf(items)} tid={st?.thread_id} onRegenerate={last && idle ? act.say : null} />
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
         {running && <LiveLine live={live} items={items} stopping={stopping} />}
         {!running && <AnswerSources nums={nums} sources={st?.sources} />}
@@ -463,7 +465,7 @@ function Thinking({ it, running, thinking }) {
 }
 
 function ToolRow({ s }) {
-  const Icon = { read: IconPage, weather: IconCloudSun }[s.kind] || IconSearch;
+  const Icon = { read: IconPage, weather: IconCloudSun, image: IconImage }[s.kind] || IconSearch;
   let main, sub;
   let bad = !s.ok;
   if (s.kind === "read") {
@@ -473,6 +475,9 @@ function ToolRow({ s }) {
   } else if (s.kind === "weather") {
     main = <>查天气「{s.text}」</>;
     sub = s.pending ? "查询中…" : s.ok ? s.title : `没查成：${s.message || "出错了"}`;
+  } else if (s.kind === "image") {
+    main = <>{s.edit ? "改图" : "画图"}「{s.text}」</>;
+    sub = s.pending ? "生成中…" : s.image ? "已生成" : `没画成：${s.message || "出错了"}`;
   } else {
     main = <>搜索「{s.text}」{s.limits.map((l) => <span key={l} className="lim">{l}</span>)}</>;
     sub = s.pending ? "搜索中…" : s.ok ? `${s.hits} 条结果${s.message ? `（${s.message}）` : ""}` : `没搜成：${s.message || "出错了"}`;
@@ -510,6 +515,7 @@ const TIPS = {
   search: [...TIPS_ANY, "正在全网翻箱倒柜", "线索正在赶来的路上", "大海捞针中，针快捞到了", "搜索有点堵车，马上通"],
   read: [...TIPS_ANY, "这页有点长，容我多看两眼", "网页加载慢吞吞的，我也干着急", "正在逐字逐句地啃这篇", "有的网站慢，再给它一点时间"],
   weather: TIPS_ANY,
+  image: [...TIPS_ANY, "正在一笔一笔地画", "画师正在构图", "颜料快调好了", "好图值得多等几秒"],
 };
 const TIP_AFTER = 3000; // 看不到新进展多久以后开始说
 const TIP_EVERY = 6000; // 一直没进展就隔一会儿换一句
@@ -521,7 +527,7 @@ function LiveLine({ live, items, stopping }) {
   const pending = items.filter((i) => i.type === "step" && i.pending); // 并行的几步里先做完的排在后面也算还在等
   const streaming = lastItem?.live && (lastItem.type === "text" || (lastItem.type === "thinking" && !lastItem.ms));
   const stage = stopping ? "正在停止…" : live?.stage || (pending.length || streaming ? null : PHASES[live?.phase] || "正在准备…");
-  const waitingFor = ["read", "search", "weather"].find((k) => pending.some((i) => i.kind === k)) || "model";
+  const waitingFor = ["image", "read", "search", "weather"].find((k) => pending.some((i) => i.kind === k)) || "model";
   const tip = useTip(`${items.length}:${lastItem?.text?.length ?? 0}:${pending.length}:${live?.phase}:${stage}`, stopping ? null : TIPS[waitingFor]);
   return (
     <div className="ws-live" role="status">

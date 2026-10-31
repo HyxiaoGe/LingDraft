@@ -14,6 +14,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any, NotRequired
 
@@ -28,6 +30,7 @@ from app.graph.research import history, prompts
 from app.graph.research.sources import parse
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Turn
 from app.model_guard import ContentBlocked
+from app.tools.images import ImageStore
 
 TITLE_CHARS = 24  # 起标题失败时截取用户原话的长度
 TURN_END = "TurnMiddleware.after_agent"  # 一轮的最后一个节点：在它名下写状态，线程就停在这一轮结束的地方
@@ -35,6 +38,14 @@ CHINA_TZ = timezone(timedelta(hours=8))
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 # 系统提示词按这个顺序拼（见 prompts.toml 的 [agent]）
 SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "language")
+
+
+@dataclass(frozen=True)
+class ChatContext:
+    """一次运行的上下文（create_agent 的 context，不进检查点），工具从 runtime.context 拿。"""
+
+    images: ImageStore  # 画好的图存在哪儿
+    check_stop: Callable[[], None]  # 用户点了停止就抛出：要等很久的工具（画图）边等边查，不用等它做完
 
 
 def now() -> str:
@@ -310,6 +321,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver):
         model=planner.agent_model(),
         tools=planner.tools(),
         state_schema=ResearchState,
+        context_schema=ChatContext,
         middleware=[
             TurnMiddleware(planner),
             ContentGuard(planner),  # 在 TurnMiddleware 里面：重发的请求也带着换好的系统提示词

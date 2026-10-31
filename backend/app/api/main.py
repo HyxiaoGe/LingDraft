@@ -295,6 +295,15 @@ async def research_state(thread_id: str):
     return _view(research(), thread_id)
 
 
+@app.get("/api/research/threads/{thread_id}/images/{name}")
+async def research_image(thread_id: str, name: str):
+    """对话里画的图。文件名是图片编号，内容不会变，浏览器可以一直缓存；对话删了图也跟着删。"""
+    path = research().images.path(thread_id, name)
+    if path is None:
+        raise HTTPException(404, "没有这张图")
+    return FileResponse(path, headers={"Cache-Control": "private, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"})
+
+
 @app.get("/api/inspirations")
 async def inspiration_list():
     """新对话页的“今日灵感”（从 Fusion 取，见 inspiration.py）。一次都没取到回 502，页面显示固定的几个例子。"""

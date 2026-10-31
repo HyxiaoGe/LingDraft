@@ -230,6 +230,39 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-hourly .cross { stroke: var(--line2); stroke-dasharray: 2 3; }
 .ws-hourly text { font: 11px var(--sans); text-anchor: middle; fill: var(--muted); }
 .ws-hourly text.t { fill: var(--ink2); }
+
+/* 画的图（照 Fusion 的图片卡片）：按图的比例定宽，生成中是点阵占位，出图后淡入；下面一行是哪个模型画的和几个按钮 */
+.ws-images { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; margin: 2px 0 4px; }
+.ws-image { margin: 0; max-width: 100%; display: flex; flex-direction: column; gap: 6px; animation: ws-in .25s var(--ease); }
+.ws-image-frame { position: relative; max-width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r); background: var(--side); }
+.ws-image-dots { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.ws-image-note { position: absolute; left: 12px; right: 12px; top: 50%; transform: translateY(-50%); text-align: center; font-size: 13px; color: var(--muted); }
+.ws-image-secs { position: absolute; right: 10px; bottom: 9px; padding: 1px 8px; border-radius: 99px; background: rgba(255, 255, 255, .85);
+  font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; box-shadow: 0 1px 2px rgba(20, 24, 31, .08); }
+.ws-image-failed { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.ws-image-open { position: absolute; inset: 0; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.ws-image-open img { width: 100%; height: 100%; object-fit: cover; display: block;
+  opacity: 0; filter: blur(14px); transform: scale(1.015); transition: opacity .7s ease-out, filter .9s ease-out, transform .9s ease-out; }
+.ws-image-open img[data-instant=true] { transition: none; }
+.ws-image-open img[data-loaded=true] { opacity: 1; filter: none; transform: none; }
+.ws-image-open:focus-visible { outline-offset: -2px; }
+.ws-image-cap { font-size: 12px; color: var(--muted); }
+.ws-image-cap .row { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.ws-image-cap .by { flex: 1; min-width: 0; overflow-wrap: anywhere; text-wrap: balance; }
+.ws-image-act { flex: none; display: inline-flex; align-items: center; justify-content: center; height: 26px; min-width: 26px; padding: 0 6px;
+  border: 0; border-radius: var(--r-sm); background: none; color: var(--muted) !important; font-size: 12px; }
+.ws-image-act:hover { background: var(--hover); color: var(--ink) !important; }
+.ws-image-prompt { margin: 4px 0 0; padding: 6px 8px; border-radius: var(--r-sm); background: var(--side); color: var(--ink2); line-height: 1.6; white-space: pre-wrap; }
+.ws-viewer { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 40px;
+  background: rgba(16, 18, 22, .82); animation: ws-in .2s var(--ease); cursor: zoom-out; }
+.ws-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--r-sm); cursor: default; box-shadow: 0 12px 48px rgba(0, 0, 0, .4); }
+.ws-viewer-close { position: absolute; top: 14px; right: 16px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 99px; background: rgba(255, 255, 255, .12); color: #fff; }
+.ws-viewer-close:hover { background: rgba(255, 255, 255, .22); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) {
+  .ws-image-open img { transition: opacity .2s linear; filter: none; transform: none; }
+}
 .ws-hourly text.none { fill: var(--faint); }
 .ws-card-title { font-weight: 600; font-size: 14px; display: flex; gap: 8px; align-items: flex-start; }
 .ws-card-title svg { flex: none; margin-top: 3px; color: var(--accent); }

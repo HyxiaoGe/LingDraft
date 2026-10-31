@@ -2,6 +2,7 @@
 
 消息列表就是对话记录：用户的话、模型的思考和正文、工具调用和结果都按发生的先后存在里面。
 旁边只放线程标题和每一轮的记录。来源从搜索、读页的工具结果里取，不另外存。
+生成的图是文件，存在数据目录里（见 app.tools.images），消息里只记它的编号和文件名。
 """
 
 from __future__ import annotations
@@ -64,13 +65,28 @@ class Forecast(BaseModel):
     hourly: list[WeatherHour] = Field(default_factory=list, description="从现在起 24 小时；取不到时是空的")
 
 
+class GeneratedImage(BaseModel):
+    """生成的一张图（image-service）。文件在这个对话的图片目录里（见 app.tools.images.ImageStore），页面按文件名取。"""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(description="图片编号：模型改这张图时用它（source_image_id）")
+    file: str = Field(description="文件名，<编号>.<扩展名>")
+    mime_type: str
+    width: int
+    height: int
+    prompt: str = Field(description="交给生图模型的描述；改图时是修改要求")
+    aspect_ratio: str
+    model: str | None = Field(default=None, description="实际出图的模型")
+    edited_from: str | None = Field(default=None, description="改的是哪张图（编号）")
+
+
 class ToolStep(BaseModel):
     """一次工具调用，给页面的过程记录用。"""
 
     model_config = ConfigDict(extra="forbid")
     id: str = Field(description="工具调用 id；页面据此把实时进度和存下来的记录对上")
-    kind: Literal["search", "read", "weather"]
-    text: str = Field(description="搜索词 / 网址 / 地名")
+    kind: Literal["search", "read", "weather", "image"]
+    text: str = Field(description="搜索词 / 网址 / 地名 / 画图的描述")
     limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制")
     ok: bool = True
     hits: int = 0  # 搜索返回的条数
@@ -80,6 +96,9 @@ class ToolStep(BaseModel):
     message: str = Field(default="", description="失败的原因")
     pending: bool = Field(default=False, description="已经发起、还没有结果")
     weather: Forecast | None = Field(default=None, description="查到的天气，页面画成天气卡片")
+    image: GeneratedImage | None = Field(default=None, description="画好的图，页面画成图片卡片")
+    aspect_ratio: str = Field(default="", description="画图时要的比例：还没出图时页面按它占位；改图没给比例时是空的")
+    edit: bool = Field(default=False, description="画图是在改之前的一张图")
 
     @field_validator("title")
     @classmethod
@@ -99,6 +118,7 @@ class Usage(BaseModel):
     searches: int = 0
     reads: int = 0
     weather: int = 0  # 查天气的次数
+    images: int = 0  # 画成的图（画新图和改图都算）
 
 
 class Turn(BaseModel):

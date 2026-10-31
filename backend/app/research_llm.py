@@ -6,6 +6,8 @@ agent 本身由 app.graph.research.agent 构建，这里提供它要的聊天模
 
 from __future__ import annotations
 
+import hashlib
+import io
 import json
 import re
 import threading
@@ -21,6 +23,7 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from PIL import Image, ImageDraw
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import config
@@ -248,12 +251,60 @@ def _fake_weather(path: str, params) -> httpx.Response:
     return httpx.Response(404, json={"error": "not_found"})
 
 
+FAKE_IMAGE_FILTERED = "【违规图】"  # 画图的描述里有它，假 image-service 按内容审核没过拒绝
+FAKE_IMAGE_SLOW = "慢慢画"  # 描述里有它，假 image-service 过几秒才出图（看占位、试停止）
+FAKE_IMAGE_SLOW_S = 6.0
+
+
+def _fake_png(prompt: str, ratio: str, edit: bool) -> bytes:
+    """按比例画一张纯色底、带个方块的 PNG，颜色随描述变；改出来的图方块是白的。"""
+    w, h = (int(x) for x in ratio.split(":"))
+    size = (512, round(512 * h / w)) if w >= h else (round(512 * w / h), 512)
+    d = hashlib.md5(prompt.encode()).digest()
+    img = Image.new("RGB", size, (60 + d[0] % 150, 60 + d[1] % 150, 60 + d[2] % 150))
+    ImageDraw.Draw(img).rectangle((size[0] // 3, size[1] // 3, size[0] * 2 // 3, size[1] * 2 // 3),
+                                  fill=(255, 255, 255) if edit else (20, 24, 31))
+    out = io.BytesIO()
+    img.save(out, "PNG")
+    return out.getvalue()
+
+
+def _fake_image_service() -> Any:
+    """假 image-service：POST /image/v1/generate 出图，图在 GET /image/static/images/<id>.png。"""
+    made: dict[str, bytes] = {}
+
+    def handle(req: httpx.Request) -> httpx.Response:
+        if req.method == "GET":
+            data = made.get(req.url.path.removeprefix("/image"))
+            return httpx.Response(200, content=data, headers={"content-type": "image/png"}) if data else httpx.Response(404)
+        body = json.loads(req.content)
+        prompt = body["prompt"]
+        if FAKE_IMAGE_FILTERED in prompt:
+            return httpx.Response(422, json={"error": "content_filtered", "message": "blocked", "retryable": False,
+                                             "model": "doubao-seedream-5-0-flash"})
+        if FAKE_IMAGE_SLOW in prompt:
+            time.sleep(FAKE_IMAGE_SLOW_S)
+        iid = f"fake{len(made) + 1}"
+        path = f"/static/images/{iid}.png"
+        made[path] = _fake_png(prompt, body.get("aspect_ratio") or "1:1", bool(body.get("reference_images")))
+        model = "doubao-seedream-5-0-pro" if body.get("quality") == "high" else "doubao-seedream-5-0-flash"
+        return httpx.Response(200, json={"id": iid, "image_url": path, "model": model, "requested_model": model, "fallback_used": False,
+                                         "grounding_used": False, "cached": False, "created_at": "2026-10-31T00:00:00Z",
+                                         "reference_images_used": len(body.get("reference_images") or []),
+                                         "reference_search": {"status": "skipped"}})
+
+    return handle
+
+
 def fake_gateway_client() -> GatewayClient:
-    """用 MockTransport 模拟网关：每次搜索给 3 条稳定的候选，读页返回正文（第 3 条读不到）；天气见 _fake_weather。"""
+    """用 MockTransport 模拟网关：每次搜索给 3 条稳定的候选，读页返回正文（第 3 条读不到）；天气见 _fake_weather，画图见 _fake_image_service。"""
+    images = _fake_image_service()
 
     def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path.startswith("/weather/"):
             return _fake_weather(req.url.path, req.url.params)
+        if req.url.path == "/image/v1/generate" or req.url.path.startswith("/image/static/"):
+            return images(req)
         if req.url.path == "/search/search":
             q = json.loads(req.content).get("query", "")
             slug = re.sub(r"\W+", "-", q)[:24] or "q"
@@ -278,6 +329,7 @@ def fake_gateway_client() -> GatewayClient:
     return GatewayClient("http://fake-gw", "fake-key", scene="research", transport=httpx.MockTransport(handler))
 
 
+_FAKE_IMAGE_ID = re.compile(r"Image id: ([0-9a-f]{12})")  # 生图结果里给模型的编号（prompts.toml 的 tools.generate_image.success）
 FAKE_USAGE = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
               "input_token_details": {"cache_read": 60}, "output_token_details": {"reasoning": 5}}
 _BAD_ARGS = '{"query": "a" x}'  # 解析不了的参数
@@ -290,6 +342,8 @@ class FakeToolModel(BaseChatModel):
     - “直接答”：不调工具直接回复；“不回复”：最后不给文字；
     - “坏JSON”：第一步先发一个参数无法解析的工具调用；“一直坏”：每次都发。
     - “天气”：先查天气，地名是“天气”前面那段（没有就是广州），再照常搜、读。
+    - “画”：画一张图（描述就是用户的话，“横”的是 16:9），画完直接回复，不搜；“改图”：改这段对话里最近画的那张；
+      “再画”“再生成”：用上一次的参数再画一张（regenerate）。
     内容审核（模拟服务商）：请求里任何地方有 FAKE_BLOCKED 就整个拒绝；用户的话里有“查完就拦”时，有工具结果就拒绝；
     有“输出拦截”时，吐完思考后输出被截断。
     """
@@ -320,6 +374,8 @@ class FakeToolModel(BaseChatModel):
             return "直接回答：这个问题不用查。", []
         if "天气" in text and "get_weather" in self.bound and "get_weather" not in names:
             return call("get_weather", location=text.split("天气")[0].strip()[:8] or "广州")
+        if any(k in text for k in ("画", "改图", "再生成")) and "generate_image" in self.bound:
+            return self._draw(text, messages, turn, call)
         if "search_web" not in names:
             return call("search_web", query=text.splitlines()[0][:20], count=3)
         if "read_page" not in names and hits:
@@ -327,6 +383,19 @@ class FakeToolModel(BaseChatModel):
         if "不回复" in text:
             return "", []
         return f"结论：可以用但不稳定 [{hits[0]['id']}]，详情见第二条 [{hits[1]['id']}]。" if hits else "没查到。", []
+
+    @staticmethod
+    def _draw(text: str, messages: list[BaseMessage], turn: list[BaseMessage], call) -> tuple[str, list[dict]]:
+        if done := next((m for m in reversed(turn) if isinstance(m, ToolMessage) and m.name == "generate_image"), None):
+            return ("没画成。" if done.status == "error" else "画好了，看看要不要调整。"), []
+        prompt = text.splitlines()[0][:200]  # 用户的话后面跟着发送时间
+        ids = _FAKE_IMAGE_ID.findall("\n".join(str(m.content) for m in messages if isinstance(m, ToolMessage) and m.name == "generate_image"))
+        if "改图" in text and ids:
+            return call("generate_image", prompt=prompt, source_image_id=ids[-1])
+        before = [tc["args"] for m in messages if isinstance(m, AIMessage) for tc in m.tool_calls if tc["name"] == "generate_image"]
+        if ("再画" in text or "再生成" in text) and before:
+            return call("generate_image", **{**before[-1], "regenerate": True})
+        return call("generate_image", prompt=prompt, **({"aspect_ratio": "16:9"} if "横" in text else {}))
 
     def _message(self, messages: list[BaseMessage]) -> AIMessage:
         _fake_review(messages)
