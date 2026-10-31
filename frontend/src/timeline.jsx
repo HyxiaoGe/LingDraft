@@ -14,10 +14,10 @@ const EXAMPLES = [
   "珠穆朗玛峰现在的官方高度是多少？",
 ];
 
-export function Conversation({ st, live, busy, suggesting, error, now, act, isNew }) {
+export function Conversation({ st, live, busy, suggesting, error, now, act, tid }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
-  const fresh = isNew && !live;
+  const fresh = !tid && !live;
 
   // 换了对话就到底；之后内容变高（字一个个出来、过程展开）或可视区变矮时，贴着底的跟到底。
   // 看的是尺寸变化，不靠这里重新渲染：逐字出现只重新渲染那一段，每帧也跟得上
@@ -26,6 +26,14 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, isNe
     stick.current = true;
     el.scrollTop = el.scrollHeight;
   }, [st?.thread_id]);
+  // 发出一句话（或重新回答、重试）：往上翻着看的也跳到底，跟着看这一轮
+  const started = !!live;
+  useLayoutEffect(() => {
+    if (!started) return;
+    const el = scrollRef.current;
+    stick.current = true;
+    el.scrollTop = el.scrollHeight;
+  }, [started]);
   useLayoutEffect(() => {
     const el = scrollRef.current;
     const ro = new ResizeObserver(() => { if (stick.current) el.scrollTop = el.scrollHeight; });
@@ -55,7 +63,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, isNe
           {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error}</span></div>}
         </div>
       </div>
-      <Composer mode={mode} stopping={stopping} onSend={onSend} onStop={act.stop} />
+      <Composer thread={tid || "new"} mode={mode} stopping={stopping} onSend={onSend} onStop={act.stop} />
     </section>
   );
 }
@@ -123,10 +131,13 @@ function Turn({ t, st, live, running, suggesting, stopping, last, now, act }) {
 }
 
 // 用户说的话：下面是发送时间和“复制”，最后一句在空闲时还有“编辑”。pinned（最后一轮）一直显示，其他的悬停才出现
+// 临时的输入框（改这句话、左栏改名）关掉以后，光标回到对话的输入框（等它从页面上撤掉再放）
+export const focusInput = () => setTimeout(() => dispatchEvent(new Event("ws-focus-input")));
+
 function UserMsg({ text, at, pinned, now, editable, onEdit }) {
   const [editing, setEditing] = useState(false);
   useEffect(() => { if (!editable) setEditing(false); }, [editable]); // 开着编辑框时这一轮又跑起来了（点了重新回答、推荐问题），编辑框就收起
-  if (editing && editable) return <EditBox text={text} onCancel={() => setEditing(false)} onSend={(t) => { setEditing(false); onEdit(t); }} />;
+  if (editing && editable) return <EditBox text={text} onCancel={() => { setEditing(false); focusInput(); }} onSend={(t) => { setEditing(false); onEdit(t); }} />;
   return (
     <div className={"ws-user" + (pinned ? " pinned" : "")}>
       <div className="ws-bubble">{text}</div>
@@ -438,12 +449,45 @@ const PLACEHOLDER = {
   failed: "这一轮没跑完，点上面的“重试”",
 };
 
-function Composer({ mode, stopping, onSend, onStop }) {
+// 回答时输入框只读而不是禁用：禁用会把光标弄丢，答完还得再点一下。
+// 每个对话没发出去的字各存各的，切走再切回来还在（刷新就没了）
+function Composer({ thread, mode, stopping, onSend, onStop }) {
   const [text, setText] = useState("");
   const ref = useRef(null);
+  const drafts = useRef(new Map());
+  const shown = useRef(thread); // text 是哪个对话的
   const enabled = mode === "new" || mode === "idle";
   const canStop = mode === "busy" || mode === "queued";
   useAutoHeight(ref, text);
+
+  // 光标放回输入框：换了对话（包括刚打开页面）一定放；能说话了、切回这个窗口时，光标不在别处、也没选中文字才放
+  const focus = (always) => {
+    const el = ref.current;
+    const at = document.activeElement;
+    if (!el || at === el) return;
+    if (!always && ((at && at !== document.body) || getSelection()?.toString())) return;
+    el.focus({ preventScroll: true });
+  };
+  useEffect(() => {
+    if (shown.current !== thread) {
+      drafts.current.set(shown.current, text);
+      shown.current = thread;
+      setText(drafts.current.get(thread) || "");
+    }
+    focus(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thread]);
+  useEffect(() => { if (enabled) focus(false); }, [enabled]);
+  useEffect(() => {
+    const back = () => focus(false);
+    addEventListener("focus", back); // 切回这个窗口
+    addEventListener("ws-focus-input", back); // 见 focusInput
+    return () => {
+      removeEventListener("focus", back);
+      removeEventListener("ws-focus-input", back);
+    };
+  }, []);
+
   const send = () => {
     const t = text.trim();
     if (!t || !enabled) return;
@@ -453,7 +497,7 @@ function Composer({ mode, stopping, onSend, onStop }) {
   return (
     <div className="ws-composer">
       <div className={"ws-input" + (enabled ? "" : " off")}>
-        <textarea ref={ref} rows={1} value={text} disabled={!enabled} placeholder={PLACEHOLDER[mode] || PLACEHOLDER.busy} aria-label="输入"
+        <textarea ref={ref} rows={1} value={text} readOnly={!enabled} placeholder={PLACEHOLDER[mode] || PLACEHOLDER.busy} aria-label="输入"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
         <div className="ws-input-bar">

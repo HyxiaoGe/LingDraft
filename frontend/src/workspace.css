@@ -170,6 +170,8 @@ button.ws-proc-head:hover { color: var(--ink); }
 .md ul, .md ol { padding-left: 22px; }
 .md li { margin: 2px 0; }
 .md li.sub { margin-left: 18px; list-style-type: circle; }
+.md .loose > li + li { margin-top: 8px; }
+.md-nobr { white-space: nowrap; }
 .md blockquote { border-left: 3px solid var(--line2); padding: 0 0 0 12px; color: var(--ink2); }
 .md code { font: 12.5px/1.5 ui-monospace, Menlo, monospace; background: var(--hover); border-radius: 4px; padding: 1px 5px; }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
@@ -210,10 +212,10 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-ai-note { max-width: 700px; margin: 6px auto 0; text-align: center; font-size: 11.5px; color: var(--faint); }
 .ws-input { max-width: 700px; margin: 0 auto; border: 1px solid var(--line2); border-radius: var(--r-lg); padding: 10px 12px 8px 14px; background: var(--paper); box-shadow: 0 2px 12px rgba(20, 24, 31, .06); transition: border-color .15s, box-shadow .15s; }
 .ws-input:focus-within { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft), 0 2px 12px rgba(20, 24, 31, .06); }
-.ws-input.off { background: var(--side); box-shadow: none; }
+.ws-input.off { background: var(--side); box-shadow: none; border-color: var(--line2); } /* 回答时只读：光标留在里面，但不显示成能输入 */
 .ws-input textarea { width: 100%; border: 0; outline: none; resize: none; font: inherit; background: transparent; line-height: 1.6; max-height: 160px; padding: 0; color: var(--ink); }
 .ws-input textarea::placeholder { color: var(--faint); }
-.ws-input textarea:disabled { color: var(--muted); }
+.ws-input textarea:read-only { color: var(--muted); cursor: default; }
 .ws-input-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
 .ws-input-bar .ws-send { margin-left: auto; }
 

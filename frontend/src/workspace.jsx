@@ -6,7 +6,7 @@ import { createResearchThread, deleteResearchThread, editResearchThread, followR
   renameResearchThread, retryResearchThread, sayResearch, stopResearchThread } from "./api.js";
 import { IconDownload, IconEdit, IconMore, IconPlus, IconTrash } from "./icons.jsx";
 import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, threadMarkdown, useNow, when } from "./research.js";
-import { Conversation } from "./timeline.jsx";
+import { Conversation, focusInput } from "./timeline.jsx";
 import "./workspace.css";
 
 // 地址：/chat/new 是新对话，/chat/<线程 id> 是某个对话；别的地址（/、/chat）都当新对话，进来时改成 /chat/new。
@@ -305,7 +305,7 @@ export default function Workspace() {
   return (
     <div className="ws">
       <Sidebar threads={threads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={select} manage={manage} />
-      <Conversation st={st} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} isNew={!tid} />
+      <Conversation st={st} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} />
     </div>
   );
 }
@@ -455,10 +455,10 @@ function RenameRow({ t, onDone }) {
     <div className="ws-task renaming">
       <input ref={ref} className="ws-rename" value={v} maxLength={40} aria-label="对话标题" onChange={(e) => setV(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.nativeEvent.isComposing) finish(v.trim());
-          else if (e.key === "Escape") finish(null);
+          if (e.key === "Enter" && !e.nativeEvent.isComposing) { finish(v.trim()); focusInput(); }
+          else if (e.key === "Escape") { finish(null); focusInput(); }
         }}
-        onBlur={() => finish(v.trim())} />
+        onBlur={() => finish(v.trim())} /* 点了别处：光标就在别处，不拉回输入框 */ />
     </div>
   );
 }
