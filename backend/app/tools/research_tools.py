@@ -1,7 +1,8 @@
 """agent 查资料的工具：搜索、读网页、查天气。工具描述在 app/graph/research/prompts.toml 的 [tools.*]。
 
 搜索和读页的结果里每个网址带一个来源 id（见 app.graph.research.sources），模型在正文里用它引用。
-查天气的结果不是网页、不带来源 id：页面上画成天气卡片，卡片上写明来自和风天气（见 app.tools.weather）。
+查天气的结果不是网页、不带来源 id：模型看逐日预报和逐小时的摘要；整份预报放在结果的 artifact 里（不发给模型），
+页面画成天气卡片，卡片上写明来自和风天气（见 app.tools.weather）。
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from pydantic import BaseModel, Field
 from app.graph.research import prompts
 from app.graph.research.sources import known_ids, source_id, url_key
 from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError
-from app.tools.weather import Unresolved, WeatherService
+from app.tools.weather import Unresolved, WeatherService, summarize_hourly
 
 MAX_COUNT = 10
 MAX_DAYS = 365
@@ -125,7 +126,10 @@ def make_research_tools(client: GatewayClient) -> list:
             raise  # 密钥或网关放行的问题：让这次运行失败、把错误亮出来
         except GatewayError as e:
             raise _failed(e.kind, str(e), e.retryable) from e
-        return json.dumps({"ok": True, **fc.model_dump()}, ensure_ascii=False), {"retrieved_at": _now()}
+        seen = {"ok": True, **fc.model_dump(exclude={"hourly"})}
+        if summary := summarize_hourly(fc.hourly):
+            seen["hourly_summary"] = summary
+        return json.dumps(seen, ensure_ascii=False), {"retrieved_at": _now(), "forecast": fc.model_dump()}
 
     get_weather.handle_tool_error = True
 

@@ -13,7 +13,8 @@ from app.graph.research import history
 from app.research_llm import FakeResearchPlanner
 from app.tools.gateway import City, Day, GatewayAuthError, GatewayClient, GatewayError, Hour
 from app.tools.research_tools import make_research_tools
-from app.tools.weather import CACHE_SECONDS, Unresolved, WeatherService, city_label, select_city
+from app.graph.research.state import WeatherHour
+from app.tools.weather import CACHE_SECONDS, Unresolved, WeatherService, city_label, select_city, summarize_hourly
 from tests.test_research import Chat
 
 
@@ -145,6 +146,20 @@ def test_hourly_failure_keeps_daily_and_uses_china_date():
     assert fc.hourly == [] and fc.today == "2026-11-01"
 
 
+def test_hourly_summary_gives_the_peak_and_the_wet_hours():
+    def h(hour, temp, pop=None, precip=None):
+        return WeatherHour(time=f"2026-11-01T{hour:02d}:00+08:00", temp=temp, text="晴", pop=pop, precip=precip)
+
+    # 和风真会给出“晴、0 毫米、降水概率六成”这种：高峰照样报出来，有没有降水量另算
+    dry = [h(9, 26, 19, 0.0), h(10, 28, 61, 0.0), h(11, 30, 61, 0.0), h(12, 30, None, None)]
+    assert summarize_hourly(dry) == {"window": "2026-11-01T09:00+08:00 ~ 2026-11-01T12:00+08:00", "temp_min": 26, "temp_max": 30,
+                                     "max_pop": 61, "max_pop_time": "2026-11-01T10:00+08:00", "precip_hours": 0}
+    wet = summarize_hourly([h(14, 25, 70, 1.2), h(15, 24, 80, 0.36), h(16, 24, 40, 0.0), h(17, 24, 30, 0.2)])
+    assert (wet["precip_hours"], wet["first_precip_time"][11:16], wet["last_precip_time"][11:16], wet["precip_total"]) == (3, "14:00", "17:00", 1.8)
+    assert summarize_hourly([h(9, 20)]) == {"window": "2026-11-01T09:00+08:00 ~ 2026-11-01T09:00+08:00", "temp_min": 20, "temp_max": 20, "precip_hours": 0}
+    assert summarize_hourly([]) is None
+
+
 def test_english_names_are_looked_up_in_english():
     gw = FakeWeather(cities=[city("Paris", "Île-de-France", "Paris", country="France", rank=10)])
     WeatherService(gw).forecast("France·Île-de-France·Paris")
@@ -166,7 +181,10 @@ def test_tool_returns_forecast_or_tells_the_agent_why_not():
     tool = _weather_tool(FakeResearchPlanner()._gateway)
     ok = _call(tool, "广州")
     d = json.loads(ok.content)
-    assert ok.status == "success" and d["ok"] and d["location"] == "广东省·广州" and len(d["days"]) == 4 and len(d["hourly"]) == 24
+    assert ok.status == "success" and d["ok"] and d["location"] == "广东省·广州" and len(d["days"]) == 4
+    # 模型只看逐小时的摘要（假数据每天 14～16 点有雨）；整份预报在 artifact 里给卡片
+    assert "hourly" not in d and (d["hourly_summary"]["max_pop"], d["hourly_summary"]["precip_hours"], d["hourly_summary"]["precip_total"]) == (70, 3, 3.6)
+    assert len(ok.artifact["forecast"]["hourly"]) == 24
     amb = _call(tool, "朝阳")
     d = json.loads(amb.content)
     assert amb.status == "error" and d["kind"] == "ambiguous_location" and d["candidates"] == ["北京市·北京·朝阳", "辽宁省·朝阳"]

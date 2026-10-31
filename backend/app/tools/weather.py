@@ -1,4 +1,5 @@
-"""查天气：经网关取和风天气的城市、逐日和逐小时预报，整理成一份 Forecast，模型看它，页面把它画成天气卡片。
+"""查天气：经网关取和风天气的城市、逐日和逐小时预报，整理成一份 Forecast，页面把它画成天气卡片；
+模型看的是逐日预报加逐小时的摘要（见 summarize_hourly）。
 
 和风的城市查询是模糊匹配，随便写什么都会返回几个城市。照 Fusion 的做法挑（见 select_city）：
 只认名字出现在地名里的候选；名字相同的，用地名里写到的省、市、国家区分；还分不出就把候选交给模型，
@@ -113,6 +114,25 @@ def _hours(hours: list[Hour]) -> list[WeatherHour]:
         if temp is None or at.tzinfo is None or (out and at <= datetime.fromisoformat(out[-1].time)):
             continue
         out.append(WeatherHour(time=h.time, temp=temp, text=h.text, pop=int(pop) if pop is not None else None, precip=_num(h.precip)))
+    return out
+
+
+def summarize_hourly(hours: list[WeatherHour]) -> dict | None:
+    """逐小时明细只给卡片画图，模型拿这份摘要（照 Fusion）：时间窗、气温范围、降水概率最高的那个小时、有降水的小时。
+    24 条明细交给模型，它容易漏看降水概率的高峰，也容易逐条复述。"""
+    if not hours:
+        return None
+    temps = [h.temp for h in hours]
+    out: dict = {"window": f"{hours[0].time} ~ {hours[-1].time}", "temp_min": min(temps), "temp_max": max(temps)}
+    with_pop = [h for h in hours if h.pop is not None]
+    if with_pop:
+        peak = max(with_pop, key=lambda h: h.pop)  # 一样高的取最早的
+        out["max_pop"], out["max_pop_time"] = peak.pop, peak.time
+    wet = [h for h in hours if (h.precip or 0) > 0]
+    out["precip_hours"] = len(wet)
+    if wet:
+        out["first_precip_time"], out["last_precip_time"] = wet[0].time, wet[-1].time
+        out["precip_total"] = round(sum(h.precip for h in wet), 1)
     return out
 
 

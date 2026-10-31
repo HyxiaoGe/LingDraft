@@ -112,9 +112,10 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
 
 
 def _weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> ToolStep:
+    """卡片要的整份预报在 artifact 里；模型看的只有逐日和逐小时的摘要（见 research_tools.get_weather）。"""
     if isinstance(data, dict) and data.get("ok") and result.status != "error":
         try:
-            fc = Forecast.model_validate({k: v for k, v in data.items() if k != "ok"})
+            fc = Forecast.model_validate(result.artifact.get("forecast") if isinstance(result.artifact, dict) else None)
             return ToolStep(id=cid, kind="weather", text=text, title=fc.location, weather=fc)
         except ValidationError:
             return ToolStep(id=cid, kind="weather", text=text, ok=False, message="天气结果的格式不对")
