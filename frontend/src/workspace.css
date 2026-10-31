@@ -209,8 +209,15 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-welcome { text-align: center; }
 .ws-welcome h2 { font: 600 30px/1.35 var(--serif); letter-spacing: .02em; margin: 0 0 12px; }
 .ws-welcome p { color: var(--ink2); margin: 0 auto; }
-.ws-examples { flex: 1.4 1 0; width: 100%; max-width: 756px; margin: 0 auto; padding: 8px 28px 40px;
-  display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; align-content: flex-start; gap: 8px; }
+.ws-examples { flex: 1.4 1 0; width: 100%; max-width: 756px; margin: 0 auto; padding: 18px 28px 40px; position: relative; }
+/* 今日灵感：小标题，下面固定两行高；翻的时候一个接一个绕横轴转过去（时长、错开见 timeline.jsx 的 Inspirations） */
+.ws-inspire-label { height: 18px; margin-bottom: 8px; display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 12px; color: var(--muted); }
+.ws-inspire { height: 72px; display: flex; flex-wrap: wrap; justify-content: center; align-content: flex-start; gap: 8px; overflow: hidden; }
+.ws-inspire-ruler { position: absolute; top: 0; left: 0; right: 0; height: 0; overflow: hidden; visibility: hidden; display: flex; } /* 一排放不下的剪掉，不把页面撑宽；量的宽度不受影响 */
+.ws-inspire .ws-suggest-item, .ws-inspire-ruler .ws-suggest-item { flex: none; height: 32px; padding: 0 12px; line-height: 30px; white-space: nowrap; }
+.ws-inspire .ws-suggest-item { max-width: 100%; overflow: hidden; text-overflow: ellipsis; backface-visibility: hidden;
+  transition-property: opacity, transform, border-color, color; transition-duration: .3s, .3s, .15s, .15s; }
+.ws-inspire.flip .ws-suggest-item { opacity: 0; transform: rotateX(90deg); }
 
 /* 输入框；往上翻着看时，上面浮一个“回到底部” */
 .ws-dock { position: relative; flex: none; }

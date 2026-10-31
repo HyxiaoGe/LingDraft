@@ -17,6 +17,7 @@ export const IconWarn = (p) => svg(<><path d="M12 4l9 16H3z" /><path d="M12 10v4
 export const IconChevron = (p) => svg(<path d="M6 9l6 6 6-6" />, p);
 export const IconArrowUp = (p) => svg(<path d="M12 19V5M5 12l7-7 7 7" />, { stroke: 2.4, ...p });
 export const IconArrowDown = (p) => svg(<path d="M12 5v14M5 12l7 7 7-7" />, p);
+export const IconSparkle = (p) => svg(<><path d="M11 3.5l1.9 5.6 5.6 1.9-5.6 1.9L11 18.5l-1.9-5.6-5.6-1.9 5.6-1.9z" /><path d="M19 15.5v4M17 17.5h4" /></>, p);
 export const IconExternal = (p) => svg(<path d="M7 17L17 7M9 7h8v8" />, p);
 export const IconRetry = (p) => svg(<><path d="M4 12a8 8 0 1 0 2.3-5.7L4 8.5" /><path d="M4 4v4.5h4.5" /></>, p);
 export const IconStop = (p) => svg(<rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none" />, p);

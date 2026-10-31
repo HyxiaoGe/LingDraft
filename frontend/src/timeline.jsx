@@ -3,11 +3,13 @@
 // 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。最后一轮的这些一直显示，之前的悬停才出现。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCopy, IconEdit, IconLoop, IconPage, IconRetry, IconSearch, IconStop, IconWarn, Spinner } from "./icons.jsx";
+import { listInspirations } from "./api.js";
+import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCopy, IconEdit, IconLoop, IconPage, IconRetry, IconSearch, IconSparkle, IconStop, IconWarn, Spinner } from "./icons.jsx";
 import { Markdown } from "./markdown.jsx";
 import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Mark } from "./sources.jsx";
 
+// 今日灵感没取到时，新对话页显示这几个
 const EXAMPLES = [
   "深圳这周会不会降温？",
   "最近一周 AI 圈有什么新闻？",
@@ -30,10 +32,13 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid 
   // 看的是尺寸变化，不靠这里重新渲染：逐字出现只重新渲染那一段，每帧也跟得上
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(toBottom, [st?.thread_id]);
-  // 发出一句话（或重新回答、重试）：往上翻着看的也跳到底，跟着看这一轮
+  // 发出一句话（或重新回答、重试）：往上翻着看的也跳到底，跟着看这一轮；
+  // 点的是今日灵感、推荐问题，按钮点完就没了，光标回到输入框，好接着写下一句
   const started = !!live;
   useLayoutEffect(() => {
-    if (started) toBottom();
+    if (!started) return;
+    toBottom();
+    focusInput();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started]);
   useLayoutEffect(() => {
@@ -74,22 +79,124 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid 
         {away && <button className="ws-jump" aria-label="回到底部" title="回到底部" onMouseDown={(e) => e.preventDefault()} onClick={toBottom}><IconArrowDown size={16} /></button>}
         <Composer thread={tid || "new"} carry={!!live} mode={mode} stopping={stopping} onSend={onSend} onStop={act.stop} />
       </div>
-      {fresh && (
-        <div className="ws-examples">
-          {EXAMPLES.map((t) => <button key={t} className="ws-suggest-item" onClick={() => act.start(t)}>{t}</button>)}
-        </div>
-      )}
+      {fresh && <Inspirations onPick={act.start} />}
     </section>
   );
 }
 
-// 新对话：欢迎语在输入框上面，例子在下面，三样一起放在中间偏上
+// 新对话：欢迎语在输入框上面，今日灵感在下面，三样一起放在中间偏上
 function Welcome() {
   return (
     <div className="ws-welcome">
       <h2>想问什么？</h2>
       <p>直接问。需要查的会上网搜、读原文，回答里标出处，鼠标放在角标上能看到是哪条来源。</p>
     </div>
+  );
+}
+
+// 今日灵感：Fusion 每天照热榜出的题（后端代取，只留新闻、调研、常识、天气），每次打开新对话打乱顺序。
+// 照 Fusion 的样子：排两行，放得下几个放几个；每 6 秒一个接一个翻过去，换成接下来的一批；鼠标放在上面、键盘停在上面时不翻。
+// 取不到就显示固定的几个例子，不写“今日灵感”。取回来之前先空着占好位置，出来时页面不跳
+const ROTATE_MS = 6000;
+const FLIP_MS = 300; // 和 .ws-inspire 里的过渡时长一致
+const FLIP_STAGGER = 80;
+const CHIP_GAP = 8; // 和 .ws-inspire 的 gap 一致
+const ROWS = 2;
+
+function shuffled(xs) {
+  const a = [...xs];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// 从第 start 个往后（到头了接着从头来），两行放得下的那几个的序号
+function fitRows(widths, start, room) {
+  const out = [];
+  let row = 0;
+  let used = 0;
+  for (let k = 0; k < widths.length; k++) {
+    const i = (start + k) % widths.length;
+    const w = Math.min(widths[i], room);
+    if (used && used + CHIP_GAP + w > room) {
+      if (++row >= ROWS) break;
+      used = w;
+    } else used = used ? used + CHIP_GAP + w : w;
+    out.push(i);
+  }
+  return out;
+}
+
+function Inspirations({ onPick }) {
+  const [pool, setPool] = useState(null); // {questions, today}；today 为假：没取到，用的固定例子
+  const [start, setStart] = useState(0);
+  const [size, setSize] = useState(null); // {room：能用多宽, widths：每个题多宽}
+  const [flipped, setFlipped] = useState(false);
+  const [hover, setHover] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const box = useRef(null);
+  const ruler = useRef(null); // 看不见的一排，用来量每个题多宽
+  const timers = useRef([]);
+
+  useEffect(() => {
+    let on = true;
+    listInspirations()
+      .then((qs) => on && setPool(qs.length ? { questions: shuffled(qs), today: true } : { questions: EXAMPLES, today: false }))
+      .catch(() => on && setPool({ questions: EXAMPLES, today: false }));
+    return () => {
+      on = false;
+      timers.current.forEach(clearTimeout);
+    };
+  }, []);
+  useLayoutEffect(() => {
+    if (!pool) return undefined;
+    const read = () => setSize({ room: box.current.clientWidth, widths: [...ruler.current.children].map((c) => c.getBoundingClientRect().width) });
+    read();
+    const ro = new ResizeObserver(read); // 窗口宽度变了重新排
+    ro.observe(box.current);
+    return () => ro.disconnect();
+  }, [pool]);
+
+  const shown = pool && size?.room ? fitRows(size.widths, start, size.room) : [];
+  const next = useRef(null);
+  next.current = () => {
+    if (!shown.length || pool.questions.length <= shown.length) return; // 一屏就放得下全部：不翻
+    const to = (start + shown.length) % pool.questions.length;
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+    setFlipped(true);
+    timers.current.push(setTimeout(() => {
+      setStart(to);
+      timers.current.push(setTimeout(() => setFlipped(false), 50));
+    }, shown.length * FLIP_STAGGER + FLIP_MS));
+  };
+  const paused = hover || focused;
+  useEffect(() => {
+    if (paused) return undefined;
+    const t = setInterval(() => next.current(), ROTATE_MS);
+    return () => clearInterval(t);
+  }, [paused]);
+
+  return (
+    <section className="ws-examples" aria-label={pool?.today ? "今日灵感" : "可以这样问"}>
+      {/* 停翻只看小标题和两行题：外面这块往下撑满了页面，鼠标放在下面的空白处不算 */}
+      <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+        onFocus={() => setFocused(true)} onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setFocused(false)}>
+        <div className="ws-inspire-label">{pool?.today && <><IconSparkle size={13} />今日灵感</>}</div>
+        <div className="ws-inspire-ruler" ref={ruler} aria-hidden="true">
+          {pool?.questions.map((q) => <span key={q} className="ws-suggest-item">{q}</span>)}
+        </div>
+        <div className={"ws-inspire" + (flipped ? " flip" : "")} ref={box}>
+          {shown.map((i, n) => {
+            const q = pool.questions[i];
+            const d = `${n * FLIP_STAGGER}ms`; // 只有翻的两项错开，悬停变色不等
+            return <button key={q} className="ws-suggest-item" style={{ transitionDelay: `${d}, ${d}, 0ms, 0ms` }} onClick={() => onPick(q)}>{q}</button>;
+          })}
+        </div>
+      </div>
+    </section>
   );
 }
 

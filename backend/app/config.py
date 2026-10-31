@@ -51,3 +51,6 @@ MAX_CHECK_RETRIES = 2
 # dev 上的 agent-tools 网关：搜索 / 网页读取，Bearer 产品密钥
 AGENT_TOOLS_URL = os.environ.get("AGENT_TOOLS_URL", "http://agent-tools-gateway:8100")
 AGENT_TOOLS_API_KEY = os.environ.get("AGENT_TOOLS_API_KEY", "")
+
+# 新对话页的“今日灵感”从 Fusion 的公开接口取（不用登录），见 app/api/inspiration.py
+FUSION_URL = os.environ.get("FUSION_URL", "https://fusion.seanfield.org")

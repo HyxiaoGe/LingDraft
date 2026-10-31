@@ -95,6 +95,13 @@ export async function listResearchThreads() {
   return (await resp.json()).threads;
 }
 
+// 新对话页的“今日灵感”（后端从 Fusion 代取）；取不到抛错，页面用固定的例子
+export async function listInspirations() {
+  const resp = await fetch("/api/inspirations");
+  if (!resp.ok) throw await httpError(resp);
+  return (await resp.json()).questions;
+}
+
 export async function createResearchThread(text, onEvent, signal) {
   return sse("/api/research/threads", postJson({ text }), onEvent, signal);
 }

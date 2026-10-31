@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app import config
 from app.api.favicon import Favicons
+from app.api.inspiration import InspirationError, Inspirations
 from app.api.research_runner import NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 
@@ -20,6 +21,7 @@ app = FastAPI(title="LingDraft PoC")
 _runner: GraphRunner | None = None
 _research: ResearchRunner | None = None
 _favicons: Favicons | None = None
+_inspirations: Inspirations | None = None
 
 
 def runner() -> GraphRunner:
@@ -56,6 +58,18 @@ def favicons() -> Favicons:
 def set_favicons(f: Favicons | None) -> None:
     global _favicons
     _favicons = f
+
+
+def inspirations() -> Inspirations:
+    global _inspirations
+    if _inspirations is None:
+        _inspirations = Inspirations(config.FUSION_URL)
+    return _inspirations
+
+
+def set_inspirations(i: Inspirations | None) -> None:
+    global _inspirations
+    _inspirations = i
 
 
 def _sse(gen):
@@ -279,6 +293,15 @@ async def research_events(thread_id: str, after: str | None = None):
 @app.get("/api/research/threads/{thread_id}/state")
 async def research_state(thread_id: str):
     return _view(research(), thread_id)
+
+
+@app.get("/api/inspirations")
+async def inspiration_list():
+    """新对话页的“今日灵感”（从 Fusion 取，见 inspiration.py）。一次都没取到回 502，页面显示固定的几个例子。"""
+    try:
+        return {"questions": await inspirations().get()}
+    except InspirationError as e:
+        raise HTTPException(502, str(e)) from None
 
 
 @app.get("/api/favicon/{host}")
