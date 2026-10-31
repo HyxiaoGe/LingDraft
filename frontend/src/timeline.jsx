@@ -3,7 +3,7 @@
 // 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。最后一轮的这些一直显示，之前的悬停才出现。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { IconArrowUp, IconCheck, IconChevron, IconCopy, IconEdit, IconLoop, IconPage, IconRetry, IconSearch, IconStop, IconWarn, Spinner } from "./icons.jsx";
+import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCopy, IconEdit, IconLoop, IconPage, IconRetry, IconSearch, IconStop, IconWarn, Spinner } from "./icons.jsx";
 import { Markdown } from "./markdown.jsx";
 import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Mark } from "./sources.jsx";
@@ -17,22 +17,24 @@ const EXAMPLES = [
 export function Conversation({ st, live, busy, suggesting, error, now, act, tid }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
+  const [away, setAway] = useState(false); // 离底部远了：输入框上面出“回到底部”
   const fresh = !tid && !live;
+  const toBottom = () => {
+    const el = scrollRef.current;
+    stick.current = true;
+    setAway(false);
+    el.scrollTop = el.scrollHeight;
+  };
 
   // 换了对话就到底；之后内容变高（字一个个出来、过程展开）或可视区变矮时，贴着底的跟到底。
   // 看的是尺寸变化，不靠这里重新渲染：逐字出现只重新渲染那一段，每帧也跟得上
-  useLayoutEffect(() => {
-    const el = scrollRef.current;
-    stick.current = true;
-    el.scrollTop = el.scrollHeight;
-  }, [st?.thread_id]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(toBottom, [st?.thread_id]);
   // 发出一句话（或重新回答、重试）：往上翻着看的也跳到底，跟着看这一轮
   const started = !!live;
   useLayoutEffect(() => {
-    if (!started) return;
-    const el = scrollRef.current;
-    stick.current = true;
-    el.scrollTop = el.scrollHeight;
+    if (started) toBottom();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started]);
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -52,30 +54,41 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid 
   const title = st?.title || live?.title || live?.said || "新对话";
 
   return (
-    <section className="ws-main" aria-label="对话">
+    <section className={"ws-main" + (fresh ? " fresh" : "")} aria-label="对话">
       <header className="ws-head">
         <div className="ws-head-title" title={title}>{fresh ? "新对话" : title}</div>
       </header>
       <div className="ws-scroll" ref={scrollRef}
-        onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; }}>
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+          setAway(!stick.current);
+        }}>
         <div className="ws-flow">
-          {fresh ? <Welcome onPick={act.start} /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} />}
+          {fresh ? <Welcome /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} />}
           {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error}</span></div>}
         </div>
       </div>
-      <Composer thread={tid || "new"} mode={mode} stopping={stopping} onSend={onSend} onStop={act.stop} />
+      <div className="ws-dock">
+        {/* 按下去不抢光标：输入框里写着的字和光标都留着 */}
+        {away && <button className="ws-jump" aria-label="回到底部" title="回到底部" onMouseDown={(e) => e.preventDefault()} onClick={toBottom}><IconArrowDown size={16} /></button>}
+        <Composer thread={tid || "new"} carry={!!live} mode={mode} stopping={stopping} onSend={onSend} onStop={act.stop} />
+      </div>
+      {fresh && (
+        <div className="ws-examples">
+          {EXAMPLES.map((t) => <button key={t} className="ws-suggest-item" onClick={() => act.start(t)}>{t}</button>)}
+        </div>
+      )}
     </section>
   );
 }
 
-function Welcome({ onPick }) {
+// 新对话：欢迎语在输入框上面，例子在下面，三样一起放在中间偏上
+function Welcome() {
   return (
     <div className="ws-welcome">
       <h2>想问什么？</h2>
       <p>直接问。需要查的会上网搜、读原文，回答里标出处，鼠标放在角标上能看到是哪条来源。</p>
-      <div className="ws-examples">
-        {EXAMPLES.map((t) => <button key={t} className="ws-suggest-item" onClick={() => onPick(t)}>{t}</button>)}
-      </div>
     </div>
   );
 }
@@ -444,20 +457,23 @@ function Failed({ st, act }) {
 const PLACEHOLDER = {
   new: "想问什么？",
   idle: "接着问…",
-  busy: "正在回答，可以随时停止",
+  busy: "正在回答，可以先写下一句，答完再发",
   queued: QUEUED,
   failed: "这一轮没跑完，点上面的“重试”",
 };
 
-// 回答时输入框只读而不是禁用：禁用会把光标弄丢，答完还得再点一下。
-// 每个对话没发出去的字各存各的，切走再切回来还在（刷新就没了）
-function Composer({ thread, mode, stopping, onSend, onStop }) {
+// 回答时也能打字，先把下一句写好，答完再发（这时回车不发）；Esc 停止回答。
+// 每个对话没发出去的字各存各的，切走再切回来还在（刷新就没了）。
+// carry：新对话刚发出去、拿到了 id，thread 从 "new" 换成 id，还是同一个对话
+function Composer({ thread, carry, mode, stopping, onSend, onStop }) {
   const [text, setText] = useState("");
   const ref = useRef(null);
   const drafts = useRef(new Map());
   const shown = useRef(thread); // text 是哪个对话的
-  const enabled = mode === "new" || mode === "idle";
+  const enabled = mode === "new" || mode === "idle"; // 能发
   const canStop = mode === "busy" || mode === "queued";
+  const stopNow = useRef(null); // 按 Esc 时调的：能停才有
+  stopNow.current = canStop && !stopping ? onStop : null;
   useAutoHeight(ref, text);
 
   // 光标放回输入框：换了对话（包括刚打开页面）一定放；能说话了、切回这个窗口时，光标不在别处、也没选中文字才放
@@ -469,9 +485,14 @@ function Composer({ thread, mode, stopping, onSend, onStop }) {
     el.focus({ preventScroll: true });
   };
   useEffect(() => {
-    if (shown.current !== thread) {
-      drafts.current.set(shown.current, text);
-      shown.current = thread;
+    const was = shown.current;
+    shown.current = thread;
+    if (was !== thread && was === "new" && carry) { // 同一个对话：等回答时写的字留着，光标也不动
+      drafts.current.delete("new");
+      return;
+    }
+    if (was !== thread) {
+      drafts.current.set(was, text);
       setText(drafts.current.get(thread) || "");
     }
     focus(true);
@@ -480,11 +501,21 @@ function Composer({ thread, mode, stopping, onSend, onStop }) {
   useEffect(() => { if (enabled) focus(false); }, [enabled]);
   useEffect(() => {
     const back = () => focus(false);
+    // 光标在输入框里、或者没在哪儿（点了正文）时才停；在改名、菜单、角标这些地方，Esc 归它们自己。
+    // 在捕获阶段看：等它们处理完，改名框已经撤掉，光标就不在那儿了
+    const esc = (e) => {
+      const at = document.activeElement;
+      if (e.key !== "Escape" || e.isComposing || !stopNow.current) return;
+      if (at && at !== document.body && at !== ref.current) return;
+      stopNow.current();
+    };
     addEventListener("focus", back); // 切回这个窗口
     addEventListener("ws-focus-input", back); // 见 focusInput
+    addEventListener("keydown", esc, true);
     return () => {
       removeEventListener("focus", back);
       removeEventListener("ws-focus-input", back);
+      removeEventListener("keydown", esc, true);
     };
   }, []);
 
@@ -496,13 +527,13 @@ function Composer({ thread, mode, stopping, onSend, onStop }) {
   };
   return (
     <div className="ws-composer">
-      <div className={"ws-input" + (enabled ? "" : " off")}>
-        <textarea ref={ref} rows={1} value={text} readOnly={!enabled} placeholder={PLACEHOLDER[mode] || PLACEHOLDER.busy} aria-label="输入"
+      <div className="ws-input">
+        <textarea ref={ref} rows={1} value={text} placeholder={PLACEHOLDER[mode] || PLACEHOLDER.busy} aria-label="输入"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
         <div className="ws-input-bar">
           {canStop
-            ? <button className="ws-send stop" aria-label={stopping ? "正在停止" : "停止"} title={stopping ? "正在停止" : "停止"} disabled={stopping} onClick={onStop}>
+            ? <button className="ws-send stop" aria-label={stopping ? "正在停止" : "停止"} title={stopping ? "正在停止" : "停止（Esc）"} disabled={stopping} onClick={onStop}>
               {stopping ? <Spinner size={14} /> : <IconStop size={13} />}
             </button>
             : <button className="ws-send" aria-label="发送" disabled={!enabled || !text.trim()} onClick={send}><IconArrowUp size={15} /></button>}

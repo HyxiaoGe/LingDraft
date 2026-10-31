@@ -103,7 +103,7 @@
 .ws-alt:hover { color: var(--ink) !important; }
 
 /* ---------- 对话 ---------- */
-.ws-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.ws-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
 .ws-head { padding: 0 28px; border-bottom: 1px solid var(--line); height: 58px; flex: none; display: flex; flex-direction: column; justify-content: center; }
 .ws-head-title { width: 100%; max-width: 624px; margin: 0 auto; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* 和对话正文对齐 */
 .ws-scroll { flex: 1; overflow-y: auto; }
@@ -201,21 +201,29 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-card-sub { font-size: 12.5px; color: var(--muted); margin-top: -4px; }
 .ws-card-actions { display: flex; gap: 8px; }
 
-/* 欢迎页：标题用宋体 */
-.ws-welcome { padding: 9vh 2px 0; }
-.ws-welcome h2 { font: 600 30px/1.35 var(--serif); letter-spacing: .02em; margin: 0 0 14px; }
-.ws-welcome p { color: var(--ink2); margin: 0 0 6px; max-width: 34em; }
-.ws-examples { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin-top: 24px; }
+/* 新对话：欢迎语、输入框、例子一起放在中间偏上（上面空的和下面空的按 1 : 1.4 分）；“内容由 AI 生成”放到最底下。标题用宋体 */
+.ws-main.fresh .ws-scroll { display: flex; flex-direction: column; }
+.ws-main.fresh .ws-flow { margin-top: auto; width: 100%; padding-bottom: 12px; }
+.ws-main.fresh .ws-dock { position: static; } /* 下面这行贴着整个右栏的底，不是贴着输入框 */
+.ws-main.fresh .ws-ai-note { position: absolute; left: 0; right: 0; bottom: 12px; }
+.ws-welcome { text-align: center; }
+.ws-welcome h2 { font: 600 30px/1.35 var(--serif); letter-spacing: .02em; margin: 0 0 12px; }
+.ws-welcome p { color: var(--ink2); margin: 0 auto; }
+.ws-examples { flex: 1.4 1 0; width: 100%; max-width: 756px; margin: 0 auto; padding: 8px 28px 40px;
+  display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; align-content: flex-start; gap: 8px; }
 
-/* 输入框 */
+/* 输入框；往上翻着看时，上面浮一个“回到底部” */
+.ws-dock { position: relative; flex: none; }
+.ws-jump { position: absolute; left: 50%; bottom: calc(100% + 4px); transform: translateX(-50%); z-index: 2; width: 32px; height: 32px; border-radius: 50%;
+  border: 1px solid var(--line2); background: var(--paper); color: var(--ink2); box-shadow: 0 2px 10px rgba(20, 24, 31, .1);
+  display: inline-flex; align-items: center; justify-content: center; transition: color .15s, border-color .15s; }
+.ws-jump:hover { color: var(--ink); border-color: var(--muted); }
 .ws-composer { padding: 10px 28px 10px; }
 .ws-ai-note { max-width: 700px; margin: 6px auto 0; text-align: center; font-size: 11.5px; color: var(--faint); }
 .ws-input { max-width: 700px; margin: 0 auto; border: 1px solid var(--line2); border-radius: var(--r-lg); padding: 10px 12px 8px 14px; background: var(--paper); box-shadow: 0 2px 12px rgba(20, 24, 31, .06); transition: border-color .15s, box-shadow .15s; }
 .ws-input:focus-within { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft), 0 2px 12px rgba(20, 24, 31, .06); }
-.ws-input.off { background: var(--side); box-shadow: none; border-color: var(--line2); } /* 回答时只读：光标留在里面，但不显示成能输入 */
 .ws-input textarea { width: 100%; border: 0; outline: none; resize: none; font: inherit; background: transparent; line-height: 1.6; max-height: 160px; padding: 0; color: var(--ink); }
 .ws-input textarea::placeholder { color: var(--faint); }
-.ws-input textarea:read-only { color: var(--muted); cursor: default; }
 .ws-input-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
 .ws-input-bar .ws-send { margin-left: auto; }
 

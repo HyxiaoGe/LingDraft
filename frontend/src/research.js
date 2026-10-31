@@ -4,12 +4,11 @@ import { useEffect, useState } from "react";
 export const ACTIVE = new Set(["queued", "running"]); // 服务器上还有执行没结束
 export const QUEUED = "排队中，前面的任务跑完就开始";
 
-// 每秒走一次的时钟：显示“已用 2 分 05 秒”
+// 时钟：有执行在跑每秒走一次，显示“已用 2 分 05 秒”；没有就每分钟走一次，过了零点，今天的时间换成写日期
 export function useNow(active) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
-    if (!active) return undefined;
-    const t = setInterval(() => setNow(Date.now()), 1000);
+    const t = setInterval(() => setNow(Date.now()), active ? 1000 : 60000);
     return () => clearInterval(t);
   }, [active]);
   return now;
@@ -22,23 +21,24 @@ export function elapsed(since, now) {
 }
 
 // 今天的显示时刻，更早的显示日期
-export function when(iso, now = Date.now()) {
-  if (!iso) return "";
-  const d = new Date(iso);
-  const today = new Date(now);
-  const pad = (n) => String(n).padStart(2, "0");
-  return d.toDateString() === today.toDateString() ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-// 一句话、一条回答的时间：“10月31日 14:32”，不是今年的带上年份；full 精确到秒，放在悬停提示里
+// 时间的写法，左栏和对话里一样：今天的只写钟点“14:32”，别的天写日期“10月30日”，不是今年的带上年份。
+// 一句话、一条回答下面是 text：日期后面再跟钟点；full 精确到秒，放在悬停提示里
 export function stamp(iso, now = Date.now()) {
   if (!iso) return null;
   const d = new Date(iso);
+  const today = new Date(now);
   const pad = (n) => String(n).padStart(2, "0");
-  const day = `${d.getMonth() + 1}月${d.getDate()}日`;
+  const md = `${d.getMonth() + 1}月${d.getDate()}日`;
   const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const year = `${d.getFullYear()}年`;
-  return { text: `${d.getFullYear() === new Date(now).getFullYear() ? "" : year}${day} ${hm}`, full: `${year}${day} ${hm}:${pad(d.getSeconds())}` };
+  const day = d.toDateString() === today.toDateString() ? "" : `${d.getFullYear() === today.getFullYear() ? "" : year}${md}`;
+  return { day, hm, text: day ? `${day} ${hm}` : hm, full: `${year}${md} ${hm}:${pad(d.getSeconds())}` };
+}
+
+// 左栏对话的时间：今天的写钟点，别的天只写日期
+export function when(iso, now = Date.now()) {
+  const s = stamp(iso, now);
+  return s ? s.day || s.hm : "";
 }
 
 export const domain = (url) => {
