@@ -89,15 +89,15 @@ def deepseek(monkeypatch):
     return make_chat_model("deepseek", "m", thinking=True)
 
 
-def test_deepseek_passes_back_only_this_turns_reasoning(deepseek):
-    """同一轮里的工具调用要把思考原样传回；之前几轮的不传（传了接口也不用，白占上下文）。"""
+def test_deepseek_passes_back_all_reasoning(deepseek):
+    """思考原样传回：同一轮里的不传接口报 400；之前几轮的也传，下一轮发出去的开头和上一轮一样，前缀缓存才接得上。"""
     call = [{"name": "search_web", "args": {"query": "q"}, "id": "c1", "type": "tool_call"}]
     msgs = [HumanMessage("第一轮"), AIMessage(content="", tool_calls=call, additional_kwargs={"reasoning_content": "旧思考"}),
             ToolMessage(content="[]", tool_call_id="c1"), AIMessage(content="答", additional_kwargs={"reasoning_content": "旧结论"}),
             HumanMessage("第二轮"), AIMessage(content="", tool_calls=[{**call[0], "id": "c2"}], additional_kwargs={"reasoning_content": "新思考"}),
             ToolMessage(content="[]", tool_call_id="c2")]
     payload = deepseek._get_request_payload(msgs)
-    assert [m.get("reasoning_content") for m in payload["messages"]] == [None, None, None, None, None, "新思考", None]
+    assert [m.get("reasoning_content") for m in payload["messages"]] == [None, "旧思考", None, "旧结论", None, "新思考", None]
 
 
 def test_reply_without_structured_output_raises():

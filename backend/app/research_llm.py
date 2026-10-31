@@ -121,8 +121,9 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
                     callbacks: list | None = None) -> BaseChatModel:
     """按提供方构造聊天模型。每次调用都过熔断，服务商的错误换成 ModelUnavailable / ContentBlocked（见 app.model_guard）。
 
-    DeepSeek 思考模式下：同一轮里的多次工具调用必须把 reasoning_content 原样传回（langchain-openai / langchain-deepseek 都不做，这里补），
-    之前几轮的不传；不接受强制 tool_choice（with_structured_output 会设），这里去掉；temperature 无效。
+    DeepSeek 思考模式下：带工具的请求要把 reasoning_content 原样传回（langchain-openai / langchain-deepseek 都不做，这里补）。
+    同一轮里的不传接口报 400；之前几轮的照它现在的文档也传，会拼进上下文，只传这一轮的话，下一轮上一轮的消息变了，前缀缓存从那里断
+    （2026-11-01 Sean 定）。不接受强制 tool_choice（with_structured_output 会设），这里去掉；temperature 无效。
     """
     if provider == "ark":
         from langchain_openai import ChatOpenAI
@@ -151,8 +152,7 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
                 payload.pop("tool_choice")
             msgs = self._convert_input(input_).to_messages()
             if len(msgs) == len(payload.get("messages", [])):
-                turn = next((i for i in range(len(msgs) - 1, -1, -1) if isinstance(msgs[i], HumanMessage)), -1)
-                for m, d in list(zip(msgs, payload["messages"]))[turn + 1:]:
+                for m, d in zip(msgs, payload["messages"]):
                     if isinstance(m, AIMessage) and m.additional_kwargs.get("reasoning_content") is not None:
                         d["reasoning_content"] = m.additional_kwargs["reasoning_content"]
             return payload
