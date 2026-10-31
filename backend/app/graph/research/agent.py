@@ -1,7 +1,8 @@
 """对话 agent：一条线程就是一个 create_agent 的对话，检查点挂在 agent 上，没有外层的图。
 
 用户每说一句话：先写进消息（update_state，as_node=START），再接着跑（stream(None)），直到模型给出不带工具调用的回复。
-- TurnMiddleware：还没有标题时按第一句话起标题；每轮开始、结束时记下这一轮；模型每次调用前换上系统提示词（日期按当天）。
+- TurnMiddleware：还没有标题时按第一句话起标题；每轮开始、结束时记下这一轮；模型每次调用前换上系统提示词（日期按北京时间的当天），
+  最新一条用户消息后面接上几点钟（都按这一轮开始的时候）。
   起标题、调模型之前往自定义流里写一个阶段（phase），页面在还没有字和步骤的空档里据此说明在等什么。
   推荐问题不在这一轮里起：正文写完这一轮就结束，运行器在结束之后再起（见 api.research_runner）。
 - ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度。
@@ -13,7 +14,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any, NotRequired
 
 from langchain.agents import create_agent
@@ -30,6 +31,10 @@ from app.model_guard import ContentBlocked
 
 TITLE_CHARS = 24  # 起标题失败时截取用户原话的长度
 TURN_END = "TurnMiddleware.after_agent"  # 一轮的最后一个节点：在它名下写状态，线程就停在这一轮结束的地方
+CHINA_TZ = timezone(timedelta(hours=8))
+WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+# 系统提示词按这个顺序拼（见 prompts.toml 的 [agent]）
+SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "language")
 
 
 def now() -> str:
@@ -43,8 +48,42 @@ def emit(event: dict) -> None:
         pass
 
 
-def system_prompt() -> str:
-    return prompts.render("agent.system", today=date.today().isoformat())
+def turn_started(request: ModelRequest) -> datetime:
+    """这一轮开始的北京时间。照 Fusion 在准备这一轮的请求时取一次：一轮里调好几次模型都一样，前缀缓存用得上；
+    重新回答按重新回答的时候。取不到这一轮的记录就按现在。"""
+    msgs = request.messages
+    i = history.last_human(msgs)
+    turn = next((t for t in reversed(request.state.get("turns", [])) if i >= 0 and t.id == msgs[i].id), None)
+    try:
+        return datetime.fromisoformat(turn.started_at).astimezone(CHINA_TZ) if turn else datetime.now(CHINA_TZ)
+    except ValueError:
+        return datetime.now(CHINA_TZ)
+
+
+def _day(d: date) -> str:
+    return f"{d.isoformat()} ({WEEKDAYS[d.weekday()]})"
+
+
+def system_prompt(at: datetime) -> str:
+    """照 Fusion：日期按北京时间，带星期和明天、这周末、下周末的日期，模型不用自己推星期几。"""
+    today = at.astimezone(CHINA_TZ).date()
+    saturday = today - timedelta(days=today.weekday()) + timedelta(days=5)
+    dates = {"current_date": _day(today), "tomorrow": _day(today + timedelta(days=1)),
+             "this_saturday": _day(saturday), "this_sunday": _day(saturday + timedelta(days=1)),
+             "next_saturday": _day(saturday + timedelta(days=7)), "next_sunday": _day(saturday + timedelta(days=8))}
+    return "\n\n".join(prompts.render(f"agent.{k}", **dates) for k in SYSTEM_SECTIONS)
+
+
+def with_time_note(messages: list, at: datetime) -> list:
+    """照 Fusion：几点钟只接在最新一条用户消息后面（放进系统提示词，每分钟的请求都用不上前缀缓存）。
+    只改发给模型的这一份，存下来的消息不带。"""
+    i = history.last_human(messages)
+    if i < 0:
+        return messages
+    m = messages[i]
+    note = prompts.render("agent.current_time", current_time=at.astimezone(CHINA_TZ).strftime("%H:%M"))
+    content = [*m.content, {"type": "text", "text": note}] if isinstance(m.content, list) else f"{m.content}\n\n{note}"
+    return [*messages[:i], m.model_copy(update={"content": content}), *messages[i + 1:]]
 
 
 class TurnMiddleware(AgentMiddleware[ResearchState]):
@@ -71,7 +110,8 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
 
     def wrap_model_call(self, request: ModelRequest, handler):
         emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
-        return handler(request.override(system_message=SystemMessage(system_prompt())))
+        at = turn_started(request)  # 日期和几点钟都按这一轮开始的时候
+        return handler(request.override(system_message=SystemMessage(system_prompt(at)), messages=with_time_note(request.messages, at)))
 
     def after_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         msgs = state["messages"]

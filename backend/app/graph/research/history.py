@@ -17,6 +17,7 @@ from app.graph.research.state import Forecast, ToolStep, Usage
 BLOCKED = "lingdraft_blocked"  # 一轮因内容审核停下时，系统补的那条模型消息 response_metadata 里的键，值是原因（见 agent.ContentGuard）
 STOPPED = "lingdraft_stopped"  # 用户点了停止时，已经流出来的那部分正文存成的模型消息 response_metadata 里的键
 STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather"}
+BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
 
 
 def text_of(m: BaseMessage) -> str:
@@ -102,13 +103,20 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         if isinstance(data, list) and result.status != "error":
             dropped = result.artifact.get("blocked", 0) if isinstance(result.artifact, dict) else 0
             return ToolStep(id=cid, kind=kind, text=text, hits=len(data), source_ids=[h["id"] for h in data if h.get("id")],
-                            message=prompts.render("agent.hits_blocked", n=dropped) if dropped else "", **extra)
-        msg = (data.get("message") or data.get("kind")) if isinstance(data, dict) else text_of(result)
-        return ToolStep(id=cid, kind=kind, text=text, ok=False, message=str(msg or ""), **extra)
+                            message=f"{dropped} 条没通过内容审核，已去掉" if dropped else "", **extra)
+        return ToolStep(id=cid, kind=kind, text=text, ok=False, message=_failure(data, result), **extra)
     if isinstance(data, dict) and data.get("ok") and (data.get("content") or "").strip():
         return ToolStep(id=cid, kind=kind, text=text, body=True, title=data.get("title") or "", source_ids=[data["id"]] if data.get("id") else [])
-    msg = (data.get("message") or data.get("kind")) if isinstance(data, dict) else text_of(result)
-    return ToolStep(id=cid, kind=kind, text=text, ok=False, message=str(msg or "没有读到正文"))
+    return ToolStep(id=cid, kind=kind, text=text, ok=False, message=_failure(data, result) or "没有读到正文")
+
+
+def _failure(data: Any, result: ToolMessage) -> str:
+    """没做成的原因（页面上显示）。内容审核去掉的结果，模型看的说明是英文的，页面上换成中文的。"""
+    if not isinstance(data, dict):
+        return text_of(result)
+    if data.get("kind") == "content_blocked":
+        return BLOCKED_NOTE
+    return str(data.get("message") or data.get("kind") or "")
 
 
 def _weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> ToolStep:
@@ -119,8 +127,7 @@ def _weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> ToolSt
             return ToolStep(id=cid, kind="weather", text=text, title=fc.location, weather=fc)
         except ValidationError:
             return ToolStep(id=cid, kind="weather", text=text, ok=False, message="天气结果的格式不对")
-    msg = (data.get("message") or data.get("kind")) if isinstance(data, dict) else text_of(result)
-    return ToolStep(id=cid, kind="weather", text=text, ok=False, message=str(msg or "没查到"))
+    return ToolStep(id=cid, kind="weather", text=text, ok=False, message=_failure(data, result) or "没查到")
 
 
 def collect_steps(messages: list[BaseMessage]) -> list[ToolStep]:

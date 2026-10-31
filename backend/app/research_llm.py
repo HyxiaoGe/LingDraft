@@ -36,7 +36,7 @@ PROBE_WORKERS = 4  # 单条送审同时发几个
 
 class Suggestions(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    questions: list[str] = Field(description="3 个用户接下来可能会问的问题")
+    questions: list[str] = Field(description="Three follow-up questions the user may want to ask")
 
 
 # ---- 协议 ----
@@ -194,12 +194,11 @@ class LiveResearchPlanner:
         return self._tools
 
     def title(self, text: str) -> str:
-        out = self._fast.invoke([("system", prompts.render("title.system")), ("user", prompts.render("title.user", text=text))])
+        out = self._fast.invoke([("user", prompts.render("title.prompt", content=text))])
         return str(out.content).strip()
 
     def suggest(self, question: str, reply: str) -> list[str]:
-        res = _structured(self._fast, Suggestions).invoke([("system", prompts.render("suggest.system")),
-                                                           ("user", prompts.render("suggest.user", question=question, reply=reply))])
+        res = _structured(self._fast, Suggestions).invoke([("user", prompts.render("suggest.prompt", question=question, reply=reply))])
         return [q.strip() for q in res.questions if q.strip()]
 
     def blocked(self, texts: Sequence[str]) -> list[bool]:

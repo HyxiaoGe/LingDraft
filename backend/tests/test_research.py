@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -16,10 +16,11 @@ from app.api import research_runner
 from app.api.research_runner import NothingToRegenerate, NotIdle, ResearchRunner, StreamBuffer
 from app.api.runner import RunConflict
 from app.api.runner import LocalRunRegistry
-from app.graph.research import history
-from app.graph.research.agent import system_prompt
+from app.graph.research import history, prompts
+from app.graph.research.agent import CHINA_TZ, system_prompt, turn_started
 from app.graph.research.graph import memory_checkpointer, open_sqlite_checkpointer
 from app.graph.research.sources import cited, collect_sources, url_key
+from app.graph.research.state import Turn
 from app.model_guard import ModelUnavailable
 from app.research_llm import FAKE_BLOCKED, THINKING_MS, FakeResearchPlanner, FakeToolModel, LiveResearchPlanner
 from app.tools.gateway import GatewayAuthError, GatewayClient
@@ -172,10 +173,48 @@ def test_live_title_keeps_what_the_model_wrote():
     assert p.title("三体里的黑暗森林是什么意思") == "《三体》里的“黑暗森林”"
 
 
-def test_system_prompt_has_today():
-    from datetime import date
+def test_system_prompt_dates_are_beijing_with_weekday_anchors():
+    """日期按北京时间（服务器在 UTC 也一样），带星期；今天是周六时，这周末就是今天和明天。"""
+    sat = system_prompt(datetime(2026, 10, 31, 3, 0, tzinfo=UTC))
+    assert "[Current date] 2026-10-31 (Saturday), Asia/Shanghai." in sat
+    assert "Tomorrow is 2026-11-01 (Sunday)." in sat
+    assert "This Saturday is 2026-10-31 (Saturday) and this Sunday is 2026-11-01 (Sunday)." in sat
+    assert "Next Saturday is 2026-11-07 (Saturday) and next Sunday is 2026-11-08 (Sunday)." in sat
+    # UTC 周六晚上 17 点，北京已经是周日凌晨：这周末还是 10-31、11-01
+    sun = system_prompt(datetime(2026, 10, 31, 17, 0, tzinfo=UTC))
+    assert "[Current date] 2026-11-01 (Sunday)" in sun and "This Saturday is 2026-10-31 (Saturday)" in sun
 
-    assert date.today().isoformat() in system_prompt()
+
+def test_dates_follow_when_this_turn_started():
+    """取的是最新这句话那一轮的开始时间，不是上一轮的，也不是现在。"""
+    from types import SimpleNamespace
+
+    turns = [Turn(id="h0", started_at="2026-10-30T01:00:00+00:00"), Turn(id="h1", started_at="2026-10-31T01:02:00+00:00")]
+    req = SimpleNamespace(messages=[HumanMessage(content="早", id="h0"), AIMessage(content="早"), HumanMessage(content="x", id="h1")],
+                          state={"turns": turns})
+    assert turn_started(req) == datetime(2026, 10, 31, 9, 2, tzinfo=CHINA_TZ)
+
+
+def test_time_note_goes_after_the_latest_message_only_in_the_request():
+    """几点钟接在最新一条用户消息后面，按这一轮开始的时候（北京时间）；存下来的消息不带，之前的消息也不带。"""
+    seen: list[list] = []
+
+    class Recording(FakeToolModel):
+        def _message(self, messages):
+            seen.append(messages)
+            return super()._message(messages)
+
+    p = FakeResearchPlanner()
+    p._model = Recording()
+    chat = Chat(planner=p)
+    chat.say("直接答 第一句")
+    chat.say("直接答 第二句")
+    humans = [m for m in seen[-1] if isinstance(m, HumanMessage)]
+    assert humans[0].content == "直接答 第一句"
+    first, note = humans[1].content.split("\n\n")
+    started = datetime.fromisoformat(chat.values()["turns"][-1].started_at).astimezone(CHINA_TZ)
+    assert first == "直接答 第二句" and note.startswith(f"[Current time] {started:%H:%M} Asia/Shanghai, when the user sent")
+    assert [m.content for m in chat.values()["messages"] if isinstance(m, HumanMessage)] == ["直接答 第一句", "直接答 第二句"]
 
 
 def test_invalid_tool_call_is_retried_with_the_error(chat):
@@ -184,7 +223,7 @@ def test_invalid_tool_call_is_retried_with_the_error(chat):
     bad = next(m for m in msgs if isinstance(m, AIMessage) and m.invalid_tool_calls)
     # 无效的调用在下一次请求里仍是 tool_calls：重发前先有一条带解析错误的结果，接口才不报错
     res = next(m for m in msgs if isinstance(m, ToolMessage) and m.tool_call_id == bad.invalid_tool_calls[0]["id"])
-    assert res.status == "error" and "不是合法的 JSON" in res.content
+    assert res.status == "error" and "not valid JSON" in res.content
     assert msgs.index(res) == msgs.index(bad) + 1
     assert v["status"] == "idle" and v["turns"][0]["items"][-1]["text"] == "直接回答：这个问题不用查。"
     assert not [i for i in v["turns"][0]["items"] if i["type"] == "step"]
@@ -210,7 +249,7 @@ def test_dangling_calls_get_error_results():
     (fix,) = history.dangling([HumanMessage("x"), ai, done])
     assert fix.tool_call_id == "c2" and fix.status == "error" and fix.artifact is None
     (stopped,) = history.dangling([HumanMessage("x"), ai, done], stopped=True)
-    assert stopped.artifact == {"stopped": True} and "停止" in stopped.content
+    assert stopped.artifact == {"stopped": True} and stopped.content == prompts.render("agent.stopped_call")
     assert history.step_of(ai.tool_calls[1], stopped).message == "停止了，没有做完"
 
 
@@ -296,7 +335,7 @@ def test_stop_before_the_tools_run_closes_the_calls(chat):
     assert _kinds(turn) == ["thinking", "step:search"] and not step["ok"] and step["message"] == "停止了，没有做完"
     assert turn["record"]["outcome"] == "stopped" and v["sources"] == {}
     msgs = chat.values()["messages"]
-    assert _answered(msgs) and "停止" in msgs[-1].content
+    assert _answered(msgs) and msgs[-1].content == prompts.render("agent.stopped_call")
     assert chat.say("直接答：好")["turns"][-1]["record"]["outcome"] == "ok"
 
 
@@ -443,7 +482,7 @@ def test_whole_batch_dropped_when_no_single_hit_is_blocked(monkeypatch):
     monkeypatch.setattr(p, "blocked", lambda texts: [False] * len(texts))
     v = Chat(planner=p).say("比较两款笔记软件")
     step = _search_step(v)
-    assert not step["ok"] and step["message"] == "没通过模型服务的内容审核，内容已去掉，不能用"
+    assert not step["ok"] and step["message"] == history.BLOCKED_NOTE
     assert v["status"] == "idle" and v["turns"][0]["items"][-1]["text"] == "没查到。" and v["sources"] == {}
 
 
