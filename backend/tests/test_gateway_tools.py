@@ -133,7 +133,7 @@ def test_tools_wrap_client():
         return httpx.Response(200, json={"title": "T", "content": "body", "provider": "direct"})
 
     tools = {t.name: t for t in make_research_tools(_client(handler))}
-    assert set(tools) == {"search_web", "read_page", "get_weather", "generate_image"}
+    assert set(tools) == {"search_web", "read_page", "get_weather", "generate_image", "get_current_time"}
     hit = json.loads(tools["search_web"].invoke(_call("search_web", query="q")).content)[0]
     assert hit["url"] == "https://a" and hit["id"].startswith("s")
     page = tools["read_page"].invoke(_call("read_page", url="https://a"))

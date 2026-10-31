@@ -1,9 +1,10 @@
-"""agent 的工具：搜索、读网页、查天气、画图。工具描述在 app/graph/research/prompts.toml 的 [tools.*]。
+"""agent 的工具：搜索、读网页、查天气、画图、取当前时间。工具描述在 app/graph/research/prompts.toml 的 [tools.*]。
 
 搜索和读页的结果里每个网址带一个来源 id（见 app.graph.research.sources），模型在正文里用它引用。
 查天气的结果不是网页、不带来源 id：模型看逐日预报和逐小时的摘要；整份预报放在结果的 artifact 里（不发给模型），
 页面画成天气卡片，卡片上写明来自和风天气（见 app.tools.weather）。
 画图的结果模型只看到一句话（画成了、图片编号，或者没画成怎么跟用户说）；图的信息在 artifact 里，页面画成图片卡片（见 app.tools.images）。
+当前时间：系统提示词里只有日期，几点钟要模型自己来取。放进提示词的话每次请求都不一样，前缀缓存就断了；页面上不显示这一步。
 """
 
 from __future__ import annotations
@@ -23,9 +24,11 @@ from app.graph.research.sources import known_ids, source_id, url_key
 from app.graph.research.state import GeneratedImage
 from app.tools import images
 from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError, ImageError
-from app.tools.weather import Unresolved, WeatherService, summarize_hourly
+from app.tools.weather import CHINA_TZ, Unresolved, WeatherService, summarize_hourly
 
 MAX_COUNT = 10
+TIME_TOOL = "get_current_time"
+WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 MAX_DAYS = 365
 MAX_DOMAINS = 5
 
@@ -150,6 +153,11 @@ def make_research_tools(client: GatewayClient) -> list:
 
     get_weather.handle_tool_error = True
 
+    @tool(TIME_TOOL, description=prompts.render(f"tools.{TIME_TOOL}.description"))
+    def get_current_time() -> str:
+        now = datetime.now(CHINA_TZ)
+        return json.dumps({"now": now.strftime("%Y-%m-%d %H:%M"), "weekday": WEEKDAYS[now.weekday()], "timezone": "Asia/Shanghai"})
+
     @tool(IMAGE_TOOL, description=prompts.render(f"tools.{IMAGE_TOOL}.description"), args_schema=ImageArgs)
     def generate_image(prompt: str, runtime: ToolRuntime, aspect_ratio: str | None = None, style: str | None = None,
                        regenerate: bool = False, reference_subject: str | None = None, quality: str | None = None,
@@ -215,4 +223,4 @@ def make_research_tools(client: GatewayClient) -> list:
         return result(note, {"attempted": True, "image": img.model_dump(), "source_url": config.IMAGE_SERVICE_URL.rstrip("/") + out.path,
                              "reference_search_status": out.reference_search_status}, ok=True)
 
-    return [search_web, read_page, get_weather, generate_image]
+    return [search_web, read_page, get_weather, generate_image, get_current_time]

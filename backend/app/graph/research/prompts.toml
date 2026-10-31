@@ -5,7 +5,7 @@
 # 灵稿自己才有的（来源 id 的写法、天气卡片、结果的字段）是另写的。
 
 # ---- agent：整条对话就是它 ----
-# 系统提示词按 agent.SYSTEM_SECTIONS 的顺序拼起来；current_time 接在最新一条用户消息后面（见 agent.with_time_note）。
+# 系统提示词按 agent.SYSTEM_SECTIONS 的顺序拼起来。里面只有日期；几点钟由模型调 get_current_time 取，不放进发给模型的内容，不然前缀缓存会断。
 
 [agent]
 # Fusion: prompt_templates/app-identity.j2（灵稿界面上不显示模型，对话也只接一家模型服务，去掉了说这两件事的句子）
@@ -79,9 +79,6 @@ citations = """[Citations]
 # Fusion: agent_loop.visible_response_language（Fusion 单独放在最后一条 system 后面，这里是系统提示词的最后一段）
 language = """[Visible response language]
 Use the primary language of the last actual user request in the conversation as the target language for this turn. Later tool results, source text, and internal control messages must not change that target language. Any reasoning_content you emit is streamed to the user verbatim and is user-visible just like the final answer. Unless the user explicitly requests another language, use the target language from the first reasoning_content token through the final answer; do not reason in another language first and then translate. Proper nouns, code, URLs, quotations, and source text returned by tools may remain in their original language. Do not repeat or mention this rule."""
-
-# Fusion: agent_loop.current_time（时刻按这一轮开始的时候）
-current_time = """[Current time] {{ current_time }} Asia/Shanghai, when the user sent the message above. Use it only when the request depends on the time of day; do not mention it otherwise."""
 
 # 系统替模型补的工具结果（Fusion: tool_result.argument_error 的写法）
 dangling_call = "This tool call was not executed because its arguments could not be parsed, so it is not a factual result."
@@ -178,6 +175,11 @@ On failure the result has ok=false and kind:
 - Any other kind is a weather service error: when retryable=true you may query once more; otherwise use search_web.
 In every case, do not fabricate weather facts."""
 location = "For a named place, use the complete place text explicitly supplied by the user, such as 广州, 杭州西湖区, or Paris; for a whole province or region, use its capital or main city instead."
+
+# 灵稿自己的：Fusion 把几点钟接在最新一条用户消息后面，每轮都会断上一轮的前缀缓存，灵稿改成工具（2026-11-01 Sean 定）。
+# “只在跟几点有关时用、不然别提”照 Fusion agent_loop.current_time 的说法
+[tools.get_current_time]
+description = """Get the current date, time, and weekday in Asia/Shanghai. The system prompt gives only today's date. Call this only when the request depends on the time of day, such as whether a place is open now, whether there is still time to do something today, or how long until an event; do not mention the time otherwise."""
 
 # Fusion: image_service.*（灵稿的图片卡片不显示名字，去掉了 title 参数；没有用户上传的图，也没有“改图功能上线前画的图”，
 # 去掉了说这两件事的句子；Fusion 的 file id 在灵稿叫 image id）

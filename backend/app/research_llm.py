@@ -30,7 +30,7 @@ from app import config
 from app.graph.research import prompts
 from app.model_guard import ContentBlocked, GuardedChatModel
 from app.tools.gateway import GatewayClient
-from app.tools.research_tools import make_research_tools
+from app.tools.research_tools import TIME_TOOL, make_research_tools
 
 PROBE_WORKERS = 4  # 单条送审同时发几个
 
@@ -341,6 +341,7 @@ class FakeToolModel(BaseChatModel):
     用户的话里的关键字控制特殊路径（只给测试用）：
     - “直接答”：不调工具直接回复；“不回复”：最后不给文字；
     - “坏JSON”：第一步先发一个参数无法解析的工具调用；“一直坏”：每次都发。
+    - “几点”：先取当前时间，再照常往下走。
     - “天气”：先查天气，地名是“天气”前面那段（没有就是广州），再照常搜、读。
     - “画”：画一张图（描述就是用户的话，“横”的是 16:9），画完直接回复，不搜；“改图”：改这段对话里最近画的那张；
       “再画”“再生成”：用上一次的参数再画一张（regenerate）。
@@ -370,6 +371,8 @@ class FakeToolModel(BaseChatModel):
 
         if "坏JSON" in text and (not bad or "一直坏" in text) and not names:
             return "", [{"name": "search_web", "args": _BAD_ARGS, "id": f"bad_{n}", "invalid": True}]
+        if "几点" in text and TIME_TOOL in self.bound and TIME_TOOL not in names:
+            return call(TIME_TOOL)
         if "直接答" in text:
             return "直接回答：这个问题不用查。", []
         if "天气" in text and "get_weather" in self.bound and "get_weather" not in names:
@@ -388,7 +391,7 @@ class FakeToolModel(BaseChatModel):
     def _draw(text: str, messages: list[BaseMessage], turn: list[BaseMessage], call) -> tuple[str, list[dict]]:
         if done := next((m for m in reversed(turn) if isinstance(m, ToolMessage) and m.name == "generate_image"), None):
             return ("没画成。" if done.status == "error" else "画好了，看看要不要调整。"), []
-        prompt = text.splitlines()[0][:200]  # 用户的话后面跟着发送时间
+        prompt = text.splitlines()[0][:200]
         ids = _FAKE_IMAGE_ID.findall("\n".join(str(m.content) for m in messages if isinstance(m, ToolMessage) and m.name == "generate_image"))
         if "改图" in text and ids:
             return call("generate_image", prompt=prompt, source_image_id=ids[-1])

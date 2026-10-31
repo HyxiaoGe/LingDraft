@@ -1,8 +1,8 @@
 """对话 agent：一条线程就是一个 create_agent 的对话，检查点挂在 agent 上，没有外层的图。
 
 用户每说一句话：先写进消息（update_state，as_node=START），再接着跑（stream(None)），直到模型给出不带工具调用的回复。
-- TurnMiddleware：还没有标题时按第一句话起标题；每轮开始、结束时记下这一轮；模型每次调用前换上系统提示词（日期按北京时间的当天），
-  最新一条用户消息后面接上几点钟（都按这一轮开始的时候）。
+- TurnMiddleware：还没有标题时按第一句话起标题；每轮开始、结束时记下这一轮；模型每次调用前换上系统提示词（日期按这一轮开始时北京时间的当天）。
+  几点钟不放进发给模型的内容，要用时模型自己调 get_current_time（见 tools.research_tools）。
   起标题、调模型之前往自定义流里写一个阶段（phase），页面在还没有字和步骤的空档里据此说明在等什么。
   推荐问题不在这一轮里起：正文写完这一轮就结束，运行器在结束之后再起（见 api.research_runner）。
 - ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度。
@@ -85,18 +85,6 @@ def system_prompt(at: datetime) -> str:
     return "\n\n".join(prompts.render(f"agent.{k}", **dates) for k in SYSTEM_SECTIONS)
 
 
-def with_time_note(messages: list, at: datetime) -> list:
-    """照 Fusion：几点钟只接在最新一条用户消息后面（放进系统提示词，每分钟的请求都用不上前缀缓存）。
-    只改发给模型的这一份，存下来的消息不带。"""
-    i = history.last_human(messages)
-    if i < 0:
-        return messages
-    m = messages[i]
-    note = prompts.render("agent.current_time", current_time=at.astimezone(CHINA_TZ).strftime("%H:%M"))
-    content = [*m.content, {"type": "text", "text": note}] if isinstance(m.content, list) else f"{m.content}\n\n{note}"
-    return [*messages[:i], m.model_copy(update={"content": content}), *messages[i + 1:]]
-
-
 class TurnMiddleware(AgentMiddleware[ResearchState]):
     state_schema = ResearchState
 
@@ -121,8 +109,7 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
 
     def wrap_model_call(self, request: ModelRequest, handler):
         emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
-        at = turn_started(request)  # 日期和几点钟都按这一轮开始的时候
-        return handler(request.override(system_message=SystemMessage(system_prompt(at)), messages=with_time_note(request.messages, at)))
+        return handler(request.override(system_message=SystemMessage(system_prompt(turn_started(request)))))
 
     def after_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         msgs = state["messages"]

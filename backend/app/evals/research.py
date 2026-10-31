@@ -5,7 +5,7 @@
 所以顺带检查流式片段的消息 id 和存下来的对得上。结果写到 data/evals/research-<时间>.json，对话记录写到同名的 .md。
 
 每轮的检查：跑完了、有回复（这一轮的结果是 ok，最后一条模型消息有正文）、正文里引用的来源都存在；
-expect 里写了的才检查：搜没搜、读到几篇。judge 写了就由裁判模型按标准看这一轮的正文（回答质量）。
+expect 里写了的才检查：搜没搜、读到几篇、取没取当前时间。judge 写了就由裁判模型按标准看这一轮的正文（回答质量）。
 正文里带来源角标的说法交给裁判模型逐条拿 agent 当时看到的材料核对（来源对不对，--no-sources 不做）。
 """
 
@@ -29,6 +29,7 @@ from app.graph.research.graph import memory_checkpointer
 from app.graph.research.sources import SOURCE_ID, cited, url_key
 from app.prompting import PromptFile
 from app.tools.gateway import GatewayError
+from app.tools.research_tools import TIME_TOOL
 
 BACKEND = Path(__file__).resolve().parents[2]
 CASES_FILE = BACKEND / "evals" / "research" / "cases.yaml"
@@ -46,6 +47,7 @@ class Expect(BaseModel):
     model_config = ConfigDict(extra="forbid")
     searched: bool | None = None
     min_reads: int | None = None
+    checked_time: bool | None = None
 
 
 class CaseTurn(BaseModel):
@@ -188,10 +190,15 @@ def play(runner, tid: str, turn: CaseTurn, rec: Recorder) -> dict:
     rec_turn = t["record"] or {}
     streamed = {e["data"]["id"] for e in events if e["event"] == "delta"}
     stored = {i["id"] for i in t["items"] if i["type"] in ("thinking", "text")}
+    ais = [m for m in msgs[history.last_human(msgs) + 1:] if m.type == "ai"]
+    # 每次调模型的输入和其中命中缓存的，看前缀缓存接没接上（上一轮发过的这一轮第一次调用就该命中）
+    calls = [{"input": m.usage_metadata["input_tokens"], "cached": (m.usage_metadata.get("input_token_details") or {}).get("cache_read", 0)}
+             for m in ais if m.usage_metadata]
     return {"say": turn.say, "events": len(events), "status": view["status"], "error": view.get("error"),
             "reply": history.final_text(msgs[history.last_human(msgs) + 1:]), "items": t["items"],
             "suggestions": rec_turn.get("suggestions", []), "usage": rec_turn.get("usage"), "outcome": rec_turn.get("outcome"),
             "searches": rec.searches[searches0:], "reads": rec.reads[reads0:],
+            "time_checks": sum(1 for m in ais for tc in m.tool_calls if tc["name"] == TIME_TOOL), "calls": calls,
             "stream_ids_match": streamed == stored, "view": view}
 
 
@@ -211,6 +218,8 @@ def turn_checks(turn: CaseTurn, played: dict) -> list[dict]:
     if e.min_reads is not None:
         n = sum(1 for r in played["reads"] if r["ok"])
         out.append(_check("min_reads", n >= e.min_reads, f"读到 {n} 篇"))
+    if e.checked_time is not None:
+        out.append(_check("checked_time", bool(played["time_checks"]) == e.checked_time, f"取了 {played['time_checks']} 次时间"))
     return out
 
 

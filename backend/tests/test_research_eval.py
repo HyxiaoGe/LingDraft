@@ -73,6 +73,14 @@ def test_multi_turn_case_passes_and_records_each_turn():
     assert summary_line(r).startswith("x") and "通过" in summary_line(r)
 
 
+def test_checked_time_counts_calls_and_each_call_is_recorded():
+    r = _run([{"say": "现在几点 直接答", "expect": {"checked_time": True, "searched": False}},
+              {"say": "直接答 谢谢", "expect": {"checked_time": True}}])
+    assert _failed(r) == [(2, "checked_time")]
+    assert [t["time_checks"] for t in r["turns"]] == [1, 0]
+    assert [len(t["calls"]) for t in r["turns"]] == [2, 1] and all("cached" in c for c in r["turns"][0]["calls"])
+
+
 def test_failed_checks_and_unsupported_citations_fail_the_case():
     r = _run([{"say": "直接答：天气", "expect": {"searched": True}}, {"say": "查一下 不回复"}])
     assert not r["passed"] and _failed(r) == [(1, "searched"), (2, "replied")]

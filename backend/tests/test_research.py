@@ -17,7 +17,7 @@ from app.api.research_runner import NothingToRegenerate, NotIdle, ResearchRunner
 from app.api.runner import RunConflict
 from app.api.runner import LocalRunRegistry
 from app.graph.research import history, prompts
-from app.graph.research.agent import CHINA_TZ, system_prompt, turn_started
+from app.graph.research.agent import CHINA_TZ, WEEKDAYS, system_prompt, turn_started
 from app.graph.research.graph import memory_checkpointer, open_sqlite_checkpointer
 from app.graph.research.sources import cited, collect_sources, url_key
 from app.graph.research.state import Turn
@@ -195,8 +195,9 @@ def test_dates_follow_when_this_turn_started():
     assert turn_started(req) == datetime(2026, 10, 31, 9, 2, tzinfo=CHINA_TZ)
 
 
-def test_time_note_goes_after_the_latest_message_only_in_the_request():
-    """几点钟接在最新一条用户消息后面，按这一轮开始的时候（北京时间）；存下来的消息不带，之前的消息也不带。"""
+def test_time_of_day_comes_from_the_tool_not_the_request():
+    """几点钟不接在发给模型的消息上，之前发过的内容不变，前缀缓存才接得上；要用时模型调 get_current_time，
+    取的是北京时间，页面上不显示这一步，也不进步骤流。"""
     seen: list[list] = []
 
     class Recording(FakeToolModel):
@@ -208,13 +209,15 @@ def test_time_note_goes_after_the_latest_message_only_in_the_request():
     p._model = Recording()
     chat = Chat(planner=p)
     chat.say("直接答 第一句")
-    chat.say("直接答 第二句")
-    humans = [m for m in seen[-1] if isinstance(m, HumanMessage)]
-    assert humans[0].content == "直接答 第一句"
-    first, note = humans[1].content.split("\n\n")
-    started = datetime.fromisoformat(chat.values()["turns"][-1].started_at).astimezone(CHINA_TZ)
-    assert first == "直接答 第二句" and note.startswith(f"[Current time] {started:%H:%M} Asia/Shanghai, when the user sent")
-    assert [m.content for m in chat.values()["messages"] if isinstance(m, HumanMessage)] == ["直接答 第一句", "直接答 第二句"]
+    v = chat.say("现在几点 直接答")
+    assert [m.content for m in seen[-1] if isinstance(m, HumanMessage)] == ["直接答 第一句", "现在几点 直接答"]
+    result = next(m for m in chat.values()["messages"] if isinstance(m, ToolMessage) and m.name == "get_current_time")
+    data = json.loads(result.content)
+    got = datetime.strptime(data["now"], "%Y-%m-%d %H:%M").replace(tzinfo=CHINA_TZ)
+    assert data["timezone"] == "Asia/Shanghai" and abs((datetime.now(CHINA_TZ) - got).total_seconds()) < 120
+    assert data["weekday"] == WEEKDAYS[got.weekday()]
+    assert _kinds(v["turns"][-1]) == ["thinking", "thinking", "text"]
+    assert not [e for e in chat.events if e["event"] == "step"]
 
 
 def test_invalid_tool_call_is_retried_with_the_error(chat):

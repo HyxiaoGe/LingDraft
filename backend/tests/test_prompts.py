@@ -10,7 +10,7 @@ from app.prompting import ENV
 
 def test_every_prompt_parses():
     texts = prompts.texts()
-    assert {f"agent.{k}" for k in SYSTEM_SECTIONS} | {"agent.current_time", "title.prompt", "suggest.prompt",
+    assert {f"agent.{k}" for k in SYSTEM_SECTIONS} | {"tools.get_current_time.description", "title.prompt", "suggest.prompt",
                                                          "tools.search_web.description"} <= texts.keys()
     for src in texts.values():
         ENV.parse(src)
