@@ -110,6 +110,9 @@ class Recorder:
                 self._keep(url, res.content)
         return res
 
+    def __getattr__(self, name: str):
+        return getattr(self._client, name)  # 查天气这些不当引用材料，不记，直接转给网关客户端
+
     def text_for(self, url: str) -> str:
         return "\n\n".join(self.evidence.get(url_key(url), []))[:EVIDENCE_CHARS] or "（没有记录到材料）"
 

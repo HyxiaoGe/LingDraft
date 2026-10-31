@@ -1,12 +1,10 @@
 """今日灵感：从 Fusion 取、只留四类、缓存半小时、取不到时用旧的或报 502。网络用 MockTransport 模拟。"""
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-
 import httpx
 from fastapi.testclient import TestClient
 
 from app.api import main as api_main
 from app.api.inspiration import FRESH, InspirationError, Inspirations, pick
+from tests.research_helpers import run_async as run
 
 URL = "https://fusion.test/api/prompts/examples"
 
@@ -18,12 +16,6 @@ def fusion(examples, calls: list[str], status: int = 200):
             raise examples
         return httpx.Response(status, json={"code": "SUCCESS", "data": {"examples": examples, "refreshed_at": "2026-10-31T05:00:00"}})
     return httpx.MockTransport(handler)
-
-
-def run(coro):
-    """在另开的线程里跑：整套测试里画海报的同步 Playwright 会在主线程留一个跑着的事件循环，这里直接 asyncio.run 会报错。"""
-    with ThreadPoolExecutor(1) as pool:
-        return pool.submit(asyncio.run, coro).result()
 
 
 def ex(category: str, question: str) -> dict:

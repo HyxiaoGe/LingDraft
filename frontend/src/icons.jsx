@@ -14,6 +14,15 @@ export const IconSearch = (p) => svg(<><circle cx="11" cy="11" r="6" /><path d="
 export const IconPage = (p) => svg(<><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v4h4M9 12h6M9 16h6" /></>, p);
 export const IconLoop = (p) => svg(<><path d="M4 12a8 8 0 0 1 14-5.3L20 9" /><path d="M20 4v5h-5" /><path d="M20 12a8 8 0 0 1-14 5.3L4 15" /><path d="M4 20v-5h5" /></>, p);
 export const IconWarn = (p) => svg(<><path d="M12 4l9 16H3z" /><path d="M12 10v4M12 17v.01" /></>, p);
+// 天气：晴、多云（晴间多云）、阴、雨、雪、雷、雾霾沙尘
+const CLOUD_TOP = "M4 14.9A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 2.5 8.24";
+export const IconSun = (p) => svg(<><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>, p);
+export const IconCloud = (p) => svg(<path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9z" />, p);
+export const IconCloudSun = (p) => svg(<><path d="M12 2v2M4.9 4.9l1.4 1.4M20 12h2M19.1 4.9l-1.4 1.4M15.9 12.7A4 4 0 0 0 10 8.5" /><path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6z" /></>, p);
+export const IconRain = (p) => svg(<><path d={CLOUD_TOP} /><path d="M16 14v6M8 14v6M12 16v6" /></>, p);
+export const IconSnow = (p) => svg(<><path d={CLOUD_TOP} /><path d="M8 15h.01M8 19h.01M12 17h.01M12 21h.01M16 15h.01M16 19h.01" /></>, p);
+export const IconThunder = (p) => svg(<><path d="M6 16.3A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 .5 8.97" /><path d="M13 12l-3 5h4l-3 5" /></>, p);
+export const IconFog = (p) => svg(<><path d={CLOUD_TOP} /><path d="M16 17H7M17 21H9" /></>, p);
 export const IconChevron = (p) => svg(<path d="M6 9l6 6 6-6" />, p);
 export const IconArrowUp = (p) => svg(<path d="M12 19V5M5 12l7-7 7 7" />, { stroke: 2.4, ...p });
 export const IconArrowDown = (p) => svg(<path d="M12 5v14M5 12l7 7 7-7" />, p);

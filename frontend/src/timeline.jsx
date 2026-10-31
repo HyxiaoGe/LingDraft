@@ -4,10 +4,11 @@
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
-import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCopy, IconEdit, IconLoop, IconPage, IconRetry, IconSearch, IconSparkle, IconStop, IconWarn, Spinner } from "./icons.jsx";
+import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconLoop, IconPage, IconRetry, IconSearch, IconSparkle, IconStop, IconWarn, Spinner } from "./icons.jsx";
 import { Markdown } from "./markdown.jsx";
 import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Mark } from "./sources.jsx";
+import { WeatherCard, forecastsOf } from "./weather.jsx";
 
 // 今日灵感没取到时，新对话页显示这几个
 const EXAMPLES = [
@@ -231,6 +232,7 @@ function Turn({ t, st, live, running, suggesting, stopping, last, now, act }) {
       {t.user && <UserMsg text={live?.edit ?? t.user} at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && idle} onEdit={act.edit} />}
       <div className="ws-ai">
         {(running || rec) && <Process items={process} st={st} nums={nums} rec={rec} running={running} failed={failed} now={now} />}
+        {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
         {running && <LiveLine live={live} items={items} stopping={stopping} />}
         {!running && <AnswerSources nums={nums} sources={st?.sources} />}
@@ -461,13 +463,16 @@ function Thinking({ it, running, thinking }) {
 }
 
 function ToolRow({ s }) {
-  const Icon = s.kind === "read" ? IconPage : IconSearch;
+  const Icon = { read: IconPage, weather: IconCloudSun }[s.kind] || IconSearch;
   let main, sub;
   let bad = !s.ok;
   if (s.kind === "read") {
     main = <>读 <a href={s.text} target="_blank" rel="noreferrer" title={s.text}>{s.title || domain(s.text)}</a></>;
     sub = s.pending ? "读取中…" : s.body ? "读到原文" : `没读成${s.message ? `：${s.message}` : ""}`;
     bad = !s.pending && !s.body;
+  } else if (s.kind === "weather") {
+    main = <>查天气「{s.text}」</>;
+    sub = s.pending ? "查询中…" : s.ok ? s.title : `没查成：${s.message || "出错了"}`;
   } else {
     main = <>搜索「{s.text}」{s.limits.map((l) => <span key={l} className="lim">{l}</span>)}</>;
     sub = s.pending ? "搜索中…" : s.ok ? `${s.hits} 条结果${s.message ? `（${s.message}）` : ""}` : `没搜成：${s.message || "出错了"}`;
@@ -504,6 +509,7 @@ const TIPS = {
   model: [...TIPS_ANY, "脑子转得飞快，嘴还没跟上", "正在憋大招，马上放出来", "这题有点意思，值得多想一会儿", "正在把线索串成一条线", "让子弹再飞一会儿"],
   search: [...TIPS_ANY, "正在全网翻箱倒柜", "线索正在赶来的路上", "大海捞针中，针快捞到了", "搜索有点堵车，马上通"],
   read: [...TIPS_ANY, "这页有点长，容我多看两眼", "网页加载慢吞吞的，我也干着急", "正在逐字逐句地啃这篇", "有的网站慢，再给它一点时间"],
+  weather: TIPS_ANY,
 };
 const TIP_AFTER = 3000; // 看不到新进展多久以后开始说
 const TIP_EVERY = 6000; // 一直没进展就隔一会儿换一句
@@ -515,7 +521,7 @@ function LiveLine({ live, items, stopping }) {
   const pending = items.filter((i) => i.type === "step" && i.pending); // 并行的几步里先做完的排在后面也算还在等
   const streaming = lastItem?.live && (lastItem.type === "text" || (lastItem.type === "thinking" && !lastItem.ms));
   const stage = stopping ? "正在停止…" : live?.stage || (pending.length || streaming ? null : PHASES[live?.phase] || "正在准备…");
-  const waitingFor = pending.some((i) => i.kind === "read") ? "read" : pending.length ? "search" : "model";
+  const waitingFor = ["read", "search", "weather"].find((k) => pending.some((i) => i.kind === k)) || "model";
   const tip = useTip(`${items.length}:${lastItem?.text?.length ?? 0}:${pending.length}:${live?.phase}:${stage}`, stopping ? null : TIPS[waitingFor]);
   return (
     <div className="ws-live" role="status">

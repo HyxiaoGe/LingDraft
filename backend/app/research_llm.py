@@ -12,6 +12,7 @@ import threading
 import time
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -219,10 +220,41 @@ class LiveResearchPlanner:
 # ---- 离线假实现 ----
 
 
+FAKE_CITIES = [
+    {"location_id": "101280101", "name": "广州", "adm1": "广东省", "adm2": "广州", "country": "中国", "rank": 11},
+    {"location_id": "101010300", "name": "朝阳", "adm1": "北京市", "adm2": "北京", "country": "中国", "rank": 15},
+    {"location_id": "101071201", "name": "朝阳", "adm1": "辽宁省", "adm2": "朝阳", "country": "中国", "rank": 23},
+]
+FAKE_SKY = ["晴", "多云", "小雨", "阴", "雷阵雨", "晴", "多云"]
+
+
+def _fake_weather(path: str, params) -> httpx.Response:
+    """假的和风：城市只有广州和两个朝阳；预报从北京时间今天、这个小时起，下午有一阵雨。"""
+    now = datetime.now(timezone(timedelta(hours=8))).replace(minute=0, second=0, microsecond=0)
+    if path == "/weather/v1/cities":
+        q = params.get("location", "")
+        return httpx.Response(200, json={"cities": [c for c in FAKE_CITIES if c["name"] in q or q in c["name"]]})
+    if path == "/weather/v1/forecast/daily":
+        days = [{"date": (now + timedelta(days=k)).date().isoformat(), "text_day": FAKE_SKY[k], "text_night": "晴",
+                 "temp_max": str(30 - k), "temp_min": str(21 - k), "wind_dir_day": "北风", "wind_scale_day": "1-3"} for k in range(7)]
+        return httpx.Response(200, json={"daily": days})
+    if path == "/weather/v1/forecast/hourly":
+        hours = []
+        for k in range(24):
+            t = now + timedelta(hours=k)
+            wet = 14 <= t.hour <= 16
+            hours.append({"time": t.isoformat(timespec="minutes"), "temp": str(22 + round(8 * max(0.0, 1 - abs(t.hour - 14) / 9))),
+                          "text": "小雨" if wet else "晴", "pop": "70" if wet else "0", "precip": "1.2" if wet else "0.0"})
+        return httpx.Response(200, json={"hourly": hours})
+    return httpx.Response(404, json={"error": "not_found"})
+
+
 def fake_gateway_client() -> GatewayClient:
-    """用 MockTransport 模拟网关：每次搜索给 3 条稳定的候选，读页返回正文（第 3 条读不到）。"""
+    """用 MockTransport 模拟网关：每次搜索给 3 条稳定的候选，读页返回正文（第 3 条读不到）；天气见 _fake_weather。"""
 
     def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.startswith("/weather/"):
+            return _fake_weather(req.url.path, req.url.params)
         if req.url.path == "/search/search":
             q = json.loads(req.content).get("query", "")
             slug = re.sub(r"\W+", "-", q)[:24] or "q"
@@ -258,6 +290,7 @@ class FakeToolModel(BaseChatModel):
     用户的话里的关键字控制特殊路径（只给测试用）：
     - “直接答”：不调工具直接回复；“不回复”：最后不给文字；
     - “坏JSON”：第一步先发一个参数无法解析的工具调用；“一直坏”：每次都发。
+    - “天气”：先查天气，地名是“天气”前面那段（没有就是广州），再照常搜、读。
     内容审核（模拟服务商）：请求里任何地方有 FAKE_BLOCKED 就整个拒绝；用户的话里有“查完就拦”时，有工具结果就拒绝；
     有“输出拦截”时，吐完思考后输出被截断。
     """
@@ -286,6 +319,8 @@ class FakeToolModel(BaseChatModel):
             return "", [{"name": "search_web", "args": _BAD_ARGS, "id": f"bad_{n}", "invalid": True}]
         if "直接答" in text:
             return "直接回答：这个问题不用查。", []
+        if "天气" in text and "get_weather" in self.bound and "get_weather" not in names:
+            return call("get_weather", location=text.split("天气")[0].strip()[:8] or "广州")
         if "search_web" not in names:
             return call("search_web", query=text.splitlines()[0][:20], count=3)
         if "read_page" not in names and hits:

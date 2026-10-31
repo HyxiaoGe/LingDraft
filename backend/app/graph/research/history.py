@@ -8,14 +8,15 @@ from __future__ import annotations
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from pydantic import ValidationError
 
 from app.graph.research import prompts
 from app.graph.research.sources import parse
-from app.graph.research.state import ToolStep, Usage
+from app.graph.research.state import Forecast, ToolStep, Usage
 
 BLOCKED = "lingdraft_blocked"  # 一轮因内容审核停下时，系统补的那条模型消息 response_metadata 里的键，值是原因（见 agent.ContentGuard）
 STOPPED = "lingdraft_stopped"  # 用户点了停止时，已经流出来的那部分正文存成的模型消息 response_metadata 里的键
-STEP_TOOLS = {"search_web": "search", "read_page": "read"}
+STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather"}
 
 
 def text_of(m: BaseMessage) -> str:
@@ -89,12 +90,14 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
     if kind == "search":
         text, extra = str(args.get("query", "")), {"limits": search_limits(args)}
     else:
-        text, extra = str(args.get("url", "")), {}
+        text, extra = str(args.get("url" if kind == "read" else "location", "")), {}
     if result is None:
         return ToolStep(id=cid, kind=kind, text=text, pending=True, **extra)
     if isinstance(result.artifact, dict) and result.artifact.get("stopped"):
         return ToolStep(id=cid, kind=kind, text=text, ok=False, message="停止了，没有做完", **extra)
     data = parse(result)
+    if kind == "weather":
+        return _weather_step(cid, text, data, result)
     if kind == "search":
         if isinstance(data, list) and result.status != "error":
             dropped = result.artifact.get("blocked", 0) if isinstance(result.artifact, dict) else 0
@@ -108,6 +111,17 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
     return ToolStep(id=cid, kind=kind, text=text, ok=False, message=str(msg or "没有读到正文"))
 
 
+def _weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> ToolStep:
+    if isinstance(data, dict) and data.get("ok") and result.status != "error":
+        try:
+            fc = Forecast.model_validate({k: v for k, v in data.items() if k != "ok"})
+            return ToolStep(id=cid, kind="weather", text=text, title=fc.location, weather=fc)
+        except ValidationError:
+            return ToolStep(id=cid, kind="weather", text=text, ok=False, message="天气结果的格式不对")
+    msg = (data.get("message") or data.get("kind")) if isinstance(data, dict) else text_of(result)
+    return ToolStep(id=cid, kind="weather", text=text, ok=False, message=str(msg or "没查到"))
+
+
 def collect_steps(messages: list[BaseMessage]) -> list[ToolStep]:
     results = {m.tool_call_id: m for m in messages if isinstance(m, ToolMessage)}
     steps = (step_of(tc, results.get(tc["id"])) for m in messages if isinstance(m, AIMessage) for tc in m.tool_calls)
@@ -118,7 +132,7 @@ def collect_steps(messages: list[BaseMessage]) -> list[ToolStep]:
 
 
 def usage_of(messages: list[BaseMessage]) -> Usage:
-    """一轮里 agent 的模型调用和搜索、读页次数。token 来自模型返回的用量（流式要开 stream_usage）。"""
+    """一轮里 agent 的模型调用和搜索、读页、查天气次数。token 来自模型返回的用量（流式要开 stream_usage）。"""
     u = Usage()
     for m in messages:
         if isinstance(m, AIMessage) and not blocked_reason(m) and not m.response_metadata.get(STOPPED):  # 系统补的消息不是一次完整的模型调用
@@ -132,4 +146,6 @@ def usage_of(messages: list[BaseMessage]) -> Usage:
             u.searches += 1
         elif isinstance(m, ToolMessage) and m.name == "read_page":
             u.reads += 1
+        elif isinstance(m, ToolMessage) and m.name == "get_weather":
+            u.weather += 1
     return u

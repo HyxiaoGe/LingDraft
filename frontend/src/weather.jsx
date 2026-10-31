@@ -1,0 +1,159 @@
+// 天气卡片：get_weather 查到的预报（和风天气，见 app/tools/weather.py）。上面是逐日几列，下面是接下来 24 小时：
+// 气温折线和降水概率柱子分上下两条，共用时间轴，不叠在一张图上（单位不同，不用两套纵轴）
+import { useLayoutEffect, useRef, useState } from "react";
+import { IconCloud, IconCloudSun, IconFog, IconRain, IconSnow, IconSun, IconThunder } from "./icons.jsx";
+import { stamp } from "./research.js";
+
+// 这一轮查到的天气，一个地方一张：同一个地方查了几次，位置按第一次、内容用最后一次
+export function forecastsOf(items) {
+  const by = new Map();
+  for (const i of items) if (i.type === "step" && i.kind === "weather" && i.weather) by.set(i.weather.location, i.weather);
+  return [...by.values()];
+}
+
+// 和风的天气现象是一套固定的说法（晴、多云、晴间多云、阴、小雨、雷阵雨、雨夹雪、雾、霾、扬沙……），按字挑图标
+export function skyIcon(text = "") {
+  if (text.includes("雷")) return IconThunder;
+  if (text.includes("雪") || text.includes("冰雹")) return IconSnow;
+  if (text.includes("雨")) return IconRain;
+  if (/[雾霾沙尘]/.test(text)) return IconFog;
+  if (text.includes("晴")) return text.includes("云") ? IconCloudSun : IconSun;
+  if (text.includes("少云")) return IconCloudSun;
+  if (text.includes("云") || text.includes("阴")) return IconCloud;
+  return IconCloudSun;
+}
+
+const WEEK = "日一二三四五六";
+const monthDay = (date) => `${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日`;
+const dayName = (date, today) => (date === today ? "今天" : `周${WEEK[new Date(`${date}T00:00:00`).getDay()]}`);
+const deg = (t) => `${Math.round(t)}°`;
+
+export function WeatherCard({ fc }) {
+  const parts = fc.location.split("·");
+  const at = stamp(fc.fetched_at);
+  return (
+    <section className="ws-card ws-weather" aria-label={`${fc.location}的天气预报`}>
+      <div className="ws-weather-head">
+        <IconCloudSun size={15} />
+        <span className="place">{parts.at(-1)}</span>
+        {parts.length > 1 && <span className="adm">{parts.slice(0, -1).join("·")}</span>}
+        <span className="by" title={at?.full}>和风天气{at && ` · ${at.text} 更新`}</span>
+      </div>
+      <div className="ws-weather-days">
+        {fc.days.map((d) => <Day key={d.date} d={d} today={fc.today} />)}
+      </div>
+      {fc.hourly.length > 1 && <Hourly hours={fc.hourly} />}
+    </section>
+  );
+}
+
+function Day({ d, today }) {
+  const Icon = skyIcon(d.day);
+  const sky = !d.night || d.night === d.day ? d.day : `${d.day}转${d.night}`;
+  return (
+    <div className={"ws-weather-day" + (d.date === today ? " today" : "")}>
+      <div className="when"><b>{dayName(d.date, today)}</b><span>{monthDay(d.date)}</span></div>
+      <Icon size={22} stroke={1.6} />
+      <div className="sky" title={`白天${d.day}，夜间${d.night}`}>{sky}</div>
+      <div className="temp"><b>{deg(d.high)}</b><span>{deg(d.low)}</span></div>
+      {d.wind && <div className="wind">{d.wind}</div>}
+    </div>
+  );
+}
+
+// 图的竖向布局（像素）：上面一条画气温，下面一条画降水概率，最下面是钟点
+const PAD = 16;
+const TEMP_TOP = 20;
+const TEMP_BOTTOM = 62;
+const BAR_TOP = 80;
+const BAR_BOTTOM = 112;
+const HEIGHT = 132;
+const MIN_SPAN = 6; // 一天里气温差得少时，折线不要被拉成大起大落
+const POP_LABEL = 30; // 降水概率到这么多才在柱子上写数
+
+// 当地钟点：直接从时间里取，不经浏览器的时区换算
+const hourOf = (t) => Number(t.slice(11, 13));
+const hourName = (h, first) => `${h.time.slice(0, 10) === first.time.slice(0, 10) ? "" : "明天"}${hourOf(h.time)}时`;
+
+// 柱子：顶上两个角圆，底边贴着基线
+const barPath = (x, y, w, h) => {
+  const r = Math.min(3, w / 2, h);
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+};
+
+function Hourly({ hours }) {
+  const box = useRef(null);
+  const [w, setW] = useState(0);
+  const [at, setAt] = useState(null); // 悬停的那个小时
+  useLayoutEffect(() => {
+    const el = box.current;
+    const fit = () => setW(Math.floor(el.clientWidth));
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const temps = hours.map((h) => h.temp);
+  let lo = Math.min(...temps), hi = Math.max(...temps);
+  if (hi - lo < MIN_SPAN) [lo, hi] = [(lo + hi - MIN_SPAN) / 2, (lo + hi + MIN_SPAN) / 2];
+  const hasPop = hours.some((h) => h.pop != null);
+  const maxPop = Math.max(0, ...hours.map((h) => h.pop ?? 0));
+  const step = (w - PAD * 2) / (hours.length - 1);
+  const x = (i) => PAD + i * step;
+  const y = (t) => TEMP_BOTTOM - ((t - lo) / (hi - lo)) * (TEMP_BOTTOM - TEMP_TOP);
+  const bw = Math.min(step * 0.6, 14);
+  // 钟点和气温每 3 小时写一个，第一个小时总写；离第一个太近的不写，免得挤在一起
+  const ticks = hours.map((h, i) => i === 0 || (hourOf(h.time) % 3 === 0 && i >= 2));
+  const summary = `接下来 24 小时气温 ${deg(Math.min(...temps))} 到 ${deg(Math.max(...temps))}` + (hasPop ? `，降水概率最高 ${maxPop}%` : "");
+  const pick = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    setAt(Math.max(0, Math.min(hours.length - 1, Math.round((e.clientX - r.left - PAD) / step))));
+  };
+  const h = at == null ? null : hours[at];
+
+  return (
+    <div className="ws-hourly">
+      <div className="ws-hourly-head">
+        <span className="title">接下来 24 小时</span>
+        {h ? (
+          <span className="read">
+            <b>{hourName(h, hours[0])}</b> {h.text} · {deg(h.temp)}
+            {h.pop != null && ` · 降水概率 ${h.pop}%`}{h.precip > 0 && ` · ${h.precip} 毫米`}
+          </span>
+        ) : (
+          <span className="key"><i />气温{hasPop && <><i className="rain" />降水概率</>}</span>
+        )}
+      </div>
+      <div ref={box}>
+        {w > 0 && (
+          <svg width={w} height={HEIGHT} role="img" aria-label={summary} onMouseMove={pick} onMouseLeave={() => setAt(null)}>
+            {h && <line className="cross" x1={x(at)} x2={x(at)} y1={TEMP_TOP - 8} y2={BAR_BOTTOM} />}
+            {hasPop && (
+              <>
+                {hours.map((p, i) => {
+                  const bh = ((p.pop ?? 0) / 100) * (BAR_BOTTOM - BAR_TOP);
+                  return bh > 0 && <path key={p.time} className={"bar" + (i === at ? " on" : "")} d={barPath(x(i) - bw / 2, BAR_BOTTOM - bh, bw, bh)} />;
+                })}
+                {hours.map((p, i) => p.pop >= POP_LABEL && p.pop !== hours[i - 1]?.pop && (
+                  <text key={p.time} x={x(i)} y={BAR_BOTTOM - (p.pop / 100) * (BAR_BOTTOM - BAR_TOP) - 4}>{p.pop}%</text>
+                ))}
+                {maxPop === 0 && <text className="none" x={w / 2} y={(BAR_TOP + BAR_BOTTOM) / 2 + 8}>降水概率都是 0</text>}
+                <line className="base" x1={PAD - bw / 2} x2={w - PAD + bw / 2} y1={BAR_BOTTOM + 0.5} y2={BAR_BOTTOM + 0.5} />
+              </>
+            )}
+            <path className="tl" d={hours.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.temp).toFixed(1)}`).join("")} />
+            {hours.map((p, i) => ticks[i] && (
+              <g key={p.time}>
+                <circle className="dot" cx={x(i)} cy={y(p.temp)} r={3} />
+                <text className="t" x={x(i)} y={y(p.temp) - 8}>{deg(p.temp)}</text>
+                <text x={x(i)} y={HEIGHT - 4}>{i > 0 && hourOf(p.time) === 0 ? "明天0时" : `${hourOf(p.time)}时`}</text>
+              </g>
+            ))}
+            {h && <circle className="dot on" cx={x(at)} cy={y(h.temp)} r={4.5} />}
+          </svg>
+        )}
+      </div>
+    </div>
+  );
+}

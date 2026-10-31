@@ -34,21 +34,52 @@ class Source(BaseModel):
         return tidy_title(v)
 
 
+class WeatherDay(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    date: str = Field(description="当地日期 YYYY-MM-DD")
+    day: str = Field(description="白天的天气")
+    night: str = Field(description="夜间的天气")
+    high: float
+    low: float
+    wind: str = Field(default="", description="白天的风向风力，比如“北风 1-3级”")
+
+
+class WeatherHour(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    time: str = Field(description="当地时间，带时区，比如 2026-10-31T15:00+08:00")
+    temp: float
+    text: str
+    pop: int | None = Field(default=None, description="降水概率 %")
+    precip: float | None = Field(default=None, description="降水量 mm")
+
+
+class Forecast(BaseModel):
+    """一次查天气的结果（和风天气）。模型看的和页面上的天气卡片是同一份。"""
+
+    model_config = ConfigDict(extra="forbid")
+    location: str = Field(description="和风的地名，比如“广东省·广州”")
+    today: str = Field(description="查的时候当地是哪天")
+    fetched_at: str
+    days: list[WeatherDay] = Field(description="从今天起几天的逐日预报")
+    hourly: list[WeatherHour] = Field(default_factory=list, description="从现在起 24 小时；取不到时是空的")
+
+
 class ToolStep(BaseModel):
     """一次工具调用，给页面的过程记录用。"""
 
     model_config = ConfigDict(extra="forbid")
     id: str = Field(description="工具调用 id；页面据此把实时进度和存下来的记录对上")
-    kind: Literal["search", "read"]
-    text: str = Field(description="搜索词 / 网址")
+    kind: Literal["search", "read", "weather"]
+    text: str = Field(description="搜索词 / 网址 / 地名")
     limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制")
     ok: bool = True
     hits: int = 0  # 搜索返回的条数
     body: bool = False  # 读页读到了正文
-    title: str = ""  # 读到的页面标题
+    title: str = ""  # 读到的页面标题；查天气时是和风的地名
     source_ids: list[str] = Field(default_factory=list, description="这一步得到的来源")
     message: str = Field(default="", description="失败的原因")
     pending: bool = Field(default=False, description="已经发起、还没有结果")
+    weather: Forecast | None = Field(default=None, description="查到的天气，页面画成天气卡片")
 
     @field_validator("title")
     @classmethod
@@ -67,6 +98,7 @@ class Usage(BaseModel):
     reasoning_tokens: int = 0
     searches: int = 0
     reads: int = 0
+    weather: int = 0  # 查天气的次数
 
 
 class Turn(BaseModel):

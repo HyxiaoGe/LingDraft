@@ -1,6 +1,7 @@
-"""agent 查资料的工具：搜索、读网页。工具描述在 app/graph/research/prompts.toml 的 [tools.*]。
+"""agent 查资料的工具：搜索、读网页、查天气。工具描述在 app/graph/research/prompts.toml 的 [tools.*]。
 
 搜索和读页的结果里每个网址带一个来源 id（见 app.graph.research.sources），模型在正文里用它引用。
+查天气的结果不是网页、不带来源 id：页面上画成天气卡片，卡片上写明来自和风天气（见 app.tools.weather）。
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field
 from app.graph.research import prompts
 from app.graph.research.sources import known_ids, source_id, url_key
 from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError
+from app.tools.weather import Unresolved, WeatherService
 
 MAX_COUNT = 10
 MAX_DAYS = 365
@@ -40,6 +42,10 @@ class ReadArgs(BaseModel):
     url: str = Field(description=_arg("read_page", "url"))
 
 
+class WeatherArgs(BaseModel):
+    location: str = Field(description=_arg("get_weather", "location"))
+
+
 def freshness(recency_days: int | None) -> str | None:
     """搜索服务只认 Brave 风格的四档（天、周、月、年），向上取整。"""
     if recency_days is None:
@@ -62,22 +68,27 @@ def _bad_args(count: int, recency_days: int | None, sites: list[str]) -> str | N
     return "；".join(problems) or None
 
 
+def _failed(kind: str, message: str, retryable: bool = False, **extra) -> ToolException:
+    return ToolException(json.dumps({"ok": False, "kind": kind, "message": message, "retryable": retryable, **extra}, ensure_ascii=False))
+
+
 def make_research_tools(client: GatewayClient) -> list:
+    weather = WeatherService(client)
+
     @tool("search_web", description=prompts.render("tools.search_web.description"), args_schema=SearchArgs,
           response_format="content_and_artifact")
     def search_web(query: str, runtime: ToolRuntime, count: int = 5, recency_days: int | None = None,
                    domains: list[str] | None = None):
         sites = [d.strip() for d in domains or [] if d.strip()]
         if problem := _bad_args(count, recency_days, sites):
-            raise ToolException(json.dumps({"ok": False, "kind": "bad_arguments", "message": problem, "retryable": False}, ensure_ascii=False))
+            raise _failed("bad_arguments", problem)
         try:
             hits = client.search(query, count=count, freshness=freshness(recency_days), domains=sites)
         except GatewayAuthError:
             raise  # 密钥配置问题：让这次运行失败、把错误亮出来，改好配置再重试
         except GatewayError as e:
             # 服务偶发出错交给 agent 处理，不让整轮失败
-            raise ToolException(json.dumps({"ok": False, "kind": e.kind, "message": str(e), "retryable": e.retryable},
-                                           ensure_ascii=False)) from e
+            raise _failed(e.kind, str(e), e.retryable) from e
         known = known_ids(runtime.state.get("messages", []))
         out = []
         for h in hits:
@@ -98,4 +109,24 @@ def make_research_tools(client: GatewayClient) -> list:
             res = {"id": source_id((res.get("url") or url).strip(), known_ids(runtime.state.get("messages", []))), **res}
         return json.dumps(res, ensure_ascii=False), {"retrieved_at": _now()}
 
-    return [search_web, read_page]
+    @tool("get_weather", description=prompts.render("tools.get_weather.description"), args_schema=WeatherArgs,
+          response_format="content_and_artifact")
+    def get_weather(location: str):
+        place = location.strip()
+        if not place:
+            raise _failed("bad_arguments", "location 是空的")
+        try:
+            fc = weather.forecast(place)
+        except Unresolved as e:
+            if e.kind == "ambiguous_location":
+                raise _failed(e.kind, f"“{place}”对得上好几个地方，没有查", candidates=e.candidates) from e
+            raise _failed(e.kind, f"和风天气里没找到“{place}”") from e
+        except GatewayAuthError:
+            raise  # 密钥或网关放行的问题：让这次运行失败、把错误亮出来
+        except GatewayError as e:
+            raise _failed(e.kind, str(e), e.retryable) from e
+        return json.dumps({"ok": True, **fc.model_dump()}, ensure_ascii=False), {"retrieved_at": _now()}
+
+    get_weather.handle_tool_error = True
+
+    return [search_web, read_page, get_weather]
