@@ -139,9 +139,8 @@
 .ws-tool.pending { color: var(--accent); }
 .ws-tool.pending .spin { transform: translateY(2px); }
 
-.ws-live { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--accent); flex-wrap: wrap; }
+.ws-live { display: flex; align-items: center; gap: 8px; min-height: 20px; font-size: 13px; line-height: 20px; color: var(--accent); flex-wrap: wrap; }
 .ws-live .stage { color: var(--ink2); }
-.ws-live .hint { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .ws-live .tip { color: var(--ink2); animation: ws-in .3s var(--ease); }
 .ws-live span + span::before { content: "·"; margin-right: 8px; color: var(--faint); }
 /* 一轮里的东西：思考、工具步骤、正文、来源、推荐问题 */

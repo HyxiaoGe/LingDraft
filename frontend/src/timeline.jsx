@@ -377,7 +377,8 @@ const TIPS = {
 const TIP_AFTER = 5000; // 看不到新进展多久以后开始说
 const TIP_EVERY = 6000; // 一直没进展就隔一会儿换一句
 
-// 正在跑的这一轮最下面一行：空档里说清在等什么（思考、搜索、读页、写正文时各自已经有显示，这里不重复）；等久了加一句俏皮话
+// 正在跑的这一轮最下面一行：空档里说清在等什么（思考、搜索、读页、写正文时各自已经有显示，这里不重复）；等久了加一句俏皮话。
+// 两样都没有时这一行空着、高度不变，俏皮话冒出来、消失时页面不跳
 function LiveLine({ live, items, stopping }) {
   const lastItem = items.at(-1);
   const pending = items.filter((i) => i.type === "step" && i.pending); // 并行的几步里先做完的排在后面也算还在等
@@ -389,7 +390,6 @@ function LiveLine({ live, items, stopping }) {
     <div className="ws-live" role="status">
       {stage && <><Spinner size={14} /><span className="stage">{stage}</span></>}
       {tip && <span key={tip} className="tip" aria-hidden="true">{tip}</span>}
-      <span className="hint">可以关掉页面，回来接着看</span>
     </div>
   );
 }
