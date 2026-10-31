@@ -63,7 +63,7 @@ uv run python -m app.cli --scenario research state <thread_id>
 
 调研给模型看的文字都在 `app/graph/research/prompts.toml`，改文字不用动代码，改完重启后端。调研方法（技能）在 `app/graph/research/skills/<name>/`，文件格式沿用 Agent Skills：`SKILL.md` 的 frontmatter 写 `name`（和目录同名）、`description`（用途，模型靠它判断用不用）、`metadata.title`（页面上显示的名字），正文是查法；`references/report.md` 是报告结构和论断写法的示例。agent 的系统提示词只列目录，由模型决定读不读；读过的方法在整理草稿时带上，按它的报告结构分节。加一类方法就加一个目录，写坏了启动时直接报错。改了提示词、调研方法或调研链路，先跑一遍回放评测（`uv run python -m app.evals.research`）。
 
-调研的检查点在 `data/checkpoints_research.sqlite`。每版报告另写一份 `report_v{n}.md` 留档在 `output/research/<thread_id>/`，流程不读它：页面和 agent 看到的报告都从检查点里的数据生成。
+对话的检查点默认在 `data/checkpoints_research.sqlite`；配了 `LINGDRAFT_DATABASE_URL` 就存 Postgres。本机连 dev 上的库要先开隧道：`ssh -N -L 15432:127.0.0.1:5432 dev`（加 `-f` 放后台），见 `.env.example`。隧道断了请求会等 10 秒报错，接回来以后不用重启后端。测试不碰这个库；设 `LINGDRAFT_TEST_DATABASE_URL` 能把整套测试放到另一个 Postgres 库上再跑一遍，每个测试前都清空这个库，别指向有用的库。每版报告另写一份 `report_v{n}.md` 留档在 `output/research/<thread_id>/`，流程不读它：页面和 agent 看到的报告都从检查点里的数据生成。
 
 检查点在 `data/checkpoints.sqlite`，每个 thread 的 `v{n}.png / v{n}.html` 和导出的 `final.png / final.html / brief.json` 在 `output/<thread_id>/`。进程重启后 `resume` 可直接续跑。
 

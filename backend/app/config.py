@@ -45,6 +45,8 @@ ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-flash-2
 BACKGROUND_ENABLED = _flag("LINGDRAFT_BACKGROUND", True)
 USE_FAKE_PLANNER = _flag("LINGDRAFT_FAKE", False)
 RESEARCH_WORKERS = int(os.environ.get("LINGDRAFT_RESEARCH_WORKERS", "4"))  # 同时跑几个调研线程，多出来的排队
+# 对话的检查点存 Postgres（postgresql://用户:密码@主机:端口/库）；不配存 DATA_DIR 下的 SQLite
+DATABASE_URL = os.environ.get("LINGDRAFT_DATABASE_URL", "")
 
 MAX_CHECK_RETRIES = 2
 

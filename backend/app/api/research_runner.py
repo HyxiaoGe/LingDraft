@@ -19,7 +19,7 @@ from app import config
 from app.api.runner import BaseRunner, Executor, RunConflict, jsonable
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, now, stop_turn
-from app.graph.research.graph import build_graph, open_sqlite_checkpointer, thread_ids
+from app.graph.research.graph import build_graph, open_checkpointer, thread_ids
 from app.graph.research.sources import collect_sources
 from app.graph.research.state import Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
@@ -172,10 +172,10 @@ class ResearchRunner(BaseRunner):
         fake = config.USE_FAKE_PLANNER if fake is None else fake
         self.planner = planner or (FakeResearchPlanner() if fake else LiveResearchPlanner())
         data = Path(data_dir or config.DATA_DIR)
-        saver = checkpointer or open_sqlite_checkpointer(data / "checkpoints_research.sqlite")
+        saver = checkpointer or open_checkpointer(data)
         self.graph = build_graph(self.planner, saver)
         self.images = ImageStore(data / "images")  # 画好的图，按对话分目录
-        # 对话不碰浏览器，几个线程各跑各的；检查点共用一个连接，SqliteSaver 自己加锁
+        # 对话不碰浏览器，几个线程各跑各的；检查点的读写 SqliteSaver / PostgresSaver 自己加锁
         self.executor = Executor(workers or config.RESEARCH_WORKERS, "research")
         # 正文写完这一轮就结束，推荐问题在结束之后才起（见 _after_run）。线程 → 等着起推荐问题的那一轮（轮 id, 用户的话, 回复）。
         # 用户又说了话、重新回答或删掉对话时撤掉：起好了也不写。撤掉和写检查点都在锁里，不会和用户那边的写交错

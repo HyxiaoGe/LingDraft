@@ -1,14 +1,40 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+import psycopg
 import pytest
 from langgraph.types import Command
 
+from app import config
 from app.graph.poster.graph import build_graph, memory_checkpointer
+from app.graph.research import graph as research_graph
 from app.llm import FakePlanner
 
 REQUEST = "某品牌蓝牙耳机黑五预热，5 折，11.20 到 11.27"
+
+# .env 里的 LINGDRAFT_DATABASE_URL 是 dev 上的库，测试不碰。设了 LINGDRAFT_TEST_DATABASE_URL 时，对话的检查点改存这个库，
+# 整套测试在 Postgres 上再跑一遍（每个测试前清空；别指向有用的库）
+config.DATABASE_URL = os.environ.get("LINGDRAFT_TEST_DATABASE_URL", "")
+
+
+@pytest.fixture(autouse=True)
+def _postgres(monkeypatch):
+    if not config.DATABASE_URL:
+        yield
+        return
+    with psycopg.connect(config.DATABASE_URL, autocommit=True) as c:
+        try:
+            c.execute("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes")
+        except psycopg.errors.UndefinedTable:  # 还没有哪个测试建过表
+            pass
+    opened = []
+    real = research_graph.open_postgres_checkpointer
+    monkeypatch.setattr(research_graph, "open_postgres_checkpointer", lambda url: opened.append(real(url)) or opened[-1])
+    yield
+    for saver in opened:  # 每个运行器一个连接池，用完关掉，免得连接数攒满
+        saver.conn.close()
 
 
 @pytest.fixture
