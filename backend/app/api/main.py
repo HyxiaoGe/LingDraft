@@ -182,7 +182,7 @@ async def research_list():
 
 @app.post("/api/research/threads")
 async def research_create(body: ResearchMessageBody):
-    return _sse(research().start(uuid.uuid4().hex[:8], _text(body)))
+    return _sse(research().start(str(uuid.uuid4()), _text(body)))
 
 
 @app.post("/api/research/threads/{thread_id}/messages")

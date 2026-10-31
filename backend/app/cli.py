@@ -92,7 +92,7 @@ def research(args) -> None:
     from app.api.research_runner import ResearchRunner
 
     r = ResearchRunner(fake=args.fake)
-    tid = getattr(args, "thread_id", None) or uuid.uuid4().hex[:8]
+    tid = getattr(args, "thread_id", None) or str(uuid.uuid4())
     if args.cmd in ("new", "say"):
         r.accept(tid, args.text)
     elif args.cmd == "retry":

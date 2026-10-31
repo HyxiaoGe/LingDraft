@@ -9,13 +9,24 @@ import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, threadMarkdown, us
 import { Conversation } from "./timeline.jsx";
 import "./workspace.css";
 
-const hashId = () => location.hash.match(/^#r\/([0-9a-f]{6,})$/)?.[1] || null;
+// 地址：/chat/new 是新对话，/chat/<线程 id> 是某个对话；别的地址（/、/chat）都当新对话，进来时改成 /chat/new。
+// 线程 id 只有字母、数字、- 和 _（后端校验），地址里不用编码；对不上的 id 后端回 404，页面换成新对话
+const NEW_PATH = "/chat/new";
+const chatPath = (id) => (id ? `/chat/${id}` : NEW_PATH);
+const routeId = () => {
+  const m = location.pathname.match(/^\/chat\/([^/]+)\/?$/);
+  return m && m[1] !== "new" ? m[1] : null;
+};
+// 改地址栏：push 进浏览器历史（后退能回来），否则换掉当前这条；已经是这个地址就不动
+const navigate = (path, push) => {
+  if (location.pathname !== path || location.hash) history[push ? "pushState" : "replaceState"](null, "", path);
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const fileName = (title) => (title || "").replace(/[\\/:*?"<>|\s]+/g, " ").trim().slice(0, 60) || "对话";
 
 export default function Workspace() {
   const [threads, setThreads] = useState(null);
-  const [tid, setTid] = useState(hashId);
+  const [tid, setTid] = useState(routeId);
   const [st, setSt] = useState(null);
   // 这个页面发起或接上的那次执行：{said, sentAt, turnsAtStart, items, stage, phase, title, stopping, hidden, edit}
   // sentAt：这次说的话或改的话按本机时间记的发送时间，存下来的对话回来以前先显示它
@@ -42,11 +53,13 @@ export default function Workspace() {
 
   useEffect(() => {
     refreshList();
+    navigate(chatPath(tid), false);
     if (tid) restore(tid, gen.current);
-    const onHash = () => location.hash !== "#poster" && hashId() !== tidRef.current && select(hashId()); // 手动改了地址栏里的线程
-    addEventListener("hashchange", onHash);
+    // 浏览器前进后退、手动改了地址：地址栏已经是了，只换页面（去海报页时这个页面会被换掉，不用管）
+    const onPop = () => location.hash !== "#poster" && routeId() !== tidRef.current && select(routeId(), "none");
+    addEventListener("popstate", onPop);
     return () => { // 切去别的页：断开连接，旧的回调不再改页面
-      removeEventListener("hashchange", onHash);
+      removeEventListener("popstate", onPop);
       ctl.current.abort();
       ctl.current = new AbortController();
       gen.current += 1;
@@ -63,7 +76,8 @@ export default function Workspace() {
 
   // ---- 切换线程 ----
 
-  const select = (id) => {
+  // how：push 记进浏览器历史（点左栏的对话、新对话）；replace 换掉当前这条（当前对话删了、打不开）；none 地址栏已经是了
+  const select = (id, how = "push") => {
     if (id === tidRef.current && id) return;
     ctl.current.abort();
     ctl.current = new AbortController();
@@ -78,7 +92,7 @@ export default function Workspace() {
     setSuggesting(false);
     setError(null);
     setBusy(false);
-    history.replaceState(null, "", id ? `#r/${id}` : location.pathname);
+    if (how !== "none") navigate(chatPath(id), how === "push");
     if (id) restore(id, gen.current);
   };
 
@@ -94,8 +108,8 @@ export default function Workspace() {
       }
     } catch (e) {
       if (g !== gen.current) return;
-      setError(`打开失败：${e.message || e}`);
-      if (e.status === 404) history.replaceState(null, "", location.pathname); // 线程确实不在了才清地址栏；网络抖动时留着，刷新还能再试
+      if (e.status === 404) select(null, "replace"); // 线程确实不在了才换成新对话；网络抖动时地址留着，刷新还能再试
+      setError(e.status === 404 ? "这个对话不存在，可能已经删掉了" : `打开失败：${e.message || e}`);
     }
   }
 
@@ -160,7 +174,7 @@ export default function Workspace() {
       if (tidRef.current !== data.thread_id) {
         tidRef.current = data.thread_id;
         setTid(data.thread_id);
-        history.replaceState(null, "", `#r/${data.thread_id}`);
+        navigate(chatPath(data.thread_id), false); // 新对话有了 id：换掉 /chat/new，后退不回到空白的新对话
       }
       setLive((l) => (l ? { ...l, stage: data.queued ? QUEUED : l.stage } : l));
       refreshList();
@@ -280,7 +294,7 @@ export default function Workspace() {
       try {
         await deleteResearchThread(id);
         setThreads((ts) => ts && ts.filter((t) => t.thread_id !== id));
-        if (id === tidRef.current) select(null);
+        if (id === tidRef.current) select(null, "replace");
       } catch (e) {
         setError(`没删成：${e.message || e}`);
       }
@@ -347,8 +361,8 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage }) {
                 ? <RenameRow key={t.thread_id} t={t} onDone={(title) => { setRenaming(null); if (title && title !== t.title) manage.rename(t.thread_id, title); }} />
                 : (
                   <div key={t.thread_id} className={"ws-task" + (t.thread_id === current ? " sel" : "") + (menu?.t.thread_id === t.thread_id ? " menu" : "")}>
-                    <a href={`#r/${t.thread_id}`} className="ws-task-link" aria-current={t.thread_id === current ? "page" : undefined}
-                      onClick={(e) => { e.preventDefault(); onSelect(t.thread_id); }}>
+                    <a href={chatPath(t.thread_id)} className="ws-task-link" aria-current={t.thread_id === current ? "page" : undefined}
+                      onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onSelect(t.thread_id); }}>
                       <span className={"dot " + key} />
                       <span className="body">
                         <span className="title" title={t.title}>{t.title}</span>
