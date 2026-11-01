@@ -130,6 +130,35 @@ def test_last_model_call_writes_the_report_without_tools(monkeypatch):
     assert sum(isinstance(m, HumanMessage) for m in sub) == 1  # 最后那条说明只在请求里，不存进记录
 
 
+def test_budget_blocks_extra_calls_and_reminds_each_step(monkeypatch):
+    """搜索预算 3，模型不管预算、每次并行搜两个：第二次只执行一个，另一个不执行，模型收到“不要再调”。
+    每次工具结果回来，请求末尾提醒用了几次、还剩几次；提醒说用完了，它就写报告。
+    没执行的那个页面上不列、用量不算；提醒只在请求里，不存进记录。"""
+    monkeypatch.setattr(subagent, "TOOL_BUDGET", {"search_web": 3, "read_page": 2})
+    notes: list[str] = []
+    decide = FakeToolModel._decide
+
+    def spy(self, messages):
+        if str(messages[-1].content).startswith("<budget>"):
+            notes.append(str(messages[-1].content))
+        return decide(self, messages)
+
+    monkeypatch.setattr(FakeToolModel, "_decide", spy)
+    c = Chat()
+    v = c.say("子任务一直搜杭州美食")
+    (task,) = _tasks(v["turns"][0])
+    assert task["ok"] and _kinds(task) == ["thinking", "step:search", "step:search", "thinking", "step:search", "thinking", "text"]
+    assert task["items"][-1]["text"].startswith("预算用完了")
+    assert [n.splitlines()[1:3] for n in notes] == [
+        ["search_web Budget Used: 2, search_web Budget Remaining: 1", "read_page Budget Used: 0, read_page Budget Remaining: 2"],
+        ["search_web Budget Used: 3, search_web Budget Remaining: 0", "read_page Budget Used: 0, read_page Budget Remaining: 2"]]
+    sub = subagent_messages(_task_results(c)[0])
+    blocked = [m for m in sub if isinstance(m, ToolMessage) and history.not_run(m)]
+    assert len(blocked) == 1 and blocked[0].status == "error" and "Do not call 'search_web' again" in history.text_of(blocked[0])
+    assert sum(isinstance(m, HumanMessage) for m in sub) == 1
+    assert v["turns"][0]["record"]["subagent_usage"]["searches"] == 3
+
+
 def test_stop_inside_a_subagent_keeps_what_it_did():
     """子 agent 搜完一次就点停止：两个子 agent 都停下，子任务显示停止了，卡片里留着它们已经做的搜索，来源也在；下一轮能接着说。"""
     c = Chat()
@@ -148,12 +177,14 @@ def test_stop_inside_a_subagent_keeps_what_it_did():
 
 
 def test_retry_continues_the_subagent_where_it_failed():
-    """子 agent 搜完以后调模型出错，这一轮失败；重试时它接着自己的检查点跑：不重搜，任务说明也不会多一份。"""
-    armed = [True]
+    """子 agent 搜完以后调模型出错，这一轮失败；重试时它接着自己的检查点跑：不重搜，任务说明也不会多一份，预算接着算。"""
+    armed, notes = [True], []
 
     class Flaky(FakeToolModel):
         def _message(self, messages: list[BaseMessage]):
-            if armed[0] and isinstance(messages[-1], ToolMessage):
+            if str(messages[-1].content).startswith("<budget>"):
+                notes.append(str(messages[-1].content).splitlines()[1])
+            if armed[0] and any(isinstance(m, ToolMessage) for m in messages):
                 armed[0] = False
                 raise RuntimeError("假模型：网络断了")
             return super()._message(messages)
@@ -170,6 +201,8 @@ def test_retry_continues_the_subagent_where_it_failed():
     assert task["ok"] and _kinds(task) == SUB_ITEMS
     (result,) = _task_results(c)
     assert sum(isinstance(m, HumanMessage) for m in subagent_messages(result)) == 1
+    budget = subagent.TOOL_BUDGET["search_web"]
+    assert notes[:2] == [f"search_web Budget Used: 1, search_web Budget Remaining: {budget - 1}"] * 2  # 出错那次、重试那次
 
 
 def test_moderation_stop_in_a_subagent_is_reported_and_the_turn_goes_on():
@@ -216,6 +249,9 @@ def test_stream_buffer_keeps_subagents_apart():
 def test_task_prompts_render():
     assert "5" in prompts.render("tools.task.description", max_per_turn=subagent.MAX_PER_TURN)
     text = subagent.system_prompt(subagent.datetime(2026, 11, 1, tzinfo=subagent.CHINA_TZ), subagent.SYSTEM_PROMPT,
-                                  max_calls=subagent.MAX_MODEL_CALLS)
+                                  search_budget=7, read_budget=4)
     assert text.startswith("[Your role]") and "2026-11-01 (Sunday)" in text and "[Your report]" in text
-    assert f"after {subagent.MAX_MODEL_CALLS} responses in all" in text
+    assert "up to 7 search_web calls and up to 4 read_page calls" in text
+    note = prompts.render("subagent.budget", tools=[("search_web", 3, 4), ("read_page", 0, 4)])
+    assert note.splitlines() == ["<budget>", "search_web Budget Used: 3, search_web Budget Remaining: 4",
+                                 "read_page Budget Used: 0, read_page Budget Remaining: 4", "Make the best use of the available resources.", "</budget>"]

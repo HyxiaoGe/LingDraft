@@ -98,12 +98,17 @@ def search_limits(args: dict) -> list[str]:
     return ([f"近 {args['recency_days']} 天"] if args.get("recency_days") else []) + [str(d) for d in args.get("domains") or []]
 
 
+def not_run(m: ToolMessage) -> bool:
+    """系统替模型补的结果，工具没真执行：参数解析不了的纠错（hidden）、子 agent 超了预算的（over_budget，见 subagent.ToolBudget）。"""
+    return isinstance(m.artifact, dict) and bool(m.artifact.get("hidden") or m.artifact.get("over_budget"))
+
+
 def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
     """一次工具调用 → 过程记录；还没有结果的记成 pending。
-    系统替模型纠错的结果（参数解析不了）标了 hidden，运行时没报进度，这里也不列。"""
+    工具没真执行的（not_run），运行时没报进度，这里也不列。"""
     name, args, cid = call["name"], call.get("args") or {}, call.get("id") or ""
     kind = STEP_TOOLS.get(name)
-    if kind is None or (result is not None and isinstance(result.artifact, dict) and result.artifact.get("hidden")):
+    if kind is None or (result is not None and not_run(result)):
         return None
     if kind == "search":
         text, extra = str(args.get("query", "")), {"limits": search_limits(args)}
@@ -204,6 +209,8 @@ def usage_of(messages: list[BaseMessage]) -> Usage:
             u.output_tokens += meta.get("output_tokens") or 0
             u.cached_tokens += (meta.get("input_token_details") or {}).get("cache_read") or 0
             u.reasoning_tokens += (meta.get("output_token_details") or {}).get("reasoning") or 0
+        elif isinstance(m, ToolMessage) and not_run(m):  # 没真执行的不算
+            continue
         elif isinstance(m, ToolMessage) and m.name == "search_web":
             u.searches += 1
         elif isinstance(m, ToolMessage) and m.name == "read_page":

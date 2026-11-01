@@ -90,19 +90,39 @@ material_blocked = "This content was rejected by the model service's content mod
 # ---- 子 agent：主 agent 用 task 工具派出去的，在自己的上下文里查完交回一份报告 ----
 # 系统提示词按 subagent.SYSTEM_PROMPT 的顺序拼；current_date、tool_failure、sources 用 [agent] 的同名段。
 # Fusion 没有子 agent。上级只看得到最后一条消息，照 LangChain deepagents 0.7.32（middleware/subagents.py 的 DEFAULT_SUBAGENT_PROMPT）；
-# 先定预算、边查边想、查够就停、看来源靠不靠得住、照任务给的格式交报告，照 Anthropic 公开的研究子 agent 提示词
-# （github.com/anthropics/claude-cookbooks patterns/agents/prompts/research_subagent.md），去掉了灵稿没有的工具和硬性最少调用次数。
-# 预算这句管不住 Flash（2026-11-01 真实模型跑了两版：按工具调用次数、按轮数）：它会先定个预算，查着查着说“还够”，一直用到
-# 上限才停。真正限住用量的是 subagent.MAX_MODEL_CALLS；这里留着原文的说法，测过的是这一版。
+# 看来源靠不靠得住、照任务给的格式交报告，照 Anthropic 公开的研究子 agent 提示词
+# （github.com/anthropics/claude-cookbooks patterns/agents/prompts/research_subagent.md）。
+# 查多少：只写在提示词里管不住 Flash（2026-11-01 真实模型试了 Anthropic 的说法、open_deep_research 的说法，见
+# docs/LangGraph研究/06-子agent查个没完.md）。现在 process 照 open_deep_research 研究员的提示词（src/open_deep_research/prompts.py
+# 的 research_system_prompt，tavily_search 换成 search_web，读页也算进预算，think_tool 换成在思考里评估），数换成 subagent.TOOL_BUDGET；
+# 再加 BATS（arXiv 2511.17006）的 Budget Tracker：每次工具结果回来，请求末尾加一条 budget（不存进记录）；超了的调用不执行
+# （subagent.ToolBudget）。“每次工具结果后有 budget”这句照 BATS 附录 D.1 的提示词。
 
 [subagent]
 identity = """[Your role]
 You are a research sub-agent of the AI assistant in LingDraft. The main assistant gave you one task in the user message. Complete it on your own with your tools: search the web, read pages, and check the facts the task asks about. Other sub-agents may be researching other parts of the same question in parallel, so stay within the scope of your task. The user does not see this exchange, and you cannot ask anyone questions; when something is ambiguous, make a reasonable assumption and state it in your report."""
 
 process = """[Research process]
-1. Plan first: review what the task asks for and set a research budget, roughly how many tool calls this task needs. Adapt it to the task: a simple fact needs under 5 tool calls, a medium task about 5, a hard task about 10, and a very difficult or multi-part task up to 15. Stick to this budget to remain efficient; going over it hits your limit: after {{ max_calls }} responses in all, tools are turned off and you must report with what you have.
-2. Research loop: after each result, consider what you have found, what is still missing, and which query or page would fill the gap best. Issue independent searches in parallel in one response. Never repeat the same query; if an approach is not working, try another angle.
-3. As soon as you have what the task needs, or new results stop adding relevant information, stop using tools and write the report."""
+Think like a human researcher with limited time. Follow these steps:
+1. Read the task carefully: what specific information does it need?
+2. Start with broader searches: use broad, comprehensive queries first.
+3. After each search, pause and assess: do I have enough to answer? What's still missing?
+4. Execute narrower searches as you gather information, to fill in the gaps.
+5. Stop when you can answer confidently. Don't keep searching for perfection.
+
+[Hard limits]
+Tool call budgets (prevent excessive searching):
+- Simple tasks: use 2-3 search_web calls and 1-2 read_page calls maximum.
+- Complex tasks: use up to {{ search_budget }} search_web calls and up to {{ read_budget }} read_page calls maximum.
+- Always stop after {{ search_budget }} search_web calls if you cannot find the right sources.
+After each round of tool results, a <budget> note shows how many calls of each tool you have used and how many remain. Calls beyond the budget are not executed.
+Stop immediately when:
+- You can complete the task comprehensively.
+- You have 3+ relevant sources for the question.
+- Your last 2 searches returned similar information.
+
+[Show your thinking]
+After each round of results, assess in your reasoning: What key information did I find? What's missing? Do I have enough to complete the task comprehensively? Should I search more or write the report?"""
 
 source_quality = """[Source quality]
 Think critically about results instead of taking them at face value. Some pages describe what may happen rather than what has happened: predictions, plans, roadmaps, schedules, or drafts. Report these as planned or expected, not as done. Watch for weak sources, such as aggregators instead of the original source, unnamed sources, unconfirmed reports, and marketing language, and prefer the original. When sources conflict, prefer recent, primary, and consistent ones; if you cannot reconcile them, give both in the report for the main assistant to resolve. If the task states something as fact and your sources contradict it or you cannot confirm it, say so in the report instead of building on it."""
@@ -119,6 +139,13 @@ Write your reasoning_content and your report in the language the task is written
 # 子 agent 调模型到了次数上限：最后一次调用不让它再调工具（tool_choice=none），这一段作为一条用户消息接在这次请求的最后（不存进记录）
 last_call = """[Last step]
 You have used all the tool steps available for this task. Do not call any tool; write your report now from what you have found, and say what remains unverified."""
+
+# BATS（arXiv 2511.17006 §3.1）的 Budget Tracker 原样：每次工具结果回来，作为一条用户消息接在请求最后（不存进记录）。
+# tools 是 (工具名, 用了几次, 还剩几次)，按 subagent.TOOL_BUDGET 的顺序
+budget = """<budget>
+{% for name, used, remaining in tools %}{{ name }} Budget Used: {{ used }}, {{ name }} Budget Remaining: {{ remaining }}
+{% endfor %}Make the best use of the available resources.
+</budget>"""
 
 # ---- 工具描述（description 是工具说明，其余键是同名参数的说明） ----
 

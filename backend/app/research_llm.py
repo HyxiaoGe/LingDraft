@@ -344,6 +344,10 @@ FAKE_USAGE = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
 _BAD_ARGS = '{"query": "a" x}'  # 解析不了的参数
 
 
+def _budget_note(m: BaseMessage) -> bool:
+    return isinstance(m, HumanMessage) and str(m.content).startswith("<budget>")
+
+
 class FakeToolModel(BaseChatModel):
     """按这一轮的进度发固定的工具调用：搜 → 读 → 文字回复。每次回复都带一段假思考和用量。
 
@@ -355,6 +359,7 @@ class FakeToolModel(BaseChatModel):
     - “画”：画一张图（描述就是用户的话，“横”的是 16:9），画完直接回复，不搜；“改图”：改这段对话里最近画的那张；
       “再画”“再生成”：用上一次的参数再画一张（regenerate）。
     - “子任务”：派一个子 agent（task），拿到报告后回复，引用报告里的来源；“分头”：一次派两个，并行。“派N个”：一次派 N 个。
+    - “一直搜”：每次并行搜两个，不管预算，直到请求末尾的预算提醒说搜索用完了（子 agent 才有这条提醒）。
     内容审核（模拟服务商）：请求里任何地方有 FAKE_BLOCKED 就整个拒绝；用户的话里有“查完就拦”时，有工具结果就拒绝；
     有“输出拦截”时，吐完思考后输出被截断。
     """
@@ -372,7 +377,8 @@ class FakeToolModel(BaseChatModel):
                                        "tool_choice": kwargs.get("tool_choice")})
 
     def _decide(self, messages: list[BaseMessage]) -> tuple[str, list[dict]]:
-        i = next(i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], HumanMessage))
+        # 用户的话：最后一条用户消息，子 agent 请求末尾的预算提醒（<budget>，见 subagent.SubagentPrompt）不算
+        i = next(i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], HumanMessage) and not _budget_note(messages[i]))
         text, turn = str(messages[i].content), messages[i + 1:]
         names = [tc["name"] for m in turn if isinstance(m, AIMessage) for tc in m.tool_calls]
         bad = [tc for m in turn if isinstance(m, AIMessage) for tc in m.invalid_tool_calls]
@@ -396,6 +402,11 @@ class FakeToolModel(BaseChatModel):
             return self._draw(text, messages, turn, call)
         if any(k in text for k in ("子任务", "分头", "派")) and "task" in self.bound:
             return self._delegate(text, turn, n)
+        if "一直搜" in text and "search_web" in self.bound:  # 每次并行搜两个，直到预算提醒说搜索用完了
+            note = messages[-1] if _budget_note(messages[-1]) else None
+            if note is not None and re.search(r"search_web Budget Remaining: 0\b", str(note.content)):
+                return "预算用完了，按查到的说。", []
+            return "", [{"name": "search_web", "args": {"query": f"{text[:10]}{n}{k}", "count": 3}, "id": f"call_search_web_{n}{k}"} for k in "ab"]
         if "search_web" not in names:
             return call("search_web", query=text.splitlines()[0][:20], count=3)
         if "read_page" not in names and hits:
@@ -463,7 +474,7 @@ FAKE_BLOCKED = "【审核不通过】"
 
 
 def _turn_text(messages: list[BaseMessage]) -> str:
-    return next((str(m.content) for m in reversed(messages) if isinstance(m, HumanMessage)), "")
+    return next((str(m.content) for m in reversed(messages) if isinstance(m, HumanMessage) and not _budget_note(m)), "")
 
 
 def _fake_review(messages: list[BaseMessage]) -> None:
