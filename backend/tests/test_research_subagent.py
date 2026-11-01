@@ -215,5 +215,7 @@ def test_stream_buffer_keeps_subagents_apart():
 
 def test_task_prompts_render():
     assert "5" in prompts.render("tools.task.description", max_per_turn=subagent.MAX_PER_TURN)
-    text = subagent.system_prompt(subagent.datetime(2026, 11, 1, tzinfo=subagent.CHINA_TZ), subagent.SYSTEM_PROMPT)
+    text = subagent.system_prompt(subagent.datetime(2026, 11, 1, tzinfo=subagent.CHINA_TZ), subagent.SYSTEM_PROMPT,
+                                  max_calls=subagent.MAX_MODEL_CALLS)
     assert text.startswith("[Your role]") and "2026-11-01 (Sunday)" in text and "[Your report]" in text
+    assert f"after {subagent.MAX_MODEL_CALLS} responses in all" in text
