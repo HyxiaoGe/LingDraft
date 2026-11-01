@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from app import config
 from app.graph.research import prompts
 from app.graph.research.history import IMAGE_TOOL
-from app.graph.research.sources import known_ids, source_id, url_key
+from app.graph.research.sources import known_in, source_id, url_key
 from app.graph.research.state import GeneratedImage
 from app.tools import images
 from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError, ImageError
@@ -110,7 +110,7 @@ def make_research_tools(client: GatewayClient) -> list:
         except GatewayError as e:
             # 服务偶发出错交给 agent 处理，不让整轮失败
             raise _failed(e.kind, str(e), e.retryable) from e
-        known = known_ids(runtime.state.get("messages", []))
+        known = known_in(runtime.state)
         out = []
         for h in hits:
             d = h.to_dict()
@@ -127,7 +127,7 @@ def make_research_tools(client: GatewayClient) -> list:
     def read_page(url: str, runtime: ToolRuntime):
         res = client.read(url).to_dict()
         if res.get("ok"):
-            res = {"id": source_id((res.get("url") or url).strip(), known_ids(runtime.state.get("messages", []))), **res}
+            res = {"id": source_id((res.get("url") or url).strip(), known_in(runtime.state)), **res}
         return json.dumps(res, ensure_ascii=False), {"retrieved_at": _now()}
 
     @tool("get_weather", description=prompts.render("tools.get_weather.description"), args_schema=WeatherArgs,

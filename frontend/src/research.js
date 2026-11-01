@@ -189,7 +189,8 @@ export function saveFile(name, text) {
 export const itemKey = (i) => `${i.type}:${i.id}`;
 
 // 这一轮的条目：存下来的（state.turns）为准，叠上还没存下来的实时片段。
-// 思考和正文按（消息 id，种类）对上，工具步骤按调用 id 对上；存下来的步骤还在等结果时，用实时收到的结果。
+// 思考和正文按（消息 id，种类）对上，工具步骤按调用 id 对上；存下来的步骤还在等结果时，用实时收到的：
+// 结果已经来了用结果，子任务还在跑用它实时的条目（存下来的子任务要做完才有条目）。
 // 重新回答时，旧回答的条目在新状态取回来之前就不显示了（live.hidden）
 export function mergeItems(saved, live) {
   if (!live) return saved;
@@ -197,15 +198,17 @@ export function mergeItems(saved, live) {
   const have = new Map(kept.map((i) => [itemKey(i), i]));
   const out = kept.map((i) => {
     const l = i.type === "step" && i.pending ? live.items.find((x) => itemKey(x) === itemKey(i)) : null;
-    return l && !l.pending ? l : i;
+    return l ? { ...i, ...l } : i;
   });
   for (const i of live.items) if (!have.has(itemKey(i))) out.push(i);
   return out;
 }
 
-// 实时事件 → 这次执行里的条目（只记还在路上的；存下来以后 mergeItems 以存下来的为准）
+// 实时事件 → 这次执行里的条目（只记还在路上的；存下来以后 mergeItems 以存下来的为准）。
+// 带 task 的是子 agent 的：放进派它的那个子任务（task 那一步）的 items，排法一样；它的阶段（排队、等模型）记在那一步上
 export function addLive(l, ev, data) {
   if (!l) return l;
+  if (data.task) return { ...l, items: addSub(l.items, ev, data) };
   const items = l.items.slice();
   if (ev === "delta") {
     const i = items.findIndex((x) => x.type === data.kind && x.id === data.id);
@@ -216,6 +219,7 @@ export function addLive(l, ev, data) {
   } else if (ev === "step") {
     const s = { type: "step", ...data.step };
     const i = items.findIndex((x) => x.type === "step" && x.id === s.id);
+    if (s.kind === "task") s.items = items[i]?.items || []; // 做完的那一步不带子 agent 的条目，留着实时收到的
     if (i < 0) items.push(s);
     else items[i] = s;
     stopThinking(items);
@@ -225,6 +229,16 @@ export function addLive(l, ev, data) {
     return l;
   }
   return { ...l, items };
+}
+
+function addSub(items, ev, { task, ...data }) {
+  const out = items.slice();
+  let i = out.findIndex((x) => x.type === "step" && x.id === task);
+  // 子任务那一步总是先到；页面中途接上这次执行时可能没有，先占个位，mergeItems 叠到存下来的那一步上
+  if (i < 0) i = out.push({ type: "step", kind: "task", id: task, pending: true, items: [] }) - 1;
+  const sub = addLive({ items: out[i].items || [], phase: out[i].phase }, ev, data);
+  out[i] = { ...out[i], items: sub.items, phase: sub.phase };
+  return out;
 }
 
 function stopThinking(items) {

@@ -20,7 +20,7 @@ from app.api.runner import BaseRunner, Executor, RunConflict, jsonable
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, now, stop_turn
 from app.graph.research.graph import build_graph, open_checkpointer, thread_ids
-from app.graph.research.sources import collect_sources
+from app.graph.research.sources import collect_sources, subagent_messages
 from app.graph.research.state import Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
 from app.tools.images import ImageStore
@@ -76,34 +76,48 @@ class StopCheck(BaseCallbackHandler):
         self.check()
 
 
+class _Streamed:
+    """一条消息到现在流出来的全部思考和正文，以及思考了多久。"""
+
+    def __init__(self, mid: str) -> None:
+        self.mid, self.text, self.thinking, self.clock = mid, "", "", ThinkingClock()
+
+    def message(self) -> AIMessage:
+        meta: dict[str, Any] = {history.STOPPED: True}
+        if (ms := self.clock.ms()) is not None:
+            meta[THINKING_MS] = ms
+        return AIMessage(id=self.mid, content=self.text, additional_kwargs={"reasoning_content": self.thinking} if self.thinking else {},
+                         response_metadata=meta)
+
+
 class StreamBuffer:
-    """把模型的流式片段攒成事件：思考和正文按（消息 id，种类）合并，约每 80ms 发一次。
-    同时记着最后一条消息流出来的全部思考和正文，以及思考了多久：停止时存成这一轮的回复。"""
+    """把模型的流式片段攒成事件：思考和正文按（子任务，消息 id，种类）合并，约每 80ms 发一次。子 agent 的片段带上派它的 task 调用 id。
+    同时记着主 agent 和每个子 agent 最后一条消息流出来的东西：停止时存下来（主 agent 的是这一轮的回复，子 agent 的进它的子任务卡）。"""
 
     def __init__(self) -> None:
         self._deltas: list[dict] = []
         self._last = time.monotonic()
-        self._mid = ""
-        self._text = ""
-        self._thinking = ""
-        self._clock = ThinkingClock()
+        self._cur: dict[str | None, _Streamed] = {}  # None 是主 agent
 
-    def add(self, chunk: AIMessageChunk) -> list[dict]:
+    def add(self, chunk: AIMessageChunk, task: str | None = None) -> list[dict]:
         mid = chunk.id or ""
-        if mid != self._mid:
-            self._mid, self._text, self._thinking, self._clock = mid, "", "", ThinkingClock()
-        self._clock.see(chunk)
+        cur = self._cur.get(task)
+        if cur is None or cur.mid != mid:
+            cur = self._cur[task] = _Streamed(mid)
+        cur.clock.see(chunk)
         thinking = chunk.additional_kwargs.get("reasoning_content") or ""
         text = chunk.content if isinstance(chunk.content, str) else ""
-        self._thinking += thinking
-        self._text += text
+        cur.thinking += thinking
+        cur.text += text
         for kind, piece in (("thinking", thinking), ("text", text)):
             if not piece:
                 continue
-            if self._deltas and self._deltas[-1]["id"] == mid and self._deltas[-1]["kind"] == kind:
-                self._deltas[-1]["text"] += piece
+            # 并行的几个子 agent 的片段交错着来：接在同一条消息最近的那一段后面，种类变了才另起一段
+            prev = next((d for d in reversed(self._deltas) if d["id"] == mid and d.get("task") == task), None)
+            if prev is not None and prev["kind"] == kind:
+                prev["text"] += piece
             else:
-                self._deltas.append({"id": mid, "kind": kind, "text": piece})
+                self._deltas.append({"id": mid, "kind": kind, "text": piece, **({"task": task} if task else {})})
         return self.flush() if time.monotonic() - self._last >= DELTA_S else []
 
     def flush(self) -> list[dict]:
@@ -111,19 +125,14 @@ class StreamBuffer:
         self._deltas, self._last = [], time.monotonic()
         return out
 
-    def partial(self) -> AIMessage | None:
-        if not self._mid:
-            return None
-        meta: dict[str, Any] = {history.STOPPED: True}
-        if (ms := self._clock.ms()) is not None:
-            meta[THINKING_MS] = ms
-        return AIMessage(id=self._mid, content=self._text, additional_kwargs={"reasoning_content": self._thinking} if self._thinking else {},
-                         response_metadata=meta)
+    def partial(self, task: str | None = None) -> AIMessage | None:
+        cur = self._cur.get(task)
+        return cur.message() if cur is not None and cur.mid else None
 
 
 def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
     """对话按轮：用户的话，然后这一轮里模型的思考、正文、工具步骤按先后排，被内容审核拦下时最后是一条 blocked。
-    每轮带这一轮的记录（推荐问题、用量、结果）。"""
+    每轮带这一轮的记录（推荐问题、用量、结果）。子任务那一步带着它的子 agent 的条目（items），排法一样。"""
     by_id = {t.id: t for t in turns}
     results = {m.tool_call_id: m for m in messages if isinstance(m, ToolMessage)}
     out: list[dict] = []
@@ -134,21 +143,35 @@ def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
             cur = {"id": m.id, "user": history.text_of(m), "sent_at": m.additional_kwargs.get(SENT_AT, ""), "items": [],
                    "record": t.model_dump(exclude={"id"}) if t else None}
             out.append(cur)
-            continue
-        if cur is None or not isinstance(m, AIMessage):
-            continue
-        items = cur["items"]
-        if reason := history.blocked_reason(m):
-            items.append({"type": "blocked", "id": m.id, "reason": reason})
-            continue
-        if thinking := m.additional_kwargs.get("reasoning_content"):
-            items.append({"type": "thinking", "id": m.id, "text": thinking, "ms": m.response_metadata.get(THINKING_MS)})
-        if text := history.text_of(m).strip():
-            items.append({"type": "text", "id": m.id, "text": text})
-        for tc in m.tool_calls:
-            if step := history.step_of(tc, results.get(tc["id"])):
-                items.append({"type": "step", **step.model_dump()})
+        elif cur is not None and isinstance(m, AIMessage):
+            cur["items"] += _items_of(m, results)
     return out
+
+
+def _items_of(m: AIMessage, results: dict[str, ToolMessage]) -> list[dict]:
+    """一条模型消息 → 条目：思考、正文、工具步骤；被内容审核拦下的是一条 blocked。"""
+    if reason := history.blocked_reason(m):
+        return [{"type": "blocked", "id": m.id, "reason": reason}]
+    items: list[dict] = []
+    if thinking := m.additional_kwargs.get("reasoning_content"):
+        items.append({"type": "thinking", "id": m.id, "text": thinking, "ms": m.response_metadata.get(THINKING_MS)})
+    if text := history.text_of(m).strip():
+        items.append({"type": "text", "id": m.id, "text": text})
+    for tc in m.tool_calls:
+        result = results.get(tc["id"])
+        if step := history.step_of(tc, result):
+            item = {"type": "step", **step.model_dump()}
+            if step.kind == "task":
+                item["items"] = subagent_items(result)
+            items.append(item)
+    return items
+
+
+def subagent_items(result: ToolMessage | None) -> list[dict]:
+    """子任务卡里的条目：它的子 agent 每次调模型的思考、正文（最后一段是报告）、搜索和读页。还没有结果时是空的，页面用实时的。"""
+    sub = subagent_messages(result) if result is not None else []
+    results = {x.tool_call_id: x for x in sub if isinstance(x, ToolMessage)}
+    return [i for x in sub if isinstance(x, AIMessage) for i in _items_of(x, results)]
 
 
 def _error_text(err: str) -> str:
@@ -271,43 +294,66 @@ class ResearchRunner(BaseRunner):
     def _stop_requested(self, thread_id: str) -> bool:
         return self.runs.stop_requested(self._run_key(thread_id))
 
-    def _write_stop(self, thread_id: str, partial: AIMessage | None) -> None:
-        """这一轮以停止收尾，写成这一轮最后一个节点（TURN_END）的更新：线程停在这一轮结束的地方，可以接着说。"""
+    def _write_stop(self, thread_id: str, buf: StreamBuffer | None = None, tasks: dict[str, str] | None = None) -> None:
+        """这一轮以停止收尾，写成这一轮最后一个节点（TURN_END）的更新：线程停在这一轮结束的地方，可以接着说。
+        tasks 是这次运行里派出去的子 agent（命名空间 → task 调用 id）：还没做完的，把它检查点里已经做了的和流出来的半截存进它的子任务卡。"""
         cfg = self._cfg(thread_id)
         v = self.graph.get_state(cfg).values
+        partial = buf.partial() if buf else None
         if partial is not None and any(m.id == partial.id for m in v["messages"]):  # 这条消息已经完整存下来了
             partial = None
-        self.graph.update_state(cfg, stop_turn(v, partial), as_node=TURN_END)
+        subs: dict[str, list[BaseMessage]] = {}
+        for ns, call_id in (tasks or {}).items():
+            tup = self.graph.checkpointer.get_tuple({"configurable": {"thread_id": thread_id, "checkpoint_ns": ns}})
+            msgs = list(tup.checkpoint["channel_values"].get("messages", [])) if tup else []
+            p = buf.partial(call_id) if buf else None
+            if p is not None and (p.content or p.additional_kwargs) and not any(m.id == p.id for m in msgs):
+                msgs.append(p)
+            if msgs:
+                subs[call_id] = msgs
+        self.graph.update_state(cfg, stop_turn(v, partial, subs), as_node=TURN_END)
 
     def _graph_events(self, thread_id: str, inp: Any):
         """agent 的流 → 页面事件。messages 只转发 model 节点的（快模型在别的节点里调用，不算）；
         custom 是中间件写的进度（step）、标题（title）和阶段（phase：起标题、等模型这些空档在等什么）；updates 里改了 state 的节点做完发 node，页面据此重新取状态。
+        子 agent（task 工具里跑的另一个 agent）的流要开 subgraphs 才有，按命名空间认出是哪个 task 调用派的：
+        它的片段、进度、阶段带上 task（调用 id），页面放进那张子任务卡；它的节点做完不发 node。它的片段 langgraph_node 也是 model，只按节点名分不开。
         用户点了停止：排队时就点的不跑，直接收尾；跑着的在下一个片段或下一步停下（见 StopCheck），已经流出来的正文留着。"""
         if self._stop_requested(thread_id):
-            self._write_stop(thread_id, None)
+            self._write_stop(thread_id)
             yield {"event": "node", "data": {"node": TURN_END}}
             return
         buf = StreamBuffer()
+        tasks: dict[str, str] = {}  # 子 agent 的命名空间 → 派它的 task 调用 id（task 工具开跑前写进自定义流的 subagent）
         stop = StopCheck(lambda: self._stop_requested(thread_id))
         cfg = {**self._cfg(thread_id), "callbacks": [stop]}
         ctx = ChatContext(images=self.images, check_stop=stop.check)
         try:
-            for mode, chunk in self.graph.stream(inp, cfg, context=ctx, stream_mode=["messages", "updates", "custom"]):
+            for ns, mode, chunk in self.graph.stream(inp, cfg, context=ctx, stream_mode=["messages", "updates", "custom"], subgraphs=True):
+                task = tasks.get(ns[0]) if ns else None
+                if ns and task is None:  # 不是子 agent 的嵌套图（现在没有）
+                    continue
                 if mode == "messages":
                     msg, meta = chunk
                     if meta.get("langgraph_node") == "model" and isinstance(msg, AIMessageChunk):
-                        yield from buf.add(msg)
+                        yield from buf.add(msg, task)
                     continue
                 yield from buf.flush()
                 if mode == "custom":
-                    yield {"event": chunk["type"], "data": jsonable({k: v for k, v in chunk.items() if k != "type"})}
+                    if chunk["type"] == "subagent":
+                        tasks[chunk["ns"]] = chunk["id"]
+                        continue
+                    data = {k: v for k, v in chunk.items() if k != "type"} | ({"task": task} if task else {})
+                    yield {"event": chunk["type"], "data": jsonable(data)}
+                    continue
+                if task:
                     continue
                 for node, update in chunk.items():
                     if update:  # 没改 state 的中间件节点不发
                         yield {"event": "node", "data": {"node": node}}
         except Stopped:
             yield from buf.flush()
-            self._write_stop(thread_id, buf.partial())
+            self._write_stop(thread_id, buf, tasks)
             yield {"event": "node", "data": {"node": TURN_END}}
             return
         yield from buf.flush()

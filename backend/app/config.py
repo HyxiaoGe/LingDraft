@@ -39,6 +39,11 @@ RESEARCH_PROVIDER = os.environ.get("RESEARCH_PROVIDER", "deepseek")
 RESEARCH_MODEL = os.environ.get("RESEARCH_MODEL", "")  # 空则按提供方默认
 RESEARCH_THINKING = _flag("RESEARCH_THINKING", True)
 RESEARCH_EFFORT = os.environ.get("RESEARCH_EFFORT", "high")
+# 子 agent（主 agent 用 task 工具派出去的）用快一些、便宜一些的模型（2026-11-01 Sean 定）。空则按提供方默认：deepseek-flash / 豆包 lite
+SUBAGENT_MODEL = os.environ.get("SUBAGENT_MODEL", "")
+SUBAGENT_THINKING = _flag("SUBAGENT_THINKING", True)
+SUBAGENT_EFFORT = os.environ.get("SUBAGENT_EFFORT", "high")
+DEEPSEEK_FLASH_MODEL = os.environ.get("DEEPSEEK_FLASH_MODEL", "deepseek-flash")
 
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-flash-260915")
 # 背景图生成开关（M2 起默认开）；关闭时背景为模板渐变

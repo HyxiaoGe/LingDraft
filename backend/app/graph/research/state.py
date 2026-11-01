@@ -85,8 +85,8 @@ class ToolStep(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     id: str = Field(description="工具调用 id；页面据此把实时进度和存下来的记录对上")
-    kind: Literal["search", "read", "weather", "image"]
-    text: str = Field(description="搜索词 / 网址 / 地名 / 画图的描述")
+    kind: Literal["search", "read", "weather", "image", "task"]
+    text: str = Field(description="搜索词 / 网址 / 地名 / 画图的描述 / 子任务的标题")
     limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制")
     ok: bool = True
     hits: int = 0  # 搜索返回的条数
@@ -99,6 +99,7 @@ class ToolStep(BaseModel):
     image: GeneratedImage | None = Field(default=None, description="画好的图，页面画成图片卡片")
     aspect_ratio: str = Field(default="", description="画图时要的比例：还没出图时页面按它占位；改图没给比例时是空的")
     edit: bool = Field(default=False, description="画图是在改之前的一张图")
+    prompt: str = Field(default="", description="子任务：主 agent 交给子 agent 的完整说明")
 
     @field_validator("title")
     @classmethod
@@ -119,6 +120,7 @@ class Usage(BaseModel):
     reads: int = 0
     weather: int = 0  # 查天气的次数
     images: int = 0  # 画成的图（画新图和改图都算）
+    subagents: int = 0  # 派出去的子 agent（真跑了的）
 
 
 class Turn(BaseModel):
@@ -129,7 +131,8 @@ class Turn(BaseModel):
     started_at: str
     ended_at: str = ""
     suggestions: list[str] = Field(default_factory=list)
-    usage: Usage = Field(default_factory=Usage)
+    usage: Usage = Field(default_factory=Usage, description="主 agent 的")
+    subagent_usage: Usage = Field(default_factory=Usage, description="这一轮所有子 agent 加起来的；模型不一样，价钱不一样，和主 agent 分开记")
     outcome: Literal["ok", "no_reply", "blocked", "stopped"] = Field(
         default="ok", description="no_reply：这一轮结束时模型没有给出正文；blocked：被模型服务的内容审核拦下，这一轮停了；"
                                   "stopped：用户点了停止，已经写出来的正文留着")

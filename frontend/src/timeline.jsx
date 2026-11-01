@@ -4,7 +4,7 @@
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
-import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconImage, IconLoop, IconPage, IconRetry, IconSearch, IconSparkle, IconStop, IconWarn, Spinner } from "./icons.jsx";
+import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconLoop, IconPage, IconRetry, IconSearch, IconSparkle, IconStop, IconWarn, Spinner } from "./icons.jsx";
 import { ImageCards, imagesOf } from "./images.jsx";
 import { Markdown } from "./markdown.jsx";
 import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
@@ -223,7 +223,10 @@ function Turns({ st, live, busy, suggesting, stopping, now, act }) {
 function Turn({ t, st, live, running, suggesting, stopping, last, now, act }) {
   const items = mergeItems(t.items, live);
   const { process, answer } = splitTurn(items);
-  const nums = citeNumbers(items.filter((i) => i.type === "text").map((i) => i.text), st?.sources);
+  const texts = items.filter((i) => i.type === "text").map((i) => i.text);
+  const nums = citeNumbers(texts, st?.sources);
+  // 过程里还有子任务卡：它们的报告引用的来源接着往下编号。这一轮的文字排前面，正文的编号和底下的来源列表不变
+  const procNums = citeNumbers([...texts, ...subTexts(items)], st?.sources);
   const rec = t.record;
   const idle = !running && st?.status === "idle";
   const failed = last && !running && st?.status === "failed";
@@ -232,7 +235,7 @@ function Turn({ t, st, live, running, suggesting, stopping, last, now, act }) {
     <>
       {t.user && <UserMsg text={live?.edit ?? t.user} at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && idle} onEdit={act.edit} />}
       <div className="ws-ai">
-        {(running || rec) && <Process items={process} st={st} nums={nums} rec={rec} running={running} failed={failed} now={now} />}
+        {(running || rec) && <Process items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} />}
         {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
         <ImageCards steps={imagesOf(items)} tid={st?.thread_id} onRegenerate={last && idle ? act.say : null} />
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
@@ -354,15 +357,70 @@ function Process({ items, st, nums, rec, running, failed, now }) {
       {items.length
         ? <button className="ws-proc-head" aria-expanded={shown} onClick={() => setOpen(!shown)}>{label}<IconChevron size={13} className={"chev" + (shown ? " up" : "")} /></button>
         : <div className="ws-proc-head">{label}</div>}
-      {shown && (
-        <div className="ws-proc-body">
-          {items.map((it) => (it.type === "step" ? <ToolRow key={`step:${it.id}`} s={it} />
-            : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} running={running} thinking={running && it.live && !it.ms} />
-              : <ProcText key={`text:${it.id}`} it={it} cite={(sid) => <Mark n={nums[sid]} s={st?.sources?.[sid]} />} />))}
+      {shown && <div className="ws-proc-body"><ProcItems items={items} st={st} nums={nums} running={running} /></div>}
+    </div>
+  );
+}
+
+// 过程里的一条条：思考、中途说的话、工具步骤，子任务是一张卡片。子任务卡里是它的子 agent 的这些，排法一样。
+// hideUnknown：子 agent 还在跑，它查到的来源要等它做完才进这一轮的来源表，还对不上的引用先不显示（不然先冒一个问号）
+function ProcItems({ items, st, nums, running, hideUnknown = false }) {
+  const cite = (sid) => (hideUnknown && !st?.sources?.[sid] ? null : <Mark n={nums[sid]} s={st?.sources?.[sid]} />);
+  return items.map((it) => (it.type === "step" ? (it.kind === "task" ? <TaskCard key={`step:${it.id}`} s={it} st={st} nums={nums} running={running} />
+    : <ToolRow key={`step:${it.id}`} s={it} />)
+    : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} running={running} thinking={running && it.live && !it.ms} />
+      : it.type === "blocked" ? <div key={`blocked:${it.id}`} className="ws-tool bad"><IconWarn size={12} /><span className="main">内容审核没通过，这个子任务停在这里</span></div>
+        : <ProcText key={`text:${it.id}`} it={it} cite={cite} />));
+}
+
+// 子任务卡里报告和中途说的话：给它们的引用编号用
+const subTexts = (items) => items.flatMap((i) => (i.type === "step" && i.kind === "task" ? (i.items || []).filter((x) => x.type === "text").map((x) => x.text) : []));
+
+// 子任务：主 agent 派给一个子 agent 去查的事。卡片一行是任务标题和它现在在做什么，做完了是搜了几次、读了几页；
+// 点开是交代给它的话，和它的思考、搜索、读页、交回的报告。默认收着：几个子 agent 并行时，展开的过程太长
+function TaskCard({ s, st, nums, running }) {
+  const [open, setOpen] = useState(false);
+  const sub = s.items || [];
+  const live = running && s.pending;
+  const done = (k) => sub.filter((i) => i.type === "step" && i.kind === k && !i.pending).length;
+  const did = [done("search") && `搜了 ${done("search")} 次`, done("read") && `读了 ${done("read")} 页`].filter(Boolean).join("、");
+  const status = live ? taskActivity(s) : s.pending ? "没做完" : !s.ok ? s.message || "没做成" : did || "已完成";
+  return (
+    <div className={"ws-task" + (live ? " live" : !s.pending && !s.ok ? " bad" : "")}>
+      <button className="ws-task-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {live ? <Spinner size={12} /> : <IconFork size={12} />}
+        <span className="main" title={s.text}>{s.text || "子任务"}</span>
+        <span className="sub" title={status}>{status}</span>
+        <IconChevron size={13} className={"chev" + (open ? " up" : "")} />
+      </button>
+      {open && (
+        <div className="ws-task-body">
+          {s.prompt && <div className="ws-task-prompt">{s.prompt}</div>}
+          <ProcItems items={sub} st={st} nums={nums} running={live} hideUnknown={live} />
         </div>
       )}
     </div>
   );
+}
+
+// 子 agent 现在在做什么：在搜、在读、在想、在写报告，都没有就看它在等什么（排队、等模型……）
+const TASK_PHASES = {
+  queued: "排队中，前面的子任务做完就开始",
+  model: "等待模型响应…",
+  retry: "工具参数没写对，让模型重写…",
+  guard: "部分资料没通过内容审核，去掉后重试…",
+};
+
+function taskActivity(s) {
+  const sub = s.items || [];
+  const pending = sub.filter((i) => i.type === "step" && i.pending);
+  const more = pending.length > 1 ? ` 等 ${pending.length} 项` : "";
+  const p = pending.at(-1);
+  if (p) return p.kind === "read" ? `正在读 ${p.title || domain(p.text)}${more}` : `正在搜「${p.text}」${more}`;
+  const last = sub.at(-1);
+  if (last?.live && last.type === "text") return "正在写报告…";
+  if (last?.live && last.type === "thinking" && !last.ms) return "思考中…";
+  return TASK_PHASES[s.phase] || "准备中…";
 }
 
 // 被模型服务的内容审核拦下、这一轮停了：说明是固定的，原因来自后端（这一轮从哪里被拦）
@@ -516,6 +574,7 @@ const TIPS = {
   read: [...TIPS_ANY, "这页有点长，容我多看两眼", "网页加载慢吞吞的，我也干着急", "正在逐字逐句地啃这篇", "有的网站慢，再给它一点时间"],
   weather: TIPS_ANY,
   image: [...TIPS_ANY, "正在一笔一笔地画", "画师正在构图", "颜料快调好了", "好图值得多等几秒"],
+  task: [...TIPS_ANY, "几个帮手正分头查着呢", "分头行动中，等它们交回报告", "帮手们还在翻资料"],
 };
 const TIP_AFTER = 3000; // 看不到新进展多久以后开始说
 const TIP_EVERY = 6000; // 一直没进展就隔一会儿换一句
@@ -527,8 +586,10 @@ function LiveLine({ live, items, stopping }) {
   const pending = items.filter((i) => i.type === "step" && i.pending); // 并行的几步里先做完的排在后面也算还在等
   const streaming = lastItem?.live && (lastItem.type === "text" || (lastItem.type === "thinking" && !lastItem.ms));
   const stage = stopping ? "正在停止…" : live?.stage || (pending.length || streaming ? null : PHASES[live?.phase] || "正在准备…");
-  const waitingFor = ["image", "read", "search", "weather"].find((k) => pending.some((i) => i.kind === k)) || "model";
-  const tip = useTip(`${items.length}:${lastItem?.text?.length ?? 0}:${pending.length}:${live?.phase}:${stage}`, stopping ? null : TIPS[waitingFor]);
+  const waitingFor = ["image", "task", "read", "search", "weather"].find((k) => pending.some((i) => i.kind === k)) || "model";
+  // 子任务卡里有进展也算：子 agent 在搜、在写，主 agent 这边一直没动静
+  const sub = pending.filter((i) => i.kind === "task").map((i) => `${i.items?.length ?? 0}.${i.items?.at(-1)?.text?.length ?? 0}.${i.phase}`).join(",");
+  const tip = useTip(`${items.length}:${lastItem?.text?.length ?? 0}:${pending.length}:${live?.phase}:${stage}:${sub}`, stopping ? null : TIPS[waitingFor]);
   return (
     <div className="ws-live" role="status">
       {stage && <><Spinner size={14} /><span className="stage">{stage}</span></>}

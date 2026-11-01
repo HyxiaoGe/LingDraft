@@ -2,6 +2,7 @@
 
 每个网址的 id 由网址算出来（`s` 加 6 位十六进制），工具结果里直接带给模型，正文里用它引用。
 同一个网址在整条线程里永远是同一个 id：并行的几次搜索各自算，也对得上。
+子 agent 的搜索、读页结果在 task 工具结果的 artifact 里（见 subagent_messages），也算这条线程的来源。
 """
 
 from __future__ import annotations
@@ -13,10 +14,11 @@ import string
 from typing import Any
 from urllib.parse import quote, urlsplit
 
-from langchain_core.messages import BaseMessage, ToolMessage
+from langchain_core.messages import BaseMessage, ToolMessage, messages_from_dict
 
 from app.graph.research.state import Source
 
+SUBAGENT_TOOL = "task"  # 主 agent 派子 agent 的工具（见 app.graph.research.subagent）
 EXCERPT_CHARS = 400  # 来源卡上显示的原文开头；模型自己看的是完整的工具结果
 SOURCE_ID = re.compile(r"\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\]")  # 正文里的引用：[s3fa9c1]
 
@@ -70,10 +72,31 @@ def parse(msg: ToolMessage) -> Any:
         return None
 
 
-def collect_sources(messages: list[BaseMessage]) -> list[Source]:
-    """按第一次出现的先后列出所有来源。读到正文的来源用正文开头替换搜索摘要。"""
-    by_id: dict[str, Source] = {}
+def subagent_messages(m: BaseMessage) -> list[BaseMessage]:
+    """一条 task 工具结果里带着的子 agent 的整段消息（artifact 里，模型看不到；存的是 messages_to_dict）。别的消息、没带的是空的。"""
+    art = m.artifact if isinstance(m, ToolMessage) and m.name == SUBAGENT_TOOL else None
+    raw = art.get("messages") if isinstance(art, dict) else None
+    if not raw:
+        return []
+    try:
+        return messages_from_dict(raw)
+    except (KeyError, TypeError, ValueError):
+        return []
+
+
+def flatten(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """每条 task 工具结果前面插上它的子 agent 的消息：来源、用量按发生的先后都算上。"""
+    out: list[BaseMessage] = []
     for m in messages:
+        out += subagent_messages(m)
+        out.append(m)
+    return out
+
+
+def collect_sources(messages: list[BaseMessage]) -> list[Source]:
+    """按第一次出现的先后列出所有来源，子 agent 查到的也算。读到正文的来源用正文开头替换搜索摘要。"""
+    by_id: dict[str, Source] = {}
+    for m in flatten(messages):
         if not isinstance(m, ToolMessage) or m.status == "error":
             continue
         data = parse(m)
@@ -98,6 +121,11 @@ def collect_sources(messages: list[BaseMessage]) -> list[Source]:
 def known_ids(messages: list[BaseMessage]) -> dict[str, str]:
     """之前的工具结果里出现过的 {url_key: id}，给新的搜索、读页结果编 id 用。"""
     return {url_key(s.url): s.id for s in collect_sources(messages)}
+
+
+def known_in(state: dict) -> dict[str, str]:
+    """工具给新结果编 id 时已经有的 {url_key: id}：子 agent 的 state 里还带着派它时主 agent 那边已有的（parent_sources）。"""
+    return {**(state.get("parent_sources") or {}), **known_ids(state.get("messages", []))}
 
 
 def cited(text: str) -> list[str]:

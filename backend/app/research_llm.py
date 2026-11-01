@@ -48,6 +48,8 @@ class Suggestions(BaseModel):
 class ResearchPlanner(Protocol):
     def agent_model(self) -> BaseChatModel: ...
 
+    def subagent_model(self) -> BaseChatModel: ...
+
     def tools(self) -> list: ...
 
     def title(self, text: str) -> str: ...
@@ -185,6 +187,10 @@ class LiveResearchPlanner:
         provider, model = config.RESEARCH_PROVIDER, config.RESEARCH_MODEL
         self._agent = make_chat_model(provider, model, thinking=config.RESEARCH_THINKING, effort=config.RESEARCH_EFFORT,
                                       callbacks=[ThinkingTimer()])
+        # 子 agent 用快一些、便宜一些的模型（见 config.SUBAGENT_MODEL）
+        sub = config.SUBAGENT_MODEL or (config.DEEPSEEK_FLASH_MODEL if provider == "deepseek" else config.ARK_MODEL_LITE)
+        self._sub = make_chat_model(provider, sub, thinking=config.SUBAGENT_THINKING, effort=config.SUBAGENT_EFFORT,
+                                    callbacks=[ThinkingTimer()])
         # 快模型步骤（起标题、推荐问题、单条送审）不开思考：都是小活，开思考慢得多
         self._fast = make_chat_model(provider, model, thinking=False, timeout=120)
         self._gateway = gateway or GatewayClient(config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY, scene="research")
@@ -192,6 +198,9 @@ class LiveResearchPlanner:
 
     def agent_model(self) -> BaseChatModel:
         return self._agent
+
+    def subagent_model(self) -> BaseChatModel:
+        return self._sub
 
     def tools(self) -> list:
         return self._tools
@@ -345,18 +354,22 @@ class FakeToolModel(BaseChatModel):
     - “天气”：先查天气，地名是“天气”前面那段（没有就是广州），再照常搜、读。
     - “画”：画一张图（描述就是用户的话，“横”的是 16:9），画完直接回复，不搜；“改图”：改这段对话里最近画的那张；
       “再画”“再生成”：用上一次的参数再画一张（regenerate）。
+    - “子任务”：派一个子 agent（task），拿到报告后回复，引用报告里的来源；“分头”：一次派两个，并行。“派N个”：一次派 N 个。
     内容审核（模拟服务商）：请求里任何地方有 FAKE_BLOCKED 就整个拒绝；用户的话里有“查完就拦”时，有工具结果就拒绝；
     有“输出拦截”时，吐完思考后输出被截断。
     """
 
     bound: list[str] = Field(default_factory=list)
+    prefix: str = "fake"  # 消息 id 的前缀：子 agent 的假模型用另一个，和主 agent 的消息分得开
+    tool_choice: str | None = None  # "none"：不许调工具，直接回复
 
     @property
     def _llm_type(self) -> str:
         return "fake-tool-model"
 
     def bind_tools(self, tools: Any, **kwargs: Any) -> FakeToolModel:
-        return self.model_copy(update={"bound": [getattr(t, "name", getattr(t, "__name__", "")) for t in tools]})
+        return self.model_copy(update={"bound": [getattr(t, "name", getattr(t, "__name__", "")) for t in tools],
+                                       "tool_choice": kwargs.get("tool_choice")})
 
     def _decide(self, messages: list[BaseMessage]) -> tuple[str, list[dict]]:
         i = next(i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], HumanMessage))
@@ -369,6 +382,8 @@ class FakeToolModel(BaseChatModel):
         def call(tool: str, **args) -> tuple[str, list[dict]]:
             return "", [{"name": tool, "args": args, "id": f"call_{tool}_{n}"}]
 
+        if self.tool_choice == "none":
+            return (f"不能再查了，按查到的说 [{hits[0]['id']}]。" if hits else "不能再查了，没查到。"), []
         if "坏JSON" in text and (not bad or "一直坏" in text) and not names:
             return "", [{"name": "search_web", "args": _BAD_ARGS, "id": f"bad_{n}", "invalid": True}]
         if "几点" in text and TIME_TOOL in self.bound and TIME_TOOL not in names:
@@ -379,6 +394,8 @@ class FakeToolModel(BaseChatModel):
             return call("get_weather", location=text.split("天气")[0].strip()[:8] or "广州")
         if any(k in text for k in ("画", "改图", "再生成")) and "generate_image" in self.bound:
             return self._draw(text, messages, turn, call)
+        if any(k in text for k in ("子任务", "分头", "派")) and "task" in self.bound:
+            return self._delegate(text, turn, n)
         if "search_web" not in names:
             return call("search_web", query=text.splitlines()[0][:20], count=3)
         if "read_page" not in names and hits:
@@ -400,13 +417,24 @@ class FakeToolModel(BaseChatModel):
             return call("generate_image", **{**before[-1], "regenerate": True})
         return call("generate_image", prompt=prompt, **({"aspect_ratio": "16:9"} if "横" in text else {}))
 
+    @staticmethod
+    def _delegate(text: str, turn: list[BaseMessage], n: int) -> tuple[str, list[dict]]:
+        reports = [m for m in turn if isinstance(m, ToolMessage) and m.name == "task"]
+        if reports:
+            ids = list(dict.fromkeys(re.findall(r"\[(s[0-9a-f]{6,10})\]", "\n".join(str(m.content) for m in reports))))
+            return "汇总：" + ("".join(f"[{i}]" for i in ids[:2]) if ids else "子任务没查到。"), []
+        k = int(m.group(1)) if (m := re.search(r"派(\d+)个", text)) else 2 if "分头" in text else 1
+        q = text.splitlines()[0][:12]
+        return "", [{"name": "task", "args": {"title": f"查{q}{j + 1}", "prompt": f"查一查 {q} 第{j + 1}方面"}, "id": f"call_task_{n}_{j}"}
+                    for j in range(k)]
+
     def _message(self, messages: list[BaseMessage]) -> AIMessage:
         _fake_review(messages)
         content, calls = self._decide(messages)
         valid = [{**c, "type": "tool_call"} for c in calls if not c.get("invalid")]
         invalid = [{"name": c["name"], "args": c["args"], "id": c["id"], "error": "bad json", "type": "invalid_tool_call"}
                    for c in calls if c.get("invalid")]
-        return AIMessage(content=content, tool_calls=valid, invalid_tool_calls=invalid, id=f"fake-{len(messages)}",
+        return AIMessage(content=content, tool_calls=valid, invalid_tool_calls=invalid, id=f"{self.prefix}-{len(messages)}",
                          additional_kwargs={"reasoning_content": "（假思考）先想一想。"}, usage_metadata=FAKE_USAGE)
 
     def _generate(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> ChatResult:
@@ -460,9 +488,13 @@ class FakeResearchPlanner:
         self._gateway = gateway or fake_gateway_client()
         self._tools = make_research_tools(self._gateway)
         self._model = FakeToolModel()
+        self._sub_model = FakeToolModel(prefix="fake-sub")
 
     def agent_model(self) -> BaseChatModel:
         return self._model
+
+    def subagent_model(self) -> BaseChatModel:
+        return self._sub_model
 
     def tools(self) -> list:
         return self._tools

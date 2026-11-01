@@ -8,26 +8,27 @@
 - ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度。
 - InvalidToolCallRetryMiddleware：模型返回无法解析的工具调用时，让它带着解析错误重发，最多几次。
 - ContentGuard：模型服务的内容审核拦下请求时，去掉没通过的搜索、读页结果接着跑；去不掉就停下这一轮，之后不再带进上下文。
+工具里有 task：把一件查资料的事交给子 agent（见 subagent），一次回复里调几次就并行跑几个。
 用户点了停止时，运行器掐断这次运行，再用 stop_turn 把这一轮收尾（见 api.research_runner）。
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any, NotRequired
 
 from langchain.agents import create_agent
 from langchain.agents.middleware.types import AgentMiddleware, AgentState, ExtendedModelResponse, ModelRequest, hook_config
-from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage, messages_to_dict
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
 from app.graph.research import history, prompts
-from app.graph.research.sources import parse
+from app.graph.research.sources import SUBAGENT_TOOL, parse
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Turn
 from app.model_guard import ContentBlocked
 from app.tools.images import ImageStore
@@ -38,6 +39,7 @@ CHINA_TZ = timezone(timedelta(hours=8))
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 # 系统提示词按这个顺序拼（见 prompts.toml 的 [agent]）
 SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "language")
+AGENT_PROMPT = tuple(f"agent.{k}" for k in SYSTEM_SECTIONS)
 
 
 @dataclass(frozen=True)
@@ -62,9 +64,13 @@ def emit(event: dict) -> None:
 def turn_started(request: ModelRequest) -> datetime:
     """这一轮开始的北京时间。照 Fusion 在准备这一轮的请求时取一次：一轮里调好几次模型都一样，前缀缓存用得上；
     重新回答按重新回答的时候。取不到这一轮的记录就按现在。"""
-    msgs = request.messages
+    return turn_start(request.messages, request.state)
+
+
+def turn_start(msgs: list[BaseMessage], state: dict) -> datetime:
+    """同 turn_started，按 state 里的消息和每轮的记录取（工具里没有 ModelRequest，用这个）。"""
     i = history.last_human(msgs)
-    turn = next((t for t in reversed(request.state.get("turns", [])) if i >= 0 and t.id == msgs[i].id), None)
+    turn = next((t for t in reversed(state.get("turns", [])) if i >= 0 and t.id == msgs[i].id), None)
     try:
         return datetime.fromisoformat(turn.started_at).astimezone(CHINA_TZ) if turn else datetime.now(CHINA_TZ)
     except ValueError:
@@ -75,14 +81,14 @@ def _day(d: date) -> str:
     return f"{d.isoformat()} ({WEEKDAYS[d.weekday()]})"
 
 
-def system_prompt(at: datetime) -> str:
-    """照 Fusion：日期按北京时间，带星期和明天、这周末、下周末的日期，模型不用自己推星期几。"""
+def system_prompt(at: datetime, keys: Sequence[str] = AGENT_PROMPT) -> str:
+    """照 Fusion：日期按北京时间，带星期和明天、这周末、下周末的日期，模型不用自己推星期几。keys 是按顺序拼的各段（子 agent 用另一套）。"""
     today = at.astimezone(CHINA_TZ).date()
     saturday = today - timedelta(days=today.weekday()) + timedelta(days=5)
     dates = {"current_date": _day(today), "tomorrow": _day(today + timedelta(days=1)),
              "this_saturday": _day(saturday), "this_sunday": _day(saturday + timedelta(days=1)),
              "next_saturday": _day(saturday + timedelta(days=7)), "next_sunday": _day(saturday + timedelta(days=8))}
-    return "\n\n".join(prompts.render(f"agent.{k}", **dates) for k in SYSTEM_SECTIONS)
+    return "\n\n".join(prompts.render(k, **dates) for k in keys)
 
 
 class TurnMiddleware(AgentMiddleware[ResearchState]):
@@ -123,6 +129,7 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         reply = history.final_text(turn_msgs)
         blocked = any(history.blocked_reason(m) for m in turn_msgs)
         turns[-1] = turns[-1].model_copy(update={"ended_at": now(), "suggestions": [], "usage": history.usage_of(turn_msgs),
+                                                 "subagent_usage": history.subagent_usage(turn_msgs),
                                                  "outcome": "blocked" if blocked else "ok" if reply else "no_reply"})
         out["turns"] = turns
         return out
@@ -135,22 +142,28 @@ def _retrying(msgs: list) -> bool:
     return bool(tail) and all(isinstance(m, ToolMessage) for m in tail) and any(isinstance(m.artifact, dict) and m.artifact.get("hidden") for m in tail)
 
 
-def stop_turn(values: dict, partial: AIMessage | None) -> dict[str, Any]:
+def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list[BaseMessage]] | None = None) -> dict[str, Any]:
     """用户点了停止，这一轮到此为止：没跑完的工具调用补上结果，已经流出来的正文（partial）存成这一轮的回复，记下这一轮。
     返回的更新以 TURN_END 的名义写进检查点。这一轮还没开始（排队时就停了）也要补一条记录。
+    subagents 是还没跑完的子 agent 已经做了的（task 调用 id → 消息），存进补上的那条结果，页面上的子任务卡留着它做过的事。
 
     values 是 get_state 拿到的：被掐断的那一步里已经做完的任务（比如并行的几个搜索里先回来的）的结果算在里面，
     但还没落进检查点，update_state 时会被丢掉。所以这一轮的消息原样再写一遍（同一个 id 覆盖，不会重复）。"""
     msgs = values["messages"]
     start = history.last_human(msgs)
     human, turn_msgs = msgs[start], msgs[start + 1:]
-    new: list = turn_msgs + history.dangling(turn_msgs, stopped=True)
+    fixes = history.dangling(turn_msgs, stopped=True)
+    for m in fixes:
+        if m.name == SUBAGENT_TOOL and (sub := (subagents or {}).get(m.tool_call_id)):
+            m.artifact = {**(m.artifact or {}), "messages": messages_to_dict(sub)}
+    new: list = turn_msgs + fixes
     if partial is not None and history.text_of(partial).strip():
         new.append(partial)
     turns = list(values.get("turns", []))
     if not turns or turns[-1].id != human.id:
         turns.append(Turn(id=human.id, started_at=now()))
-    turns[-1] = turns[-1].model_copy(update={"ended_at": now(), "suggestions": [], "usage": history.usage_of(new), "outcome": "stopped"})
+    turns[-1] = turns[-1].model_copy(update={"ended_at": now(), "suggestions": [], "usage": history.usage_of(new),
+                                             "subagent_usage": history.subagent_usage(new), "outcome": "stopped"})
     return {"messages": new, "turns": turns}
 
 
@@ -304,9 +317,11 @@ def _stop(reason: str) -> AIMessage:
 
 
 def build_agent(planner, checkpointer: BaseCheckpointSaver):
+    from app.graph.research.subagent import make_task_tool  # subagent 用到本模块的 middleware，放在这里导入
+
     return create_agent(
         model=planner.agent_model(),
-        tools=planner.tools(),
+        tools=[*planner.tools(), make_task_tool(planner)],
         state_schema=ResearchState,
         context_schema=ChatContext,
         middleware=[
