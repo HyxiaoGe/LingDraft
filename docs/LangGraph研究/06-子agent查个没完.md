@@ -149,7 +149,7 @@ Sean 定了按工具设上限，问能不能借助 LangChain 现成的组件。
 
 **提示词和配置**
 - `[subagent].process` 换成 open_deep_research 研究员的写法（就是上面 tracker 那组用的），数换成配置里的预算，再加 BATS 提示词里"每次工具结果后有 budget"那句。
-- 预算是两个环境变量 `SUBAGENT_SEARCH_BUDGET`、`SUBAGENT_READ_BUDGET`，默认先填 8，等 Sean 定。
+- 预算是两个环境变量 `SUBAGENT_SEARCH_BUDGET`、`SUBAGENT_READ_BUDGET`，默认 8（11-02 Sean 定）。
 - 代码见 `subagent.py` 的 `ToolBudget`、`SubagentPrompt`。
 
 **端到端怎么比**
@@ -190,6 +190,6 @@ Sean 定了按工具设上限，问能不能借助 LangChain 现成的组件。
 **结论**
 - 机制可以定下来：预算一定守得住，主要作用是把跑飞的情况收住，正常情况下花费差别不大。
 - 少查的细节到了最终回答里影响多大，这次测不出来：评委只看出长短，Pro 每次写多长本身就在变。要测准，得每种跑好几次，或者换一种不看长短的评法，比如先列一张这道题该有的事实清单，再逐条对。
-- 默认数先填 8/8，等 Sean 定。
+- 默认数先填 8/8，等 Sean 定。11-02 Sean 定了就用 8/8。
 
 **花费**：端到端 8 次运行 $0.50，评委 $0.04，共约 $0.54。搜索服务付费的 Brave 一次没用。

@@ -43,7 +43,7 @@ RESEARCH_EFFORT = os.environ.get("RESEARCH_EFFORT", "high")
 SUBAGENT_MODEL = os.environ.get("SUBAGENT_MODEL", "")
 SUBAGENT_THINKING = _flag("SUBAGENT_THINKING", True)
 SUBAGENT_EFFORT = os.environ.get("SUBAGENT_EFFORT", "high")
-# 一个子 agent 最多搜几次、读几页：超了的不执行，每步提醒还剩几次（2026-11-01 Sean 定按工具设上限）
+# 一个子 agent 最多搜几次、读几页：超了的不执行，每步提醒还剩几次（2026-11-01 Sean 定按工具设上限，11-02 定 8/8）
 SUBAGENT_SEARCH_BUDGET = int(os.environ.get("SUBAGENT_SEARCH_BUDGET", "8"))
 SUBAGENT_READ_BUDGET = int(os.environ.get("SUBAGENT_READ_BUDGET", "8"))
 DEEPSEEK_FLASH_MODEL = os.environ.get("DEEPSEEK_FLASH_MODEL", "deepseek-flash")
