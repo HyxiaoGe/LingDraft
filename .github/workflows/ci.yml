@@ -1,0 +1,68 @@
+name: CI
+
+# PR：只跑测试（GitHub 的机器）。合进 master：测试过了再部署到 dev（dev 上的 self-hosted runner）
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.16"
+      - name: 后端测试
+        working-directory: backend
+        run: |
+          uv sync --frozen
+          uv run playwright install --with-deps chromium
+          uv run pytest -q
+          uvx ruff@0.15.10 check app tests
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: 前端构建
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: self-hosted
+    timeout-minutes: 20
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
+    steps:
+      - name: 部署
+        run: |
+          cd ~/project/LingDraft
+          git pull --ff-only
+          docker compose up -d --build
+          docker image prune -f
+      - name: 等容器健康
+        run: |
+          for i in $(seq 1 40); do
+            s=$(docker inspect -f '{{.State.Health.Status}}' lingdraft)
+            echo "health: $s"
+            [ "$s" = healthy ] && exit 0
+            sleep 3
+          done
+          docker logs --tail 80 lingdraft
+          exit 1
