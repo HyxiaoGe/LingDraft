@@ -16,6 +16,7 @@ from app.graph.research.state import Forecast, GeneratedImage, ToolStep, Usage
 
 BLOCKED = "lingdraft_blocked"  # 一轮因内容审核停下时，系统补的那条模型消息 response_metadata 里的键，值是原因（见 agent.ContentGuard）
 STOPPED = "lingdraft_stopped"  # 用户点了停止时，已经流出来的那部分正文存成的模型消息 response_metadata 里的键
+GUIDE = "lingdraft_guide"  # 用户插进正在跑的这一轮的话：这条用户消息 additional_kwargs 里的键（见 agent.TurnMiddleware.before_model）
 IMAGE_TOOL = "generate_image"
 STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", IMAGE_TOOL: "image", SUBAGENT_TOOL: "task"}
 BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
@@ -43,14 +44,24 @@ def text_of(m: BaseMessage) -> str:
     return "".join(b.get("text", "") for b in m.content if isinstance(b, dict) and b.get("type") == "text")
 
 
+def is_guide(m: BaseMessage) -> bool:
+    """用户插进正在跑的这一轮的话：算这一轮里的一条，不开新的一轮。"""
+    return isinstance(m, HumanMessage) and bool(m.additional_kwargs.get(GUIDE))
+
+
+def is_request(m: BaseMessage) -> bool:
+    """开始一轮的用户消息（插进来的话不算）。"""
+    return isinstance(m, HumanMessage) and not is_guide(m)
+
+
 def last_human(messages: list[BaseMessage]) -> int:
-    """最后一条用户消息的位置（这一轮从这里开始）；没有是 -1。"""
-    return next((i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], HumanMessage)), -1)
+    """最后一轮开始的那条用户消息的位置（这一轮从这里开始，插进来的话不算）；没有是 -1。"""
+    return next((i for i in range(len(messages) - 1, -1, -1) if is_request(messages[i])), -1)
 
 
 def requests(messages: list[BaseMessage]) -> list[str]:
-    """用户在对话里说过的话，按先后。"""
-    return [text_of(m) for m in messages if isinstance(m, HumanMessage)]
+    """用户在对话里开始每一轮的那句话，按先后（插进来的话不算）。"""
+    return [text_of(m) for m in messages if is_request(m)]
 
 
 def final_text(messages: list[BaseMessage]) -> str:
@@ -69,7 +80,7 @@ def without_blocked_turns(messages: list[BaseMessage]) -> list[BaseMessage]:
     """去掉因内容审核停下的那几轮（从用户的话到这一轮结束）：带着它们，之后的每次请求都会被拦。"""
     turns: list[list[BaseMessage]] = []
     for m in messages:
-        if isinstance(m, HumanMessage) or not turns:
+        if is_request(m) or not turns:
             turns.append([])
         turns[-1].append(m)
     return [m for t in turns if not any(blocked_reason(x) for x in t) for m in t]

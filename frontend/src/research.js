@@ -134,7 +134,7 @@ export function splitTurn(items) {
   const answer = [];
   items.forEach((it, k) => {
     if (it.type === "blocked") answer.push(it);
-    else if (k <= lastStep || it.type === "thinking") process.push(it);
+    else if (k <= lastStep || it.type === "thinking" || it.type === "guide") process.push(it); // 用户插进这一轮的话也在过程里
     else answer.push(it);
   });
   return { process, answer };
@@ -152,10 +152,11 @@ export function answerText(items, sources, { links = false } = {}) {
   return used.length ? `${body}\n\n来源：\n${links ? "\n" : ""}${used.join("\n")}` : body;
 }
 
-// 整段对话导出成 Markdown：每轮是用户的话（引用块）和回答，不含思考和搜索步骤
+// 整段对话导出成 Markdown：每轮是用户的话（引用块，回答过程中插进去的话接在后面）和回答，不含思考和搜索步骤
 export function threadMarkdown(st) {
+  const quote = (text) => text.split("\n").map((l) => `> ${l}`).join("\n");
   const turns = st.turns.map((t) => {
-    const asked = t.user.split("\n").map((l) => `> ${l}`).join("\n");
+    const asked = [t.user, ...t.items.filter((i) => i.type === "guide").map((i) => `（回答过程中插话）${i.text}`)].map(quote).join("\n>\n");
     let reply = answerText(t.items, st.sources, { links: true }) || "（这一轮没有回答）";
     if (t.record?.outcome === "stopped") reply += "\n\n（已停止）";
     if (t.items.some((i) => i.type === "blocked")) reply += "\n\n（内容审核没通过，这一轮停在这里）";
@@ -226,6 +227,9 @@ export function addLive(l, ev, data) {
     if (s.kind === "task") s.items = items[i]?.items || []; // 做完的那一步不带子 agent 的条目，留着实时收到的
     if (i < 0) items.push(s);
     else items[i] = s;
+    stopThinking(items);
+  } else if (ev === "guide") {
+    if (!items.some((x) => x.type === "guide" && x.id === data.id)) items.push({ type: "guide", ...data }); // 用户插进这一轮的话放进对话了
     stopThinking(items);
   } else if (ev === "phase") {
     return { ...l, phase: data.phase }; // 空档里在等什么（等模型、重写参数……），页面据此说明

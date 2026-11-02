@@ -236,6 +236,23 @@ async def research_unqueue(thread_id: str):
     return {"text": r.unqueue(thread_id)}
 
 
+@app.post("/api/research/threads/{thread_id}/guide")
+async def research_guide(thread_id: str):
+    """排着的话不等这一轮答完，插进这一轮：主 agent 下一次调模型之前放进对话；这一轮没再调模型就结束了的，照常排着发。
+    返回 {"guided": 等着插进去的那句}；已经没在跑了（排着的话已经发出去了）是 null。"""
+    r = research()
+    _view(r, thread_id)
+    return {"guided": r.guide(thread_id)}
+
+
+@app.delete("/api/research/threads/{thread_id}/guide")
+async def research_unguide(thread_id: str):
+    """撤回等着插进这一轮的话，返回 {"text": 原文}，页面放回输入框；已经插进去了或没有，text 是 null。"""
+    r = research()
+    _view(r, thread_id)
+    return {"text": r.unguide(thread_id)}
+
+
 @app.post("/api/research/threads/{thread_id}/stop")
 async def research_stop(thread_id: str):
     """让正在跑（或排队）的这一轮停下；停下的结果从事件流里来。没在跑的返回 409。"""

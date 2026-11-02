@@ -27,6 +27,7 @@ QUEUED, RUNNING, SUCCESS, STOPPED, ERROR, LOST = "queued", "running", "success",
 # error：抛了错；lost：进程重启时还在排队或在跑（服务启动时补记，见 sweep）
 STATUSES = (QUEUED, RUNNING, SUCCESS, STOPPED, ERROR, LOST)
 QUEUE = "queue"  # 排着的话的方式：这一轮结束后开新的一轮发（见 ResearchRunner.queue）
+GUIDE = "guide"  # 插进正在跑的这一轮：主 agent 下一次调模型之前放进对话（见 ResearchRunner.guide）
 JOIN = "\n"  # 又说的话接在排着的那句后面，中间换行
 FIELDS = ("id", "thread_id", "kind", "turn_id", "status", "created_at", "started_at", "ended_at", "error_type", "error", "traceback", "version")
 

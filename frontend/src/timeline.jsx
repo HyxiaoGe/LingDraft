@@ -1,10 +1,11 @@
 // 对话。一轮是用户的一句话加上模型这一轮做的事：先是过程（思考、搜索、读页按发生的先后），然后是天气卡片、画的图，再是正文和这条回答用到的来源；
-// 最后一轮下面是推荐问题（起的时候先说一声）。回答时又说的话排着，显示在最下面，这一轮答完就发，能撤回到输入框。过程正在跑时展开，这一轮结束后收成一行“已完成 25 秒”，点开看每一步。
+// 最后一轮下面是推荐问题（起的时候先说一声）。回答时又说的话排着，显示在最下面，这一轮答完就发，能撤回到输入框；
+// 也能插进这一轮：模型做完手上这一步就看到它，插进去以后排在过程里。过程正在跑时展开，这一轮结束后收成一行“已完成 25 秒”，点开看每一步。
 // 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。最后一轮的这些一直显示，之前的悬停才出现。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
-import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconLoop, IconPage, IconRetry, IconSearch, IconSparkle, IconStop, IconUndo, IconWarn, Spinner } from "./icons.jsx";
+import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconInsert, IconLoop, IconPage, IconRetry, IconSearch, IconSparkle, IconStop, IconUndo, IconWarn, Spinner } from "./icons.jsx";
 import { ImageCards, imagesOf } from "./images.jsx";
 import { Markdown } from "./markdown.jsx";
 import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
@@ -219,7 +220,8 @@ function Turns({ st, live, busy, suggesting, stopping, now, act }) {
         const last = i === all.length - 1;
         return <Turn key={t.id} t={t} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} />;
       })}
-      {running && st?.queued_message && <QueuedMsg text={st.queued_message.text} onWithdraw={act.unqueue} />}
+      {running && st?.guided_message && <PendingMsg text={st.guided_message.text} note="做完手上这一步就插进这一轮" onWithdraw={act.unguide} />}
+      {running && st?.queued_message && <PendingMsg text={st.queued_message.text} note="这一轮答完就发" onGuide={act.guide} onWithdraw={act.unqueue} />}
     </>
   );
 }
@@ -281,13 +283,14 @@ function UserMsg({ text, at, pinned, now, editable, onEdit }) {
   );
 }
 
-// 排着的话：这一轮答完就发。撤回就放回输入框，可以改了再发
-function QueuedMsg({ text, onWithdraw }) {
+// 还没发出去的话：排着的（这一轮答完就发，可以改成插进这一轮）、等着插进这一轮的。撤回就放回输入框，可以改了再发
+function PendingMsg({ text, note, onGuide, onWithdraw }) {
   return (
     <div className="ws-user queued pinned">
       <div className="ws-bubble">{text}</div>
       <div className="ws-user-foot pinned">
-        <span className="ws-time">这一轮答完就发</span>
+        <span className="ws-time">{note}</span>
+        {onGuide && <button className="ws-btn ghost sm" title="不等这一轮答完：模型做完手上这一步就看到这句话，接着按它调整" onClick={onGuide}><IconInsert size={13} />插进这一轮</button>}
         <button className="ws-btn ghost sm" onClick={onWithdraw}><IconUndo size={13} />撤回</button>
       </div>
     </div>
@@ -387,7 +390,18 @@ function ProcItems({ items, st, nums, running, hideUnknown = false }) {
     : <ToolRow key={`step:${it.id}`} s={it} />)
     : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} running={running} thinking={running && it.live && it.ms == null} />
       : it.type === "blocked" ? <div key={`blocked:${it.id}`} className="ws-tool bad"><IconWarn size={12} /><span className="main">内容审核没通过，这个子任务停在这里</span></div>
-        : <ProcText key={`text:${it.id}`} it={it} cite={cite} />));
+        : it.type === "guide" ? <GuideNote key={`guide:${it.id}`} it={it} />
+          : <ProcText key={`text:${it.id}`} it={it} cite={cite} />));
+}
+
+// 用户插进这一轮的话：模型从这里开始看到它
+function GuideNote({ it }) {
+  return (
+    <div className="ws-guide">
+      <span className="ws-guide-tag">你插了一句</span>
+      <div className="ws-guide-text">{it.text}</div>
+    </div>
+  );
 }
 
 // 子任务卡里报告和中途说的话：给它们的引用编号用

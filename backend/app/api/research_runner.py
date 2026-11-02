@@ -1,6 +1,7 @@
 """对话场景的接口层运行器：接用户的话、把 agent 的流变成页面的事件、停止和重新生成、线程状态视图。
 
 回答进行中用户又说的话不打断这一轮：排着（存进 run_store 的 pending_messages），这一轮答完或停下就接着发成新的一轮（见 queue、_ended）。
+排着的话也可以插进正在跑的这一轮（见 guide）：主 agent 下一次调模型之前放进对话；这一轮没再调模型就结束了的，退回去排着。
 """
 
 from __future__ import annotations
@@ -8,6 +9,7 @@ from __future__ import annotations
 import ast
 import threading
 import time
+import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,7 +21,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import START
 
 from app import config
-from app.api.run_store import QUEUE, STOPPED, SUCCESS, MemoryRunStore, RunStore, open_run_store
+from app.api.run_store import GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, RunStore, open_run_store
 from app.api.runner import BaseRunner, Executor, RunConflict, jsonable, log
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, now, stop_turn
@@ -57,6 +59,11 @@ SENT_AT = "sent_at"  # 用户那句话的发送时间，记在消息的 addition
 
 def _said(text: str, **kw: Any) -> HumanMessage:
     return HumanMessage(content=text.strip(), additional_kwargs={SENT_AT: now()}, **kw)
+
+
+def _guided(text: str) -> HumanMessage:
+    """插进这一轮的话：发送时间记成放进对话的时候。id 先定下来，页面实时收到的和存下来的对得上。"""
+    return HumanMessage(content=text, id=str(uuid.uuid4()), additional_kwargs={SENT_AT: now(), history.GUIDE: True})
 
 
 class StopCheck(BaseCallbackHandler):
@@ -146,14 +153,18 @@ class StreamBuffer:
 
 
 def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
-    """对话按轮：用户的话，然后这一轮里模型的思考、正文、工具步骤按先后排，被内容审核拦下时最后是一条 blocked。
+    """对话按轮：用户的话，然后这一轮里模型的思考、正文、工具步骤按先后排，被内容审核拦下时最后是一条 blocked；
+    用户插进这一轮的话是一条 guide，排在它放进对话的地方。
     每轮带这一轮的记录（推荐问题、用量、结果）。子任务那一步带着它的子 agent 的条目（items），排法一样。"""
     by_id = {t.id: t for t in turns}
     results = {m.tool_call_id: m for m in messages if isinstance(m, ToolMessage)}
     out: list[dict] = []
     cur: dict | None = None
     for m in messages:
-        if isinstance(m, HumanMessage):
+        if history.is_guide(m):
+            if cur is not None:
+                cur["items"].append({"type": "guide", "id": m.id, "text": history.text_of(m), "sent_at": m.additional_kwargs.get(SENT_AT, "")})
+        elif isinstance(m, HumanMessage):
             t = by_id.get(m.id)
             cur = {"id": m.id, "user": history.text_of(m), "sent_at": m.additional_kwargs.get(SENT_AT, ""), "items": [],
                    "record": t.model_dump(exclude={"id"}) if t else None}
@@ -260,6 +271,28 @@ class ResearchRunner(BaseRunner):
         """撤回排着的话，返回原文（页面放回输入框）；已经发出去了、或者没有排着的，返回 None。"""
         return self.run_store.take_pending(thread_id, QUEUE)
 
+    def guide(self, thread_id: str) -> dict | None:
+        """排着的话不等这一轮答完，插进这一轮：主 agent 下一次调模型之前放进对话（见 agent.TurnMiddleware.before_model）。
+        已经有一句等着插的，接在它后面。返回等着插的那句；没在跑（排着的话已经发出去了）返回 None。"""
+        with self._queue_mu:  # 和这一轮结束时的交接错开：在锁里看到还在跑，结束时一定看得到这句话
+            if self.runs.get(self._run_key(thread_id)) is None:
+                return None
+            text = self.run_store.take_pending(thread_id, QUEUE)
+            return self.run_store.put_pending(thread_id, GUIDE, text) if text else self.run_store.get_pending(thread_id, GUIDE)
+
+    def unguide(self, thread_id: str) -> str | None:
+        """撤回等着插进这一轮的话，返回原文；已经插进去了、或者没有，返回 None。"""
+        return self.run_store.take_pending(thread_id, GUIDE)
+
+    def _take_guide(self, thread_id: str) -> HumanMessage | None:
+        """主 agent 调模型之前取等着插进这一轮的话。取不到就当没有：话留在库里，这一轮结束时退回去排着。"""
+        try:
+            text = self.run_store.take_pending(thread_id, GUIDE)
+        except Exception:  # noqa: BLE001
+            log.warning("插进这一轮的话没取出来：%s", self._run_key(thread_id), exc_info=True)
+            return None
+        return _guided(text) if text else None
+
     def _admit(self, key: str) -> bool:
         with self._queue_mu:
             return self.runs.admit(key)
@@ -267,9 +300,15 @@ class ResearchRunner(BaseRunner):
     def _ended(self, thread_id: str, status: str) -> None:
         """一次执行结束：退掉占位。答完或停下了、又排着话，就把它发成新的一轮（kind 是 say），占位直接交过去，中间别的请求插不进来；
         这次执行最后的状态里线程已经又在跑了，页面看到就接着读下一次执行的事件。
-        出错的不发：排着的话留着，页面把它放回输入框，用户重试完再发。"""
+        出错的不发：排着的话留着，页面把它放回输入框，用户重试完再发。
+        等着插进这一轮、这一轮却没再调模型的话，先退回去排着（排在这期间又说的话前面），和排着的一样处理。"""
         key = self._run_key(thread_id)
         with self._queue_mu:
+            try:
+                if left := self.run_store.take_pending(thread_id, GUIDE):
+                    self.run_store.put_pending(thread_id, QUEUE, left, front=True)
+            except Exception:  # noqa: BLE001
+                log.warning("没插进去的话没退回去排着：%s", key, exc_info=True)
             text = None
             if status in (SUCCESS, STOPPED):
                 try:
@@ -408,7 +447,7 @@ class ResearchRunner(BaseRunner):
         tasks: dict[str, str] = {}  # 子 agent 的命名空间 → 派它的 task 调用 id（task 工具开跑前写进自定义流的 subagent）
         stop = StopCheck(lambda: self._stop_requested(thread_id))
         cfg = {**self._cfg(thread_id), "callbacks": [stop]}
-        ctx = ChatContext(images=self.images, check_stop=stop.check)
+        ctx = ChatContext(images=self.images, check_stop=stop.check, take_guide=lambda: self._take_guide(thread_id))
         try:
             for ns, mode, chunk in self.graph.stream(inp, cfg, context=ctx, stream_mode=["messages", "updates", "custom"], subgraphs=True,
                                                 durability=DURABILITY):
@@ -529,6 +568,7 @@ class ResearchRunner(BaseRunner):
             "turns": jsonable(conversation(v["messages"], v.get("turns", []))),
             "sources": {s.id: s.model_dump() for s in collect_sources(v["messages"])},
             "queued_message": self.run_store.get_pending(thread_id, QUEUE),  # 排着、这一轮答完就发的话（{text, created_at, updated_at}）；没有为 None
+            "guided_message": self.run_store.get_pending(thread_id, GUIDE),  # 等着插进这一轮的话，同上
         }
 
     def summary_view(self, thread_id: str) -> dict | None:

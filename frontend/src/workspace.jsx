@@ -2,10 +2,10 @@
 // 页面以服务器上的线程状态为准：对话和来源都从状态里取。执行中的事件（思考和正文的逐字片段、工具步骤）
 // 叠在存下来的对话上实时显示，并提示该重新取一次状态了；所以刷新、换个页面打开、或者中途断线重连，看到的都一样。
 // 回答时又说的话排在服务器上，这一轮答完或停下就接着发成新的一轮：这一轮的事件流结束时线程又在跑了，页面接着读下一次执行的。
-// 这一轮出错时排着的话不发，取回输入框。
+// 这一轮出错时排着的话不发，取回输入框。排着的话也能插进这一轮：放进对话时事件流里来一条 guide，页面把它挪进过程里。
 import { useEffect, useRef, useState } from "react";
-import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getResearchState, listResearchThreads, queueResearch,
-  regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unqueueResearch } from "./api.js";
+import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getResearchState, guideResearch, listResearchThreads, queueResearch,
+  regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
 import { IconDownload, IconEdit, IconMore, IconPlus, IconTrash } from "./icons.jsx";
 import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, threadMarkdown, useNow, when } from "./research.js";
 import { Conversation, focusInput } from "./timeline.jsx";
@@ -25,6 +25,9 @@ const navigate = (path, push) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const fileName = (title) => (title || "").replace(/[\\/:*?"<>|\s]+/g, " ").trim().slice(0, 60) || "对话";
+
+// 一轮结束时还留在服务器上的话：要放回输入框的那几种
+const leftover = (s) => [s.guided_message && "guided", s.queued_message && "queued"].filter(Boolean);
 
 export default function Workspace() {
   const [threads, setThreads] = useState(null);
@@ -108,7 +111,7 @@ export default function Workspace() {
       if (ACTIVE.has(s.status)) {
         setLive({ items: [], turnsAtStart: s.turns.length, stage: s.status === "queued" ? QUEUED : null });
         await follow(id, g, []);
-      } else if (s.queued_message) takeBack(id); // 没在跑却还排着话：上次那一轮出错了、或服务重启时没跑完
+      } else takeBack(id, leftover(s)); // 没在跑却还排着话：上次那一轮出错了、或服务重启时没跑完
     } catch (e) {
       if (g !== gen.current) return;
       if (e.status === 404) select(null, "replace"); // 线程确实不在了才换成新对话；网络抖动时地址留着，刷新还能再试
@@ -152,15 +155,21 @@ export default function Workspace() {
     setLive(null);
     setSuggesting(false);
     if (errs.length && s.status !== "failed") setError(errs.at(-1));
-    if (s.queued_message) takeBack(s.thread_id); // 这一轮出错，排着的话没发
+    takeBack(s.thread_id, leftover(s)); // 这一轮出错，排着的话没发
     refreshList();
   }
 
-  // 排着的话取回输入框：撤回的，或者这一轮出错没发的。服务器上取一次就没了：已经发出去了就什么也不放
-  async function takeBack(id) {
+  // 排着的话取回输入框：撤回的，或者这一轮出错没发的。服务器上取一次就没了：已经发出去了就什么也不放。
+  // kinds 是取哪几种：queued（排着、答完就发的）、guided（等着插进这一轮的）；都取时等着插的在前，合成一句放回去
+  async function takeBack(id, kinds = ["queued"]) {
+    if (!kinds.length) return;
     try {
-      const text = await unqueueResearch(id);
-      if (id === tidRef.current) setSt((s) => (s ? { ...s, queued_message: null } : s));
+      const texts = [];
+      for (const k of ["guided", "queued"].filter((k) => kinds.includes(k))) {
+        texts.push(await (k === "guided" ? unguideResearch : unqueueResearch)(id));
+        if (id === tidRef.current) setSt((s) => (s ? { ...s, [`${k}_message`]: null } : s));
+      }
+      const text = texts.filter(Boolean).join("\n");
       if (text) setPutBack({ thread: id, text });
     } catch (e) {
       if (id === tidRef.current) setError(`排着的话没取回来：${e.message || e}`);
@@ -212,6 +221,10 @@ export default function Workspace() {
       refreshList();
     } else if (ev === "delta" || ev === "step") {
       setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
+    } else if (ev === "guide") { // 等着插的话放进这一轮了：从下面挪进过程里。之后又插了一句的话以服务器为准
+      setLive((l) => addLive(l, ev, data));
+      setSt((s) => (s?.guided_message?.text === data.text ? { ...s, guided_message: null } : s));
+      refetch(g, 0);
     } else if (ev === "phase") {
       if (data.phase === "suggest") setSuggesting(true); // 这一轮已经结束，live 已经清掉了
       else setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
@@ -301,6 +314,18 @@ export default function Workspace() {
       }
     },
     unqueue: () => takeBack(tidRef.current),
+    // 排着的话不等这一轮答完，插进这一轮。服务器说已经没在跑了：排着的话已经发出去了（或这一轮出错，结束时会放回输入框）
+    guide: async () => {
+      const id = tidRef.current;
+      const g = gen.current;
+      try {
+        const gd = await guideResearch(id);
+        if (g === gen.current) setSt((s) => (s ? { ...s, queued_message: null, guided_message: gd } : s));
+      } catch (e) {
+        if (g === gen.current) setError(`没插进去：${e.message || e}`);
+      }
+    },
+    unguide: () => takeBack(tidRef.current, ["guided"]),
     // 只是提出停下：服务器在下一个字或下一步之前停，最终状态照常从这次执行的事件流里来
     stop: async () => {
       const g = gen.current;
