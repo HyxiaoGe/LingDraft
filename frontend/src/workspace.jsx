@@ -172,7 +172,7 @@ export default function Workspace() {
       const text = texts.filter(Boolean).join("\n");
       if (text) setPutBack({ thread: id, text });
     } catch (e) {
-      if (id === tidRef.current) setError(`排着的话没取回来：${e.message || e}`);
+      if (id === tidRef.current) setError(`排着的话没能取回输入框（${e.message || e}）`);
     }
   }
 
@@ -310,7 +310,7 @@ export default function Workspace() {
       } catch (e) {
         if (g !== gen.current) return;
         setPutBack({ thread: id, text }); // 没排上：话放回输入框
-        setError(`没排上：${e.message || e}`);
+        setError(`这句话没能排上，已经放回输入框，可以再发一次（${e.message || e}）`);
       }
     },
     unqueue: () => takeBack(tidRef.current),
@@ -322,7 +322,9 @@ export default function Workspace() {
         const gd = await guideResearch(id);
         if (g === gen.current) setSt((s) => (s ? { ...s, queued_message: null, guided_message: gd } : s));
       } catch (e) {
-        if (g === gen.current) setError(`没插进去：${e.message || e}`);
+        if (g !== gen.current) return;
+        setError(`没能插进这一轮（${e.message || e}）`);
+        refetch(g, 0); // 这句话现在是排着还是等着插，以服务器为准
       }
     },
     unguide: () => takeBack(tidRef.current, ["guided"]),
