@@ -55,6 +55,8 @@ USE_FAKE_PLANNER = _flag("LINGDRAFT_FAKE", False)
 RESEARCH_WORKERS = int(os.environ.get("LINGDRAFT_RESEARCH_WORKERS", "4"))  # 同时跑几个调研线程，多出来的排队
 # 对话的检查点存 Postgres（postgresql://用户:密码@主机:端口/库）；不配存 DATA_DIR 下的 SQLite
 DATABASE_URL = os.environ.get("LINGDRAFT_DATABASE_URL", "")
+# 前端构建出来的页面（frontend/dist）：部署时由后端一起出页面（镜像里配好了）；本机开发不配，页面由 Vite 出
+STATIC_DIR = os.environ.get("LINGDRAFT_STATIC_DIR", "")
 
 MAX_CHECK_RETRIES = 2
 

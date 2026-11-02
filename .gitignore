@@ -8,3 +8,6 @@ backend/output/
 .DS_Store
 node_modules/
 frontend/dist/
+
+# dev 上 compose 挂进容器的数据目录（对话里画的图、网站图标）
+/data/

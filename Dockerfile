@@ -1,0 +1,24 @@
+# 一个镜像：先构建前端页面，再装后端；后端（uvicorn，单进程）连同页面一起出，接口在 /api 下
+FROM node:22-alpine AS web
+WORKDIR /web
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+FROM python:3.12-slim
+WORKDIR /app
+COPY --from=ghcr.io/astral-sh/uv:0.11.16 /uv /usr/local/bin/uv
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+COPY backend/pyproject.toml backend/uv.lock ./
+RUN uv sync --frozen --no-dev
+COPY backend/ ./
+COPY --from=web /web/dist /app/static
+# 对话里画的图、网站图标存在 /app/data（compose 里挂到宿主机）；对话本身存 Postgres（LINGDRAFT_DATABASE_URL）
+ENV PATH="/app/.venv/bin:$PATH" \
+    LINGDRAFT_STATIC_DIR=/app/static \
+    LINGDRAFT_DATA_DIR=/app/data \
+    LINGDRAFT_OUTPUT_DIR=/app/data/output
+EXPOSE 8000
+# 只能一个进程：执行登记、事件日志都在进程内（见 app/api/runner.py）
+CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

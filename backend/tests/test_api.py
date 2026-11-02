@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api import main as api_main
@@ -76,3 +77,26 @@ def test_unknown_thread_404(client):
     assert client.get("/api/threads/nope/state").status_code == 404
     assert client.post("/api/threads/nope/resume", json={"payload": {}}).status_code == 404
     assert client.get("/api/threads/nope/export").status_code == 404
+
+
+def test_health(client):
+    assert client.get("/api/health").json() == {"ok": True}
+
+
+def test_pages_fall_back_to_index_but_not_for_api_or_assets(tmp_path):
+    """部署时后端出前端页面：/chat/<id> 这类地址给 index.html（不让直接用缓存）；/api 下没有的接口、缺了的资源文件都是 404。"""
+    (tmp_path / "index.html").write_text("<p>页面</p>")
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "app-1a2b.js").write_text("js")
+    app = FastAPI()
+    app.get("/api/health")(lambda: {"ok": True})
+    app.mount("/", api_main.Pages(directory=tmp_path, html=True))
+    c = TestClient(app)
+    for path in ("/", "/chat/new", "/chat/9b259891-c7f8-4c51-9688-ee938444cb8d"):
+        r = c.get(path)
+        assert (r.status_code, r.text, r.headers["cache-control"]) == (200, "<p>页面</p>", "no-cache"), path
+    r = c.get("/assets/app-1a2b.js")
+    assert r.text == "js" and "cache-control" not in r.headers
+    assert c.get("/api/health").json() == {"ok": True}
+    assert c.get("/api/nope").status_code == 404 and c.get("/api").status_code == 404
+    assert c.get("/assets/app-old.js").status_code == 404

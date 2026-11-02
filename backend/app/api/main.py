@@ -4,12 +4,14 @@ from __future__ import annotations
 import io
 import uuid
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import config
 from app.api.favicon import Favicons
@@ -329,3 +331,33 @@ async def favicon(host: str):
     return Response(data, media_type=kind, headers={
         "Cache-Control": "public, max-age=604800", "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"})
+
+
+@app.get("/api/health")
+async def health():
+    """探活（容器健康检查、uptime-kuma）：进程在、能回话就行，不碰数据库和外部服务。"""
+    return {"ok": True}
+
+
+class Pages(StaticFiles):
+    """部署时的前端页面。有这个文件就给文件；地址里没有扩展名的（/chat/new、/chat/<线程 id>）给 index.html，由前端按地址选页面，
+    刷新也打得开。/api 下没有的接口、缺了的资源文件照常 404：发版后旧页面要旧资源，拿到的不能是 HTML。
+    index.html 不让浏览器直接用缓存：发了新版，刷新就拿到新的资源文件名；资源文件名带内容哈希，可以一直缓存。"""
+
+    async def get_response(self, path: str, scope) -> Response:
+        if path.split("/")[0] == "api":
+            raise StarletteHTTPException(404)
+        try:
+            resp = await super().get_response(path, scope)
+        except StarletteHTTPException as e:
+            if e.status_code != 404 or PurePosixPath(path).suffix:
+                raise
+            resp = await super().get_response("index.html", scope)
+        if Path(getattr(resp, "path", "")).name == "index.html":
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+# 放在最后：前面的接口都没对上，才轮到页面
+if config.STATIC_DIR:
+    app.mount("/", Pages(directory=config.STATIC_DIR, html=True), name="pages")
