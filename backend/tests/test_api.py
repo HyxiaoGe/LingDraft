@@ -7,6 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from app import config
 from app.api import main as api_main
 from app.api.runner import GraphRunner
 
@@ -79,8 +80,10 @@ def test_unknown_thread_404(client):
     assert client.get("/api/threads/nope/export").status_code == 404
 
 
-def test_health(client):
-    assert client.get("/api/health").json() == {"ok": True}
+def test_health(client, monkeypatch):
+    assert client.get("/api/health").json() == {"ok": True, "version": None}
+    monkeypatch.setattr(config, "VERSION", "aca72b2")
+    assert client.get("/api/health").json() == {"ok": True, "version": "aca72b2"}
 
 
 def test_pages_fall_back_to_index_but_not_for_api_or_assets(tmp_path):

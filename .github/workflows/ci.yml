@@ -54,14 +54,17 @@ jobs:
         run: |
           cd ~/project/LingDraft
           git pull --ff-only
-          docker compose up -d --build
+          LINGDRAFT_VERSION=$(git rev-parse --short HEAD) docker compose up -d --build
           docker image prune -f
       - name: 等容器健康
         run: |
           for i in $(seq 1 40); do
             s=$(docker inspect -f '{{.State.Health.Status}}' lingdraft)
             echo "health: $s"
-            [ "$s" = healthy ] && exit 0
+            if [ "$s" = healthy ]; then
+              echo "version: $(docker exec lingdraft printenv LINGDRAFT_VERSION)"
+              exit 0
+            fi
             sleep 3
           done
           docker logs --tail 80 lingdraft

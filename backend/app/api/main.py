@@ -17,6 +17,7 @@ from app import config
 from app.api.favicon import Favicons
 from app.api.inspiration import InspirationError, Inspirations
 from app.api.research_runner import NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner
+from app.api.run_store import STATUSES
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 
 app = FastAPI(title="LingDraft PoC")
@@ -42,6 +43,7 @@ def research() -> ResearchRunner:
     global _research
     if _research is None:
         _research = ResearchRunner()
+        _research.recover()  # 进程里第一次用到：之前留下的“还在跑”的运行记录都是上一个进程的
     return _research
 
 
@@ -292,6 +294,27 @@ async def research_events(thread_id: str, after: str | None = None):
     return _sse(r.follow(thread_id, after))
 
 
+@app.get("/api/research/threads/{thread_id}/runs")
+async def research_thread_runs(thread_id: str):
+    """这段对话的每次运行（新的在前）：怎么来的、状态、时间、出错的原因。排查问题用，页面不用。"""
+    r = research()
+    _view(r, thread_id)
+    return {"runs": r.thread_runs(thread_id)}
+
+
+RUNS_LIMIT = 200
+
+
+@app.get("/api/research/runs")
+async def research_runs(status: str | None = None, limit: int = 50):
+    """所有对话里最近的运行，status 只看某个状态（比如 error）。排查问题用，页面不用。"""
+    if status is not None and status not in STATUSES:
+        raise HTTPException(400, f"status 只能是 {'、'.join(STATUSES)}")
+    if not 1 <= limit <= RUNS_LIMIT:
+        raise HTTPException(400, f"limit 在 1 到 {RUNS_LIMIT} 之间")
+    return {"runs": research().recent_runs(status, limit)}
+
+
 @app.get("/api/research/threads/{thread_id}/state")
 async def research_state(thread_id: str):
     return _view(research(), thread_id)
@@ -335,8 +358,8 @@ async def favicon(host: str):
 
 @app.get("/api/health")
 async def health():
-    """探活（容器健康检查、uptime-kuma）：进程在、能回话就行，不碰数据库和外部服务。"""
-    return {"ok": True}
+    """探活（容器健康检查、uptime-kuma）：进程在、能回话就行，不碰数据库和外部服务。version 是部署的提交号，看部署上去的是哪一版。"""
+    return {"ok": True, "version": config.VERSION or None}
 
 
 class Pages(StaticFiles):

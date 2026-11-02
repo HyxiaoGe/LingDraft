@@ -3,13 +3,16 @@
 海报场景只用一个工作线程：Playwright 同步浏览器绑定线程，PoC 不需要并发渲染；调研场景的执行器有多个线程（见 ResearchRunner）。
 同一个线程同时只能有一次执行：请求被接受时就占位（排队也算），执行结束才释放，浏览器断开不影响。
 执行的事件先进日志、再由连接去读：断线或刷新后按事件 id 接着读，执行本身不受连接影响。
+每次执行还记一行运行记录（run_store，见 app.api.run_store），和事件日志用同一个 id；出错时连同堆栈一起记下，也打进日志。
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import threading
+import traceback
 import uuid
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable, Iterator
@@ -22,12 +25,15 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from app import config
+from app.api.run_store import ERROR, SUCCESS, RunStore
 from app.graph.poster.graph import build_graph, open_sqlite_checkpointer
 from app.graph.poster.nodes import _element_view
 from app.llm import ArkPlanner, FakePlanner
 
 _THREAD_ID = re.compile(r"[0-9A-Za-z_-]{1,64}")
 HEARTBEAT_S = 15  # 这么久没有事件就发一行注释保活：nginx 之类的代理默认 60 秒没数据就断开
+
+log = logging.getLogger(__name__)
 
 
 def valid_thread_id(thread_id: str) -> bool:
@@ -123,7 +129,7 @@ class LocalEventLog:
         self._max = max_runs
 
     def open(self, key: str) -> str:
-        run = uuid.uuid4().hex[:8]
+        run = uuid.uuid4().hex  # 也是运行记录的 id，要长期不重复
         with self._mu:
             self._runs[run] = {"key": key, "events": [], "ended": False, "waiters": []}
             self._current[key] = run
@@ -252,6 +258,7 @@ class BaseRunner:
     runs: RunRegistry = _runs
     events: EventLog = _log
     executor: Executor = _poster_executor
+    run_store: RunStore | None = None  # 没有就不记运行记录
 
     def thread_dir(self, thread_id: str) -> Path:
         """thread_id 来自 URL：先查格式，再确认解析后的路径仍在输出目录下。"""
@@ -287,6 +294,10 @@ class BaseRunner:
     def _summarize(self, thread_id: str, node: str, update: dict | None) -> dict:
         return {"node": node}
 
+    def _turn_of(self, thread_id: str) -> str | None:
+        """这次执行属于哪一轮（记进运行记录）；输入已经写进检查点之后调。"""
+        return None
+
     def _after_run(self, thread_id: str) -> Iterator[dict]:
         """执行结束、占位退了、最终状态也发出去以后还要做的事（这时线程已经可以接着用）；吐出的事件接在这次执行后面，最后才是 end。"""
         return iter(())
@@ -312,33 +323,65 @@ class BaseRunner:
                 else:
                     yield {"event": "node", "data": self._summarize(thread_id, node, update)}
 
-    def _submit(self, thread_id: str, make_input: Callable[[], Any]) -> AsyncIterator[str]:
-        """占位 → 算出图的输入（校验在这一步，不通过就退位；新的调研线程在这一步先把需求落盘）→ 提交执行。占着位，别的请求改不了这个线程。"""
+    def _submit(self, thread_id: str, make_input: Callable[[], Any], kind: str) -> AsyncIterator[str]:
+        """占位 → 算出图的输入（校验在这一步，不通过就退位；新的调研线程在这一步先把需求落盘）→ 提交执行。占着位，别的请求改不了这个线程。
+        kind 是这次执行怎么来的，记进运行记录。"""
         key = self._run_key(thread_id)
         if not self.runs.admit(key):
             raise RunConflict("这一步还在处理，等它完成后再提交")
         try:
-            return self._launch(thread_id, make_input())
+            return self._launch(thread_id, make_input(), kind)
         except BaseException:
             self.runs.release(key)
             raise
 
-    def _launch(self, thread_id: str, inp: Any) -> AsyncIterator[str]:
-        """开一段新的事件日志并提交执行，返回读这段日志的 SSE。执行结束才释放占位：浏览器断开、没人读都照常跑完。"""
+    def _record(self, write: Callable[[RunStore], None]) -> None:
+        """写运行记录。写不上只打日志，不影响执行本身。"""
+        if self.run_store is None:
+            return
+        try:
+            write(self.run_store)
+        except Exception:  # noqa: BLE001
+            log.warning("运行记录没写上", exc_info=True)
+
+    def _finish(self, run: str, status: str, error: BaseException | None = None) -> None:
+        if error is None:
+            self._record(lambda s: s.finish(run, status))
+            return
+        tb = "".join(traceback.format_exception(error))
+        self._record(lambda s: s.finish(run, status, type(error).__name__, str(error), tb))
+
+    def _pump(self, run: str, events: Iterator[dict]) -> Any:
+        """把事件逐个写进这次执行的日志，返回生成器的返回值（_graph_events 用它说这次执行是怎么结束的）。"""
+        while True:
+            try:
+                ev = next(events)
+            except StopIteration as done:
+                return done.value
+            self.events.append(run, ev)
+
+    def _launch(self, thread_id: str, inp: Any, kind: str) -> AsyncIterator[str]:
+        """开一段新的事件日志、记一行运行记录并提交执行，返回读这段日志的 SSE。执行结束才释放占位：浏览器断开、没人读都照常跑完。"""
         key = self._run_key(thread_id)
+        turn = self._turn_of(thread_id)
         run = self.events.open(key)
         queued = self.executor.reserve()
+        self._record(lambda s: s.create(run, thread_id, kind, turn, config.VERSION or None))
 
         def work():
             try:
                 self.runs.started(key)
+                self._record(lambda s: s.started(run))
                 self.events.append(run, {"event": "started", "data": {}})
+                status, error = ERROR, None  # 被 Exception 以外的打断（进程要退出）也记成出错
                 try:
-                    for ev in self._graph_events(thread_id, inp):
-                        self.events.append(run, ev)
+                    status = self._pump(run, self._graph_events(thread_id, inp)) or SUCCESS
                 except Exception as e:  # noqa: BLE001
+                    error = e
+                    log.exception("执行出错：%s 运行 %s", self._run_key(thread_id), run)
                     self.events.append(run, {"event": "error", "data": {"message": str(e)}})
                 finally:
+                    self._finish(run, status, error)
                     self.runs.release(key)
                 try:
                     self.events.append(run, {"event": "state", "data": self.state_view(thread_id)})
@@ -352,9 +395,10 @@ class BaseRunner:
         try:
             self.events.append(run, {"event": "thread", "data": {"thread_id": thread_id, "queued": queued}})  # 排队时也先把 id 给页面
             self.executor.submit(work)
-        except BaseException:
+        except BaseException as e:
             self.executor.release()
             self.events.close(run)
+            self._finish(run, ERROR, e)
             raise
         return self._stream(run)
 
@@ -390,7 +434,7 @@ class BaseRunner:
         yield _sse_text({"event": "end", "data": {}})
 
     def resume(self, thread_id: str, payload: dict, interrupt_id: str | None = None) -> AsyncIterator[str]:
-        return self._submit(thread_id, lambda: self.resume_input(thread_id, payload, interrupt_id))
+        return self._submit(thread_id, lambda: self.resume_input(thread_id, payload, interrupt_id), "resume")
 
 
 class GraphRunner(BaseRunner):
@@ -470,4 +514,4 @@ class GraphRunner(BaseRunner):
         return out
 
     def start(self, thread_id: str, request: str, product_image: str | None):
-        return self._submit(thread_id, lambda: {"request": request, "product_image": product_image})
+        return self._submit(thread_id, lambda: {"request": request, "product_image": product_image}, "new")
