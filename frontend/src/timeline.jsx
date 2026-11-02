@@ -58,7 +58,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid 
     if (mode === "idle") return act.say(text);
     return undefined;
   };
-  const title = st?.title || live?.title || live?.said || "新对话";
+  const title = live?.title || st?.title || live?.said || "新对话";
 
   return (
     <section className={"ws-main" + (fresh ? " fresh" : "")} aria-label="对话">

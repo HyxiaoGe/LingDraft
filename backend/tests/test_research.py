@@ -129,6 +129,21 @@ def test_events_stream_title_steps_and_text(chat):
     assert text == chat.view()["turns"][0]["items"][-1]["text"]
 
 
+def test_finished_steps_carry_their_sources(chat):
+    """一轮跑完才存检查点，执行中页面从事件拿来源：做完的那一步带着它得到的来源，和最终状态里的一致（读页之后的用正文开头）。"""
+    v = chat.say("查一下局部修改")
+    search, read = [e["data"] for e in chat.events if e["event"] == "step" and not e["data"]["step"]["pending"]]
+    assert list(search["sources"]) == search["step"]["source_ids"] and len(search["sources"]) == 3
+    assert {s["excerpt_kind"] for s in search["sources"].values()} == {"summary"}
+    (sid,) = read["step"]["source_ids"]
+    assert read["sources"] == {sid: v["sources"][sid]} and v["sources"][sid]["excerpt_kind"] == "body"
+    assert read["sources"][sid]["title"] == search["sources"][sid]["title"]  # 标题沿用搜索时的
+    for other in set(search["sources"]) - {sid}:
+        assert search["sources"][other] == v["sources"][other]
+    pending = [e["data"] for e in chat.events if e["event"] == "step" and e["data"]["step"]["pending"]]
+    assert all("sources" not in p for p in pending)
+
+
 def test_phases_say_what_the_gaps_wait_for(chat):
     """没有字和步骤的空档，页面靠阶段说明在等什么：起标题（只有第一轮）、每次调模型之前、这一轮结束后起推荐问题。"""
     chat.say("查一下局部修改")

@@ -231,8 +231,8 @@ def test_refresh_mid_run_replays_progress_so_far(tmp_path):
             assert wait_until(lambda: any(e["event"] == "node" and e["data"]["node"] == "model" for e in _logged(rr, "evt00002"))
                               and len([e for e in _logged(rr, "evt00002") if e["event"] == "step"]) == 4)
             v = rr.state_view("evt00002")
-            assert v["status"] == "running" and [(i["kind"], i["pending"]) for i in v["turns"][0]["items"] if i["type"] == "step"] == \
-                [("search", False), ("read", False)]
+            # 一轮跑完才存检查点：执行中库里只有用户那句话，做完的搜索、读页和来源都从事件里补发
+            assert v["status"] == "running" and v["turns"][0]["items"] == [] and v["sources"] == {}
             live = asyncio.ensure_future(_drain(rr.follow("evt00002", None)))  # 刷新后的页面：手里没有事件 id
             await asyncio.sleep(0.3)
         finally:
@@ -241,6 +241,8 @@ def test_refresh_mid_run_replays_progress_so_far(tmp_path):
         kinds = [e for _, e, _ in got]
         assert kinds[:2] == ["thread", "started"] and "step" in kinds and kinds[-2:] == ["state", "end"]
         assert [_seq(eid) for eid, _, _ in got] == list(range(1, len(got) + 1))
+        done = [d for _, e, d in got if e == "step" and not d["step"]["pending"]]
+        assert [d["step"]["kind"] for d in done] == ["search", "read"] and all(d["sources"] for d in done)
 
     run_async(go())
 

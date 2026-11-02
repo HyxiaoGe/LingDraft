@@ -44,6 +44,10 @@ class Stopped(Exception):
 
 
 CUT_SHORT = "上次运行没跑完就停了"
+# 检查点只在一次运行开头（用户的话写进去，见 accept）和结束时各存一份，中间每一步不存：每份都带着整段对话，每步都存的话按平方增长。
+# 出错、点停止也算结束，结束前把做到哪儿存下来，重试从断点接着跑；进程直接崩掉或被杀，这一轮做到一半的没存，重试从头跑这一轮。
+# 执行中页面要的东西（来源、标题、进度）都跟着事件走，不从库里取。
+DURABILITY = "exit"
 DELTA_S = 0.08  # 逐字片段攒这么久发一次
 SENT_AT = "sent_at"  # 用户那句话的发送时间，记在消息的 additional_kwargs 里（不会发给模型）
 
@@ -332,7 +336,7 @@ class ResearchRunner(BaseRunner):
 
     def _graph_events(self, thread_id: str, inp: Any):
         """agent 的流 → 页面事件。messages 只转发 model 节点的（快模型在别的节点里调用，不算）；
-        custom 是中间件写的进度（step）、标题（title）和阶段（phase：起标题、等模型这些空档在等什么）；updates 里改了 state 的节点做完发 node，页面据此重新取状态。
+        custom 是中间件写的进度（step，做完的带来源）、标题（title）和阶段（phase：起标题、等模型这些空档在等什么）；updates 里改了 state 的节点做完发 node（页面不靠它）。
         子 agent（task 工具里跑的另一个 agent）的流要开 subgraphs 才有，按命名空间认出是哪个 task 调用派的：
         它的片段、进度、阶段带上 task（调用 id），页面放进那张子任务卡；它的节点做完不发 node。它的片段 langgraph_node 也是 model，只按节点名分不开。
         用户点了停止：排队时就点的不跑，直接收尾；跑着的在下一个片段或下一步停下（见 StopCheck），已经流出来的正文留着。停下的返回 STOPPED（记进运行记录）。"""
@@ -346,7 +350,8 @@ class ResearchRunner(BaseRunner):
         cfg = {**self._cfg(thread_id), "callbacks": [stop]}
         ctx = ChatContext(images=self.images, check_stop=stop.check)
         try:
-            for ns, mode, chunk in self.graph.stream(inp, cfg, context=ctx, stream_mode=["messages", "updates", "custom"], subgraphs=True):
+            for ns, mode, chunk in self.graph.stream(inp, cfg, context=ctx, stream_mode=["messages", "updates", "custom"], subgraphs=True,
+                                                durability=DURABILITY):
                 task = tasks.get(ns[0]) if ns else None
                 if ns and task is None:  # 不是子 agent 的嵌套图（现在没有）
                     continue
