@@ -22,7 +22,7 @@ LINGDRAFT_FAKE=1 uv run uvicorn app.api.main:app --port 8000   # 去掉 LINGDRAF
 cd ../frontend && npm install && npm run dev                    # http://localhost:5173，/api 代理到 8000
 ```
 
-部署（dev，192.168.1.11）：仓库根目录的 `Dockerfile` 先构建前端，再装后端，一个容器（`lingdraft`，单进程 uvicorn）同时出接口和页面（`LINGDRAFT_STATIC_DIR`，没有扩展名的地址给 `index.html`）。`docker-compose.yml` 接入 `middleware_default`（nginx-proxy 按容器名转过来）、`postgres_default`（用 `lingdraft` 库）和 `agent-tools-internal`；`.env` 放在 dev 的 `~/project/LingDraft/` 下，画的图存在那里的 `data/`。PR 上 CI 只跑测试；合进 master 后，dev 上的 self-hosted runner 拉代码、`docker compose up -d --build`，然后等 `/api/health` 变健康。访问地址：内网 `http://lingdraft.dev.seanfield.org`，公网 `https://lingdraft.seanfield.org`（Cloudflare Tunnel）。
+部署（dev，192.168.1.11）：仓库根目录的 `Dockerfile` 先构建前端，再装后端，一个容器（`lingdraft`，单进程 uvicorn）同时出接口和页面（`LINGDRAFT_STATIC_DIR`，没有扩展名的地址给 `index.html`）。`docker-compose.yml` 接入 `middleware_default`（nginx-proxy 按容器名转过来）、`postgres_default`（用 `lingdraft` 库）和 `agent-tools-internal`；`.env` 放在 dev 的 `~/project/LingDraft/` 下，画的图存在那里的 `data/`。PR 上 CI 只跑测试；合进 master 后，dev 上的 self-hosted runner 拉代码、`docker compose up -d --build`，然后等 `/api/health` 变健康。访问地址：内网 `http://lingdraft.dev.seanfield.org`，公网 `https://lingdraft.seanfield.org`（和 fusion 一样经香港 VPS 按域名转到 dev 的 nginx，HTTPS 证书在 dev 上）。
 
 环境变量：`ARK_API_KEY`、`ARK_MODEL`、`ARK_MODEL_LITE`、`ARK_IMAGE_MODEL`、`LINGDRAFT_BACKGROUND=0` 关闭背景图生成、`LINGDRAFT_FAKE=1` 用假模型、`LINGDRAFT_RESEARCH_WORKERS` 同时跑几个调研线程（默认 4，多出来的排队）；调研场景另需 `AGENT_TOOLS_URL` / `AGENT_TOOLS_API_KEY`（agent-tools 网关）与 `DEEPSEEK_API_KEY`；`RESEARCH_PROVIDER`（deepseek / ark）、`RESEARCH_MODEL`、`RESEARCH_THINKING`、`RESEARCH_EFFORT` 可改调研模型。开关型变量（`LINGDRAFT_FAKE`、`LINGDRAFT_BACKGROUND`、`RESEARCH_THINKING`）认 1/0、true/false、yes/no、on/off，不分大小写；写成别的值启动时直接报错。
 
