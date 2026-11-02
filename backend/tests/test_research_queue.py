@@ -1,4 +1,4 @@
-"""回答进行中又说的话：排着，这一轮答完或停下就接着发；出错的留着，页面放回输入框。
+"""回答进行中又说的话：排着（最多一句），这一轮答完或停下就接着发；出错的留着，页面放回输入框。
 排着的话也可以插进正在跑的这一轮：主 agent 下一次调模型之前放进对话；这一轮没再调模型就结束了，照常排着发。只用假模型。"""
 
 from __future__ import annotations
@@ -108,20 +108,19 @@ class _Running:
 
 
 def test_said_while_running_goes_after_the_turn(client, rr):
-    """答着的时候又说了两次：合成一句排着；这一轮答完自动发成新的一轮。排着话的这一轮不起推荐问题。"""
+    """答着的时候又说了一句：排着；再说一句不收（没发出去的话最多一句）。这一轮答完自动发成新的一轮。排着话的这一轮不起推荐问题。"""
     tid = new(client, "直接答：先说一句")["thread_id"]
     with _Running(client, rr, tid, "直接答：第二句") as run:
-        one = _queue(client, tid, "直接答：第三句")
+        one = _queue(client, tid, "  直接答：第三句  ")
         assert one.status_code == 200, one.text
-        first = one.json()["queued"]
-        assert first["text"] == "直接答：第三句"
-        merged = _queue(client, tid, "  再补一句  ").json()["queued"]
-        assert merged["text"] == "直接答：第三句\n再补一句" and merged["created_at"] == first["created_at"]
-        assert state(client, tid)["queued_message"]["text"] == merged["text"]
+        assert one.json()["queued"]["text"] == "直接答：第三句"
+        two = _queue(client, tid, "再补一句")
+        assert two.status_code == 409 and "还没发出去" in two.json()["detail"]
+        assert state(client, tid)["queued_message"]["text"] == "直接答：第三句"
     # 这次执行最后的状态里，排着的话已经发出去了：线程又在跑新的一轮
     end_of_run = last(run.evs, "state")
     assert end_of_run["queued_message"] is None and len(end_of_run["turns"]) == 3
-    assert end_of_run["turns"][2]["user"] == merged["text"]
+    assert end_of_run["turns"][2]["user"] == "直接答：第三句"
     assert ("phase", {"phase": "suggest"}) not in run.evs
     end = _settled(client, tid, 3)
     assert end["status"] == "idle" and end["queued_message"] is None
@@ -253,19 +252,19 @@ def test_guided_message_goes_into_the_running_turn(client, rr):
 
 
 def test_guided_message_is_queued_when_the_turn_ends_first(client, rr):
-    """插的话还没等到下一次调模型，这一轮就答完了：照常排着发成新的一轮，排在这期间又说的话前面。"""
+    """插的话还没等到下一次调模型，这一轮就答完了：照常排着发成新的一轮。等着插的时候也算有一句没发出去，再说的不收。"""
     tid = new(client, "直接答：先说一句")["thread_id"]
     gate = _gate(rr.planner)
     with _Running(client, rr, tid, "直接答：第二句", gate):
         assert gate.waiting.wait(10)
         _queue(client, tid, "直接答：插不进去了")
         assert _guide(client, tid).json()["guided"]["text"] == "直接答：插不进去了"
-        _queue(client, tid, "后来又说的")
+        assert _queue(client, tid, "后来又说的").status_code == 409
         s = state(client, tid)
-        assert s["guided_message"]["text"] == "直接答：插不进去了" and s["queued_message"]["text"] == "后来又说的"
+        assert s["guided_message"]["text"] == "直接答：插不进去了" and s["queued_message"] is None
     end = _settled(client, tid, 3)
     assert "guide" not in _types(end["turns"][1])
-    assert end["turns"][2]["user"] == "直接答：插不进去了\n后来又说的"
+    assert end["turns"][2]["user"] == "直接答：插不进去了"
     assert end["queued_message"] is None and end["guided_message"] is None and _kinds(client, tid) == ["say", "say", "new"]
 
 

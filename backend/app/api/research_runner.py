@@ -1,7 +1,7 @@
 """对话场景的接口层运行器：接用户的话、把 agent 的流变成页面的事件、停止和重新生成、线程状态视图。
 
 回答进行中用户又说的话不打断这一轮：排着（存进 run_store 的 pending_messages），这一轮答完或停下就接着发成新的一轮（见 queue、_ended）。
-排着的话也可以插进正在跑的这一轮（见 guide）：主 agent 下一次调模型之前放进对话；这一轮没再调模型就结束了的，退回去排着。
+没发出去的话最多一句。排着的话也可以插进正在跑的这一轮（见 guide）：主 agent 下一次调模型之前放进对话；这一轮没再调模型就结束了的，退回去排着。
 """
 
 from __future__ import annotations
@@ -38,6 +38,10 @@ class NothingToRetry(Exception):
 
 class NotIdle(Exception):
     """上一轮没跑完：这时不能接着说，也不能重新生成。"""
+
+
+class AlreadyPending(Exception):
+    """回答时又说的话已经有一句没发出去（排着或等着插进这一轮）：没发出去的话最多一句，先撤回改好再发。"""
 
 
 class NothingToRegenerate(Exception):
@@ -254,11 +258,14 @@ class ResearchRunner(BaseRunner):
         return self._submit(thread_id, lambda: self.accept(thread_id, text), "say")
 
     def queue(self, thread_id: str, text: str) -> dict | None:
-        """正在回答时又说的话：排着，这一轮答完或停下就接着发（见 _ended）；已经排着一句的，接在它后面合成一句。返回排着的那句。
+        """正在回答时又说的话：排着，这一轮答完或停下就接着发（见 _ended）。返回排着的那句。
+        没发出去的话最多一句：已经有一句排着或等着插进这一轮的，抛 AlreadyPending（页面上这时发不出去，这里兜底）。
         刚好没在跑（这一轮刚结束）就直接发、返回 None，页面去接这次执行的事件流。上一轮没跑完的抛 NotIdle（先重试）。"""
         key = self._run_key(thread_id)
         with self._queue_mu:
             if not self.runs.admit(key):
+                if self.run_store.get_pending(thread_id, QUEUE) or self.run_store.get_pending(thread_id, GUIDE):
+                    raise AlreadyPending("上面那句还没发出去，先撤回改好再发")
                 return self.run_store.put_pending(thread_id, QUEUE, text.strip())
         try:
             self._launch(thread_id, self.accept(thread_id, text), "say")

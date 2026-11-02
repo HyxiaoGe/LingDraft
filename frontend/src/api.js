@@ -123,8 +123,8 @@ export async function stopResearchThread(threadId) {
   if (!resp.ok) throw await httpError(resp);
 }
 
-// 正在回答时又说的话：排着，这一轮答完或停下就接着发；已经排着一句的，接在后面合成一句。返回排着的那句（{text, created_at, updated_at}）；
-// 这一轮刚好答完了，后端直接发出去，返回 null，页面去接事件流。上一轮没跑完时返回 409
+// 正在回答时又说的话：排着，这一轮答完或停下就接着发。返回排着的那句（{text, created_at, updated_at}）；
+// 这一轮刚好答完了，后端直接发出去，返回 null，页面去接事件流。已经有一句没发出去、或上一轮没跑完时返回 409
 export async function queueResearch(threadId, text) {
   const resp = await fetch(`/api/research/threads/${threadId}/queue`, postJson({ text }));
   if (!resp.ok) throw await httpError(resp);
