@@ -16,7 +16,7 @@ from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from langchain_core.callbacks import BaseCallbackHandler
@@ -27,7 +27,7 @@ from PIL import Image, ImageDraw
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import config
-from app.graph.research import prompts
+from app.graph.research import history, prompts
 from app.model_guard import ContentBlocked, GuardedChatModel
 from app.tools.gateway import GatewayClient
 from app.tools.research_tools import TIME_TOOL, make_research_tools
@@ -356,6 +356,11 @@ def _budget_note(m: BaseMessage) -> bool:
     return isinstance(m, HumanMessage) and str(m.content).startswith("<budget>")
 
 
+def _turn_start(messages: list[BaseMessage]) -> int:
+    """这一轮用户的话的位置：最后一条用户消息，子 agent 请求末尾的预算提醒（<budget>）、用户插进这一轮的话不算。"""
+    return next((i for i in range(len(messages) - 1, -1, -1) if history.is_request(messages[i]) and not _budget_note(messages[i])), -1)
+
+
 class FakeToolModel(BaseChatModel):
     """按这一轮的进度发固定的工具调用：搜 → 读 → 文字回复。每次回复都带一段假思考和用量。
 
@@ -368,6 +373,7 @@ class FakeToolModel(BaseChatModel):
       “再画”“再生成”：用上一次的参数再画一张（regenerate）。
     - “子任务”：派一个子 agent（task），拿到报告后回复，引用报告里的来源；“分头”：一次派两个，并行。“派N个”：一次派 N 个。
     - “一直搜”：每次并行搜两个，不管预算，直到请求末尾的预算提醒说搜索用完了（子 agent 才有这条提醒）。
+    用户插进这一轮的话不改这些路径，给出文字回复时开头说一声收到了哪些（测试据此看模型有没有看到）。
     内容审核（模拟服务商）：请求里任何地方有 FAKE_BLOCKED 就整个拒绝；用户的话里有“查完就拦”时，有工具结果就拒绝；
     有“输出拦截”时，吐完思考后输出被截断。
     """
@@ -386,13 +392,14 @@ class FakeToolModel(BaseChatModel):
                                        "tool_choice": kwargs.get("tool_choice")})
 
     def _decide(self, messages: list[BaseMessage]) -> tuple[str, list[dict]]:
-        # 用户的话：最后一条用户消息，子 agent 请求末尾的预算提醒（<budget>，见 subagent.SubagentPrompt）不算
-        i = next(i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], HumanMessage) and not _budget_note(messages[i]))
+        # 用户的话：最后一条用户消息，子 agent 请求末尾的预算提醒（<budget>，见 subagent.SubagentPrompt）、插进这一轮的话不算
+        i = _turn_start(messages)
         text, turn = str(messages[i].content), messages[i + 1:]
         names = [tc["name"] for m in turn if isinstance(m, AIMessage) for tc in m.tool_calls]
         bad = [tc for m in turn if isinstance(m, AIMessage) for tc in m.invalid_tool_calls]
         hits = _hits(messages)
-        n = len(messages)
+        # 工具调用 id 里带上一段随机的：只按消息条数，去掉内容审核停下的那一轮以后条数会和之前重复，结果就对错了调用
+        n = f"{len(messages)}{uuid4().hex[:6]}"
 
         def call(tool: str, **args) -> tuple[str, list[dict]]:
             return "", [{"name": tool, "args": args, "id": f"call_{tool}_{n}"}]
@@ -451,10 +458,12 @@ class FakeToolModel(BaseChatModel):
     def _message(self, messages: list[BaseMessage]) -> AIMessage:
         _fake_review(messages)
         content, calls = self._decide(messages)
+        if content and not calls and (said := [history.text_of(m) for m in messages[_turn_start(messages):] if history.is_guide(m)]):
+            content = f"收到：{'；'.join(said)}。{content}"
         valid = [{**c, "type": "tool_call"} for c in calls if not c.get("invalid")]
         invalid = [{"name": c["name"], "args": c["args"], "id": c["id"], "error": "bad json", "type": "invalid_tool_call"}
                    for c in calls if c.get("invalid")]
-        return AIMessage(content=content, tool_calls=valid, invalid_tool_calls=invalid, id=f"{self.prefix}-{len(messages)}",
+        return AIMessage(content=content, tool_calls=valid, invalid_tool_calls=invalid, id=f"{self.prefix}-{len(messages)}-{uuid4().hex[:8]}",
                          additional_kwargs={"reasoning_content": "（假思考）先想一想。"}, usage_metadata=FAKE_USAGE)
 
     def _wait(self) -> None:
@@ -489,7 +498,8 @@ FAKE_BLOCKED = "【审核不通过】"
 
 
 def _turn_text(messages: list[BaseMessage]) -> str:
-    return next((str(m.content) for m in reversed(messages) if isinstance(m, HumanMessage) and not _budget_note(m)), "")
+    i = _turn_start(messages)
+    return str(messages[i].content) if i >= 0 else ""
 
 
 def _fake_review(messages: list[BaseMessage]) -> None:

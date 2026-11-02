@@ -138,6 +138,21 @@ export async function unqueueResearch(threadId) {
   return (await resp.json()).text;
 }
 
+// 排着的话不等这一轮答完，插进这一轮：模型做完手上这一步、下一次调模型之前看到它。返回等着插进去的那句；
+// 已经没在跑了（排着的话已经发出去了）返回 null
+export async function guideResearch(threadId) {
+  const resp = await fetch(`/api/research/threads/${threadId}/guide`, { method: "POST" });
+  if (!resp.ok) throw await httpError(resp);
+  return (await resp.json()).guided;
+}
+
+// 撤回等着插进这一轮的话，返回原文（放回输入框）；已经插进去了或没有，返回 null
+export async function unguideResearch(threadId) {
+  const resp = await fetch(`/api/research/threads/${threadId}/guide`, { method: "DELETE" });
+  if (!resp.ok) throw await httpError(resp);
+  return (await resp.json()).text;
+}
+
 // 最后一轮重新回答：去掉这一轮的回答，从用户那句话重新跑。运行中、上一轮没跑完时后端返回 409
 export async function regenerateResearchThread(threadId, onEvent, signal) {
   return sse(`/api/research/threads/${threadId}/regenerate`, { method: "POST" }, onEvent, signal);

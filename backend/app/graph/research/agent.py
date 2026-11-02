@@ -5,6 +5,8 @@
   还没有标题时，按第一句话起标题，和调模型同时跑，不耽误回答（见 _TitleJob）。
   几点钟不放进发给模型的内容，要用时模型自己调 get_current_time（见 tools.research_tools）。
   调模型之前往自定义流里写一个阶段（phase），页面在还没有字和步骤的空档里据此说明在等什么。
+  用户在这一轮里插了话（见 api.research_runner.guide）：主 agent 每次调模型之前取一次，有就放进对话，模型接着做时看得到；
+  不开新的一轮（见 history.is_guide），页面上排在这一轮的过程里它起作用的地方。
   推荐问题不在这一轮里起：正文写完这一轮就结束，运行器在结束之后再起（见 api.research_runner）。
 - ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度；做完的那一步带上它得到的来源。
 - InvalidToolCallRetryMiddleware：模型返回无法解析的工具调用时，让它带着解析错误重发，最多几次。
@@ -28,7 +30,7 @@ from typing import Any, NotRequired
 
 from langchain.agents import create_agent
 from langchain.agents.middleware.types import AgentMiddleware, AgentState, ExtendedModelResponse, ModelRequest, hook_config
-from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage, messages_to_dict
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage, messages_to_dict
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
@@ -57,6 +59,7 @@ class ChatContext:
 
     images: ImageStore  # 画好的图存在哪儿
     check_stop: Callable[[], None]  # 用户点了停止就抛出：要等很久的工具（画图）边等边查，不用等它做完
+    take_guide: Callable[[], HumanMessage | None] = lambda: None  # 取走用户插进这一轮的话（取一次就没了）；没有是 None
 
 
 def now() -> str:
@@ -112,6 +115,15 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         msgs = state["messages"]
         human = msgs[history.last_human(msgs)]
         return {"turns": list(state.get("turns", [])) + [Turn(id=human.id, started_at=now())]}
+
+    def before_model(self, state: ResearchState, runtime) -> dict[str, Any] | None:
+        """用户插进这一轮的话：这次调模型之前放进对话（排在已有的工具结果后面），页面同时收到一条 guide 把它放进过程里。
+        子 agent 不取：它的话等主 agent 下一次调模型（子 agent 都做完以后）。"""
+        msg = runtime.context.take_guide() if runtime.context else None
+        if msg is None:
+            return None
+        emit({"type": "guide", "id": msg.id, "text": history.text_of(msg), "sent_at": msg.additional_kwargs.get("sent_at", "")})
+        return {"messages": [msg]}
 
     def wrap_model_call(self, request: ModelRequest, handler):
         # 还没有标题就和这次调模型同时起，按这段对话的第一句（第一轮出错、停下时还没写进去的，下一次调模型补上）
@@ -315,7 +327,7 @@ def _withdrawn(m: ToolMessage) -> ToolMessage:
 class ContentGuard(AgentMiddleware):
     """模型服务的内容审核拦下了请求（整个请求被拒）：
     - 新加进来的有搜索、读页的结果：一条条单独送审（搜索结果按条），去掉没通过的再试；单条都能过（合在一起才拦），这一批整个去掉再试；
-    - 新加进来的是用户的话，或者去掉资料后还是拦：这一轮停下；
+    - 新加进来的是用户的话（包括这一轮里插进来的），或者去掉资料后还是拦：这一轮停下；
     - 模型的输出被截断：这一轮停下，已经流出去的思考和正文不留。
     去掉的结果写回消息（同一个 id 覆盖），之后的调用不会再带上。停下的那一轮整轮不再带进之后的上下文，
     不然以后每次请求都会被拦。停下时补一条不带工具调用的模型消息，agent 就此结束这一轮，页面据它显示固定的说明。
@@ -339,8 +351,10 @@ class ContentGuard(AgentMiddleware):
         start = next((i + 1 for i in range(len(msgs) - 1, -1, -1) if isinstance(msgs[i], AIMessage)), 0)
         tail = [m for m in msgs[start:] if isinstance(m, ToolMessage)]
         material = [m for m in tail if m.name in MATERIAL_TOOLS and m.status != "error" and m.id]
-        # 停下时的原因：上一条模型消息之后只有用户的话（这一轮的第一句）是 input，有工具结果是 material
-        reason = "material" if tail else "input"
+        # 停下时的原因：上一条模型消息之后只有用户的话（这一轮的第一句）是 input，有工具结果是 material；
+        # 用户在这一轮里插了话的，去掉资料还拦就算 input
+        guided = any(history.is_guide(m) for m in msgs[start:])
+        reason = "material" if tail and not guided else "input"
         if not material:
             return _stop(reason)
         emit({"type": "phase", "phase": "guard"})

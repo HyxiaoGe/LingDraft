@@ -37,6 +37,7 @@ export const IconTrash = (p) => svg(<><path d="M4 7h16M10 11v6M14 11v6" /><path 
 export const IconDownload = (p) => svg(<><path d="M12 4v11M7 10l5 5 5-5" /><path d="M5 20h14" /></>, p);
 export const IconFork = (p) => svg(<><circle cx="6" cy="5" r="2" /><circle cx="18" cy="5" r="2" /><circle cx="12" cy="19" r="2" /><path d="M6 7v1a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7M12 11v6" /></>, p);
 export const IconImage = (p) => svg(<><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="M21 16l-5-5-9 9" /></>, p);
+export const IconInsert = (p) => svg(<><path d="M5 4v7a4 4 0 0 0 4 4h11" /><path d="M15 10l5 5-5 5" /></>, p);
 export const IconUndo = (p) => svg(<><path d="M9 14L4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></>, p);
 export const IconClose = (p) => svg(<path d="M6 6l12 12M18 6L6 18" />, p);
 export const IconMore = (p) => svg(<><circle cx="5.5" cy="12" r="1" fill="currentColor" /><circle cx="12" cy="12" r="1" fill="currentColor" /><circle cx="18.5" cy="12" r="1" fill="currentColor" /></>, p);

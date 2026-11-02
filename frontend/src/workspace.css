@@ -172,6 +172,9 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-task.bad .ws-task-head .sub { color: var(--warn); }
 .ws-task-body { padding: 6px 10px 8px 12px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
 .ws-task-prompt { font-size: 12px; line-height: 1.6; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; padding-bottom: 4px; }
+.ws-guide { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; margin: 4px 0; animation: ws-in .25s var(--ease); }
+.ws-guide-tag { font-size: 11.5px; color: var(--faint); }
+.ws-guide-text { max-width: 85%; font-size: 13px; line-height: 1.6; color: var(--ink2); background: var(--side); border: 1px solid var(--line); border-radius: var(--r-lg) var(--r-lg) 4px var(--r-lg); padding: 5px 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ws-proc-text { font-size: 13px; line-height: 1.7; color: var(--ink2); overflow-wrap: anywhere; }
 
 /* 正文：Markdown */

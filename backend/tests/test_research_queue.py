@@ -1,4 +1,5 @@
-"""回答进行中又说的话：排着，这一轮答完或停下就接着发；出错的留着，页面放回输入框。只用假模型。"""
+"""回答进行中又说的话：排着，这一轮答完或停下就接着发；出错的留着，页面放回输入框。
+排着的话也可以插进正在跑的这一轮：主 agent 下一次调模型之前放进对话；这一轮没再调模型就结束了，照常排着发。只用假模型。"""
 
 from __future__ import annotations
 
@@ -9,8 +10,9 @@ from fastapi.testclient import TestClient
 
 from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
-from app.api.run_store import QUEUE
-from app.research_llm import FakeResearchPlanner, FakeToolModel
+from app.api.run_store import GUIDE, QUEUE
+from app.graph.research import history
+from app.research_llm import FAKE_BLOCKED, FakeResearchPlanner, FakeToolModel
 from tests.research_helpers import events, hold_model, last, new, say, state, wait_until
 
 
@@ -35,6 +37,43 @@ def _queue(http: TestClient, tid: str, text: str):
 
 def _unqueue(http: TestClient, tid: str):
     return http.delete(f"/api/research/threads/{tid}/queue")
+
+
+def _guide(http: TestClient, tid: str):
+    return http.post(f"/api/research/threads/{tid}/guide")
+
+
+def _unguide(http: TestClient, tid: str):
+    return http.delete(f"/api/research/threads/{tid}/guide")
+
+
+class _Gate(threading.Event):
+    """主 agent 的假模型第 at 次调用时停在这里（之前的直接过）；停下时 waiting 置上。放开以后再调都不停。"""
+
+    def __init__(self, at: int = 1):
+        super().__init__()
+        self.at, self.calls, self.waiting = at, 0, threading.Event()
+
+    def wait(self, timeout=None):
+        self.calls += 1
+        if self.calls < self.at:
+            return True
+        self.waiting.set()
+        return super().wait(timeout)
+
+
+def _gate(planner, at: int = 1) -> _Gate:
+    g = _Gate(at)
+    planner._model.gates.append(g)
+    return g
+
+
+def _types(turn: dict) -> list[str]:
+    return [i["kind"] if i["type"] == "step" else i["type"] for i in turn["items"]]
+
+
+def _reply(turn: dict) -> str:
+    return "".join(i["text"] for i in turn["items"] if i["type"] == "text")
 
 
 def _kinds(http: TestClient, tid: str) -> list[str]:
@@ -182,3 +221,155 @@ def test_delete_thread_drops_its_queued_message(client, rr):
     rr.run_store.put_pending(tid, QUEUE, "还排着")
     assert client.delete(f"/api/research/threads/{tid}").status_code == 200
     assert rr.run_store.get_pending(tid, QUEUE) is None
+
+
+# ---- 插进正在跑的这一轮 ----
+
+def test_guided_message_goes_into_the_running_turn(client, rr):
+    """搜着的时候把排着的话插进这一轮：搜完、下一次调模型之前放进对话，模型看得到；还是同一轮，插的话排在过程里它起作用的地方。
+    重新回答从这一轮用户的话重来，插的话不要了。"""
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    gate = _gate(rr.planner)
+    with _Running(client, rr, tid, "搜一下猫", gate) as run:
+        assert gate.waiting.wait(10)  # 第一次调模型已经开始：插的话等下一次
+        assert _queue(client, tid, "只看橘猫").json()["queued"]["text"] == "只看橘猫"
+        r = _guide(client, tid)
+        assert r.status_code == 200 and r.json()["guided"]["text"] == "只看橘猫"
+        s = state(client, tid)
+        assert s["queued_message"] is None and s["guided_message"]["text"] == "只看橘猫"
+    (ev,) = [d for e, d in run.evs if e == "guide"]
+    end = last(run.evs, "state")
+    assert end["status"] == "idle" and end["queued_message"] is None and end["guided_message"] is None
+    assert len(end["turns"]) == 2 and _kinds(client, tid) == ["say", "new"]
+    turn = end["turns"][1]
+    assert turn["user"] == "搜一下猫" and turn["record"]["outcome"] == "ok"
+    assert _types(turn) == ["thinking", "search", "guide", "thinking", "read", "thinking", "text"]
+    item = turn["items"][2]
+    assert (item["id"], item["text"]) == (ev["id"], ev["text"]) == (ev["id"], "只看橘猫") and item["sent_at"] == ev["sent_at"] != ""
+    assert _reply(turn).startswith("收到：只看橘猫。")
+    assert wait_until(lambda: state(client, tid)["turns"][1]["record"]["suggestions"])  # 推荐问题照常按这一轮用户的话起
+    again = last(events(client.post(f"/api/research/threads/{tid}/regenerate")), "state")
+    assert "guide" not in _types(again["turns"][1]) and not _reply(again["turns"][1]).startswith("收到")
+
+
+def test_guided_message_is_queued_when_the_turn_ends_first(client, rr):
+    """插的话还没等到下一次调模型，这一轮就答完了：照常排着发成新的一轮，排在这期间又说的话前面。"""
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    gate = _gate(rr.planner)
+    with _Running(client, rr, tid, "直接答：第二句", gate):
+        assert gate.waiting.wait(10)
+        _queue(client, tid, "直接答：插不进去了")
+        assert _guide(client, tid).json()["guided"]["text"] == "直接答：插不进去了"
+        _queue(client, tid, "后来又说的")
+        s = state(client, tid)
+        assert s["guided_message"]["text"] == "直接答：插不进去了" and s["queued_message"]["text"] == "后来又说的"
+    end = _settled(client, tid, 3)
+    assert "guide" not in _types(end["turns"][1])
+    assert end["turns"][2]["user"] == "直接答：插不进去了\n后来又说的"
+    assert end["queued_message"] is None and end["guided_message"] is None and _kinds(client, tid) == ["say", "say", "new"]
+
+
+def test_stop_sends_the_guided_message_that_did_not_go_in(client, rr):
+    """插的话还没放进去就点了停止：和排着的一样，接着发成新的一轮。"""
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    gate = _gate(rr.planner)
+    with _Running(client, rr, tid, "直接答：第二句", gate):
+        assert gate.waiting.wait(10)
+        _queue(client, tid, "直接答：停了也发")
+        _guide(client, tid)
+        assert client.post(f"/api/research/threads/{tid}/stop").status_code == 200
+    end = _settled(client, tid, 3)
+    assert [t["record"]["outcome"] for t in end["turns"]] == ["ok", "stopped", "ok"]
+    assert end["turns"][2]["user"] == "直接答：停了也发"
+
+
+def test_stop_after_the_guided_message_went_in_keeps_it(client, rr):
+    """插的话已经放进去了，接着调模型时点了停止：插的话留在停下的这一轮里，不再发一遍。"""
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    first, second = _gate(rr.planner, 1), _gate(rr.planner, 2)
+    with _Running(client, rr, tid, "搜一下猫", second) as run:
+        assert first.waiting.wait(10)
+        _queue(client, tid, "只看橘猫")
+        _guide(client, tid)
+        first.set()
+        assert second.waiting.wait(10)
+        assert state(client, tid)["guided_message"] is None  # 已经取走放进对话了
+        assert client.post(f"/api/research/threads/{tid}/stop").status_code == 200
+    end = last(run.evs, "state")
+    assert end["status"] == "idle" and len(end["turns"]) == 2 and _kinds(client, tid) == ["say", "new"]
+    assert end["turns"][1]["record"]["outcome"] == "stopped" and _types(end["turns"][1])[:3] == ["thinking", "search", "guide"]
+    assert end["queued_message"] is None and end["guided_message"] is None
+
+
+def test_failed_turn_keeps_the_guided_message_for_retry(tmp_path):
+    """插的话放进去以后这一轮出错：插的话留在这一轮里，重试接着跑时模型看得到。"""
+    armed = {"on": False}
+
+    class Failing(FakeToolModel):
+        def _message(self, messages):
+            if armed["on"] and any(history.is_guide(m) for m in messages):
+                armed["on"] = False
+                raise RuntimeError("假模型：网络断了")
+            return super()._message(messages)
+
+    p = FakeResearchPlanner()
+    p._model = Failing()
+    rr = ResearchRunner(planner=p, data_dir=tmp_path / "data")
+    http = _client(rr)
+    tid = new(http, "直接答：先说一句")["thread_id"]
+    armed["on"] = True
+    gate = _gate(p)
+    with _Running(http, rr, tid, "搜一下猫", gate) as run:
+        assert gate.waiting.wait(10)
+        _queue(http, tid, "只看橘猫")
+        _guide(http, tid)
+    failed = last(run.evs, "state")
+    assert failed["status"] == "failed" and failed["guided_message"] is None and failed["queued_message"] is None
+    assert "guide" in _types(failed["turns"][1])
+    end = last(events(http.post(f"/api/research/threads/{tid}/retry")), "state")
+    assert end["status"] == "idle" and _reply(end["turns"][1]).startswith("收到：只看橘猫。")
+    assert _types(end["turns"][1]).count("guide") == 1
+
+
+def test_blocked_guided_message_stops_the_turn_as_input(client, rr):
+    """插进来的话没通过内容审核：去掉查到的资料也还拦，这一轮按“用户的话没通过”停下，之后不带进上下文。"""
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    gate = _gate(rr.planner)
+    with _Running(client, rr, tid, "搜一下猫", gate):
+        assert gate.waiting.wait(10)
+        _queue(client, tid, f"只看{FAKE_BLOCKED}")
+        _guide(client, tid)
+    end = _settled(client, tid, 2)
+    turn = end["turns"][1]
+    assert turn["record"]["outcome"] == "blocked" and turn["items"][-1] == {**turn["items"][-1], "type": "blocked", "reason": "input"}
+    nxt = last(events(say(client, tid, "直接答：接着说")), "state")
+    assert nxt["turns"][2]["record"]["outcome"] == "ok"
+
+
+def test_withdrawn_guided_message_is_not_sent(client, rr):
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    gate = _gate(rr.planner)
+    with _Running(client, rr, tid, "直接答：第二句", gate):
+        assert gate.waiting.wait(10)
+        _queue(client, tid, "直接答：算了")
+        _guide(client, tid)
+        assert _unguide(client, tid).json() == {"text": "直接答：算了"}
+        assert _unguide(client, tid).json() == {"text": None}
+    end = _settled(client, tid, 2)
+    assert end["guided_message"] is None and "guide" not in _types(end["turns"][1]) and _kinds(client, tid) == ["say", "new"]
+
+
+def test_guide_when_nothing_to_guide(client, rr):
+    """没在跑：排着的话已经发出去了，没什么可插，返回 null。在跑但没排着话：返回等着插的那句（没有是 null）。"""
+    assert _guide(client, "nope0000").status_code == 404
+    assert _unguide(client, "nope0000").status_code == 404
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    assert _guide(client, tid).json() == {"guided": None}
+    gate = _gate(rr.planner)
+    with _Running(client, rr, tid, "直接答：第二句", gate):
+        assert gate.waiting.wait(10)
+        assert _guide(client, tid).json() == {"guided": None}
+        rr.run_store.put_pending(tid, GUIDE, "已经等着的")
+        assert _guide(client, tid).json()["guided"]["text"] == "已经等着的"
+        _unguide(client, tid)
+    _settled(client, tid, 2)
