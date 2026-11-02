@@ -16,7 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app import config
 from app.api.favicon import Favicons
 from app.api.inspiration import InspirationError, Inspirations
-from app.api.research_runner import NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner
+from app.api.research_runner import AlreadyPending, NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner
 from app.api.run_store import STATUSES
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 
@@ -217,14 +217,15 @@ async def research_say(thread_id: str, body: ResearchMessageBody):
 
 @app.post("/api/research/threads/{thread_id}/queue")
 async def research_queue(thread_id: str, body: ResearchMessageBody):
-    """正在回答时又说的话：排着，这一轮答完或停下就接着发；已经排着一句的，接在它后面合成一句。返回 {"queued": 排着的那句}。
-    这一轮刚好答完了就直接发，返回 {"queued": null}，页面去接事件流（/events）。上一轮没跑完时返回 409。"""
+    """正在回答时又说的话：排着，这一轮答完或停下就接着发。返回 {"queued": 排着的那句}。
+    这一轮刚好答完了就直接发，返回 {"queued": null}，页面去接事件流（/events）。
+    已经有一句没发出去（排着或等着插进这一轮）、或上一轮没跑完时返回 409。"""
     r = research()
     _view(r, thread_id)
     text = _text(body)
     try:
         return {"queued": r.queue(thread_id, text)}
-    except NotIdle as e:
+    except (NotIdle, AlreadyPending) as e:
         raise HTTPException(409, str(e)) from None
 
 
