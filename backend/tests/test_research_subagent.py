@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -14,7 +15,7 @@ from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage, T
 from app.api.research_runner import StreamBuffer
 from app.graph.research import history, prompts, subagent
 from app.graph.research.graph import open_sqlite_checkpointer
-from app.graph.research.sources import cited, subagent_messages
+from app.graph.research.sources import EXCERPT_CHARS, cited, subagent_messages
 from app.research_llm import FakeResearchPlanner, FakeToolModel
 from tests.test_research import Chat, _answered, _kinds
 
@@ -27,6 +28,16 @@ def _tasks(turn: dict) -> list[dict]:
 
 def _task_results(c: Chat) -> list[ToolMessage]:
     return [m for m in c.values()["messages"] if isinstance(m, ToolMessage) and m.name == "task"]
+
+
+def _handed_over(m: ToolMessage) -> list[dict] | None:
+    """停下的子任务补上的结果里列给主 agent 的来源；没列的（还没查到东西）是 None。"""
+    text, head = history.text_of(m), prompts.render("tools.task.stopped", sources="").strip()
+    return json.loads(text[len(head):]) if text.startswith(head) else None
+
+
+def _first_sub_step_done(e: dict) -> bool:
+    return e["event"] == "step" and "task" in e["data"] and not e["data"]["step"]["pending"]
 
 
 def test_parallel_subagents_report_back_with_their_work():
@@ -177,7 +188,7 @@ def test_budget_blocks_extra_calls_and_reminds_each_step(monkeypatch):
 def test_stop_inside_a_subagent_keeps_what_it_did():
     """子 agent 搜完一次就点停止：两个子 agent 都停下，子任务显示停止了，卡片里留着它们已经做的搜索，来源也在；下一轮能接着说。"""
     c = Chat()
-    v = c.say("分头查一下杭州美食", stop_on=lambda e: e["event"] == "step" and "task" in e["data"] and not e["data"]["step"]["pending"])
+    v = c.say("分头查一下杭州美食", stop_on=_first_sub_step_done)
     (turn,) = v["turns"]
     assert turn["record"]["outcome"] == "stopped" and v["status"] == "idle"
     tasks = _tasks(turn)
@@ -189,6 +200,53 @@ def test_stop_inside_a_subagent_keeps_what_it_did():
     assert {sid for s in done for sid in s["source_ids"]} <= v["sources"].keys()
     assert _answered(c.values()["messages"])
     assert c.say("直接答：好")["turns"][-1]["record"]["outcome"] == "ok"
+
+
+def test_stopped_subagent_hands_what_it_found_to_the_main_agent():
+    """子 agent 搜完一次就点停止：补上的结果里给主 agent 列出它已经查到的来源，和子任务卡上的一样，只有来源卡上的那些；
+    下一轮主 agent 的模型看得到。"""
+    seen: list[list[BaseMessage]] = []
+
+    class Spy(FakeToolModel):
+        def _message(self, messages: list[BaseMessage]):
+            seen.append(list(messages))
+            return super()._message(messages)
+
+    p = FakeResearchPlanner()
+    p._model = Spy()
+    c = Chat(planner=p)
+    v = c.say("分头查一下杭州美食", stop_on=_first_sub_step_done)
+    results = {m.tool_call_id: m for m in _task_results(c)}
+    for t in _tasks(v["turns"][0]):
+        found = _handed_over(results[t["id"]])
+        on_card = {sid for s in t["items"] if s["type"] == "step" and s["ok"] for sid in s["source_ids"]}
+        assert found and {s["id"] for s in found} == on_card
+        for s in found:
+            assert set(s) <= {"id", "title", "url", "published_at", "excerpt_from", "excerpt"}
+            assert s["url"] == v["sources"][s["id"]]["url"] and 0 < len(s["excerpt"]) <= EXCERPT_CHARS
+    seen.clear()
+    c.say("直接答：好")
+    sent = {m.tool_call_id: history.text_of(m) for m in seen[0] if isinstance(m, ToolMessage) and m.name == "task"}
+    assert sent == {k: history.text_of(m) for k, m in results.items()}
+
+
+def test_subagent_stopped_before_it_found_anything_says_only_that_it_stopped():
+    """子 agent 还在等第一次模型回复时点停止：还没查到东西，补上的结果只说停止了、没做完。"""
+    p = FakeResearchPlanner()
+    gate = threading.Event()
+    p._sub_model.gates.append(gate)
+
+    def stop_on(e: dict) -> bool:
+        if e["event"] == "phase" and "task" in e["data"]:
+            threading.Timer(0.3, gate.set).start()  # 停止生效之后才放子 agent 的模型回复
+            return True
+        return False
+
+    c = Chat(planner=p)
+    v = c.say("分头查一下杭州美食", stop_on=stop_on)
+    assert v["turns"][0]["record"]["outcome"] == "stopped"
+    results = _task_results(c)
+    assert len(results) == 2 and {history.text_of(m) for m in results} == {prompts.render("agent.stopped_call")}
 
 
 def test_retry_continues_the_subagent_where_it_failed():

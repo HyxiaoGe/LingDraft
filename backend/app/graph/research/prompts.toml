@@ -288,6 +288,10 @@ prompt = "The complete task for the sub-agent, in the user's language: the user'
 limit = "This sub-agent was not launched: this turn has already used the maximum of {{ max_per_turn }} sub-agents. Continue with the reports you have, or search directly."
 no_report = "The sub-agent finished without a report, so this is not a factual result. Do the lookup yourself, or tell the user what could not be found."
 blocked = "The sub-agent was stopped because the model service's content moderation rejected material it found, and it returned no report. Do not guess what it found."
+# 用户点了停止、子 agent 还没交回报告时：它已经查到的来源交给主 agent（2026-11-02 Sean 定），只给来源卡上的那些，读过的整页正文不给。
+# 一个来源都还没查到的，用 agent.stopped_call
+stopped = """The user stopped this turn before this sub-agent finished, so it returned no report. Before it stopped, it had found the sources below. Each has its title, URL, and an excerpt: the opening of the page text if the sub-agent read the page ("excerpt_from": "page"), otherwise the search snippet ("excerpt_from": "search"). This is unchecked raw material, not findings. If you use it, cite the sources by their ids and claim no more than the excerpts show.
+{{ sources }}"""
 
 # ---- 起标题（第一轮第一次调模型时同时起，按用户的第一句话） ----
 
