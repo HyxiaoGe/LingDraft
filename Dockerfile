@@ -21,5 +21,8 @@ ENV PATH="/app/.venv/bin:$PATH" \
     LINGDRAFT_DATA_DIR=/app/data \
     LINGDRAFT_OUTPUT_DIR=/app/data/output
 EXPOSE 8000
+# 部署的提交号（CI 构建时传进来），记进运行记录、/api/health 里也看得到；放在最后，换版本不让前面的层失效
+ARG LINGDRAFT_VERSION=""
+ENV LINGDRAFT_VERSION=${LINGDRAFT_VERSION}
 # 只能一个进程：执行登记、事件日志都在进程内（见 app/api/runner.py）
 CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

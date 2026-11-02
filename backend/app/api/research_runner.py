@@ -16,7 +16,8 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import START
 
 from app import config
-from app.api.runner import BaseRunner, Executor, RunConflict, jsonable
+from app.api.run_store import STOPPED, MemoryRunStore, RunStore, open_run_store
+from app.api.runner import BaseRunner, Executor, RunConflict, jsonable, log
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, now, stop_turn
 from app.graph.research.graph import build_graph, open_checkpointer, thread_ids
@@ -181,6 +182,10 @@ def subagent_items(result: ToolMessage | None) -> list[dict]:
     return [i for x in sub if isinstance(x, AIMessage) for i in _items_of(x, results)]
 
 
+def _public(run: dict) -> dict:
+    return {k: v for k, v in run.items() if k != "traceback"}
+
+
 def _error_text(err: str) -> str:
     """检查点里存的是异常的 repr（ModelUnavailable('…')），页面上只要里面那句话；解不开就原样给。"""
     name, sep, rest = err.partition("(")
@@ -198,12 +203,15 @@ class ResearchRunner(BaseRunner):
     api_prefix = "/api/research/threads"
 
     def __init__(self, fake: bool | None = None, data_dir: Path | None = None, workers: int | None = None,
-                 planner: ResearchPlanner | None = None, checkpointer: BaseCheckpointSaver | None = None):
+                 planner: ResearchPlanner | None = None, checkpointer: BaseCheckpointSaver | None = None,
+                 run_store: RunStore | None = None):
         fake = config.USE_FAKE_PLANNER if fake is None else fake
         self.planner = planner or (FakeResearchPlanner() if fake else LiveResearchPlanner())
         data = Path(data_dir or config.DATA_DIR)
         saver = checkpointer or open_checkpointer(data)
         self.graph = build_graph(self.planner, saver)
+        # 运行记录和检查点存在一处：传了检查点（测试、评测用内存的）就记在内存里，不碰数据目录和配置的库
+        self.run_store = run_store or (MemoryRunStore() if checkpointer is not None else open_run_store(data))
         self.images = ImageStore(data / "images")  # 画好的图，按对话分目录
         # 对话不碰浏览器，几个线程各跑各的；检查点的读写 SqliteSaver / PostgresSaver 自己加锁
         self.executor = Executor(workers or config.RESEARCH_WORKERS, "research")
@@ -219,10 +227,10 @@ class ResearchRunner(BaseRunner):
     # ---- 执行 ----
 
     def start(self, thread_id: str, text: str):
-        return self._submit(thread_id, lambda: self.accept(thread_id, text))
+        return self._submit(thread_id, lambda: self.accept(thread_id, text), "new")
 
     def say(self, thread_id: str, text: str):
-        return self._submit(thread_id, lambda: self.accept(thread_id, text))
+        return self._submit(thread_id, lambda: self.accept(thread_id, text), "say")
 
     def accept(self, thread_id: str, text: str) -> None:
         """把用户的话写进检查点，agent 从这里接着跑（输入为 None）。
@@ -237,7 +245,7 @@ class ResearchRunner(BaseRunner):
         return None
 
     def retry(self, thread_id: str):
-        return self._submit(thread_id, lambda: self.retry_input(thread_id))
+        return self._submit(thread_id, lambda: self.retry_input(thread_id), "retry")
 
     def retry_input(self, thread_id: str) -> None:
         """只有没跑完的线程能重试：从最后一个检查点接着跑，出错那一步重做，之前做过的搜索、读页都不重来。"""
@@ -247,7 +255,7 @@ class ResearchRunner(BaseRunner):
         return None
 
     def regenerate(self, thread_id: str, text: str | None = None):
-        return self._submit(thread_id, lambda: self.regenerate_input(thread_id, text))
+        return self._submit(thread_id, lambda: self.regenerate_input(thread_id, text), "regenerate" if text is None else "edit")
 
     def regenerate_input(self, thread_id: str, text: str | None = None) -> None:
         """最后一轮重新回答：去掉用户最后那句话之后的消息和这一轮的记录，从那句话接着跑。
@@ -288,9 +296,11 @@ class ResearchRunner(BaseRunner):
             self.graph.update_state(self._cfg(thread_id), {"title": title}, as_node=TURN_END)
 
     def delete(self, thread_id: str) -> None:
-        """删掉整段对话（这个线程的所有检查点和画的图），找不回来。"""
+        """删掉整段对话（这个线程的所有检查点、运行记录和画的图），找不回来。
+        运行记录先删：删不掉就整个报错，对话还在，可以再删一次；反过来对话先没了，剩下的记录就再也删不到了。"""
         with self._hold(thread_id):
             self._drop_suggestions(thread_id)
+            self.run_store.delete_thread(thread_id)
             self.graph.checkpointer.delete_thread(thread_id)
             self.images.drop(thread_id)
 
@@ -325,11 +335,11 @@ class ResearchRunner(BaseRunner):
         custom 是中间件写的进度（step）、标题（title）和阶段（phase：起标题、等模型这些空档在等什么）；updates 里改了 state 的节点做完发 node，页面据此重新取状态。
         子 agent（task 工具里跑的另一个 agent）的流要开 subgraphs 才有，按命名空间认出是哪个 task 调用派的：
         它的片段、进度、阶段带上 task（调用 id），页面放进那张子任务卡；它的节点做完不发 node。它的片段 langgraph_node 也是 model，只按节点名分不开。
-        用户点了停止：排队时就点的不跑，直接收尾；跑着的在下一个片段或下一步停下（见 StopCheck），已经流出来的正文留着。"""
+        用户点了停止：排队时就点的不跑，直接收尾；跑着的在下一个片段或下一步停下（见 StopCheck），已经流出来的正文留着。停下的返回 STOPPED（记进运行记录）。"""
         if self._stop_requested(thread_id):
             self._write_stop(thread_id)
             yield {"event": "node", "data": {"node": TURN_END}}
-            return
+            return STOPPED
         buf = StreamBuffer()
         tasks: dict[str, str] = {}  # 子 agent 的命名空间 → 派它的 task 调用 id（task 工具开跑前写进自定义流的 subagent）
         stop = StopCheck(lambda: self._stop_requested(thread_id))
@@ -362,9 +372,10 @@ class ResearchRunner(BaseRunner):
             yield from buf.flush()
             self._write_stop(thread_id, buf, tasks)
             yield {"event": "node", "data": {"node": TURN_END}}
-            return
+            return STOPPED
         yield from buf.flush()
         self._want_suggestions(thread_id)
+        return None
 
     # ---- 推荐问题：这一轮结束之后再起 ----
 
@@ -408,6 +419,27 @@ class ResearchRunner(BaseRunner):
             turns[-1] = turns[-1].model_copy(update={"suggestions": items})
             self.graph.update_state(cfg, {"turns": turns}, as_node=TURN_END)
         yield {"event": "state", "data": self.state_view(thread_id)}
+
+    def _turn_of(self, thread_id: str) -> str | None:
+        """这次执行跑的是哪一轮：用户最后那句话的消息 id（接着说、重试、重新回答都是）。"""
+        msgs = self.graph.get_state(self._cfg(thread_id)).values.get("messages", [])
+        i = history.last_human(msgs)
+        return msgs[i].id if i >= 0 else None
+
+    # ---- 运行记录 ----
+
+    def recover(self) -> None:
+        """服务启动时调一次：上次进程退出时还在排队、在跑的运行，记成没跑完（lost）。单进程部署，这时它们都已经停了。"""
+        if n := self.run_store.sweep():
+            log.warning("上次进程退出时有 %d 次运行没跑完，已记成 lost", n)
+
+    def thread_runs(self, thread_id: str) -> list[dict]:
+        """这段对话的每次运行，新的在前。堆栈不给：网站没有登录，堆栈只留在库和日志里。"""
+        return [_public(r) for r in self.run_store.for_thread(thread_id)]
+
+    def recent_runs(self, status: str | None = None, limit: int = 50) -> list[dict]:
+        """所有对话里最近的运行，可以只看某个状态（比如 error）。"""
+        return [_public(r) for r in self.run_store.recent(status, limit)]
 
     # ---- 视图 ----
 

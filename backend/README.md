@@ -67,6 +67,8 @@ uv run python -m app.cli --scenario research state <thread_id>
 
 对话的检查点默认在 `data/checkpoints_research.sqlite`；配了 `LINGDRAFT_DATABASE_URL` 就存 Postgres。本机连 dev 上的库要经过隧道：`ssh -N -L 15432:127.0.0.1:5432 dev`，见 `.env.example`。Sean 的机器上这条隧道交给 launchd 守着，配置在 `~/Library/LaunchAgents/org.seanfield.lingdraft-pg-tunnel.plist`，开机就起，断了自己重连，日志在 `~/Library/Logs/lingdraft-pg-tunnel.log`。看状态用 `launchctl print gui/$(id -u)/org.seanfield.lingdraft-pg-tunnel`，停掉用 `launchctl bootout gui/$(id -u)/org.seanfield.lingdraft-pg-tunnel`。隧道断着的时候，请求会等 10 秒报错；接回来以后不用重启后端。测试不碰这个库；设 `LINGDRAFT_TEST_DATABASE_URL` 能把整套测试放到另一个 Postgres 库上再跑一遍，每个测试前都清空这个库，别指向有用的库。每版报告另写一份 `report_v{n}.md` 留档在 `output/research/<thread_id>/`，流程不读它：页面和 agent 看到的报告都从检查点里的数据生成。
 
+运行记录（`app/api/run_store.py`，跟 LangGraph Agent Server 的 run 学的）：每次执行（新对话、接着说、重试、重新回答、改了原话）一行，记着属于哪一轮、状态（queued / running / success / stopped / error / lost）、进来、开始和结束的时间、出错的类型和原因连同堆栈、跑它的版本（部署的提交号）。和检查点存在一处：Postgres 的 `runs` 表，没配库时在 `data/runs.sqlite`。服务启动时，上次还在排队、在跑的记成 lost。删掉对话时一起删。查看：`GET /api/research/threads/{id}/runs` 看一段对话的，`GET /api/research/runs?status=error&limit=50` 看所有对话里最近的；接口不给堆栈，堆栈在库里，出错时也打进日志（Loki 能搜到）。写记录失败只打日志，不影响执行。
+
 检查点在 `data/checkpoints.sqlite`，每个 thread 的 `v{n}.png / v{n}.html` 和导出的 `final.png / final.html / brief.json` 在 `output/<thread_id>/`。进程重启后 `resume` 可直接续跑。
 
 ## 目录
@@ -75,7 +77,7 @@ uv run python -m app.cli --scenario research state <thread_id>
 - `app/graph/poster/nodes.py` 节点与路由；`graph.py` 建图与检查点
 - `app/llm.py` `Planner` 协议：`ArkPlanner`（豆包，json_schema 结构化输出）/ `FakePlanner`
 - `app/render/` Jinja2 模板 → Playwright 截图；`checks.py` 事实逐字比对 / 违禁词 / 溢出
-- `app/api/` FastAPI；`runner.py` `BaseRunner`（图执行放到工作线程，事件写进 `EventLog` 再转成 SSE；`RunRegistry` 运行占位；两者都是进程内实现，多 worker 时换共享存储）+ 海报 `GraphRunner`（单线程）；`research_runner.py` 调研的执行器（多线程）、状态视图与运行状态、重试、中断整形（带中断 id）、事件摘要
+- `app/api/` FastAPI；`runner.py` `BaseRunner`（图执行放到工作线程，事件写进 `EventLog` 再转成 SSE；`RunRegistry` 运行占位；两者都是进程内实现，多 worker 时换共享存储；每次执行再记一行运行记录，见 `run_store.py`）+ 海报 `GraphRunner`（单线程）；`research_runner.py` 调研的执行器（多线程）、状态视图与运行状态、重试、中断整形（带中断 id）、事件摘要
 - `app/graph/research/` 调研场景：`state.py`（来源 / 大纲 / 论断 / 逐句正文 / 版本 / 每轮记录）、`agent.py`（`create_agent` 与中间件：提问、调用上限、工具进度、无效工具调用重试、内容审核拦下时去掉资料或停下这一轮、一轮结束时出版和推荐追问）、`workbench.py`（四个报告工具改工作稿，一轮结束落成一版）、`history.py`（从消息里读出用户的话、提问与回答、工具步骤、用量）、`sources.py`（从搜索、读页结果里收集来源，同一网页只给一个 id）、`answers.py`（提问的回答校验，接口 / CLI 共用）、`graph.py`、`report.py`（确定性拼装报告与校验）、`prompts.toml`（给模型看的文字：系统提示词、工具描述、注入的说明；`prompts.py` 只负责渲染）、`skills/`（调研方法，见下）
 - `app/research_llm.py` `ResearchPlanner` 协议：`LiveResearchPlanner`（DeepSeek 或豆包 + 真实网关）/ `FakeResearchPlanner`（脚本化的假工具模型 + MockTransport 网关）
 - `app/tools/` agent-tools 网关客户端（搜索 / 网页读取）与调研 agent 的工具（`search_web` / `read_page` / `ask_user` / `load_skill`；描述在 `prompts.toml` 的 `[tools.*]`）

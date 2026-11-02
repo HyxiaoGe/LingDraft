@@ -8,6 +8,7 @@ import pytest
 from langgraph.types import Command
 
 from app import config
+from app.api import run_store
 from app.graph.poster.graph import build_graph, memory_checkpointer
 from app.graph.research import graph as research_graph
 from app.llm import FakePlanner
@@ -25,16 +26,20 @@ def _postgres(monkeypatch):
         yield
         return
     with psycopg.connect(config.DATABASE_URL, autocommit=True) as c:
-        try:
-            c.execute("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes")
-        except psycopg.errors.UndefinedTable:  # 还没有哪个测试建过表
-            pass
+        for sql in ("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes", "TRUNCATE runs"):
+            try:
+                c.execute(sql)
+            except psycopg.errors.UndefinedTable:  # 还没有哪个测试建过表
+                pass
     opened = []
     real = research_graph.open_postgres_checkpointer
     monkeypatch.setattr(research_graph, "open_postgres_checkpointer", lambda url: opened.append(real(url)) or opened[-1])
+    stores = []
+    real_store = run_store.PostgresRunStore
+    monkeypatch.setattr(run_store, "PostgresRunStore", lambda url: stores.append(real_store(url)) or stores[-1])
     yield
-    for saver in opened:  # 每个运行器一个连接池，用完关掉，免得连接数攒满
-        saver.conn.close()
+    for pool in [saver.conn for saver in opened] + [store.pool for store in stores]:  # 每个运行器各有连接池（检查点一个、运行记录一个），用完关掉，免得连接数攒满
+        pool.close()
 
 
 @pytest.fixture

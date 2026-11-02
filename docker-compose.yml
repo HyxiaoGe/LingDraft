@@ -1,7 +1,10 @@
 # 部署在 dev（192.168.1.11）：nginx-proxy 按容器名 lingdraft:8000 转过来，不占宿主机端口
 services:
   lingdraft:
-    build: .
+    build:
+      context: .
+      args:
+        LINGDRAFT_VERSION: ${LINGDRAFT_VERSION:-}  # CI 部署时设成提交号
     container_name: lingdraft
     env_file: .env
     volumes:
