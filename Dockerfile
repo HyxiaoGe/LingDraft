@@ -1,12 +1,13 @@
 # 一个镜像：先构建前端页面，再装后端；后端（uvicorn，单进程）连同页面一起出，接口在 /api 下
-FROM node:22-alpine AS web
+# 基础镜像钉到具体版本，别改成 :latest 这类滚动 tag；要升级就改这里的版本号，走 PR
+FROM node:22.23.4-alpine AS web
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM python:3.12-slim
+FROM python:3.12.16-slim
 WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:0.11.16 /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
