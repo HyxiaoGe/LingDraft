@@ -63,6 +63,8 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid,
     return undefined;
   };
   const title = live?.title || st?.title || live?.said || "新对话";
+  const running = busy || ACTIVE.has(st?.status);
+  const pendingKinds = running ? [st?.guided_message && "guided", st?.queued_message && "queued"].filter(Boolean) : [];
 
   return (
     <section className={"ws-main" + (fresh ? " fresh" : "")} aria-label="对话">
@@ -84,7 +86,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid,
         {/* 按下去不抢光标：输入框里写着的字和光标都留着 */}
         {away && <button className="ws-jump" aria-label="回到底部" title="回到底部" onMouseDown={(e) => e.preventDefault()} onClick={toBottom}><IconArrowDown size={16} /></button>}
         <Composer thread={tid || "new"} carry={!!live} mode={mode} queueing={queueing} stopping={stopping} putBack={putBack} onSend={onSend} onStop={act.stop}
-          above={(busy || ACTIVE.has(st?.status)) && <Pending st={st} act={act} />} />
+          above={running && <Pending st={st} act={act} />} onTakeBack={pendingKinds.length ? () => act.withdraw(pendingKinds) : null} />
       </div>
       {fresh && <Inspirations onPick={act.start} />}
     </section>
@@ -301,7 +303,7 @@ function Pending({ st, act }) {
           </div>
           <div className="ws-pending-acts">
             {r.onGuide && <button className="ws-btn ghost sm" title="不等这一轮答完：模型做完手上这一步就看到这句话，接着按它调整" onMouseDown={keep} onClick={r.onGuide}><IconInsert size={13} />插进这一轮</button>}
-            <button className="ws-btn ghost sm" onMouseDown={keep} onClick={r.onWithdraw}><IconUndo size={13} />撤回</button>
+            <button className="ws-btn ghost sm" title="放回输入框，改了再发（光标在输入框最前面时按 ↑，没发出去的都取回来）" onMouseDown={keep} onClick={r.onWithdraw}><IconUndo size={13} />撤回</button>
           </div>
         </div>
       ))}
@@ -688,7 +690,8 @@ const PLACEHOLDER = {
 // 每个对话没发出去的字各存各的，切走再切回来还在（刷新就没了）。
 // carry：新对话刚发出去、拿到了 id，thread 从 "new" 换成 id，还是同一个对话
 // putBack：放回输入框的话（撤回的、没发出去的），接在已经写着的字前面；不是正在看的对话，放进那个对话的草稿
-function Composer({ thread, carry, mode, queueing, stopping, putBack, onSend, onStop, above }) {
+// onTakeBack：有没发出去的话时，光标在最前面（输入框空着也算）按 ↑ 把它们取回来。光标在最前面时 ↑ 本来什么也不做，不和挪光标抢
+function Composer({ thread, carry, mode, queueing, stopping, putBack, onSend, onStop, above, onTakeBack }) {
   const [text, setText] = useState("");
   const ref = useRef(null);
   const drafts = useRef(new Map());
@@ -764,7 +767,17 @@ function Composer({ thread, carry, mode, queueing, stopping, putBack, onSend, on
       <div className="ws-input">
         <textarea ref={ref} rows={1} value={text} placeholder={PLACEHOLDER[mode] || PLACEHOLDER.busy} aria-label="输入"
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing) return;
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            } else if (e.key === "ArrowUp" && onTakeBack && !(e.shiftKey || e.altKey || e.metaKey || e.ctrlKey)
+              && e.currentTarget.selectionStart === 0 && e.currentTarget.selectionEnd === 0) {
+              e.preventDefault();
+              onTakeBack();
+            }
+          }} />
         <div className="ws-input-bar">
           {showStop
             ? <button className="ws-send stop" aria-label={stopping ? "正在停止" : "停止"} title={stopping ? "正在停止" : "停止（Esc）"} disabled={stopping} onClick={onStop}>

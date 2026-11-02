@@ -328,6 +328,7 @@ export default function Workspace() {
       }
     },
     unguide: () => takeBack(tidRef.current, ["guided"]),
+    withdraw: (kinds) => takeBack(tidRef.current, kinds), // 输入框里按 ↑：没发出去的都取回来
     // 只是提出停下：服务器在下一个字或下一步之前停，最终状态照常从这次执行的事件流里来
     stop: async () => {
       const g = gen.current;
