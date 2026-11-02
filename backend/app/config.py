@@ -47,6 +47,10 @@ SUBAGENT_EFFORT = os.environ.get("SUBAGENT_EFFORT", "high")
 SUBAGENT_SEARCH_BUDGET = int(os.environ.get("SUBAGENT_SEARCH_BUDGET", "8"))
 SUBAGENT_READ_BUDGET = int(os.environ.get("SUBAGENT_READ_BUDGET", "8"))
 DEEPSEEK_FLASH_MODEL = os.environ.get("DEEPSEEK_FLASH_MODEL", "deepseek-flash")
+# 上下文压缩（见 app/graph/research/compaction.py）：发给主 agent 的对话估算超过 TRIGGER 个 token 时，把之前几轮压到 TARGET 以下。
+# 窗口 1M，Sean 记得压到 20%～30% 效果好（2026-11-03 定 20 万触发、压到 10 万左右）
+COMPACT_TRIGGER_TOKENS = int(os.environ.get("COMPACT_TRIGGER_TOKENS", "200000"))
+COMPACT_TARGET_TOKENS = int(os.environ.get("COMPACT_TARGET_TOKENS", "100000"))
 
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-flash-260915")
 # 背景图生成开关（M2 起默认开）；关闭时背景为模板渐变

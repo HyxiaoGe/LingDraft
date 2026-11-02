@@ -1,7 +1,7 @@
 """对话场景的模型接入层：ResearchPlanner 协议，LiveResearchPlanner（DeepSeek / 豆包，按配置）与 FakeResearchPlanner（离线）。
 
 agent 本身由 app.graph.research.agent 构建，这里提供它要的聊天模型和查资料的工具，以及几个不带工具的快模型步骤：
-起标题、推荐问题，还有内容审核拦下请求时把资料一条条单独送审。
+起标题、推荐问题，内容审核拦下请求时把资料一条条单独送审，还有对话太长时给之前几轮写短版（见 graph.research.compaction）。
 """
 
 from __future__ import annotations
@@ -23,11 +23,13 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langgraph.constants import TAG_NOSTREAM
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import config
 from app.graph.research import history, prompts
+from app.graph.research.compaction import RECALL_TOOL as RECALL
 from app.model_guard import ContentBlocked, GuardedChatModel
 from app.tools.gateway import GatewayClient
 from app.tools.research_tools import TIME_TOOL, make_research_tools
@@ -35,6 +37,7 @@ from app.tools.research_tools import TIME_TOOL, make_research_tools
 PROBE_WORKERS = 4  # 单条送审同时发几个
 TITLE_TIMEOUT = 8  # 照 Fusion：起标题的超时（秒）
 TITLE_MAX_TOKENS = 64  # 起标题最多生成这么多：标题要的是 15 个字以内，模型不照做、去回答问题时到这里就截住
+SUMMARY_MAX_TOKENS = 2000  # 写短版最多生成这么多（要的是 300 词、600 字以内）
 
 # ---- 结构化输出 schema（扁平、全部 required，符合 strict 模式） ----
 
@@ -59,6 +62,8 @@ class ResearchPlanner(Protocol):
     def suggest(self, question: str, reply: str) -> list[str]: ...
 
     def blocked(self, texts: Sequence[str]) -> list[bool]: ...
+
+    def summarize(self, prompt: str) -> str: ...
 
 
 # ---- 思考计时 ----
@@ -201,6 +206,8 @@ class LiveResearchPlanner:
         self._fast = make_chat_model(provider, model, thinking=False, timeout=120)
         # 起标题照 Fusion 用轻量模型、不开思考、超时短：标题是锦上添花，慢了、坏了就用原话（见 graph.research.agent._TitleJob）
         self._titler = make_chat_model(provider, light, thinking=False, timeout=TITLE_TIMEOUT, max_tokens=TITLE_MAX_TOKENS)
+        # 对话太长时给之前几轮写短版：轻量模型、不开思考（见 graph.research.compaction）
+        self._summarizer = make_chat_model(provider, light, thinking=False, timeout=120, max_tokens=SUMMARY_MAX_TOKENS)
         self._gateway = gateway or GatewayClient(config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY, scene="research")
         self._tools = make_research_tools(self._gateway)
 
@@ -234,6 +241,11 @@ class LiveResearchPlanner:
 
         with ThreadPoolExecutor(max_workers=PROBE_WORKERS) as pool:
             return list(pool.map(one, texts))
+
+    def summarize(self, prompt: str) -> str:
+        """在调用方的运行上下文里调（停止的回调跟着），片段标 nostream，不进这次运行的消息流。"""
+        out = self._summarizer.invoke([("user", prompt)], config={"tags": [TAG_NOSTREAM]})
+        return str(out.content).strip()
 
 
 # ---- 离线假实现 ----
@@ -313,8 +325,9 @@ def _fake_image_service() -> Any:
     return handle
 
 
-def fake_gateway_client() -> GatewayClient:
-    """用 MockTransport 模拟网关：每次搜索给 3 条稳定的候选，读页返回正文（第 3 条读不到）；天气见 _fake_weather，画图见 _fake_image_service。"""
+def fake_gateway_client(page_repeat: int = 5) -> GatewayClient:
+    """用 MockTransport 模拟网关：每次搜索给 3 条稳定的候选，读页返回正文（第 3 条读不到；正文是一句话重复 page_repeat 遍）；
+    天气见 _fake_weather，画图见 _fake_image_service。"""
     images = _fake_image_service()
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -340,7 +353,7 @@ def fake_gateway_client() -> GatewayClient:
             url = req.url.params.get("url", "")
             if url.endswith("/3"):
                 return httpx.Response(404, json={"detail": {"kind": "page_not_found", "message": "gone", "retryable": False}})
-            return httpx.Response(200, json={"title": "正文标题", "content": f"正文：{url} 的内容。" * 5, "provider": "direct"})
+            return httpx.Response(200, json={"title": "正文标题", "content": f"正文：{url} 的内容。" * page_repeat, "provider": "direct"})
         return httpx.Response(404, json={"error": "not_found"})
 
     return GatewayClient("http://fake-gw", "fake-key", scene="research", transport=httpx.MockTransport(handler))
@@ -373,6 +386,7 @@ class FakeToolModel(BaseChatModel):
       “再画”“再生成”：用上一次的参数再画一张（regenerate）。
     - “子任务”：派一个子 agent（task），拿到报告后回复，引用报告里的来源；“分头”：一次派两个，并行。“派N个”：一次派 N 个。
     - “一直搜”：每次并行搜两个，不管预算，直到请求末尾的预算提醒说搜索用完了（子 agent 才有这条提醒）。
+    - “取回”：用 recall 取回这段对话第一次搜索的第一个来源；“取回第N轮”：取回第 N 轮。取到后回复取到的开头。
     用户插进这一轮的话不改这些路径，给出文字回复时开头说一声收到了哪些（测试据此看模型有没有看到）。
     内容审核（模拟服务商）：请求里任何地方有 FAKE_BLOCKED 就整个拒绝；用户的话里有“查完就拦”时，有工具结果就拒绝；
     有“输出拦截”时，吐完思考后输出被截断。
@@ -423,6 +437,8 @@ class FakeToolModel(BaseChatModel):
             if note is not None and re.search(r"search_web Budget Remaining: 0\b", str(note.content)):
                 return "预算用完了，按查到的说。", []
             return "", [{"name": "search_web", "args": {"query": f"{text[:10]}{n}{k}", "count": 3}, "id": f"call_search_web_{n}{k}"} for k in "ab"]
+        if "取回" in text and RECALL in self.bound:
+            return self._recall(text, messages, turn, call)
         if "search_web" not in names:
             return call("search_web", query=text.splitlines()[0][:20], count=3)
         if "read_page" not in names and hits:
@@ -443,6 +459,17 @@ class FakeToolModel(BaseChatModel):
         if ("再画" in text or "再生成" in text) and before:
             return call("generate_image", **{**before[-1], "regenerate": True})
         return call("generate_image", prompt=prompt, **({"aspect_ratio": "16:9"} if "横" in text else {}))
+
+    @staticmethod
+    def _recall(text: str, messages: list[BaseMessage], turn: list[BaseMessage], call) -> tuple[str, list[dict]]:
+        """“取回第N轮”取回那一轮；“取回”取回这段对话里第一次搜索的第一个来源。取到了就回复取到的开头。"""
+        if done := next((m for m in reversed(turn) if isinstance(m, ToolMessage) and m.name == RECALL), None):
+            return f"取回了：{str(done.content)[:40]}", []
+        if m := re.search(r"取回第(\d+)轮", text):
+            return call(RECALL, turn=int(m.group(1)))
+        first = next((m for m in messages if isinstance(m, ToolMessage) and m.name == "search_web" and m.status != "error"), None)
+        sid = re.search(r'"id": "(s[0-9a-f]{6,10})"', str(first.content)) if first else None
+        return call(RECALL, source_id=sid.group(1)) if sid else ("没有能取回的。", [])
 
     @staticmethod
     def _delegate(text: str, turn: list[BaseMessage], n: int) -> tuple[str, list[dict]]:
@@ -510,10 +537,15 @@ def _fake_review(messages: list[BaseMessage]) -> None:
 
 
 def _hits(messages: list[BaseMessage]) -> list[dict]:
-    """最近一次成功搜索的结果。"""
+    """最近一次成功搜索的结果（压缩换成说明的不算）。"""
     for m in reversed(messages):
         if isinstance(m, ToolMessage) and m.name == "search_web" and m.status != "error":
-            return json.loads(m.content)
+            try:
+                data = json.loads(m.content)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(data, list):
+                return data
     return []
 
 
@@ -548,3 +580,11 @@ class FakeResearchPlanner:
     def blocked(self, texts: Sequence[str]) -> list[bool]:
         self.calls.append(("blocked", list(texts)))
         return [FAKE_BLOCKED in t for t in texts]
+
+    def summarize(self, prompt: str) -> str:
+        """短版：交来的那一轮里引用过的来源 id（最多 3 个）；压用户消息时是它的开头。"""
+        self.calls.append(("summarize", prompt))
+        if "<message>" in prompt:
+            return "（短的用户消息）" + prompt.split("<message>")[-1].strip()[:20]
+        ids = list(dict.fromkeys(re.findall(r"\[(s[0-9a-f]{6,10})\]", prompt.split("<turn>")[-1])))[:3]
+        return "（短版）这一轮查过了。" + "".join(f"[{i}]" for i in ids)

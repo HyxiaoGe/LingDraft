@@ -138,6 +138,18 @@ class Turn(BaseModel):
                                   "stopped：用户点了停止，已经写出来的正文留着")
 
 
+class Compaction(BaseModel):
+    """对话太长时，发给模型的那份怎么压（见 compaction）。只记压到哪一轮和写好的短版，消息本身不改，页面照常从消息里取。
+    边界是轮的 id（这一轮用户那句话的消息 id），只往后挪；到了边界的轮（含边界那一轮）按同样的方式压，每次调模型拼出来的一样，前缀缓存接得上。"""
+
+    model_config = ConfigDict(extra="forbid")
+    cleared_through: str = Field(default="", description="到这一轮为止：搜索、读页、取回的结果换成一行说明，思考不带")
+    summarized_through: str = Field(default="", description="到这一轮为止：模型那边整个换成短版（summaries），用户的话照原样")
+    summaries: dict[str, str] = Field(default_factory=dict, description="轮 id → 这一轮模型那边的短版，写一次就不再改")
+    shortened: dict[str, str] = Field(default_factory=dict, description="用户消息 id → 特别长的用户消息的短版（只在换成短版的轮里用）")
+
+
 class ResearchState(AgentState):
     title: NotRequired[str]  # 线程标题，第一轮开始前由模型起
     turns: NotRequired[list[Turn]]
+    compaction: NotRequired[Compaction]
