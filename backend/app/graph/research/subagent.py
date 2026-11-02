@@ -12,6 +12,7 @@
 - 子 agent 的检查点跟着主 agent 的存储（create_agent 不传 checkpointer），存在 tools:<任务 id> 这个命名空间下：
   这一轮中途出错，重试时同一个任务接着它自己的检查点跑，做过的搜索、读页不重来。
 - 交回给主 agent 的只有报告（工具结果的 content）。子 agent 的整段消息放在 artifact 里，模型看不到；
+  用户点了停止、还没写完报告的，交回的是它已经查到的来源（见 agent.stop_turn）。
   页面的子任务卡、这一轮的来源和用量从这里读（见 sources.subagent_messages）。
 - 运行器要知道子 agent 的流是哪个 task 调用的：开跑前往自定义流里写一条 subagent（调用 id 和命名空间），运行器自己用，不发给页面。
 """

@@ -35,7 +35,7 @@ from langgraph.types import Command
 
 from app.graph.research import history, prompts
 from app.graph.research.sources import SUBAGENT_TOOL, collect_sources, parse
-from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Turn
+from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Source, Turn
 from app.model_guard import ContentBlocked
 from app.tools.images import ImageStore
 
@@ -150,7 +150,8 @@ def _retrying(msgs: list) -> bool:
 def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list[BaseMessage]] | None = None) -> dict[str, Any]:
     """用户点了停止，这一轮到此为止：没跑完的工具调用补上结果，已经流出来的正文（partial）存成这一轮的回复，记下这一轮。
     返回的更新以 TURN_END 的名义写进检查点。这一轮还没开始（排队时就停了）也要补一条记录。
-    subagents 是还没跑完的子 agent 已经做了的（task 调用 id → 消息），存进补上的那条结果，页面上的子任务卡留着它做过的事。
+    subagents 是还没跑完的子 agent 已经做了的（task 调用 id → 消息），存进补上的那条结果，页面上的子任务卡留着它做过的事；
+    它已经查到了来源的，补上的结果里给主 agent 列出这些来源（来源卡上的内容），下一轮主 agent 用得上（2026-11-02 Sean 定）。
 
     values 是 get_state 拿到的：被掐断的那一步里已经做完的任务（比如并行的几个搜索里先回来的）的结果算在里面，
     但还没落进检查点，update_state 时会被丢掉。所以这一轮的消息原样再写一遍（同一个 id 覆盖，不会重复）。"""
@@ -161,6 +162,8 @@ def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list
     for m in fixes:
         if m.name == SUBAGENT_TOOL and (sub := (subagents or {}).get(m.tool_call_id)):
             m.artifact = {**(m.artifact or {}), "messages": messages_to_dict(sub)}
+            if found := collect_sources(sub):
+                m.content = prompts.render("tools.task.stopped", sources=_stopped_sources(found))
     new: list = turn_msgs + fixes
     if partial is not None and history.text_of(partial).strip():
         new.append(partial)
@@ -170,6 +173,13 @@ def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list
     turns[-1] = turns[-1].model_copy(update={"ended_at": now(), "suggestions": [], "usage": history.usage_of(new),
                                              "subagent_usage": history.subagent_usage(new), "outcome": "stopped"})
     return {"messages": new, "turns": turns}
+
+
+def _stopped_sources(found: list[Source]) -> str:
+    """停下的子 agent 已经查到的来源，给主 agent 看的：只有来源卡上的内容（标题、网址、开头一段），读过的整页正文不给。"""
+    return json.dumps([{"id": s.id, "title": s.title, "url": s.url, **({"published_at": s.published_at} if s.published_at else {}),
+                        "excerpt_from": "page" if s.excerpt_kind == "body" else "search", "excerpt": s.excerpt} for s in found],
+                      ensure_ascii=False)
 
 
 def _result_message(result) -> ToolMessage | None:
