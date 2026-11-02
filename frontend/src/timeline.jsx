@@ -549,9 +549,8 @@ function ToolRow({ s }) {
   );
 }
 
-// 空档里在等什么：后端在起标题、调模型之前发的阶段（见 app/graph/research/agent.py）
+// 空档里在等什么：后端在调模型之前发的阶段（见 app/graph/research/agent.py）
 const PHASES = {
-  title: "正在给对话起标题…",
   model: "等待模型响应…",
   retry: "工具参数没写对，让模型重写…",
   guard: "部分资料没通过内容审核，去掉后重试…",

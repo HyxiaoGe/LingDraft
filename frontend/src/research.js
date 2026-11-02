@@ -228,7 +228,7 @@ export function addLive(l, ev, data) {
     else items[i] = s;
     stopThinking(items);
   } else if (ev === "phase") {
-    return { ...l, phase: data.phase }; // 空档里在等什么（起标题、等模型……），页面据此说明
+    return { ...l, phase: data.phase }; // 空档里在等什么（等模型、重写参数……），页面据此说明
   } else {
     return l;
   }

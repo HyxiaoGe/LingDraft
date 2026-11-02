@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +19,7 @@ from app.api.research_runner import NothingToRegenerate, NotIdle, ResearchRunner
 from app.api.runner import RunConflict
 from app.api.runner import LocalRunRegistry
 from app.graph.research import history, prompts
+from app.graph.research import agent as agent_mod
 from app.graph.research.agent import CHINA_TZ, WEEKDAYS, system_prompt, turn_started
 from app.graph.research.graph import memory_checkpointer, open_sqlite_checkpointer
 from app.graph.research.sources import cited, collect_sources, url_key
@@ -145,11 +147,9 @@ def test_finished_steps_carry_their_sources(chat):
 
 
 def test_phases_say_what_the_gaps_wait_for(chat):
-    """没有字和步骤的空档，页面靠阶段说明在等什么：起标题（只有第一轮）、每次调模型之前、这一轮结束后起推荐问题。"""
+    """没有字和步骤的空档，页面靠阶段说明在等什么：每次调模型之前、这一轮结束后起推荐问题。起标题不占空档（和回答同时跑）。"""
     chat.say("查一下局部修改")
-    assert [e["data"]["phase"] for e in chat.events if e["event"] == "phase"] == ["title", "model", "model", "model", "suggest"]
-    names = [e["event"] for e in chat.events]
-    assert names.index("phase") < names.index("title")  # 先说在起标题，起好了才有标题
+    assert [e["data"]["phase"] for e in chat.events if e["event"] == "phase"] == ["model", "model", "model", "suggest"]
     chat.say("直接答：再说一句")
     assert [e["data"]["phase"] for e in chat.events if e["event"] == "phase"] == ["model", "suggest"]
 
@@ -175,17 +175,73 @@ def test_no_reply_is_recorded(chat):
     assert v["status"] == "idle" and v["turns"][0]["record"]["outcome"] == "no_reply" and v["turns"][0]["record"]["suggestions"] == []
 
 
+def test_title_runs_alongside_the_answer():
+    """起标题和回答同时跑：模型不等标题起好就开始。起好的标题发给页面一次、写进 state；之后几轮不再起。"""
+    p = FakeResearchPlanner()
+    model_called = threading.Event()
+
+    class Seen:  # 放进假模型的闸门：模型一开始调用就记下来，不拦
+        def wait(self, timeout):
+            model_called.set()
+
+    p._model.gates.append(Seen())
+    orig, saw_model = p.title, []
+
+    def title(text):
+        saw_model.append(model_called.wait(5))  # 回答要是等着标题，这里等不到模型
+        return orig(text)
+
+    p.title = title
+    chat = Chat(planner=p)
+    v = chat.say("查一下局部修改")
+    assert saw_model == [True] and v["title"] == "标题：查一下局部修改"
+    assert [e["data"]["title"] for e in chat.events if e["event"] == "title"] == [v["title"]]
+    assert chat.say("直接答：再说一句")["title"] == v["title"] and saw_model == [True]
+
+
 def test_title_falls_back_to_the_words():
+    """照 Fusion：起标题失败用原话，超过 30 个字截掉、加省略号。"""
     p = FakeResearchPlanner()
     p.fail_title = True
-    text = "直接答：这是一个超过二十四个字的问题，用来测试起标题失败时的截断"
-    assert Chat(planner=p).say(text)["title"] == text[:24]
+    text = "直接答：这是一个超过三十个字的问题，用来测试起标题失败时用原话、截断以后加上省略号"
+    assert Chat(planner=p).say(text)["title"] == text[:30] + "..."
+
+
+def test_long_title_is_cut():
+    """模型没照要求写短：去掉首尾空白，超过 30 个字截掉。"""
+    p = FakeResearchPlanner()
+    p.title = lambda text: " " + "一个很长的标题" * 10 + "\n"
+    assert Chat(planner=p).say("直接答：一句话")["title"] == ("一个很长的标题" * 10)[:30]
+
+
+def test_slow_title_falls_back_and_the_late_one_is_dropped(monkeypatch):
+    """第一次调模型结束后再等一会儿还没起好：用原话；之后才起好的不再发、不再改。"""
+    monkeypatch.setattr(agent_mod, "TITLE_WAIT", 0.2)
+    p = FakeResearchPlanner()
+    gate = threading.Event()
+    orig, done = p.title, threading.Event()
+
+    def title(text):
+        gate.wait(5)
+        try:
+            return orig(text)
+        finally:
+            done.set()
+
+    p.title = title
+    chat = Chat(planner=p)
+    v = chat.say("直接答：一句话")
+    gate.set()
+    assert done.wait(5)
+    time.sleep(0.1)
+    assert v["title"] == "直接答：一句话" and chat.view()["title"] == "直接答：一句话"
+    assert [e["data"]["title"] for e in chat.events if e["event"] == "title"] == ["直接答：一句话"]
 
 
 def test_live_title_keeps_what_the_model_wrote():
     """标题原样用模型给的（只去掉首尾空白）：书名号、引号是标题的一部分，代码不删。"""
     p = LiveResearchPlanner.__new__(LiveResearchPlanner)
-    p._fast = FakeListChatModel(responses=[" 《三体》里的“黑暗森林” \n"])
+    p._titler = FakeListChatModel(responses=[" 《三体》里的“黑暗森林” \n"])
     assert p.title("三体里的黑暗森林是什么意思") == "《三体》里的“黑暗森林”"
 
 
@@ -247,7 +303,7 @@ def test_invalid_tool_call_is_retried_with_the_error(chat):
     assert v["status"] == "idle" and v["turns"][0]["items"][-1]["text"] == "直接回答：这个问题不用查。"
     assert not [i for i in v["turns"][0]["items"] if i["type"] == "step"]
     # 重发的那次调用，页面说的是在让模型重写，不是普通的等模型
-    assert [e["data"]["phase"] for e in chat.events if e["event"] == "phase"] == ["title", "model", "retry", "suggest"]
+    assert [e["data"]["phase"] for e in chat.events if e["event"] == "phase"] == ["model", "retry", "suggest"]
 
 
 def test_invalid_tool_call_gives_up_after_retries(chat):

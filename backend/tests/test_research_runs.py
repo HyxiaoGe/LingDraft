@@ -16,7 +16,7 @@ from app.api import main as api_main
 from app.api import runner as runner_mod
 from app.api.research_runner import ResearchRunner
 from app.api.runner import LocalEventLog, LocalRunRegistry
-from tests.research_helpers import SIMPLE, after_tool, events, flaky_runner, gated_runner, hold, last, new, run_async, say, state, wait_until
+from tests.research_helpers import SIMPLE, after_tool, events, flaky_runner, gated_runner, hold, hold_model, last, new, run_async, say, state, wait_until
 
 
 @pytest.fixture
@@ -102,7 +102,7 @@ def test_research_threads_run_in_parallel(tmp_path):
     tids = ("par00001", "par00002")
 
     async def go():
-        gate = hold(two.planner, "title")
+        gate = hold_model(two.planner)
         streams = [two.start(t, SIMPLE) for t in tids]
         try:
             # 两个都开跑了（停在同一道闸门上），不是一个跑、一个排队
@@ -153,7 +153,7 @@ def test_nothing_else_while_running(tmp_path):
 
 def test_disconnect_does_not_release_or_cancel_the_run(rr):
     async def go():
-        gate = hold(rr.planner, "title")
+        gate = hold_model(rr.planner)
         try:
             # 浏览器在响应开始前就断了：请求已被接受，后台照样跑
             gone = rr.start("drop0001", SIMPLE)
@@ -176,7 +176,7 @@ def test_queued_new_thread_is_visible_at_once(tmp_path):
     rr = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=1)
 
     async def go():
-        gate = hold(rr.planner, "title")
+        gate = hold_model(rr.planner)
         a = rr.start("queue001", SIMPLE)  # 占住唯一的执行线程
         try:
             ev = await asyncio.wait_for(a.__anext__(), 5)
@@ -259,13 +259,15 @@ def test_quiet_stream_sends_heartbeat(rr, monkeypatch):
     monkeypatch.setattr(runner_mod, "HEARTBEAT_S", 0.3)
 
     async def go():
-        gate = hold(rr.planner, "title")
+        gate = hold_model(rr.planner)
         s = rr.start("beat0001", SIMPLE)
         try:
-            chunks = [await asyncio.wait_for(s.__anext__(), 3) for _ in range(4)]
+            chunks = []
+            while len(chunks) < 8 and not any(c.startswith(":") for c in chunks):  # 开头几个事件之后，模型卡着，没有事件
+                chunks.append(await asyncio.wait_for(s.__anext__(), 3))
         finally:
             gate.set()
-        assert any(c.startswith(":") for c in chunks)  # 长时间没事件时发注释行，代理不会当成空闲连接掐掉
+        assert chunks[-1].startswith(":")  # 长时间没事件时发注释行，代理不会当成空闲连接掐掉
         await _drain(s)
 
     run_async(go())
@@ -290,6 +292,19 @@ def test_failed_turn_keeps_content_and_can_retry(tmp_path):
     assert say(http, st["thread_id"], "接着说").status_code == 409
     end = last(events(_retry(http, st["thread_id"])), "state")
     assert end["status"] == "idle" and len(end["turns"]) == 2 and end["turns"][1]["record"]["outcome"] == "ok"
+
+
+def test_title_is_kept_once_a_model_call_goes_through(tmp_path):
+    """标题在第一次调模型结束时写进 state：那次调用出错就没写上（起得快的话页面已经拿到了），重试时再起一次、写进去。"""
+    rr = flaky_runner(tmp_path, lambda messages: True)
+    http = _client(rr)
+    ev = events(http.post("/api/research/threads", json={"text": SIMPLE}))
+    st = last(ev, "state")
+    assert st["status"] == "failed"
+    assert not rr.graph.get_state({"configurable": {"thread_id": st["thread_id"]}}).values.get("title")
+    end = last(events(_retry(http, st["thread_id"])), "state")
+    assert end["status"] == "idle" and end["title"] == f"标题：{SIMPLE[:8]}"
+    assert [n for n, _ in rr.planner.calls].count("title") == 2
 
 
 def test_retry_does_not_redo_searches(tmp_path):
@@ -422,7 +437,7 @@ def test_delete_drops_pending_suggestions(client, rr):
 
 
 def test_stop_before_the_model_answers(client, rr):
-    gate = hold(rr.planner, "title")
+    gate = hold_model(rr.planner)
     first: dict = {}
     t = threading.Thread(target=lambda: first.setdefault("resp", client.post("/api/research/threads", json={"text": SIMPLE})))
     t.start()
@@ -442,7 +457,7 @@ def test_stop_queued_thread(tmp_path):
     one = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=1)
 
     async def go():
-        gate = hold(one.planner, "title")
+        gate = hold_model(one.planner)
         a = one.start("stopq001", SIMPLE)
         try:
             await asyncio.wait_for(a.__anext__(), 5)
@@ -493,7 +508,7 @@ def test_edit_rename_delete_over_http(client):
 
 def test_rename_and_delete_refused_while_running(rr):
     http = _client(rr)
-    gate = hold(rr.planner, "title")
+    gate = hold_model(rr.planner)
     out: dict = {}
     t = threading.Thread(target=lambda: out.update(st=new(http, SIMPLE)))
     t.start()

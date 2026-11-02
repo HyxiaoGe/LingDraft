@@ -13,7 +13,7 @@ from app.api import main as api_main
 from app.api import run_store as run_store_mod
 from app.api.research_runner import ResearchRunner
 from app.api.run_store import LOST, MemoryRunStore, SqliteRunStore
-from tests.research_helpers import SIMPLE, events, flaky_runner, hold, last, new, say, wait_until
+from tests.research_helpers import SIMPLE, events, flaky_runner, hold_model, last, new, say, wait_until
 
 
 def _client(runner: ResearchRunner) -> TestClient:
@@ -136,7 +136,7 @@ def test_failed_run_keeps_its_error_after_retry(tmp_path, caplog):
 
 
 def test_stopped_run_is_recorded(client, rr):
-    gate = hold(rr.planner, "title")
+    gate = hold_model(rr.planner)
     first: dict = {}
     t = threading.Thread(target=lambda: first.setdefault("resp", client.post("/api/research/threads", json={"text": SIMPLE})))
     t.start()

@@ -3,7 +3,7 @@
 黑五海报单场景的 LangGraph 实现：`intake → confirm_facts(中断) → 风格 → plan_layout → render → check → review(中断) → revise / manual_edit / change_fact / export`。
 设计见 `../docs/黑五海报PoC技术方案.md`。
 
-调研场景（图 + CLI + 接口 + 前端）：一条线程就是一段对话。每一轮用户说一句话（可以带上在报告里选中的文字，或报告上的按钮：排除来源、改论断、重写一节），同一个 `create_agent` 接着上下文往下做：搜索、读页、需要时 `ask_user` 停下来问（会中断），要写报告或改报告就调四个报告工具改工作稿（`write_report` / `revise_section` / `edit_claim` / `exclude_source`，草稿由快模型整理成节和论断，每次都把改完的整份报告返回给 agent），最后给一段带来源角标的回复。这一轮改过报告就在结束时落成一版、跑校验（校验只是说明，不拦交付），没改就不出新版。模型默认 DeepSeek V4 Pro（调研 agent 开思考，整理、起标题、推荐追问这些结构化步骤不开）。交互约定见 `../docs/调研交互约定.md`。
+调研场景（图 + CLI + 接口 + 前端）：一条线程就是一段对话。每一轮用户说一句话（可以带上在报告里选中的文字，或报告上的按钮：排除来源、改论断、重写一节），同一个 `create_agent` 接着上下文往下做：搜索、读页、需要时 `ask_user` 停下来问（会中断），要写报告或改报告就调四个报告工具改工作稿（`write_report` / `revise_section` / `edit_claim` / `exclude_source`，草稿由快模型整理成节和论断，每次都把改完的整份报告返回给 agent），最后给一段带来源角标的回复。这一轮改过报告就在结束时落成一版、跑校验（校验只是说明，不拦交付），没改就不出新版。模型默认 DeepSeek V4 Pro（调研 agent 开思考，整理、推荐追问这些结构化步骤不开；起标题用 Flash、不开思考，和回答同时跑，不让回答等它）。交互约定见 `../docs/调研交互约定.md`。
 
 ## 运行
 

@@ -33,6 +33,8 @@ from app.tools.gateway import GatewayClient
 from app.tools.research_tools import TIME_TOOL, make_research_tools
 
 PROBE_WORKERS = 4  # 单条送审同时发几个
+TITLE_TIMEOUT = 8  # 照 Fusion：起标题的超时（秒）
+TITLE_MAX_TOKENS = 64  # 起标题最多生成这么多：标题要的是 15 个字以内，模型不照做、去回答问题时到这里就截住
 
 # ---- 结构化输出 schema（扁平、全部 required，符合 strict 模式） ----
 
@@ -123,7 +125,7 @@ class ThinkingTimer(BaseCallbackHandler):
 
 
 def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: str = "high", timeout: int = 180,
-                    callbacks: list | None = None) -> BaseChatModel:
+                    callbacks: list | None = None, max_tokens: int | None = None) -> BaseChatModel:
     """按提供方构造聊天模型。每次调用都过熔断，服务商的错误换成 ModelUnavailable / ContentBlocked（见 app.model_guard）。
 
     DeepSeek 思考模式下：带工具的请求要把 reasoning_content 原样传回（langchain-openai / langchain-deepseek 都不做，这里补）。
@@ -141,7 +143,7 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
         return ChatArk(
             model=model or config.ARK_MODEL, base_url=config.ARK_BASE_URL, api_key=config.ARK_API_KEY,
             extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}}, timeout=timeout, max_retries=2, temperature=0,
-            stream_usage=True, callbacks=callbacks,
+            stream_usage=True, callbacks=callbacks, max_tokens=max_tokens,
         )
     if provider != "deepseek":
         raise ValueError(f"未知的模型提供方：{provider}")
@@ -166,7 +168,7 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
     return ChatDeepSeekRT(
         model=model or config.DEEPSEEK_MODEL, api_key=config.DEEPSEEK_API_KEY, api_base=config.DEEPSEEK_BASE_URL,
         extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}}, timeout=timeout, max_retries=2,
-        stream_usage=True, callbacks=callbacks, **kw,
+        stream_usage=True, callbacks=callbacks, max_tokens=max_tokens, **kw,
     )
 
 
@@ -190,12 +192,15 @@ class LiveResearchPlanner:
         provider, model = config.RESEARCH_PROVIDER, config.RESEARCH_MODEL
         self._agent = make_chat_model(provider, model, thinking=config.RESEARCH_THINKING, effort=config.RESEARCH_EFFORT,
                                       callbacks=[ThinkingTimer()])
+        light = config.DEEPSEEK_FLASH_MODEL if provider == "deepseek" else config.ARK_MODEL_LITE
         # 子 agent 用快一些、便宜一些的模型（见 config.SUBAGENT_MODEL）
-        sub = config.SUBAGENT_MODEL or (config.DEEPSEEK_FLASH_MODEL if provider == "deepseek" else config.ARK_MODEL_LITE)
+        sub = config.SUBAGENT_MODEL or light
         self._sub = make_chat_model(provider, sub, thinking=config.SUBAGENT_THINKING, effort=config.SUBAGENT_EFFORT,
                                     callbacks=[ThinkingTimer()])
-        # 快模型步骤（起标题、推荐问题、单条送审）不开思考：都是小活，开思考慢得多
+        # 快模型步骤（推荐问题、单条送审）不开思考：都是小活，开思考慢得多
         self._fast = make_chat_model(provider, model, thinking=False, timeout=120)
+        # 起标题照 Fusion 用轻量模型、不开思考、超时短：标题是锦上添花，慢了、坏了就用原话（见 graph.research.agent._TitleJob）
+        self._titler = make_chat_model(provider, light, thinking=False, timeout=TITLE_TIMEOUT, max_tokens=TITLE_MAX_TOKENS)
         self._gateway = gateway or GatewayClient(config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY, scene="research")
         self._tools = make_research_tools(self._gateway)
 
@@ -209,7 +214,7 @@ class LiveResearchPlanner:
         return self._tools
 
     def title(self, text: str) -> str:
-        out = self._fast.invoke([("user", prompts.render("title.prompt", content=text))])
+        out = self._titler.invoke([("user", prompts.render("title.prompt", content=text))])
         return str(out.content).strip()
 
     def suggest(self, question: str, reply: str) -> list[str]:
@@ -370,6 +375,7 @@ class FakeToolModel(BaseChatModel):
     bound: list[str] = Field(default_factory=list)
     prefix: str = "fake"  # 消息 id 的前缀：子 agent 的假模型用另一个，和主 agent 的消息分得开
     tool_choice: str | None = None  # "none"：不许调工具，直接回复
+    gates: list = Field(default_factory=list)  # 测试用：放进去的 threading.Event，每次调用先等它（模拟慢模型）；bind_tools 复制后还是同一个 list
 
     @property
     def _llm_type(self) -> str:
@@ -451,7 +457,12 @@ class FakeToolModel(BaseChatModel):
         return AIMessage(content=content, tool_calls=valid, invalid_tool_calls=invalid, id=f"{self.prefix}-{len(messages)}",
                          additional_kwargs={"reasoning_content": "（假思考）先想一想。"}, usage_metadata=FAKE_USAGE)
 
+    def _wait(self) -> None:
+        for g in self.gates:
+            g.wait(10)  # 10 秒兜底，测试不会永远卡住
+
     def _generate(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> ChatResult:
+        self._wait()
         return ChatResult(generations=[ChatGeneration(message=self._message(messages))])
 
     def _chunks(self, msg: AIMessage) -> list[AIMessageChunk]:
@@ -467,6 +478,7 @@ class FakeToolModel(BaseChatModel):
         return chunks
 
     def _stream(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> Iterator[ChatGenerationChunk]:
+        self._wait()
         for k, c in enumerate(self._chunks(self._message(messages))):  # 回调（on_llm_new_token）由 BaseChatModel 发
             if k == 1 and "输出拦截" in _turn_text(messages):
                 raise ContentBlocked(output=True)
