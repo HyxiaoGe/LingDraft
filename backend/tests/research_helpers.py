@@ -91,6 +91,13 @@ def hold(planner, name: str) -> threading.Event:
     return gate
 
 
+def hold_model(planner) -> threading.Event:
+    """让主 agent 的假模型每次调用都先停在闸门上（还没吐出任何东西），模拟慢模型：执行占着位，还没有回答。"""
+    gate = threading.Event()
+    planner._model.gates.append(gate)
+    return gate
+
+
 def run_async(coro):
     """在新线程里跑事件循环：同一进程里的海报测试会在主线程留下 Playwright 的循环，主线程不能再 asyncio.run。"""
     with ThreadPoolExecutor(1) as ex:

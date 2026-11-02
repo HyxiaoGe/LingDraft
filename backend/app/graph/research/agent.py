@@ -1,9 +1,10 @@
 """对话 agent：一条线程就是一个 create_agent 的对话，检查点挂在 agent 上，没有外层的图。
 
 用户每说一句话：先写进消息（update_state，as_node=START），再接着跑（stream(None)），直到模型给出不带工具调用的回复。
-- TurnMiddleware：还没有标题时按第一句话起标题；每轮开始、结束时记下这一轮；模型每次调用前换上系统提示词（日期按这一轮开始时北京时间的当天）。
+- TurnMiddleware：每轮开始、结束时记下这一轮；模型每次调用前换上系统提示词（日期按这一轮开始时北京时间的当天）。
+  还没有标题时，按第一句话起标题，和调模型同时跑，不耽误回答（见 _TitleJob）。
   几点钟不放进发给模型的内容，要用时模型自己调 get_current_time（见 tools.research_tools）。
-  起标题、调模型之前往自定义流里写一个阶段（phase），页面在还没有字和步骤的空档里据此说明在等什么。
+  调模型之前往自定义流里写一个阶段（phase），页面在还没有字和步骤的空档里据此说明在等什么。
   推荐问题不在这一轮里起：正文写完这一轮就结束，运行器在结束之后再起（见 api.research_runner）。
 - ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度；做完的那一步带上它得到的来源。
 - InvalidToolCallRetryMiddleware：模型返回无法解析的工具调用时，让它带着解析错误重发，最多几次。
@@ -14,8 +15,13 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
+import logging
+import threading
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any, NotRequired
@@ -33,7 +39,10 @@ from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, T
 from app.model_guard import ContentBlocked
 from app.tools.images import ImageStore
 
-TITLE_CHARS = 24  # 起标题失败时截取用户原话的长度
+TITLE_CHARS = 30  # 照 Fusion：标题超过这么长截掉；起标题失败时用用户原话的这么长
+TITLE_WAIT = 10  # 第一次调模型结束时标题还没起好，最多再等这么久（秒），再等不到用原话
+_TITLE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="title")
+log = logging.getLogger(__name__)
 TURN_END = "TurnMiddleware.after_agent"  # 一轮的最后一个节点：在它名下写状态，线程就停在这一轮结束的地方
 CHINA_TZ = timezone(timedelta(hours=8))
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -102,21 +111,16 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
     def before_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         msgs = state["messages"]
         human = msgs[history.last_human(msgs)]
-        out: dict[str, Any] = {"turns": list(state.get("turns", [])) + [Turn(id=human.id, started_at=now())]}
-        if not state.get("title"):  # 按这段对话的第一句起（第一轮排队时就停了的，下一轮补上）
-            emit({"type": "phase", "phase": "title"})
-            text = history.requests(msgs)[0]
-            try:
-                title = self.planner.title(text).strip() or text[:TITLE_CHARS]
-            except Exception:  # noqa: BLE001  起标题失败不影响回答，截原话
-                title = text[:TITLE_CHARS]
-            out["title"] = title
-            emit({"type": "title", "title": title})
-        return out
+        return {"turns": list(state.get("turns", [])) + [Turn(id=human.id, started_at=now())]}
 
     def wrap_model_call(self, request: ModelRequest, handler):
+        # 还没有标题就和这次调模型同时起，按这段对话的第一句（第一轮出错、停下时还没写进去的，下一次调模型补上）
+        job = None if request.state.get("title") else _TitleJob(self.planner, history.requests(request.state["messages"])[0])
         emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
-        return handler(request.override(system_message=SystemMessage(system_prompt(turn_started(request)))))
+        resp = handler(request.override(system_message=SystemMessage(system_prompt(turn_started(request)))))
+        if job is None:
+            return resp
+        return ExtendedModelResponse(model_response=resp, command=Command(update={"title": job.result(TITLE_WAIT)}))
 
     def after_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         msgs = state["messages"]
@@ -174,6 +178,53 @@ def _result_message(result) -> ToolMessage | None:
     if isinstance(result, Command) and isinstance(result.update, dict):
         return next((m for m in result.update.get("messages", []) if isinstance(m, ToolMessage)), None)
     return None
+
+
+def _fallback_title(text: str) -> str:
+    return text[:TITLE_CHARS] + "..." if len(text) > TITLE_CHARS else text
+
+
+class _TitleJob:
+    """照 Fusion，起标题和回答同时跑，不让回答等它：起好了马上发给页面；这次调模型结束时写进 state，还没起好就再等一会儿。
+    模型返回的只去掉首尾空白（引号、书名号是标题的一部分，不删），太长截掉；出错、等不到用用户原话。先定下来的算数，之后的不再发、不再改。
+    在另一个线程里调模型：不带这次运行的回调，点停止不打断它，它的字也不进这次运行的流。
+    往流里写要在图的上下文里（写的时候按上下文认是哪个图），所以起头时复制一份上下文，发标题时在它里面写。"""
+
+    def __init__(self, planner, text: str) -> None:
+        self._lock = threading.Lock()
+        self._title: str | None = None
+        self._text = text
+        try:
+            self._write = get_stream_writer()
+        except RuntimeError:  # 不在流式运行里（例如测试直接 invoke）
+            self._write = None
+        self._ctx = contextvars.copy_context()
+        self._future = _TITLE_POOL.submit(self._run, planner)
+
+    def _run(self, planner) -> None:
+        try:
+            title = planner.title(self._text).strip()[:TITLE_CHARS]
+        except Exception as e:  # noqa: BLE001  起标题失败不影响回答，用原话
+            log.warning("起标题失败，用原话：%s", e)
+            title = ""
+        self._settle(title or _fallback_title(self._text))
+
+    def _settle(self, title: str) -> None:
+        with self._lock:
+            if self._title is not None:
+                return
+            self._title = title
+        if self._write is not None:  # 只有先定下来的那一次走到这里，复制的上下文不会同时进两次
+            self._ctx.run(self._write, {"type": "title", "title": title})
+
+    def result(self, wait: float) -> str:
+        try:
+            self._future.result(timeout=wait)
+        except FutureTimeout:
+            log.warning("起标题超过 %s 秒，先用原话", wait)
+            self._future.cancel()  # 同时起标题的太多、还没轮到的，不用再起了
+            self._settle(_fallback_title(self._text))
+        return self._title or _fallback_title(self._text)
 
 
 class ToolProgressMiddleware(AgentMiddleware):
