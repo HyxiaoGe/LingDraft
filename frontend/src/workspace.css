@@ -117,6 +117,8 @@
 .ws-time { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; font-size: 12px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ws-user-foot .ws-btn { color: var(--muted); }
 .ws-user-foot .ws-btn:hover { color: var(--ink); }
+/* 排着的话：这一轮答完就发，虚线框、淡一些 */
+.ws-user.queued .ws-bubble { border-style: dashed; border-color: var(--line2); background: var(--paper); color: var(--muted); }
 /* 改最后一句 */
 .ws-edit { margin: 0 0 22px; border: 1px solid var(--accent-line); border-radius: var(--r-lg); background: var(--paper); padding: 10px 12px 8px; box-shadow: 0 0 0 3px var(--accent-soft); }
 .ws-edit textarea { width: 100%; border: 0; outline: none; resize: none; font: inherit; background: transparent; line-height: 1.6; padding: 0; color: var(--ink); }

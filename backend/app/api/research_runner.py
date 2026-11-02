@@ -1,4 +1,7 @@
-"""对话场景的接口层运行器：接用户的话、把 agent 的流变成页面的事件、停止和重新生成、线程状态视图。"""
+"""对话场景的接口层运行器：接用户的话、把 agent 的流变成页面的事件、停止和重新生成、线程状态视图。
+
+回答进行中用户又说的话不打断这一轮：排着（存进 run_store 的 pending_messages），这一轮答完或停下就接着发成新的一轮（见 queue、_ended）。
+"""
 
 from __future__ import annotations
 
@@ -16,7 +19,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import START
 
 from app import config
-from app.api.run_store import STOPPED, MemoryRunStore, RunStore, open_run_store
+from app.api.run_store import QUEUE, STOPPED, SUCCESS, MemoryRunStore, RunStore, open_run_store
 from app.api.runner import BaseRunner, Executor, RunConflict, jsonable, log
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, now, stop_turn
@@ -223,6 +226,9 @@ class ResearchRunner(BaseRunner):
         # 用户又说了话、重新回答或删掉对话时撤掉：起好了也不写。撤掉和写检查点都在锁里，不会和用户那边的写交错
         self._suggest_mu = threading.Lock()
         self._suggest_for: dict[str, tuple[str, str, str]] = {}
+        # 占位都经过这把锁（见 _admit）：话排进去时看线程在不在跑、这一轮结束时退掉占位并取走排着的话，两件事不会交错，
+        # 不会出现话排进去了、这一轮却已经结束没人发的情况
+        self._queue_mu = threading.Lock()
 
     @staticmethod
     def _cfg(thread_id: str) -> dict:
@@ -235,6 +241,60 @@ class ResearchRunner(BaseRunner):
 
     def say(self, thread_id: str, text: str):
         return self._submit(thread_id, lambda: self.accept(thread_id, text), "say")
+
+    def queue(self, thread_id: str, text: str) -> dict | None:
+        """正在回答时又说的话：排着，这一轮答完或停下就接着发（见 _ended）；已经排着一句的，接在它后面合成一句。返回排着的那句。
+        刚好没在跑（这一轮刚结束）就直接发、返回 None，页面去接这次执行的事件流。上一轮没跑完的抛 NotIdle（先重试）。"""
+        key = self._run_key(thread_id)
+        with self._queue_mu:
+            if not self.runs.admit(key):
+                return self.run_store.put_pending(thread_id, QUEUE, text.strip())
+        try:
+            self._launch(thread_id, self.accept(thread_id, text), "say")
+        except BaseException:
+            self.runs.release(key)
+            raise
+        return None
+
+    def unqueue(self, thread_id: str) -> str | None:
+        """撤回排着的话，返回原文（页面放回输入框）；已经发出去了、或者没有排着的，返回 None。"""
+        return self.run_store.take_pending(thread_id, QUEUE)
+
+    def _admit(self, key: str) -> bool:
+        with self._queue_mu:
+            return self.runs.admit(key)
+
+    def _ended(self, thread_id: str, status: str) -> None:
+        """一次执行结束：退掉占位。答完或停下了、又排着话，就把它发成新的一轮（kind 是 say），占位直接交过去，中间别的请求插不进来；
+        这次执行最后的状态里线程已经又在跑了，页面看到就接着读下一次执行的事件。
+        出错的不发：排着的话留着，页面把它放回输入框，用户重试完再发。"""
+        key = self._run_key(thread_id)
+        with self._queue_mu:
+            text = None
+            if status in (SUCCESS, STOPPED):
+                try:
+                    text = self.run_store.take_pending(thread_id, QUEUE)
+                except Exception:  # noqa: BLE001  取不到就当没有，话留在库里，页面会放回输入框
+                    log.warning("排着的话没取出来：%s", key, exc_info=True)
+            self.runs.release(key)
+            if text is None:
+                return
+            if not self.runs.admit(key):  # 占位都经过这把锁，不会被抢；万一抢了，话放回去
+                self._put_back(thread_id, text)
+                return
+        try:
+            self._launch(thread_id, self.accept(thread_id, text), "say")
+        except Exception:  # noqa: BLE001
+            self.runs.release(key)
+            log.exception("排着的话没发出去：%s", key)
+            self._put_back(thread_id, text)
+
+    def _put_back(self, thread_id: str, text: str) -> None:
+        """取出来却没发出去的话放回去，排在这期间又说的话前面；页面看到线程空闲还排着话，会放回输入框。"""
+        try:
+            self.run_store.put_pending(thread_id, QUEUE, text, front=True)
+        except Exception:  # noqa: BLE001
+            log.warning("排着的话没放回去：%s", self._run_key(thread_id), exc_info=True)
 
     def accept(self, thread_id: str, text: str) -> None:
         """把用户的话写进检查点，agent 从这里接着跑（输入为 None）。
@@ -285,7 +345,7 @@ class ResearchRunner(BaseRunner):
     def _hold(self, thread_id: str) -> Iterator[None]:
         """占着这个线程的运行位做一件事（改标题、删除）：做的时候这个线程跑不起来，在跑的也不让做。"""
         key = self._run_key(thread_id)
-        if not self.runs.admit(key):
+        if not self._admit(key):
             raise RunConflict("正在回答，答完或停下后才能改名、删除")
         try:
             yield
@@ -468,6 +528,7 @@ class ResearchRunner(BaseRunner):
             "running_since": run.get("since") if run else None,  # 这次执行开始的时间；排队中、没在跑为 None
             "turns": jsonable(conversation(v["messages"], v.get("turns", []))),
             "sources": {s.id: s.model_dump() for s in collect_sources(v["messages"])},
+            "queued_message": self.run_store.get_pending(thread_id, QUEUE),  # 排着、这一轮答完就发的话（{text, created_at, updated_at}）；没有为 None
         }
 
     def summary_view(self, thread_id: str) -> dict | None:

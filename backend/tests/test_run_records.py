@@ -12,7 +12,7 @@ from app import config
 from app.api import main as api_main
 from app.api import run_store as run_store_mod
 from app.api.research_runner import ResearchRunner
-from app.api.run_store import LOST, MemoryRunStore, SqliteRunStore
+from app.api.run_store import LOST, QUEUE, MemoryRunStore, SqliteRunStore
 from tests.research_helpers import SIMPLE, events, flaky_runner, hold_model, last, new, say, wait_until
 
 
@@ -88,6 +88,23 @@ def test_store_delete_thread(store):
     store.create("b", "t2", "new", None, None)
     store.delete_thread("t1")
     assert store.for_thread("t1") == [] and [r["id"] for r in store.for_thread("t2")] == ["b"]
+
+
+def test_store_pending_messages(store):
+    """排着的话：每个对话、每种方式一句；又说的接在后面（front 放到前面），取走就没了；删掉对话一起删。"""
+    assert store.get_pending("t1", QUEUE) is None and store.take_pending("t1", QUEUE) is None
+    a = store.put_pending("t1", QUEUE, "第一句")
+    b = store.put_pending("t1", QUEUE, "第二句")
+    assert a["text"] == "第一句" and b["text"] == "第一句\n第二句"
+    assert b["created_at"] == a["created_at"] <= b["updated_at"] and b["created_at"].endswith("+00:00")
+    store.put_pending("t1", QUEUE, "放前面", front=True)
+    store.put_pending("t1", "guide", "另一种")
+    store.put_pending("t2", QUEUE, "别的对话")
+    assert store.get_pending("t1", QUEUE)["text"] == "放前面\n第一句\n第二句"
+    assert store.take_pending("t1", QUEUE) == "放前面\n第一句\n第二句" and store.take_pending("t1", QUEUE) is None
+    assert store.get_pending("t1", "guide")["text"] == "另一种"
+    store.delete_thread("t1")
+    assert store.get_pending("t1", "guide") is None and store.get_pending("t2", QUEUE)["text"] == "别的对话"
 
 
 # ---- 经过运行器和接口 ----
