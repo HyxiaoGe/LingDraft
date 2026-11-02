@@ -239,6 +239,8 @@ def test_stream_buffer_keeps_subagents_apart():
     buf.add(AIMessageChunk(content="", id="x", additional_kwargs={"reasoning_content": "再想"}), "A")
     buf.add(AIMessageChunk(content="甲写", id="x"), "A")
     deltas = [e["data"] for e in buf.flush()]
+    ms = deltas[1].pop("ms")  # 甲想完了：用时记在甲思考那一段上；乙还在想，没有
+    assert isinstance(ms, int) and ms >= 0
     assert deltas == [{"id": "m", "kind": "text", "text": "主"}, {"id": "x", "kind": "thinking", "text": "甲想再想", "task": "A"},
                       {"id": "x", "kind": "thinking", "text": "乙想", "task": "B"}, {"id": "x", "kind": "text", "text": "甲写", "task": "A"}]
     main, a, b = buf.partial(), buf.partial("A"), buf.partial("B")

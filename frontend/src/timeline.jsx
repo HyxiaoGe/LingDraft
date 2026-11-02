@@ -368,7 +368,7 @@ function ProcItems({ items, st, nums, running, hideUnknown = false }) {
   const cite = (sid) => (hideUnknown && !st?.sources?.[sid] ? null : <Mark n={nums[sid]} s={st?.sources?.[sid]} />);
   return items.map((it) => (it.type === "step" ? (it.kind === "task" ? <TaskCard key={`step:${it.id}`} s={it} st={st} nums={nums} running={running} />
     : <ToolRow key={`step:${it.id}`} s={it} />)
-    : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} running={running} thinking={running && it.live && !it.ms} />
+    : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} running={running} thinking={running && it.live && it.ms == null} />
       : it.type === "blocked" ? <div key={`blocked:${it.id}`} className="ws-tool bad"><IconWarn size={12} /><span className="main">内容审核没通过，这个子任务停在这里</span></div>
         : <ProcText key={`text:${it.id}`} it={it} cite={cite} />));
 }
@@ -419,7 +419,7 @@ function taskActivity(s) {
   if (p) return p.kind === "read" ? `正在读 ${p.title || domain(p.text)}${more}` : `正在搜「${p.text}」${more}`;
   const last = sub.at(-1);
   if (last?.live && last.type === "text") return "正在写报告…";
-  if (last?.live && last.type === "thinking" && !last.ms) return "思考中…";
+  if (last?.live && last.type === "thinking" && last.ms == null) return "思考中…";
   return TASK_PHASES[s.phase] || "准备中…";
 }
 
@@ -509,7 +509,7 @@ function Thinking({ it, running, thinking }) {
   useLayoutEffect(() => { // 正在想的时候框里跟着最新的字
     if (thinking && box.current) box.current.scrollTop = box.current.scrollHeight;
   });
-  const secs = it.ms ? Math.max(1, Math.round(it.ms / 1000)) : null;
+  const secs = it.ms != null ? Math.max(1, Math.round(it.ms / 1000)) : null;
   const label = thinking ? "深度思考中" : secs ? `思考了 ${secs} 秒` : "思考过程";
   return (
     <div className={"ws-think" + (thinking ? " live" : "")}>
@@ -584,7 +584,7 @@ const TIP_EVERY = 6000; // 一直没进展就隔一会儿换一句
 function LiveLine({ live, items, stopping }) {
   const lastItem = items.at(-1);
   const pending = items.filter((i) => i.type === "step" && i.pending); // 并行的几步里先做完的排在后面也算还在等
-  const streaming = lastItem?.live && (lastItem.type === "text" || (lastItem.type === "thinking" && !lastItem.ms));
+  const streaming = lastItem?.live && (lastItem.type === "text" || (lastItem.type === "thinking" && lastItem.ms == null));
   const stage = stopping ? "正在停止…" : live?.stage || (pending.length || streaming ? null : PHASES[live?.phase] || "正在准备…");
   const waitingFor = ["image", "task", "read", "search", "weather"].find((k) => pending.some((i) => i.kind === k)) || "model";
   // 子任务卡里有进展也算：子 agent 在搜、在写，主 agent 这边一直没动静

@@ -71,12 +71,15 @@ class ThinkingClock:
         self._start: float | None = None
         self._end: float | None = None
 
-    def see(self, msg: AIMessageChunk) -> None:
+    def see(self, msg: AIMessageChunk) -> bool:
+        """记下一个片段。返回 True：思考到这个片段为止（它是思考之后第一个正文或工具调用片段）。"""
         t = time.monotonic()
         if msg.additional_kwargs.get("reasoning_content"):
             self._start = self._start or t
         elif self._start is not None and self._end is None and (msg.content or msg.tool_call_chunks):
             self._end = t
+            return True
+        return False
 
     def ms(self) -> int | None:
         """没有思考片段就是 None。"""

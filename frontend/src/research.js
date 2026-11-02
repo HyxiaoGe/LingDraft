@@ -212,9 +212,11 @@ export function addLive(l, ev, data) {
   const items = l.items.slice();
   if (ev === "delta") {
     const i = items.findIndex((x) => x.type === data.kind && x.id === data.id);
-    if (i < 0) items.push({ type: data.kind, id: data.id, text: data.text, live: true, t0: Date.now() });
-    else items[i] = { ...items[i], text: items[i].text + data.text };
-    // 正文或下一步一开始，前面的思考就算想完了：记下用了多久
+    // 想完了，思考那一段带着后端计的用时（ms）：以它为准，页面按收到的时间算的不准（中途打开时一下子补发、标签页在后台都会算短）
+    const ms = data.ms != null ? { ms: data.ms } : {};
+    if (i < 0) items.push({ type: data.kind, id: data.id, text: data.text, live: true, t0: Date.now(), ...ms });
+    else items[i] = { ...items[i], text: items[i].text + data.text, ...ms };
+    // 正文或下一步一开始，前面还没带用时的思考就算想完了，按页面这边的时间记
     if (data.kind === "text") stopThinking(items);
   } else if (ev === "step") {
     const s = { type: "step", ...data.step };
@@ -243,6 +245,6 @@ function addSub(items, ev, { task, ...data }) {
 
 function stopThinking(items) {
   for (let i = 0; i < items.length; i++) {
-    if (items[i].type === "thinking" && items[i].live && !items[i].ms) items[i] = { ...items[i], ms: Date.now() - items[i].t0 };
+    if (items[i].type === "thinking" && items[i].live && items[i].ms == null) items[i] = { ...items[i], ms: Date.now() - items[i].t0 };
   }
 }

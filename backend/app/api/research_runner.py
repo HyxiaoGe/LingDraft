@@ -92,6 +92,8 @@ class _Streamed:
 
 class StreamBuffer:
     """把模型的流式片段攒成事件：思考和正文按（子任务，消息 id，种类）合并，约每 80ms 发一次。子 agent 的片段带上派它的 task 调用 id。
+    一条消息想完了（下一个片段是正文或工具调用），思考那一段带上 ms（思考了多久，后端计的）：页面按收到片段的时间自己算不准，
+    中途打开对话时前面的事件一下子补发过来、标签页在后台时浏览器拖着不处理，都会算短。
     同时记着主 agent 和每个子 agent 最后一条消息流出来的东西：停止时存下来（主 agent 的是这一轮的回复，子 agent 的进它的子任务卡）。"""
 
     def __init__(self) -> None:
@@ -104,21 +106,26 @@ class StreamBuffer:
         cur = self._cur.get(task)
         if cur is None or cur.mid != mid:
             cur = self._cur[task] = _Streamed(mid)
-        cur.clock.see(chunk)
+        thought = cur.clock.see(chunk)
         thinking = chunk.additional_kwargs.get("reasoning_content") or ""
         text = chunk.content if isinstance(chunk.content, str) else ""
         cur.thinking += thinking
         cur.text += text
+        if thought:  # 思考到这里为止：用时记在思考那一段上发给页面，排在正文前面
+            self._piece(mid, task, "thinking", "")["ms"] = cur.clock.ms()
         for kind, piece in (("thinking", thinking), ("text", text)):
-            if not piece:
-                continue
-            # 并行的几个子 agent 的片段交错着来：接在同一条消息最近的那一段后面，种类变了才另起一段
-            prev = next((d for d in reversed(self._deltas) if d["id"] == mid and d.get("task") == task), None)
-            if prev is not None and prev["kind"] == kind:
-                prev["text"] += piece
-            else:
-                self._deltas.append({"id": mid, "kind": kind, "text": piece, **({"task": task} if task else {})})
+            if piece:
+                self._piece(mid, task, kind, piece)
         return self.flush() if time.monotonic() - self._last >= DELTA_S else []
+
+    def _piece(self, mid: str, task: str | None, kind: str, piece: str) -> dict:
+        """接上一段片段，返回它所在的那条。并行的几个子 agent 的片段交错着来：接在同一条消息最近的那一段后面，种类变了才另起一段。"""
+        prev = next((d for d in reversed(self._deltas) if d["id"] == mid and d.get("task") == task), None)
+        if prev is not None and prev["kind"] == kind:
+            prev["text"] += piece
+            return prev
+        self._deltas.append(d := {"id": mid, "kind": kind, "text": piece, **({"task": task} if task else {})})
+        return d
 
     def flush(self) -> list[dict]:
         out = [{"event": "delta", "data": d} for d in self._deltas]

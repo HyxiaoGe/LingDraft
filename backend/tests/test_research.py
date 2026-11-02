@@ -11,6 +11,7 @@ import httpx
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.messages.tool import tool_call_chunk
 
 from app.api import research_runner
 from app.api.research_runner import NothingToRegenerate, NotIdle, ResearchRunner, StreamBuffer
@@ -572,6 +573,24 @@ def test_stream_buffer_merges_deltas_and_keeps_the_last_message():
     buf.add(AIMessageChunk(content="四", id="m2"))
     assert buf.partial().content == "四" and buf.partial().additional_kwargs == {}  # 只记最后一条
     assert StreamBuffer().partial() is None
+
+
+def test_stream_buffer_sends_thinking_time_when_thinking_ends():
+    """想完了（下一个片段是正文或工具调用），思考那一段带上后端计的用时，排在正文前面；思考那段已经发出去了，就另起一条只带用时的。
+    页面以它为准：中途打开对话时前面的事件一下子补发过来，页面按收到的时间算会算短。"""
+    buf = StreamBuffer()
+    first = buf.add(AIMessageChunk(content="", id="m1", additional_kwargs={"reasoning_content": "想"})) + buf.flush()
+    assert [e["data"] for e in first] == [{"id": "m1", "kind": "thinking", "text": "想"}]  # 还在想，没有用时
+    time.sleep(0.03)
+    call = AIMessageChunk(content="", id="m1", tool_call_chunks=[tool_call_chunk(name="search_web", args="", id="c1", index=0)])
+    out = [e["data"] for e in buf.add(call) + buf.flush()]
+    assert len(out) == 1 and out[0]["kind"] == "thinking" and out[0]["text"] == "" and out[0]["ms"] >= 30  # 调工具也算想完了
+
+    buf.add(AIMessageChunk(content="", id="m2", additional_kwargs={"reasoning_content": "再想"}))
+    buf.add(AIMessageChunk(content="写", id="m2"))
+    buf.add(AIMessageChunk(content="完", id="m2"))
+    out = [e["data"] for e in buf.flush()]
+    assert [(d["kind"], d["text"], "ms" in d) for d in out] == [("thinking", "再想", True), ("text", "写完", False)]  # 只带一次
 
 
 # ---- 来源 ----
