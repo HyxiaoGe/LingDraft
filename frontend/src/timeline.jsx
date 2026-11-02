@@ -1,5 +1,5 @@
 // 对话。一轮是用户的一句话加上模型这一轮做的事：先是过程（思考、搜索、读页按发生的先后），然后是天气卡片、画的图，再是正文和这条回答用到的来源；
-// 最后一轮下面是推荐问题（起的时候先说一声）。回答时又说的话排着，显示在最下面，这一轮答完就发，能撤回到输入框；
+// 最后一轮下面是推荐问题（起的时候先说一声）。回答时又说的话排着，贴在输入框上沿，这一轮答完就发，能撤回到输入框；
 // 也能插进这一轮：模型做完手上这一步就看到它，插进去以后排在过程里。过程正在跑时展开，这一轮结束后收成一行“已完成 25 秒”，点开看每一步。
 // 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。最后一轮的这些一直显示，之前的悬停才出现。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
@@ -83,7 +83,8 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid,
       <div className="ws-dock">
         {/* 按下去不抢光标：输入框里写着的字和光标都留着 */}
         {away && <button className="ws-jump" aria-label="回到底部" title="回到底部" onMouseDown={(e) => e.preventDefault()} onClick={toBottom}><IconArrowDown size={16} /></button>}
-        <Composer thread={tid || "new"} carry={!!live} mode={mode} queueing={queueing} stopping={stopping} putBack={putBack} onSend={onSend} onStop={act.stop} />
+        <Composer thread={tid || "new"} carry={!!live} mode={mode} queueing={queueing} stopping={stopping} putBack={putBack} onSend={onSend} onStop={act.stop}
+          above={(busy || ACTIVE.has(st?.status)) && <Pending st={st} act={act} />} />
       </div>
       {fresh && <Inspirations onPick={act.start} />}
     </section>
@@ -220,8 +221,6 @@ function Turns({ st, live, busy, suggesting, stopping, now, act }) {
         const last = i === all.length - 1;
         return <Turn key={t.id} t={t} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} />;
       })}
-      {running && st?.guided_message && <PendingMsg text={st.guided_message.text} note="做完手上这一步就插进这一轮" onWithdraw={act.unguide} />}
-      {running && st?.queued_message && <PendingMsg text={st.queued_message.text} note="这一轮答完就发" onGuide={act.guide} onWithdraw={act.unqueue} />}
     </>
   );
 }
@@ -283,16 +282,29 @@ function UserMsg({ text, at, pinned, now, editable, onEdit }) {
   );
 }
 
-// 还没发出去的话：排着的（这一轮答完就发，可以改成插进这一轮）、等着插进这一轮的。撤回就放回输入框，可以改了再发
-function PendingMsg({ text, note, onGuide, onWithdraw }) {
+// 还没发出去的话，贴在输入框上沿：等着插进这一轮的、排着的（这一轮答完就发，可以改成插进这一轮）各一行。
+// 撤回就放回输入框，可以改了再发。按钮按下去不抢光标，输入框里正写着的接着写
+function Pending({ st, act }) {
+  const rows = [
+    st?.guided_message && { key: "guided", text: st.guided_message.text, note: "做完手上这一步就插进这一轮", onWithdraw: act.unguide },
+    st?.queued_message && { key: "queued", text: st.queued_message.text, note: "这一轮答完就发", onGuide: act.guide, onWithdraw: act.unqueue },
+  ].filter(Boolean);
+  if (!rows.length) return null;
+  const keep = (e) => e.preventDefault();
   return (
-    <div className="ws-user queued pinned">
-      <div className="ws-bubble">{text}</div>
-      <div className="ws-user-foot pinned">
-        <span className="ws-time">{note}</span>
-        {onGuide && <button className="ws-btn ghost sm" title="不等这一轮答完：模型做完手上这一步就看到这句话，接着按它调整" onClick={onGuide}><IconInsert size={13} />插进这一轮</button>}
-        <button className="ws-btn ghost sm" onClick={onWithdraw}><IconUndo size={13} />撤回</button>
-      </div>
+    <div className="ws-pending" aria-label="还没发出去的话">
+      {rows.map((r) => (
+        <div key={r.key} className="ws-pending-row">
+          <div className="ws-pending-main">
+            <div className="ws-pending-note">{r.note}</div>
+            <div className="ws-pending-text" title={r.text}>{r.text}</div>
+          </div>
+          <div className="ws-pending-acts">
+            {r.onGuide && <button className="ws-btn ghost sm" title="不等这一轮答完：模型做完手上这一步就看到这句话，接着按它调整" onMouseDown={keep} onClick={r.onGuide}><IconInsert size={13} />插进这一轮</button>}
+            <button className="ws-btn ghost sm" onMouseDown={keep} onClick={r.onWithdraw}><IconUndo size={13} />撤回</button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -676,7 +688,7 @@ const PLACEHOLDER = {
 // 每个对话没发出去的字各存各的，切走再切回来还在（刷新就没了）。
 // carry：新对话刚发出去、拿到了 id，thread 从 "new" 换成 id，还是同一个对话
 // putBack：放回输入框的话（撤回的、没发出去的），接在已经写着的字前面；不是正在看的对话，放进那个对话的草稿
-function Composer({ thread, carry, mode, queueing, stopping, putBack, onSend, onStop }) {
+function Composer({ thread, carry, mode, queueing, stopping, putBack, onSend, onStop, above }) {
   const [text, setText] = useState("");
   const ref = useRef(null);
   const drafts = useRef(new Map());
@@ -748,6 +760,7 @@ function Composer({ thread, carry, mode, queueing, stopping, putBack, onSend, on
   };
   return (
     <div className="ws-composer">
+      {above}
       <div className="ws-input">
         <textarea ref={ref} rows={1} value={text} placeholder={PLACEHOLDER[mode] || PLACEHOLDER.busy} aria-label="输入"
           onChange={(e) => setText(e.target.value)}

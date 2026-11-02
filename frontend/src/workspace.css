@@ -118,7 +118,6 @@
 .ws-user-foot .ws-btn { color: var(--muted); }
 .ws-user-foot .ws-btn:hover { color: var(--ink); }
 /* 排着的话：这一轮答完就发，虚线框、淡一些 */
-.ws-user.queued .ws-bubble { border-style: dashed; border-color: var(--line2); background: var(--paper); color: var(--muted); }
 /* 改最后一句 */
 .ws-edit { margin: 0 0 22px; border: 1px solid var(--accent-line); border-radius: var(--r-lg); background: var(--paper); padding: 10px 12px 8px; box-shadow: 0 0 0 3px var(--accent-soft); }
 .ws-edit textarea { width: 100%; border: 0; outline: none; resize: none; font: inherit; background: transparent; line-height: 1.6; padding: 0; color: var(--ink); }
@@ -317,6 +316,17 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-jump:hover { color: var(--ink); border-color: var(--muted); }
 .ws-composer { padding: 10px 28px 10px; }
 .ws-ai-note { max-width: 700px; margin: 6px auto 0; text-align: center; font-size: 11.5px; color: var(--faint); }
+/* 还没发出去的话：一条窄一点的托盘贴在输入框上沿，排着的、等着插进这一轮的各一行；文字只显示一行，悬停看全文 */
+.ws-pending { width: calc(100% - 32px); max-width: 668px; margin: 0 auto; border: 1px solid var(--line2); border-bottom: 0; border-radius: var(--r) var(--r) 0 0;
+  background: var(--side); animation: ws-in .2s var(--ease); }
+.ws-pending-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 12px; }
+.ws-pending-row + .ws-pending-row { border-top: 1px solid var(--line); }
+.ws-pending-main { flex: 1; min-width: 0; }
+.ws-pending-note { font-size: 11.5px; line-height: 1.4; color: var(--faint); }
+.ws-pending-text { font-size: 13px; line-height: 1.5; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-pending-acts { flex: none; display: flex; gap: 2px; }
+.ws-pending-acts .ws-btn { color: var(--muted); }
+.ws-pending-acts .ws-btn:hover { color: var(--ink); }
 .ws-input { max-width: 700px; margin: 0 auto; border: 1px solid var(--line2); border-radius: var(--r-lg); padding: 10px 12px 8px 14px; background: var(--paper); box-shadow: 0 2px 12px rgba(20, 24, 31, .06); transition: border-color .15s, box-shadow .15s; }
 .ws-input:focus-within { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft), 0 2px 12px rgba(20, 24, 31, .06); }
 .ws-input textarea { width: 100%; border: 0; outline: none; resize: none; font: inherit; background: transparent; line-height: 1.6; max-height: 160px; padding: 0; color: var(--ink); }
