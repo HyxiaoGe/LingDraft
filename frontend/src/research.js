@@ -205,9 +205,11 @@ export function mergeItems(saved, live) {
 }
 
 // 实时事件 → 这次执行里的条目（只记还在路上的；存下来以后 mergeItems 以存下来的为准）。
+// 做完的那一步带着它得到的来源（子 agent 的也算这条线程的），记在 sources 里：一轮跑完才存，执行中库里没有这一轮的来源。
 // 带 task 的是子 agent 的：放进派它的那个子任务（task 那一步）的 items，排法一样；它的阶段（排队、等模型）记在那一步上
 export function addLive(l, ev, data) {
   if (!l) return l;
+  if (data.sources) l = { ...l, sources: { ...l.sources, ...data.sources } };
   if (data.task) return { ...l, items: addSub(l.items, ev, data) };
   const items = l.items.slice();
   if (ev === "delta") {

@@ -71,7 +71,7 @@ export default function Workspace() {
     const t = setInterval(refreshList, anyActive ? 4000 : 20000);
     return () => clearInterval(t);
   }, [anyActive]);
-  const title = st?.title || live?.title;
+  const title = live?.title || st?.title; // 执行中起好的标题跟着事件来，库里一轮跑完才有（之前是用户的原话）
   useEffect(() => { document.title = title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : "灵稿 · 新对话"; }, [title, tid]);
 
   // ---- 切换线程 ----
@@ -152,7 +152,8 @@ export default function Workspace() {
     refreshList();
   }
 
-  // 执行中重新取一次状态（新存下来的对话、来源）；几个事件挨着来时只取一次，最早要取的那次为准
+  // 执行中重新取一次状态：用户的话存下来以后、开始跑的时候（开始的时间，计时用）。这一轮的内容一轮跑完才存，执行中都跟着事件来。
+  // 几个事件挨着来时只取一次，最早要取的那次为准
   function refetch(g, ms) {
     const due = Date.now() + ms;
     if (refetchAt.current && refetchAt.current <= due) return;
@@ -182,17 +183,15 @@ export default function Workspace() {
     } else if (ev === "started") {
       setLive((l) => (l ? { ...l, stage: null } : l));
       refreshList();
+      refetch(g, 0);
     } else if (ev === "title") {
       setLive((l) => (l ? { ...l, title: data.title } : l));
       refreshList();
     } else if (ev === "delta" || ev === "step") {
       setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
-      if (ev === "step" && !data.step.pending) refetch(g, 1500); // 新的来源
     } else if (ev === "phase") {
       if (data.phase === "suggest") setSuggesting(true); // 这一轮已经结束，live 已经清掉了
       else setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
-    } else if (ev === "node") {
-      refetch(g, 150);
     } else if (ev === "state") {
       // 这一轮结束了就按结束显示，不等连接关上：推荐问题起好了还会再来一次状态
       if (!ACTIVE.has(data.status)) {
@@ -302,10 +301,13 @@ export default function Workspace() {
     },
   };
 
+  // 执行中这一轮的来源跟着事件来（库里一轮跑完才有），叠在已存的来源上：正文里的引用据此显示成编号
+  const shown = st && live?.sources ? { ...st, sources: { ...st.sources, ...live.sources } } : st;
+
   return (
     <div className="ws">
       <Sidebar threads={threads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={select} manage={manage} />
-      <Conversation st={st} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} />
+      <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} />
     </div>
   );
 }
@@ -332,7 +334,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage }) {
   let rows = threads || [];
   if (current) {
     const mine = rows.find((t) => t.thread_id === current);
-    const title = st?.title || live?.title;
+    const title = live?.title || st?.title;
     const patch = { ...(busy ? { status: "running", running_since: st?.running_since || mine?.running_since } : st ? { status: st.status } : {}),
       ...(title ? { title } : {}) };
     rows = mine ? rows.map((t) => (t.thread_id === current ? { ...t, ...patch } : t))

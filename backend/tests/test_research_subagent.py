@@ -64,6 +64,21 @@ def test_subagent_stream_is_tagged_and_kept_out_of_the_answer():
     assert not any(e["event"] == "subagent" for e in c.events)  # 运行器自己用的，不发给页面
 
 
+def test_subagent_steps_carry_their_sources():
+    """执行中页面从事件拿来源：子 agent 的搜索、读页做完带着来源，主 agent 那边子任务那一步做完带着子 agent 查到的全部来源。"""
+    c = Chat()
+    c.say("分头查一下杭州美食")
+    v = c.view()
+    sub = [e["data"] for e in c.events if e["event"] == "step" and "task" in e["data"] and not e["data"]["step"]["pending"]]
+    assert sub and all(d["sources"] and list(d["sources"]) == d["step"]["source_ids"] for d in sub)
+    tasks = [e["data"] for e in c.events if e["event"] == "step" and "task" not in e["data"]
+             and e["data"]["step"]["kind"] == "task" and not e["data"]["step"]["pending"]]
+    assert len(tasks) == 2
+    for t in tasks:
+        assert t["sources"] and all(src == v["sources"][sid] for sid, src in t["sources"].items())
+    assert {sid for t in tasks for sid in t["sources"]} == {sid for d in sub for sid in d["sources"]}
+
+
 def test_subagents_run_in_parallel():
     """两个子 agent 同时在跑：第一次调模型时互相等一下，不是并行就会等不到。"""
     barrier = threading.Barrier(2, timeout=5)

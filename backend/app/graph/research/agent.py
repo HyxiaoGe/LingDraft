@@ -5,7 +5,7 @@
   几点钟不放进发给模型的内容，要用时模型自己调 get_current_time（见 tools.research_tools）。
   起标题、调模型之前往自定义流里写一个阶段（phase），页面在还没有字和步骤的空档里据此说明在等什么。
   推荐问题不在这一轮里起：正文写完这一轮就结束，运行器在结束之后再起（见 api.research_runner）。
-- ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度。
+- ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度；做完的那一步带上它得到的来源。
 - InvalidToolCallRetryMiddleware：模型返回无法解析的工具调用时，让它带着解析错误重发，最多几次。
 - ContentGuard：模型服务的内容审核拦下请求时，去掉没通过的搜索、读页结果接着跑；去不掉就停下这一轮，之后不再带进上下文。
 工具里有 task：把一件查资料的事交给子 agent（见 subagent），一次回复里调几次就并行跑几个。
@@ -28,7 +28,7 @@ from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
 from app.graph.research import history, prompts
-from app.graph.research.sources import SUBAGENT_TOOL, parse
+from app.graph.research.sources import SUBAGENT_TOOL, collect_sources, parse
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Turn
 from app.model_guard import ContentBlocked
 from app.tools.images import ImageStore
@@ -177,7 +177,9 @@ def _result_message(result) -> ToolMessage | None:
 
 
 class ToolProgressMiddleware(AgentMiddleware):
-    """工具开始时写一步（pending），做完再写一次带结果的。两次用同一个 id（工具调用 id），页面据此把它们和存下来的记录对上。"""
+    """工具开始时写一步（pending），做完再写一次带结果的。两次用同一个 id（工具调用 id），页面据此把它们和存下来的记录对上。
+    做完的那一步带上它得到的来源（来源卡的内容）：一轮跑完才存检查点（见 ResearchRunner._graph_events），
+    执行中页面从库里取不到这一轮的来源，正文里的引用要靠这里给的才能显示成编号。"""
 
     def wrap_tool_call(self, request, handler):
         call = request.tool_call
@@ -186,10 +188,19 @@ class ToolProgressMiddleware(AgentMiddleware):
             return handler(request)
         emit({"type": "step", "step": step.model_dump()})
         result = handler(request)
-        done = history.step_of(call, _result_message(result))
+        msg = _result_message(result)
+        done = history.step_of(call, msg)
         if done is not None:
-            emit({"type": "step", "step": done.model_dump()})
+            emit({"type": "step", "step": done.model_dump(), "sources": _step_sources(request.state, msg, done.source_ids)})
         return result
+
+
+def _step_sources(state, result: ToolMessage | None, ids: list[str]) -> dict[str, dict]:
+    """这一步得到的来源，按这条线程（子 agent 是它自己的那段）到这一步为止的全部结果算：读到正文的用正文开头，标题沿用搜索时的。"""
+    if result is None or not ids:
+        return {}
+    by_id = {s.id: s for s in collect_sources([*(state or {}).get("messages", []), result])}
+    return {sid: by_id[sid].model_dump() for sid in ids if sid in by_id}
 
 
 class _RetryState(AgentState):
