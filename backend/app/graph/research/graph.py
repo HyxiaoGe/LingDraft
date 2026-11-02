@@ -17,7 +17,7 @@ from app import config
 from app.graph.research.agent import build_agent
 from app.research_llm import ResearchPlanner
 
-ALLOWED_MODELS = [("app.graph.research.state", n) for n in ("Turn", "Usage")]
+ALLOWED_MODELS = [("app.graph.research.state", n) for n in ("Turn", "Usage", "Compaction")]
 
 
 def make_serde() -> JsonPlusSerializer:

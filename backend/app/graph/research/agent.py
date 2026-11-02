@@ -11,6 +11,7 @@
 - ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度；做完的那一步带上它得到的来源。
 - InvalidToolCallRetryMiddleware：模型返回无法解析的工具调用时，让它带着解析错误重发，最多几次。
 - ContentGuard：模型服务的内容审核拦下请求时，去掉没通过的搜索、读页结果接着跑；去不掉就停下这一轮，之后不再带进上下文。
+- CompactionMiddleware：对话太长时，发给模型的那份里把之前几轮压一压，state 不改（见 compaction）；压掉的原文用 recall 工具取回。
 工具里有 task：把一件查资料的事交给子 agent（见 subagent），一次回复里调几次就并行跑几个。
 用户点了停止时，运行器掐断这次运行，再用 stop_turn 把这一轮收尾（见 api.research_runner）。
 """
@@ -404,16 +405,21 @@ def _stop(reason: str) -> AIMessage:
 
 
 def build_agent(planner, checkpointer: BaseCheckpointSaver):
-    from app.graph.research.subagent import make_task_tool  # subagent 用到本模块的 middleware，放在这里导入
+    # subagent、compaction 用到本模块的东西，放在这里导入
+    from app.graph.research.compaction import CompactionMiddleware, make_recall_tool
+    from app.graph.research.subagent import make_task_tool
 
+    # recall 一直都在（工具列表变了前缀缓存整个断），只有压缩换成说明的内容才用得上；页面上不显示这一步
+    tools = [*planner.tools(), make_task_tool(planner), make_recall_tool()]
     return create_agent(
         model=planner.agent_model(),
-        tools=[*planner.tools(), make_task_tool(planner)],
+        tools=tools,
         state_schema=ResearchState,
         context_schema=ChatContext,
         middleware=[
             TurnMiddleware(planner),
             ContentGuard(planner),  # 在 TurnMiddleware 里面：重发的请求也带着换好的系统提示词
+            CompactionMiddleware(planner, tools),  # 在 ContentGuard 里面：被内容审核停下的那几轮先去掉再压；用户插的话放进对话以后再估
             ToolProgressMiddleware(),
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
         ],
