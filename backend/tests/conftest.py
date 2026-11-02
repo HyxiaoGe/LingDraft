@@ -26,7 +26,7 @@ def _postgres(monkeypatch):
         yield
         return
     with psycopg.connect(config.DATABASE_URL, autocommit=True) as c:
-        for sql in ("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes", "TRUNCATE runs"):
+        for sql in ("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes", "TRUNCATE runs", "TRUNCATE pending_messages"):
             try:
                 c.execute(sql)
             except psycopg.errors.UndefinedTable:  # 还没有哪个测试建过表

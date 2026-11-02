@@ -123,6 +123,21 @@ export async function stopResearchThread(threadId) {
   if (!resp.ok) throw await httpError(resp);
 }
 
+// 正在回答时又说的话：排着，这一轮答完或停下就接着发；已经排着一句的，接在后面合成一句。返回排着的那句（{text, created_at, updated_at}）；
+// 这一轮刚好答完了，后端直接发出去，返回 null，页面去接事件流。上一轮没跑完时返回 409
+export async function queueResearch(threadId, text) {
+  const resp = await fetch(`/api/research/threads/${threadId}/queue`, postJson({ text }));
+  if (!resp.ok) throw await httpError(resp);
+  return (await resp.json()).queued;
+}
+
+// 撤回排着的话，返回原文（放回输入框）；已经发出去了或没有，返回 null
+export async function unqueueResearch(threadId) {
+  const resp = await fetch(`/api/research/threads/${threadId}/queue`, { method: "DELETE" });
+  if (!resp.ok) throw await httpError(resp);
+  return (await resp.json()).text;
+}
+
 // 最后一轮重新回答：去掉这一轮的回答，从用户那句话重新跑。运行中、上一轮没跑完时后端返回 409
 export async function regenerateResearchThread(threadId, onEvent, signal) {
   return sse(`/api/research/threads/${threadId}/regenerate`, { method: "POST" }, onEvent, signal);

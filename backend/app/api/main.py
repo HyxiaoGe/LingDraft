@@ -215,6 +215,27 @@ async def research_say(thread_id: str, body: ResearchMessageBody):
         raise HTTPException(409, str(e)) from None
 
 
+@app.post("/api/research/threads/{thread_id}/queue")
+async def research_queue(thread_id: str, body: ResearchMessageBody):
+    """正在回答时又说的话：排着，这一轮答完或停下就接着发；已经排着一句的，接在它后面合成一句。返回 {"queued": 排着的那句}。
+    这一轮刚好答完了就直接发，返回 {"queued": null}，页面去接事件流（/events）。上一轮没跑完时返回 409。"""
+    r = research()
+    _view(r, thread_id)
+    text = _text(body)
+    try:
+        return {"queued": r.queue(thread_id, text)}
+    except NotIdle as e:
+        raise HTTPException(409, str(e)) from None
+
+
+@app.delete("/api/research/threads/{thread_id}/queue")
+async def research_unqueue(thread_id: str):
+    """撤回排着的话，返回 {"text": 原文}，页面放回输入框；已经发出去了或没有，text 是 null。"""
+    r = research()
+    _view(r, thread_id)
+    return {"text": r.unqueue(thread_id)}
+
+
 @app.post("/api/research/threads/{thread_id}/stop")
 async def research_stop(thread_id: str):
     """让正在跑（或排队）的这一轮停下；停下的结果从事件流里来。没在跑的返回 409。"""

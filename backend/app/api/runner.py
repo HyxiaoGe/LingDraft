@@ -302,6 +302,14 @@ class BaseRunner:
         """执行结束、占位退了、最终状态也发出去以后还要做的事（这时线程已经可以接着用）；吐出的事件接在这次执行后面，最后才是 end。"""
         return iter(())
 
+    def _admit(self, key: str) -> bool:
+        """占位。子类可以加锁，和执行结束时的交接错开（见 ResearchRunner._ended）。"""
+        return self.runs.admit(key)
+
+    def _ended(self, thread_id: str, status: str) -> None:
+        """执行结束、运行记录写好以后：退掉占位。子类可以在这里接着起下一次执行（见 ResearchRunner._ended）。"""
+        self.runs.release(self._run_key(thread_id))
+
     def resume_input(self, thread_id: str, payload: dict, interrupt_id: str | None = None) -> Any:
         return Command(resume=payload)
 
@@ -327,7 +335,7 @@ class BaseRunner:
         """占位 → 算出图的输入（校验在这一步，不通过就退位；新的调研线程在这一步先把需求落盘）→ 提交执行。占着位，别的请求改不了这个线程。
         kind 是这次执行怎么来的，记进运行记录。"""
         key = self._run_key(thread_id)
-        if not self.runs.admit(key):
+        if not self._admit(key):
             raise RunConflict("这一步还在处理，等它完成后再提交")
         try:
             return self._launch(thread_id, make_input(), kind)
@@ -382,7 +390,7 @@ class BaseRunner:
                     self.events.append(run, {"event": "error", "data": {"message": str(e)}})
                 finally:
                     self._finish(run, status, error)
-                    self.runs.release(key)
+                    self._ended(thread_id, status)
                 try:
                     self.events.append(run, {"event": "state", "data": self.state_view(thread_id)})
                     for ev in self._after_run(thread_id):

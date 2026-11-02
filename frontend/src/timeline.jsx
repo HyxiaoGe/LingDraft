@@ -1,10 +1,10 @@
 // 对话。一轮是用户的一句话加上模型这一轮做的事：先是过程（思考、搜索、读页按发生的先后），然后是天气卡片、画的图，再是正文和这条回答用到的来源；
-// 最后一轮下面是推荐问题（起的时候先说一声）。过程正在跑时展开，这一轮结束后收成一行“已完成 25 秒”，点开看每一步。
+// 最后一轮下面是推荐问题（起的时候先说一声）。回答时又说的话排着，显示在最下面，这一轮答完就发，能撤回到输入框。过程正在跑时展开，这一轮结束后收成一行“已完成 25 秒”，点开看每一步。
 // 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。最后一轮的这些一直显示，之前的悬停才出现。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
-import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconLoop, IconPage, IconRetry, IconSearch, IconSparkle, IconStop, IconWarn, Spinner } from "./icons.jsx";
+import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconLoop, IconPage, IconRetry, IconSearch, IconSparkle, IconStop, IconUndo, IconWarn, Spinner } from "./icons.jsx";
 import { ImageCards, imagesOf } from "./images.jsx";
 import { Markdown } from "./markdown.jsx";
 import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
@@ -18,7 +18,7 @@ const EXAMPLES = [
   "珠穆朗玛峰现在的官方高度是多少？",
 ];
 
-export function Conversation({ st, live, busy, suggesting, error, now, act, tid }) {
+export function Conversation({ st, live, busy, suggesting, error, now, act, tid, putBack }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
   const [away, setAway] = useState(false); // 离底部远了：输入框上面出“回到底部”
@@ -53,9 +53,12 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid 
 
   const mode = fresh ? "new" : st?.status === "queued" ? "queued" : busy || ACTIVE.has(st?.status) ? "busy" : st?.status || "busy";
   const stopping = !!(live?.stopping || st?.stopping);
+  // 回答时（包括还在排队、正在停止）发的话排着，这一轮答完就发；新对话刚发出去、还没拿到 id 时排不了
+  const queueing = !!tid && (mode === "busy" || mode === "queued");
   const onSend = (text) => {
     if (mode === "new") return act.start(text);
     if (mode === "idle") return act.say(text);
+    if (queueing) return act.queue(text);
     return undefined;
   };
   const title = live?.title || st?.title || live?.said || "新对话";
@@ -79,7 +82,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid 
       <div className="ws-dock">
         {/* 按下去不抢光标：输入框里写着的字和光标都留着 */}
         {away && <button className="ws-jump" aria-label="回到底部" title="回到底部" onMouseDown={(e) => e.preventDefault()} onClick={toBottom}><IconArrowDown size={16} /></button>}
-        <Composer thread={tid || "new"} carry={!!live} mode={mode} stopping={stopping} onSend={onSend} onStop={act.stop} />
+        <Composer thread={tid || "new"} carry={!!live} mode={mode} queueing={queueing} stopping={stopping} putBack={putBack} onSend={onSend} onStop={act.stop} />
       </div>
       {fresh && <Inspirations onPick={act.start} />}
     </section>
@@ -216,6 +219,7 @@ function Turns({ st, live, busy, suggesting, stopping, now, act }) {
         const last = i === all.length - 1;
         return <Turn key={t.id} t={t} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} />;
       })}
+      {running && st?.queued_message && <QueuedMsg text={st.queued_message.text} onWithdraw={act.unqueue} />}
     </>
   );
 }
@@ -272,6 +276,19 @@ function UserMsg({ text, at, pinned, now, editable, onEdit }) {
         <Stamp iso={at} now={now} />
         <CopyButton text={() => text} />
         {editable && <button className="ws-btn ghost sm" onClick={() => setEditing(true)}><IconEdit size={13} />编辑</button>}
+      </div>
+    </div>
+  );
+}
+
+// 排着的话：这一轮答完就发。撤回就放回输入框，可以改了再发
+function QueuedMsg({ text, onWithdraw }) {
+  return (
+    <div className="ws-user queued pinned">
+      <div className="ws-bubble">{text}</div>
+      <div className="ws-user-foot pinned">
+        <span className="ws-time">这一轮答完就发</span>
+        <button className="ws-btn ghost sm" onClick={onWithdraw}><IconUndo size={13} />撤回</button>
       </div>
     </div>
   );
@@ -636,21 +653,23 @@ function Failed({ st, act }) {
 const PLACEHOLDER = {
   new: "想问什么？",
   idle: "接着问…",
-  busy: "正在回答，可以先写下一句，答完再发",
+  busy: "正在回答，现在发的话等这一轮答完就发",
   queued: QUEUED,
   failed: "这一轮没跑完，点上面的“重试”",
 };
 
-// 回答时也能打字，先把下一句写好，答完再发（这时回车不发）；Esc 停止回答。
+// 回答时也能打字、发出去（queueing）：话排着，这一轮答完就发；这时输入框里有字是发送键，没字是停止键。Esc 停止回答。
 // 每个对话没发出去的字各存各的，切走再切回来还在（刷新就没了）。
 // carry：新对话刚发出去、拿到了 id，thread 从 "new" 换成 id，还是同一个对话
-function Composer({ thread, carry, mode, stopping, onSend, onStop }) {
+// putBack：放回输入框的话（撤回的、没发出去的），接在已经写着的字前面；不是正在看的对话，放进那个对话的草稿
+function Composer({ thread, carry, mode, queueing, stopping, putBack, onSend, onStop }) {
   const [text, setText] = useState("");
   const ref = useRef(null);
   const drafts = useRef(new Map());
   const shown = useRef(thread); // text 是哪个对话的
-  const enabled = mode === "new" || mode === "idle"; // 能发
+  const enabled = mode === "new" || mode === "idle" || queueing; // 能发
   const canStop = mode === "busy" || mode === "queued";
+  const showStop = canStop && !(queueing && text.trim());
   const stopNow = useRef(null); // 按 Esc 时调的：能停才有
   stopNow.current = canStop && !stopping ? onStop : null;
   useAutoHeight(ref, text);
@@ -678,6 +697,15 @@ function Composer({ thread, carry, mode, stopping, onSend, onStop }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread]);
   useEffect(() => { if (enabled) focus(false); }, [enabled]);
+  useEffect(() => {
+    if (!putBack) return;
+    const join = (cur) => (cur ? `${putBack.text}\n${cur}` : putBack.text);
+    if (putBack.thread === shown.current) {
+      setText(join);
+      focus(true);
+    } else drafts.current.set(putBack.thread, join(drafts.current.get(putBack.thread) || ""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [putBack]);
   useEffect(() => {
     const back = () => focus(false);
     // 光标在输入框里、或者没在哪儿（点了正文）时才停；在改名、菜单、角标这些地方，Esc 归它们自己。
@@ -711,11 +739,11 @@ function Composer({ thread, carry, mode, stopping, onSend, onStop }) {
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
         <div className="ws-input-bar">
-          {canStop
+          {showStop
             ? <button className="ws-send stop" aria-label={stopping ? "正在停止" : "停止"} title={stopping ? "正在停止" : "停止（Esc）"} disabled={stopping} onClick={onStop}>
               {stopping ? <Spinner size={14} /> : <IconStop size={13} />}
             </button>
-            : <button className="ws-send" aria-label="发送" disabled={!enabled || !text.trim()} onClick={send}><IconArrowUp size={15} /></button>}
+            : <button className="ws-send" aria-label="发送" title={queueing ? "这一轮答完就发" : undefined} disabled={!enabled || !text.trim()} onClick={send}><IconArrowUp size={15} /></button>}
         </div>
       </div>
       <div className="ws-ai-note">内容由 AI 生成，请仔细甄别</div>

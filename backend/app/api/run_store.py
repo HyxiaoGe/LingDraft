@@ -3,6 +3,10 @@
 学的是 LangGraph Agent Server 的 run：执行登记（RunRegistry）在进程内存里，跑完就没了；这里把每次执行的来历、状态、时间、错误落盘。
 和检查点存在一处：配了 LINGDRAFT_DATABASE_URL 就是 Postgres 的 runs 表，没配是数据目录下的 runs.sqlite，测试和评测用内存的。
 时间由存储自己记（UTC）。删掉对话时它的运行记录一起删。
+
+同一个库里还有一张 pending_messages：回答进行中用户又说的话，等着交给 agent（Agent Server 的双发策略里的 enqueue）。
+每个对话、每种方式一行：排队（queue）是这一轮结束后开新的一轮发；以后的引导（guide）是插进正在跑的这一轮。
+又说的接在排着的那句后面，合成一句。存进库里，服务重启也不丢。
 """
 
 from __future__ import annotations
@@ -22,6 +26,8 @@ QUEUED, RUNNING, SUCCESS, STOPPED, ERROR, LOST = "queued", "running", "success",
 # success：跑到头了（这一轮的结果另看检查点里的轮记录，比如被内容审核拦下）；stopped：用户点了停止；
 # error：抛了错；lost：进程重启时还在排队或在跑（服务启动时补记，见 sweep）
 STATUSES = (QUEUED, RUNNING, SUCCESS, STOPPED, ERROR, LOST)
+QUEUE = "queue"  # 排着的话的方式：这一轮结束后开新的一轮发（见 ResearchRunner.queue）
+JOIN = "\n"  # 又说的话接在排着的那句后面，中间换行
 FIELDS = ("id", "thread_id", "kind", "turn_id", "status", "created_at", "started_at", "ended_at", "error_type", "error", "traceback", "version")
 
 
@@ -36,7 +42,12 @@ class RunStore(Protocol):
     def for_thread(self, thread_id: str) -> list[dict]: ...
     def recent(self, status: str | None, limit: int) -> list[dict]: ...
     def sweep(self) -> int: ...  # 还在排队、在跑的记成 lost，返回条数。只在服务启动时调：单进程部署，这时它们都已经没在跑了
-    def delete_thread(self, thread_id: str) -> None: ...
+    def delete_thread(self, thread_id: str) -> None: ...  # 运行记录和排着的话一起删
+
+    # 排着的话：{"text", "created_at", "updated_at"}
+    def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False) -> dict: ...  # 接在排着的那句后面（front：放到前面），没有就新建
+    def get_pending(self, thread_id: str, mode: str) -> dict | None: ...
+    def take_pending(self, thread_id: str, mode: str) -> str | None: ...  # 取出来并删掉；两处同时取，只有一处拿得到
 
 
 def _now() -> datetime:
@@ -55,6 +66,7 @@ class MemoryRunStore:
     def __init__(self) -> None:
         self._mu = threading.Lock()
         self._rows: dict[str, dict] = {}  # 按写入的先后
+        self._pending: dict[tuple[str, str], dict] = {}
 
     def create(self, run_id: str, thread_id: str, kind: str, turn_id: str | None, version: str | None) -> None:
         row = dict.fromkeys(FIELDS) | {"id": run_id, "thread_id": thread_id, "kind": kind, "turn_id": turn_id, "status": QUEUED,
@@ -94,6 +106,27 @@ class MemoryRunStore:
     def delete_thread(self, thread_id: str) -> None:
         with self._mu:
             self._rows = {k: r for k, r in self._rows.items() if r["thread_id"] != thread_id}
+            self._pending = {k: r for k, r in self._pending.items() if k[0] != thread_id}
+
+    def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False) -> dict:
+        now = _iso(_now())
+        with self._mu:
+            row = self._pending.get((thread_id, mode))
+            if row is None:
+                row = self._pending[(thread_id, mode)] = {"text": text, "created_at": now, "updated_at": now}
+            else:
+                row.update(text=text + JOIN + row["text"] if front else row["text"] + JOIN + text, updated_at=now)
+            return dict(row)
+
+    def get_pending(self, thread_id: str, mode: str) -> dict | None:
+        with self._mu:
+            row = self._pending.get((thread_id, mode))
+            return dict(row) if row else None
+
+    def take_pending(self, thread_id: str, mode: str) -> str | None:
+        with self._mu:
+            row = self._pending.pop((thread_id, mode), None)
+            return row["text"] if row else None
 
 
 class _SqlRunStore:
@@ -131,6 +164,22 @@ class _SqlRunStore:
 
     def delete_thread(self, thread_id: str) -> None:
         self._exec("DELETE FROM runs WHERE thread_id = %s", (thread_id,))
+        self._exec("DELETE FROM pending_messages WHERE thread_id = %s", (thread_id,))
+
+    def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False) -> dict:
+        merged = "excluded.text || CAST(%s AS TEXT) || pending_messages.text" if front else "pending_messages.text || CAST(%s AS TEXT) || excluded.text"
+        now = self._time(_now())
+        return self._rows("INSERT INTO pending_messages (thread_id, mode, text, created_at, updated_at) VALUES (%s, %s, %s, %s, %s) "
+                          f"ON CONFLICT (thread_id, mode) DO UPDATE SET text = {merged}, updated_at = excluded.updated_at "
+                          "RETURNING text, created_at, updated_at", (thread_id, mode, text, now, now, JOIN))[0]
+
+    def get_pending(self, thread_id: str, mode: str) -> dict | None:
+        rows = self._rows("SELECT text, created_at, updated_at FROM pending_messages WHERE thread_id = %s AND mode = %s", (thread_id, mode))
+        return rows[0] if rows else None
+
+    def take_pending(self, thread_id: str, mode: str) -> str | None:
+        rows = self._exec("DELETE FROM pending_messages WHERE thread_id = %s AND mode = %s RETURNING text", (thread_id, mode))
+        return rows[0]["text"] if rows else None
 
     def _rows(self, sql: str, params: tuple) -> list[dict]:
         return [{k: _iso(v) if k.endswith("_at") else v for k, v in r.items()} for r in self._exec(sql, params)]
@@ -146,6 +195,9 @@ _SQLITE_DDL = (
         created_at TEXT NOT NULL, started_at TEXT, ended_at TEXT, error_type TEXT, error TEXT, traceback TEXT, version TEXT)""",
     "CREATE INDEX IF NOT EXISTS runs_thread_idx ON runs (thread_id)",
     "CREATE INDEX IF NOT EXISTS runs_status_idx ON runs (status)",
+    """CREATE TABLE IF NOT EXISTS pending_messages (
+        thread_id TEXT NOT NULL, mode TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        PRIMARY KEY (thread_id, mode))""",
 )
 
 
@@ -179,6 +231,9 @@ _POSTGRES_DDL = (
         error_type text, error text, traceback text, version text)""",
     "CREATE INDEX IF NOT EXISTS runs_thread_idx ON runs (thread_id, seq)",
     "CREATE INDEX IF NOT EXISTS runs_status_idx ON runs (status, seq)",
+    """CREATE TABLE IF NOT EXISTS pending_messages (
+        thread_id text NOT NULL, mode text NOT NULL, text text NOT NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
+        PRIMARY KEY (thread_id, mode))""",
 )
 
 

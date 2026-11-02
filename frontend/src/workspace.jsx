@@ -1,9 +1,11 @@
 // 对话页：左侧对话列表（每条能改名、导出、删除），右侧对话。
 // 页面以服务器上的线程状态为准：对话和来源都从状态里取。执行中的事件（思考和正文的逐字片段、工具步骤）
 // 叠在存下来的对话上实时显示，并提示该重新取一次状态了；所以刷新、换个页面打开、或者中途断线重连，看到的都一样。
+// 回答时又说的话排在服务器上，这一轮答完或停下就接着发成新的一轮：这一轮的事件流结束时线程又在跑了，页面接着读下一次执行的。
+// 这一轮出错时排着的话不发，取回输入框。
 import { useEffect, useRef, useState } from "react";
-import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getResearchState, listResearchThreads, regenerateResearchThread,
-  renameResearchThread, retryResearchThread, sayResearch, stopResearchThread } from "./api.js";
+import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getResearchState, listResearchThreads, queueResearch,
+  regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unqueueResearch } from "./api.js";
 import { IconDownload, IconEdit, IconMore, IconPlus, IconTrash } from "./icons.jsx";
 import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, threadMarkdown, useNow, when } from "./research.js";
 import { Conversation, focusInput } from "./timeline.jsx";
@@ -34,6 +36,7 @@ export default function Workspace() {
   const [suggesting, setSuggesting] = useState(false); // 这一轮结束了，推荐问题还在起（同一条事件流里还会再来一次状态）
   const [busy, setBusyState] = useState(false);
   const [error, setError] = useState(null);
+  const [putBack, setPutBack] = useState(null); // 要放回输入框的话：{thread, text}，每次是个新对象
   const gen = useRef(0); // 每切一次线程加一：旧线程的连接和回调发现对不上，就不再改页面
   const tidRef = useRef(tid);
   const ctl = useRef(new AbortController()); // 当前线程的连接；切走、或开始新的一次执行时断开（服务器上的执行照常跑）
@@ -105,7 +108,7 @@ export default function Workspace() {
       if (ACTIVE.has(s.status)) {
         setLive({ items: [], turnsAtStart: s.turns.length, stage: s.status === "queued" ? QUEUED : null });
         await follow(id, g, []);
-      }
+      } else if (s.queued_message) takeBack(id); // 没在跑却还排着话：上次那一轮出错了、或服务重启时没跑完
     } catch (e) {
       if (g !== gen.current) return;
       if (e.status === 404) select(null, "replace"); // 线程确实不在了才换成新对话；网络抖动时地址留着，刷新还能再试
@@ -149,7 +152,19 @@ export default function Workspace() {
     setLive(null);
     setSuggesting(false);
     if (errs.length && s.status !== "failed") setError(errs.at(-1));
+    if (s.queued_message) takeBack(s.thread_id); // 这一轮出错，排着的话没发
     refreshList();
+  }
+
+  // 排着的话取回输入框：撤回的，或者这一轮出错没发的。服务器上取一次就没了：已经发出去了就什么也不放
+  async function takeBack(id) {
+    try {
+      const text = await unqueueResearch(id);
+      if (id === tidRef.current) setSt((s) => (s ? { ...s, queued_message: null } : s));
+      if (text) setPutBack({ thread: id, text });
+    } catch (e) {
+      if (id === tidRef.current) setError(`排着的话没取回来：${e.message || e}`);
+    }
   }
 
   // 执行中重新取一次状态：用户的话存下来以后、开始跑的时候（开始的时间，计时用）。这一轮的内容一轮跑完才存，执行中都跟着事件来。
@@ -170,7 +185,15 @@ export default function Workspace() {
 
   const onEvent = (g, errs, r) => (ev, data, id) => {
     if (g !== gen.current || r.sig.aborted) return;
-    if (id) lastEvent.current = id;
+    if (id) {
+      lastEvent.current = id;
+      const run = id.slice(0, id.lastIndexOf("-")); // 事件 id 是“执行-序号”
+      if (r.run && r.run !== run) { // 接到了下一次执行（排着的话发出去了）：上一次的实时内容不要了
+        setLive({ items: [], stage: "正在准备…" });
+        errs.length = 0;
+      }
+      r.run = run;
+    }
     if (ev === "thread") {
       if (tidRef.current !== data.thread_id) {
         tidRef.current = data.thread_id;
@@ -197,6 +220,12 @@ export default function Workspace() {
       if (!ACTIVE.has(data.status)) {
         r.done = true;
         finish(g, data, errs);
+      } else { // 这次执行结束时线程又在跑了：排着的话已经发成新的一轮。先按这时的状态显示，这条流结束后接着读下一次执行（见 follow）
+        clearTimeout(refetchTimer.current);
+        refetchAt.current = 0;
+        setSt(data);
+        setLive({ items: [], stage: data.status === "queued" ? QUEUED : "正在准备…" });
+        refreshList();
       }
     } else if (ev === "error") {
       errs.push(data.message);
@@ -255,6 +284,23 @@ export default function Workspace() {
       const hidden = new Set((st?.turns?.at(-1)?.items || []).map(itemKey));
       return run((cb, sig) => editResearchThread(tidRef.current, text, cb, sig), null, { hidden, edit: text });
     },
+    // 正在回答时又说的话：排在服务器上，这一轮答完就发（又说的接在后面，合成一句）。
+    // 话到的时候这一轮刚好答完了，服务器直接发了出去：接上那次执行（流还连着的那次执行可能已经以空闲收尾，不能指望它）
+    queue: async (text) => {
+      const id = tidRef.current;
+      const g = gen.current;
+      try {
+        const q = await queueResearch(id, text);
+        if (g !== gen.current) return;
+        if (q) setSt((s) => (s ? { ...s, queued_message: q } : s));
+        else run((cb, sig) => followResearchThread(id, null, cb, sig), null);
+      } catch (e) {
+        if (g !== gen.current) return;
+        setPutBack({ thread: id, text }); // 没排上：话放回输入框
+        setError(`没排上：${e.message || e}`);
+      }
+    },
+    unqueue: () => takeBack(tidRef.current),
     // 只是提出停下：服务器在下一个字或下一步之前停，最终状态照常从这次执行的事件流里来
     stop: async () => {
       const g = gen.current;
@@ -307,7 +353,7 @@ export default function Workspace() {
   return (
     <div className="ws">
       <Sidebar threads={threads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={select} manage={manage} />
-      <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} />
+      <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} />
     </div>
   );
 }

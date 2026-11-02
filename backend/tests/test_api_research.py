@@ -35,7 +35,8 @@ def test_conversation_over_http(client):
     tid = st["thread_id"]
     assert str(uuid.UUID(tid)) == tid == last(ev, "thread")["thread_id"]  # 新对话的 id 是完整的 UUID，地址栏 /chat/<id> 用它
     assert st["status"] == "idle" and st["title"] == last(ev, "title")["title"] and len(st["sources"]) == 3
-    assert set(st) == {"thread_id", "exists", "scenario", "status", "error", "stopping", "title", "updated_at", "running_since", "turns", "sources"}
+    assert set(st) == {"thread_id", "exists", "scenario", "status", "error", "stopping", "title", "updated_at", "running_since", "turns", "sources",
+                       "queued_message"}
     assert client.get(f"/api/research/threads/{tid}/state").json() == st  # 刷新后看到的和刚才一样
 
     ev = events(say(client, tid, "直接答：为什么不稳定？"))
