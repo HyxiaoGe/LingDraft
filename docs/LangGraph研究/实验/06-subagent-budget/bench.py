@@ -12,6 +12,12 @@
   PYTHONPATH=. LINGDRAFT_DATABASE_URL= uv run python "../docs/LangGraph研究/实验/06-subagent-budget/bench.py" tracker [--only deep|cities] [--fake]
   PYTHONPATH=. LINGDRAFT_DATABASE_URL= uv run python "../docs/LangGraph研究/实验/06-subagent-budget/judge.py" odr cap6 odr2 tracker
 结果写到 backend/output/subagent-budget/<做法>/（不进仓库）。judge.py 拿每种做法的报告和 base 的成对比，Flash 当评委。
+
+要在 ba1eeea 上跑：第 06 篇的数是 0d24e84 的产品代码跑的。2c456a3 起产品默认挂上 8/8 预算和每步提醒，在之后的代码上跑，
+每种做法都会带上 8/8，base 的提示词也已经换成了 odr2 那样的写法；tracker 自己的 5/5 提醒还会被 SubagentPrompt 先加的那条挡掉
+（它看到的最后一条不再是工具结果），比的就不是原来那几样了。所以在现在的代码上脚本直接退出。复现（在仓库根目录）：
+  git worktree add ../lingdraft-ba1eeea ba1eeea && cp backend/.env ../lingdraft-ba1eeea/backend/
+再到 ../lingdraft-ba1eeea/backend 下按上面的用法跑。
 """
 from __future__ import annotations
 
@@ -143,8 +149,10 @@ def run_one(worker, t: dict, variant: dict) -> dict:
 
 
 def main() -> None:
+    if getattr(subagent, "TOOL_BUDGET", None):  # 产品代码已经带预算了：见开头“要在 ba1eeea 上跑”
+        sys.exit("bench.py 要在 ba1eeea 上跑，现在的产品代码默认带 8/8 预算，比的就不是原来那几样了。复现方法见脚本开头。")
     name = sys.argv[1]
-    only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
+    only =sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
     variant = VARIANTS[name]
     apply(variant)
     planner = FakeResearchPlanner() if "--fake" in sys.argv else LiveResearchPlanner()

@@ -5,6 +5,9 @@
   PYTHONPATH=. LINGDRAFT_DATABASE_URL= uv run python "../docs/LangGraph研究/实验/06-subagent-budget/e2e.py" b8 deep
 做法：base（ba1eeea 的提示词，不设预算）、b5、b8。问题：deep（Rust/Go/Zig）、cities（三城购房政策）。
 结果写到 backend/output/subagent-budget/e2e/<做法>-<问题>.json 和 .answer.md。不碰 8000、不碰本地库：内存检查点，数据目录在 output 下。
+
+第 06 篇的数是 2c456a3 的代码跑的。b5、b8 直接用产品代码，base 只是去掉预算、换回提示词，所以以后产品代码一改，三种都会跟着变。
+要复现那次的结果，先 git worktree add 到 2c456a3（.env 拷过去），在那边跑。
 """
 
 from __future__ import annotations

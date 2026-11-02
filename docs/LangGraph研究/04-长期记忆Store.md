@@ -22,7 +22,7 @@
 - `BaseStore` 的抽象方法只有 `batch` 和 `abatch`。
 - `get`、`search`、`put`、`delete`、`list_namespaces` 都只是把参数包成一个操作（`GetOp`、`SearchOp`、`PutOp`、`ListNamespacesOp`），再交给 `batch`。
 - 删除就是 value 为 None 的 `PutOp`。
-- 换一种存储，只要写好 `batch`。
+- 换一种存储，`batch` 和 `abatch` 两个都要写：都是抽象方法，只写 `batch` 建不出实例（试过，报 `Can't instantiate abstract class … abatch`）。（11-02 改，原来写的是"只要写好 batch"）
 
 **异步版会攒批**
 

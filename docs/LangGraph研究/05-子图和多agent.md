@@ -21,7 +21,9 @@
 - `_runner.tick` 的跑法：
   - 只有一个任务时，在当前线程直接跑；
   - 有几个任务时，同步版放进线程池，异步版建几个 asyncio 任务。
-- 并发数由 config 里的 `max_concurrency` 控制，默认不限。
+- 并发数由 config 里的 `max_concurrency` 控制。不设时同步、异步不一样（11-02 改，原来写的是"默认不限"）：
+  - 同步版：线程池是 langchain_core 的 `get_executor_for_config` 建的，`max_workers` 就是 `max_concurrency`，不设就用 Python 线程池的默认大小 min(32, CPU 核数 + 4)。这台机器 10 核，是 14 个。
+  - 异步版：设了才加一个信号量（`_executor.py` 的 `AsyncBackgroundExecutor`），不设就不限。
 
 **结果怎么合并**
 

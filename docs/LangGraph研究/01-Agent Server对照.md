@@ -5,7 +5,11 @@
 ## 先说授权
 
 - `langgraph dev` 是内存版，用来开发和测试，免费。启动日志原话："This in-memory server is designed for development and testing. For production use, please use LangSmith Deployment."
-- 生产环境自己部署 Agent Server 要 LangSmith 授权。这一条来自[社区论坛](https://forum.langchain.com/t/best-practices-for-self-hosting-langgraph-server-oss-without-langgraph-keys/3779)和第三方整理，没找到官方原话。LangGraph 框架本身是 MIT 协议。
+- 生产环境自己部署 Agent Server 要 LangSmith 授权。官方的[独立部署文档](https://docs.langchain.com/langsmith/deploy-standalone-server)写了：
+  - 环境变量里有 `LANGGRAPH_CLOUD_LICENSE_KEY`（LangSmith 许可证密钥，服务启动时验证一次）；
+  - 网络要能连 `beacon.langchain.com`，做许可证验证和用量上报，离线部署除外。
+  - 文档没写价格，也没写哪种套餐能拿到密钥。（11-02 补。之前只找到[社区论坛](https://forum.langchain.com/t/best-practices-for-self-hosting-langgraph-server-oss-without-langgraph-keys/3779)和第三方整理的说法）
+- LangGraph 框架本身是 MIT 协议。
 - 有开源的替代品 Aegra（FastAPI + Postgres，Apache 协议），没试过。
 
 所以这一步的定位是学它的设计、拿来对照，不打算把它部署到 dev 上。
