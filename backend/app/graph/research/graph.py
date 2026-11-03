@@ -10,11 +10,15 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.store.base import BaseStore
+from langgraph.store.postgres import PostgresStore
+from langgraph.store.sqlite import SqliteStore
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from app import config
 from app.graph.research.agent import build_agent
+from app.graph.research.memory import MemoryBook
 from app.research_llm import ResearchPlanner
 
 ALLOWED_MODELS = [("app.graph.research.state", n) for n in ("Turn", "Usage", "Compaction")]
@@ -76,5 +80,25 @@ def thread_ids(checkpointer: BaseCheckpointSaver) -> list[str]:
     raise TypeError(f"不支持列出线程的检查点存储：{type(checkpointer).__name__}")
 
 
-def build_graph(planner: ResearchPlanner, checkpointer: BaseCheckpointSaver):
-    return build_agent(planner, checkpointer)
+def open_store(data_dir: Path) -> BaseStore:
+    """长期记忆的 Store，和检查点在一处：配了 LINGDRAFT_DATABASE_URL 是 Postgres 的 store 表，没配是数据目录下的 SQLite。
+    不开向量搜索：dev 的库没有 pgvector，记忆整份取出来放进系统提示词，用不上按相似度查（见 memory.py）。"""
+    if config.DATABASE_URL:
+        return open_postgres_store(config.DATABASE_URL)
+    Path(data_dir).mkdir(parents=True, exist_ok=True)
+    store = SqliteStore(sqlite3.connect(str(Path(data_dir) / "store.sqlite"), check_same_thread=False, isolation_level=None))
+    store.setup()
+    return store
+
+
+def open_postgres_store(url: str) -> PostgresStore:
+    """连接参数和池子照检查点（见 open_postgres_checkpointer）；表没建的先建。"""
+    pool = ConnectionPool(url, min_size=1, max_size=2, timeout=10, open=True, check=ConnectionPool.check_connection,
+                          kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row})
+    store = PostgresStore(pool)
+    store.setup()
+    return store
+
+
+def build_graph(planner: ResearchPlanner, checkpointer: BaseCheckpointSaver, memory: MemoryBook | None = None):
+    return build_agent(planner, checkpointer, memory)

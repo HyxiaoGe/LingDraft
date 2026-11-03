@@ -12,6 +12,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,13 +20,16 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import START
+from langgraph.store.base import BaseStore
+from langgraph.store.memory import InMemoryStore
 
 from app import config
 from app.api.run_store import GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, RunStore, open_run_store
 from app.api.runner import BaseRunner, Executor, RunConflict, jsonable, log
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, now, stop_turn
-from app.graph.research.graph import build_graph, open_checkpointer, thread_ids
+from app.graph.research.graph import build_graph, open_checkpointer, open_store, thread_ids
+from app.graph.research.memory import MemoryBook, next_at
 from app.graph.research.sources import collect_sources, subagent_messages
 from app.graph.research.state import Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
@@ -226,13 +230,14 @@ class ResearchRunner(BaseRunner):
 
     def __init__(self, fake: bool | None = None, data_dir: Path | None = None, workers: int | None = None,
                  planner: ResearchPlanner | None = None, checkpointer: BaseCheckpointSaver | None = None,
-                 run_store: RunStore | None = None):
+                 run_store: RunStore | None = None, store: BaseStore | None = None):
         fake = config.USE_FAKE_PLANNER if fake is None else fake
         self.planner = planner or (FakeResearchPlanner() if fake else LiveResearchPlanner())
         data = Path(data_dir or config.DATA_DIR)
         saver = checkpointer or open_checkpointer(data)
-        self.graph = build_graph(self.planner, saver)
-        # 运行记录和检查点存在一处：传了检查点（测试、评测用内存的）就记在内存里，不碰数据目录和配置的库
+        # 运行记录、长期记忆和检查点存在一处：传了检查点（测试、评测用内存的）就记在内存里，不碰数据目录和配置的库
+        self.memory = MemoryBook(store or (InMemoryStore() if checkpointer is not None else open_store(data)))
+        self.graph = build_graph(self.planner, saver, self.memory)
         self.run_store = run_store or (MemoryRunStore() if checkpointer is not None else open_run_store(data))
         self.images = ImageStore(data / "images")  # 画好的图，按对话分目录
         # 对话不碰浏览器，几个线程各跑各的；检查点的读写 SqliteSaver / PostgresSaver 自己加锁
@@ -406,11 +411,12 @@ class ResearchRunner(BaseRunner):
             self.graph.update_state(self._cfg(thread_id), {"title": title}, as_node=TURN_END)
 
     def delete(self, thread_id: str) -> None:
-        """删掉整段对话（这个线程的所有检查点、运行记录和画的图），找不回来。
+        """删掉整段对话（这个线程的所有检查点、运行记录、画的图和整理记忆的记录），找不回来；记下的记忆不删。
         运行记录先删：删不掉就整个报错，对话还在，可以再删一次；反过来对话先没了，剩下的记录就再也删不到了。"""
         with self._hold(thread_id):
             self._drop_suggestions(thread_id)
             self.run_store.delete_thread(thread_id)
+            self.memory.forget_thread(thread_id)  # 只删整理过哪几轮的记录；从这段对话记下的记忆不动（记的是人）
             self.graph.checkpointer.delete_thread(thread_id)
             self.images.drop(thread_id)
 
@@ -551,6 +557,19 @@ class ResearchRunner(BaseRunner):
     def recent_runs(self, status: str | None = None, limit: int = 50) -> list[dict]:
         """所有对话里最近的运行，可以只看某个状态（比如 error）。"""
         return [_public(r) for r in self.run_store.recent(status, limit)]
+
+    # ---- 长期记忆 ----
+
+    def dream(self) -> dict | None:
+        """整理一次记忆（见 graph.research.memory）：每段对话按检查点里最新的状态。已经有一次在整理返回 None。"""
+        threads = ((t, self.graph.get_state(self._cfg(t)).values) for t in thread_ids(self.graph.checkpointer))
+        return self.memory.dream(threads, self.planner.dream)
+
+    def memory_view(self) -> dict:
+        """记忆页：全部记忆、上次整理（没整理过为 None）、下次按时整理的时间（关了按时整理为 None）。"""
+        return {"memories": [{k: m.get(k) for k in ("id", "text", "created_at", "updated_at")} for m in self.memory.items()],
+                "last_dream": self.memory.last_dream(),
+                "next_dream": next_at(datetime.now(UTC), config.DREAM_HOUR).isoformat() if config.DREAM_ENABLED else None}
 
     # ---- 视图 ----
 

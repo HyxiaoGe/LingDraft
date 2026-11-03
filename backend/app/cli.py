@@ -14,6 +14,7 @@
   uv run python -m app.cli --scenario research retry <thread_id>
   uv run python -m app.cli --scenario research regenerate <thread_id>
   uv run python -m app.cli --scenario research state <thread_id>
+  uv run python -m app.cli --scenario research dream      # 马上整理一次长期记忆（平时每天按时整理，见 graph.research.memory）
 
   运行时逐字打印思考和正文、每一步工具。
 """
@@ -92,6 +93,10 @@ def research(args) -> None:
     from app.api.research_runner import ResearchRunner
 
     r = ResearchRunner(fake=args.fake)
+    if args.cmd == "dream":
+        print(json.dumps(r.dream(), ensure_ascii=False, indent=2))
+        print("\n".join(f"[{m['id']}] {m['text']}" for m in r.memory.items()) or "（没有记忆）")
+        return
     tid = getattr(args, "thread_id", None) or str(uuid.uuid4())
     if args.cmd in ("new", "say"):
         r.accept(tid, args.text)
@@ -129,6 +134,7 @@ def main() -> None:
     p_regen.add_argument("thread_id")
     p_state = sub.add_parser("state")
     p_state.add_argument("thread_id")
+    sub.add_parser("dream")  # 对话场景
     args = ap.parse_args()
     (research if args.scenario == "research" else poster)(args)
 

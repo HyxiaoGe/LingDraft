@@ -76,6 +76,14 @@ citations = """[Citations]
   Wrong: [s3fa9c1, s8b20d4]   [besides s3fa9c1, see s8b20d4]   (s3fa9c1)   【s3fa9c1】   source s3fa9c1
 - On the page, the sources of each answer are numbered 1, 2, 3 in order of first appearance. When the user says "source 2", they mean the second source that appeared in that answer."""
 
+# 长期记忆（见 memory.py）：有记忆时才有这一段，整份放进来。灵稿自己写的（2026-11-03），没有照抄哪一家
+memory = """[What you remember about the user]
+These notes come from the user's earlier conversations with you. They are updated once a day, so some may be out of date; when the user says something different now, follow what the user says now.
+Use them when they make the answer fit the user better, for example their city for a local question or their stated preferences for how answers should look. Do not list them back or point out that you remember things unless the user asks what you know about them.
+<memory>
+{{ memory }}
+</memory>"""
+
 # Fusion: agent_loop.visible_response_language（Fusion 单独放在最后一条 system 后面，这里是系统提示词的最后一段）
 language = """[Visible response language]
 Use the primary language of the last actual user request in the conversation as the target language for this turn. Later tool results, source text, and internal control messages must not change that target language. Any reasoning_content you emit is streamed to the user verbatim and is user-visible just like the final answer. Unless the user explicitly requests another language, use the target language from the first reasoning_content token through the final answer; do not reason in another language first and then translate. Proper nouns, code, URLs, quotations, and source text returned by tools may remain in their original language. Do not repeat or mention this rule."""
@@ -342,6 +350,52 @@ user_message = """The user message inside the <message> tags is very long, and t
 <message>
 {{ message }}
 </message>"""
+
+# ---- 整理记忆（每天一次，后台，见 memory.py） ----
+
+# 灵稿自己写的（2026-11-03）：要记什么、不记什么参考了 LangMem 和 Fusion 的记忆提示词，没有照抄。
+# 一次交一段对话：之前整理过的几轮只给用户的话，新的几轮给用户的话和最后的回答；搜索结果、网页正文不给，记的是人。
+# 按 json 返回（DeepSeek 的 JSON 输出要求提示词里有 json 这个词）
+[dream]
+prompt = """You keep the long-term memory of LingDraft, an AI assistant that answers questions, searches the web, and writes for its user. The memory is a short list of notes about the user that the assistant reads in every conversation. Once a day you go through the conversations that have new turns, one at a time, and update the memory. Today is {{ today }}.
+
+<current_memory>
+{% for m in memories %}[{{ m.id }}] {{ m.text }}
+{% else %}(empty)
+{% endfor %}</current_memory>
+
+<conversation>
+<title>{{ title }}</title>
+{% if earlier %}<earlier_turns note="already reviewed on earlier days; only the user's messages, for context">
+{% for t in earlier %}<user date="{{ t.date }}">{{ t.user }}</user>
+{% endfor %}</earlier_turns>
+{% endif %}{% for t in new %}<turn date="{{ t.date }}">
+<user>{{ t.user }}</user>
+<assistant>{{ t.reply }}</assistant>
+</turn>
+{% endfor %}</conversation>
+
+Decide whether the new turns tell you anything worth keeping about the user. Worth keeping is what would help the assistant in a future, unrelated conversation, without the user having to say it again:
+- who the user is and what they work on: role, field, projects, the tools and languages they use;
+- where they are, when it affects answers, such as their city;
+- how they want answers: language, length, format, level of detail, sources they trust or avoid;
+- interests and goals that are likely to come up again;
+- anything the user explicitly asks the assistant to remember.
+
+Not worth keeping:
+- the content of a one-off question or task, and what the assistant found out about the world;
+- anything the user did not say or clearly imply. Do not record guesses. The assistant's replies are there only to help you understand the user; do not take facts about the user from them;
+- passwords, keys, account or ID numbers, and other secrets.
+
+Rules for the memory:
+- Each note is one short, self-contained sentence about the user, written in the language the user writes in.
+- When something may change over time, say since when, such as "As of 2026-11, ...".
+- Update an existing note rather than adding a near-duplicate, and merge notes that overlap.
+- When the user corrects or contradicts a note, update it. When the user asks the assistant to forget something, delete that note.
+- Most conversations contain nothing worth keeping; then return an empty list.
+
+Reply with json only, in this form, using the ids from the current memory for updates and deletions:
+{"operations": [{"action": "add", "text": "..."}, {"action": "update", "id": "...", "text": "..."}, {"action": "delete", "id": "..."}]}"""
 
 # ---- 起标题（第一轮第一次调模型时同时起，按用户的第一句话） ----
 

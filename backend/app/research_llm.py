@@ -65,6 +65,8 @@ class ResearchPlanner(Protocol):
 
     def summarize(self, prompt: str) -> str: ...
 
+    def dream(self, prompt: str) -> str: ...  # 整理记忆：提示词进，json 文字出（见 graph.research.memory）
+
 
 # ---- 思考计时 ----
 
@@ -208,6 +210,9 @@ class LiveResearchPlanner:
         self._titler = make_chat_model(provider, light, thinking=False, timeout=TITLE_TIMEOUT, max_tokens=TITLE_MAX_TOKENS)
         # 对话太长时给之前几轮写短版：轻量模型、不开思考（见 graph.research.compaction）
         self._summarizer = make_chat_model(provider, light, thinking=False, timeout=120, max_tokens=SUMMARY_MAX_TOKENS)
+        # 每天整理一次记忆：默认和主 agent 同一个模型、开思考，要判断一件事是长期的还是一次性的（见 config.DREAM_MODEL）
+        self._dreamer = make_chat_model(provider, config.DREAM_MODEL or model, thinking=config.DREAM_THINKING, effort=config.DREAM_EFFORT,
+                                        timeout=300)
         self._gateway = gateway or GatewayClient(config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY, scene="research")
         self._tools = make_research_tools(self._gateway)
 
@@ -246,6 +251,11 @@ class LiveResearchPlanner:
         """在调用方的运行上下文里调（停止的回调跟着），片段标 nostream，不进这次运行的消息流。"""
         out = self._summarizer.invoke([("user", prompt)], config={"tags": [TAG_NOSTREAM]})
         return str(out.content).strip()
+
+    def dream(self, prompt: str) -> str:
+        """按 JSON 输出（response_format json_object）：开着思考也能用，不像结构化输出要强制调工具。"""
+        out = self._dreamer.bind(response_format={"type": "json_object"}).invoke([("user", prompt)])
+        return str(out.content)
 
 
 # ---- 离线假实现 ----
@@ -522,6 +532,7 @@ class FakeToolModel(BaseChatModel):
 
 
 FAKE_BLOCKED = "【审核不通过】"
+FAKE_REMEMBER = "记住："  # 假模型整理记忆时，用户说的这几个字后面那句记成一条
 
 
 def _turn_text(messages: list[BaseMessage]) -> str:
@@ -553,6 +564,7 @@ class FakeResearchPlanner:
     def __init__(self, gateway: GatewayClient | None = None) -> None:
         self.calls: list[tuple[str, Any]] = []
         self.fail_title = False
+        self.dream_replies: list[str] = []  # 整理记忆时按顺序给这些回答；用完了照 dream 的说明
         self._gateway = gateway or fake_gateway_client()
         self._tools = make_research_tools(self._gateway)
         self._model = FakeToolModel()
@@ -588,3 +600,12 @@ class FakeResearchPlanner:
             return "（短的用户消息）" + prompt.split("<message>")[-1].strip()[:20]
         ids = list(dict.fromkeys(re.findall(r"\[(s[0-9a-f]{6,10})\]", prompt.split("<turn>")[-1])))[:3]
         return "（短版）这一轮查过了。" + "".join(f"[{i}]" for i in ids)
+
+    def dream(self, prompt: str) -> str:
+        """新的几轮里用户说的 FAKE_REMEMBER 后面那句记成一条（之前整理过的几轮不看）。"""
+        self.calls.append(("dream", prompt))
+        if self.dream_replies:
+            return self.dream_replies.pop(0)
+        new = prompt.split("</title>")[-1].split("</earlier_turns>")[-1]  # 标题是假模型照用户的话起的，也不看
+        notes = re.findall(FAKE_REMEMBER + r"([^<\n]+)", new)
+        return json.dumps({"operations": [{"action": "add", "text": n.strip()} for n in notes]}, ensure_ascii=False)

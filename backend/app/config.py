@@ -52,6 +52,14 @@ DEEPSEEK_FLASH_MODEL = os.environ.get("DEEPSEEK_FLASH_MODEL", "deepseek-flash")
 COMPACT_TRIGGER_TOKENS = int(os.environ.get("COMPACT_TRIGGER_TOKENS", "200000"))
 COMPACT_TARGET_TOKENS = int(os.environ.get("COMPACT_TARGET_TOKENS", "100000"))
 
+# 长期记忆（见 app/graph/research/memory.py）：每天北京时间 DREAM_HOUR 点在后台整理一次（做梦），把有新的几轮的对话整理成关于用户的记忆。
+# 2026-11-03 Sean 定后台整理、每天一次；3 点是 DeepSeek 的闲时价。模型默认和主 agent 一样（Pro），开思考：要判断一件事是长期的还是一次性的
+DREAM_ENABLED = _flag("LINGDRAFT_DREAM", True)  # 关掉就不按时整理（手动的命令照样能用）
+DREAM_HOUR = int(os.environ.get("LINGDRAFT_DREAM_HOUR", "3"))
+DREAM_MODEL = os.environ.get("DREAM_MODEL", "")  # 空则和主 agent 一样
+DREAM_THINKING = _flag("DREAM_THINKING", True)
+DREAM_EFFORT = os.environ.get("DREAM_EFFORT", "high")
+
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-flash-260915")
 # 背景图生成开关（M2 起默认开）；关闭时背景为模板渐变
 BACKGROUND_ENABLED = _flag("LINGDRAFT_BACKGROUND", True)
