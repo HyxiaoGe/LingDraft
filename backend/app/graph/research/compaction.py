@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 
 from app import config
 from app.graph.research import history, prompts
-from app.graph.research.agent import emit, system_prompt, turn_start
+from app.graph.research.agent import emit, memory_text, system_prompt, turn_start
 from app.graph.research.sources import SUBAGENT_TOOL, flatten, parse
 from app.graph.research.state import Compaction, ResearchState
 
@@ -179,9 +179,10 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
 
     state_schema = ResearchState
 
-    def __init__(self, planner, tools: list) -> None:
+    def __init__(self, planner, tools: list, memory=None) -> None:
         super().__init__()
         self.planner = planner
+        self.memory = memory  # 长期记忆在系统提示词里，估的时候算上
         self.tools_tokens = tokens(json.dumps([convert_to_openai_tool(t) for t in tools], ensure_ascii=False))  # 工具定义每次都发
 
     def before_model(self, state: ResearchState, runtime) -> dict[str, Any] | None:
@@ -190,7 +191,7 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
         order = turn_order(all_msgs)
         c = state.get("compaction") or Compaction()
         turns = turns_of(msgs)
-        base = tokens(system_prompt(turn_start(all_msgs, state))) + self.tools_tokens
+        base = tokens(system_prompt(turn_start(all_msgs, state), memory=memory_text(self.memory))) + self.tools_tokens
         costs = [size_of(_form(t, order, c)) for t in turns]
         size = base + sum(costs)
         if size <= config.COMPACT_TRIGGER_TOKENS:

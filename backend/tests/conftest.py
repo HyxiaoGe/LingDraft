@@ -18,6 +18,7 @@ REQUEST = "某品牌蓝牙耳机黑五预热，5 折，11.20 到 11.27"
 # .env 里的 LINGDRAFT_DATABASE_URL 是 dev 上的库，测试不碰。设了 LINGDRAFT_TEST_DATABASE_URL 时，对话的检查点改存这个库，
 # 整套测试在 Postgres 上再跑一遍（每个测试前清空；别指向有用的库）
 config.DATABASE_URL = os.environ.get("LINGDRAFT_TEST_DATABASE_URL", "")
+config.DREAM_ENABLED = False  # 不开整理记忆的定时任务（它会建真实模型的运行器）
 
 
 @pytest.fixture(autouse=True)
@@ -26,7 +27,7 @@ def _postgres(monkeypatch):
         yield
         return
     with psycopg.connect(config.DATABASE_URL, autocommit=True) as c:
-        for sql in ("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes", "TRUNCATE runs", "TRUNCATE pending_messages"):
+        for sql in ("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes", "TRUNCATE runs", "TRUNCATE pending_messages", "TRUNCATE store"):
             try:
                 c.execute(sql)
             except psycopg.errors.UndefinedTable:  # 还没有哪个测试建过表
@@ -37,8 +38,11 @@ def _postgres(monkeypatch):
     stores = []
     real_store = run_store.PostgresRunStore
     monkeypatch.setattr(run_store, "PostgresRunStore", lambda url: stores.append(real_store(url)) or stores[-1])
+    memories = []
+    real_memory = research_graph.open_postgres_store
+    monkeypatch.setattr(research_graph, "open_postgres_store", lambda url: memories.append(real_memory(url)) or memories[-1])
     yield
-    for pool in [saver.conn for saver in opened] + [store.pool for store in stores]:  # 每个运行器各有连接池（检查点一个、运行记录一个），用完关掉，免得连接数攒满
+    for pool in [saver.conn for saver in opened] + [store.pool for store in stores] + [m.conn for m in memories]:  # 每个运行器各有连接池（检查点、运行记录、长期记忆各一个），用完关掉，免得连接数攒满
         pool.close()
 
 

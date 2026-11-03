@@ -95,6 +95,13 @@ export async function listResearchThreads() {
   return (await resp.json()).threads;
 }
 
+// 长期记忆：{memories: [{id, text, created_at, updated_at}], last_dream, next_dream}（见后端 ResearchRunner.memory_view）
+export async function getMemory() {
+  const resp = await fetch("/api/memory");
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
 // 新对话页的“今日灵感”（后端从 Fusion 代取）；取不到抛错，页面用固定的例子
 export async function listInspirations() {
   const resp = await fetch("/api/inspirations");

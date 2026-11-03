@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import io
+import threading
 import uuid
 import zipfile
+from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
 from typing import Annotated
 
@@ -19,8 +21,23 @@ from app.api.inspiration import InspirationError, Inspirations
 from app.api.research_runner import AlreadyPending, NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner
 from app.api.run_store import STATUSES
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
+from app.graph.research.memory import DreamSchedule
 
-app = FastAPI(title="LingDraft PoC")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """服务起来时开整理记忆的定时任务（见 graph.research.memory.DreamSchedule），关掉时停。"""
+    schedule = None
+    if config.DREAM_ENABLED:
+        schedule = DreamSchedule(lambda: research().dream(), lambda: research().memory.last_dream(), config.DREAM_HOUR)
+        schedule.start()
+    yield
+    if schedule:
+        schedule.stop()
+
+
+app = FastAPI(title="LingDraft PoC", lifespan=lifespan)
+_research_mu = threading.Lock()  # 整理记忆的线程和请求可能同时第一次用到运行器，只建一个
 _runner: GraphRunner | None = None
 _research: ResearchRunner | None = None
 _favicons: Favicons | None = None
@@ -41,10 +58,11 @@ def set_runner(r: GraphRunner) -> None:
 
 def research() -> ResearchRunner:
     global _research
-    if _research is None:
-        _research = ResearchRunner()
-        _research.recover()  # 进程里第一次用到：之前留下的“还在跑”的运行记录都是上一个进程的
-    return _research
+    with _research_mu:
+        if _research is None:
+            _research = ResearchRunner()
+            _research.recover()  # 进程里第一次用到：之前留下的“还在跑”的运行记录都是上一个进程的
+        return _research
 
 
 def set_research_runner(r: ResearchRunner) -> None:
@@ -190,6 +208,12 @@ def _text(body: ResearchMessageBody) -> str:
     if not body.text.strip():
         raise HTTPException(400, "说点什么再发送")
     return body.text
+
+
+@app.get("/api/memory")
+async def memory_view():
+    """长期记忆：全部记忆和整理的时间。现在只能看（2026-11-03 Sean 定先展示）。"""
+    return research().memory_view()
 
 
 @app.get("/api/research/threads")

@@ -37,6 +37,7 @@ from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
 from app.graph.research import history, prompts
+from app.graph.research.memory import MemoryBook
 from app.graph.research.sources import SUBAGENT_TOOL, collect_sources, parse
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Source, Turn
 from app.model_guard import ContentBlocked
@@ -50,7 +51,9 @@ TURN_END = "TurnMiddleware.after_agent"  # 一轮的最后一个节点：在它�
 CHINA_TZ = timezone(timedelta(hours=8))
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 # 系统提示词按这个顺序拼（见 prompts.toml 的 [agent]）
-SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "language")
+# memory 是长期记忆，没有记忆时不拼（见 memory.py）
+SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "memory", "language")
+MEMORY_SECTION = "agent.memory"
 AGENT_PROMPT = tuple(f"agent.{k}" for k in SYSTEM_SECTIONS)
 
 
@@ -94,23 +97,24 @@ def _day(d: date) -> str:
     return f"{d.isoformat()} ({WEEKDAYS[d.weekday()]})"
 
 
-def system_prompt(at: datetime, keys: Sequence[str] = AGENT_PROMPT, **extra: Any) -> str:
+def system_prompt(at: datetime, keys: Sequence[str] = AGENT_PROMPT, memory: str = "", **extra: Any) -> str:
     """照 Fusion：日期按北京时间，带星期和明天、这周末、下周末的日期，模型不用自己推星期几。keys 是按顺序拼的各段（子 agent 用另一套），
-    extra 是这些段里另外要填的变量。"""
+    memory 是长期记忆（MemoryBook.prompt_text，空的就没有这一段），extra 是这些段里另外要填的变量。"""
     today = at.astimezone(CHINA_TZ).date()
     saturday = today - timedelta(days=today.weekday()) + timedelta(days=5)
     dates = {"current_date": _day(today), "tomorrow": _day(today + timedelta(days=1)),
              "this_saturday": _day(saturday), "this_sunday": _day(saturday + timedelta(days=1)),
              "next_saturday": _day(saturday + timedelta(days=7)), "next_sunday": _day(saturday + timedelta(days=8))}
-    return "\n\n".join(prompts.render(k, **dates, **extra) for k in keys)
+    return "\n\n".join(prompts.render(k, **dates, memory=memory, **extra) for k in keys if k != MEMORY_SECTION or memory)
 
 
 class TurnMiddleware(AgentMiddleware[ResearchState]):
     state_schema = ResearchState
 
-    def __init__(self, planner) -> None:
+    def __init__(self, planner, memory: MemoryBook | None = None) -> None:
         super().__init__()
         self.planner = planner
+        self.memory = memory
 
     def before_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         msgs = state["messages"]
@@ -130,7 +134,8 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         # 还没有标题就和这次调模型同时起，按这段对话的第一句（第一轮出错、停下时还没写进去的，下一次调模型补上）
         job = None if request.state.get("title") else _TitleJob(self.planner, history.requests(request.state["messages"])[0])
         emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
-        resp = handler(request.override(system_message=SystemMessage(system_prompt(turn_started(request)))))
+        prompt = system_prompt(turn_started(request), memory=memory_text(self.memory))
+        resp = handler(request.override(system_message=SystemMessage(prompt)))
         if job is None:
             return resp
         return ExtendedModelResponse(model_response=resp, command=Command(update={"title": job.result(TITLE_WAIT)}))
@@ -404,7 +409,12 @@ def _stop(reason: str) -> AIMessage:
     return AIMessage(content="", response_metadata={history.BLOCKED: reason})
 
 
-def build_agent(planner, checkpointer: BaseCheckpointSaver):
+def memory_text(memory: MemoryBook | None) -> str:
+    """每次调主 agent 都现取：记忆只在每天整理时变，取到的一天里都一样。"""
+    return memory.prompt_text() if memory else ""
+
+
+def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook | None = None):
     # subagent、compaction 用到本模块的东西，放在这里导入
     from app.graph.research.compaction import CompactionMiddleware, make_recall_tool
     from app.graph.research.subagent import make_task_tool
@@ -417,12 +427,13 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver):
         state_schema=ResearchState,
         context_schema=ChatContext,
         middleware=[
-            TurnMiddleware(planner),
+            TurnMiddleware(planner, memory),
             ContentGuard(planner),  # 在 TurnMiddleware 里面：重发的请求也带着换好的系统提示词
-            CompactionMiddleware(planner, tools),  # 在 ContentGuard 里面：被内容审核停下的那几轮先去掉再压；用户插的话放进对话以后再估
+            CompactionMiddleware(planner, tools, memory),  # 在 ContentGuard 里面：被内容审核停下的那几轮先去掉再压；用户插的话放进对话以后再估
             ToolProgressMiddleware(),
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
         ],
         checkpointer=checkpointer,
+        store=memory.store if memory else None,
         name="research",
     )

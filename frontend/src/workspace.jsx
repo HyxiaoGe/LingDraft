@@ -1,4 +1,4 @@
-// 对话页：左侧对话列表（每条能改名、导出、删除），右侧对话。
+// 对话页：左侧对话列表（每条能改名、导出、删除），右侧对话；左栏下面的“记忆”在右侧换成记忆页（/memory）。
 // 页面以服务器上的线程状态为准：对话和来源都从状态里取。执行中的事件（思考和正文的逐字片段、工具步骤）
 // 叠在存下来的对话上实时显示，并提示该重新取一次状态了；所以刷新、换个页面打开、或者中途断线重连，看到的都一样。
 // 回答时又说的话排在服务器上，这一轮答完或停下就接着发成新的一轮：这一轮的事件流结束时线程又在跑了，页面接着读下一次执行的。
@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getResearchState, guideResearch, listResearchThreads, queueResearch,
   regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
 import { IconDownload, IconEdit, IconMore, IconPlus, IconTrash } from "./icons.jsx";
+import { MemoryPage } from "./memory.jsx";
 import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, threadMarkdown, useNow, when } from "./research.js";
 import { Conversation, focusInput } from "./timeline.jsx";
 import "./workspace.css";
@@ -15,6 +16,8 @@ import "./workspace.css";
 // 线程 id 只有字母、数字、- 和 _（后端校验），地址里不用编码；对不上的 id 后端回 404，页面换成新对话
 const NEW_PATH = "/chat/new";
 const chatPath = (id) => (id ? `/chat/${id}` : NEW_PATH);
+const MEMORY_PATH = "/memory";
+const onMemoryPath = () => /^\/memory\/?$/.test(location.pathname);
 const routeId = () => {
   const m = location.pathname.match(/^\/chat\/([^/]+)\/?$/);
   return m && m[1] !== "new" ? m[1] : null;
@@ -32,6 +35,12 @@ const leftover = (s) => [s.guided_message && "guided", s.queued_message && "queu
 export default function Workspace() {
   const [threads, setThreads] = useState(null);
   const [tid, setTid] = useState(routeId);
+  const [memory, setMemoryState] = useState(onMemoryPath); // 右侧是记忆页（这时没有选中的对话）
+  const memoryRef = useRef(memory);
+  const setMemory = (m) => {
+    memoryRef.current = m;
+    setMemoryState(m);
+  };
   const [st, setSt] = useState(null);
   // 这个页面发起或接上的那次执行：{said, sentAt, turnsAtStart, items, stage, phase, title, stopping, hidden, edit}
   // sentAt：这次说的话或改的话按本机时间记的发送时间，存下来的对话回来以前先显示它
@@ -59,10 +68,14 @@ export default function Workspace() {
 
   useEffect(() => {
     refreshList();
-    navigate(chatPath(tid), false);
+    if (!memory) navigate(chatPath(tid), false);
     if (tid) restore(tid, gen.current);
     // 浏览器前进后退、手动改了地址：地址栏已经是了，只换页面（去海报页时这个页面会被换掉，不用管）
-    const onPop = () => location.hash !== "#poster" && routeId() !== tidRef.current && select(routeId(), "none");
+    const onPop = () => {
+      if (location.hash === "#poster") return;
+      if (onMemoryPath()) return memoryRef.current || openMemory("none");
+      if (memoryRef.current || routeId() !== tidRef.current) select(routeId(), "none");
+    };
     addEventListener("popstate", onPop);
     return () => { // 切去别的页：断开连接，旧的回调不再改页面
       removeEventListener("popstate", onPop);
@@ -78,13 +91,16 @@ export default function Workspace() {
     return () => clearInterval(t);
   }, [anyActive]);
   const title = live?.title || st?.title; // 执行中起好的标题跟着事件来，库里一轮跑完才有（之前是用户的原话）
-  useEffect(() => { document.title = title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : "灵稿 · 新对话"; }, [title, tid]);
+  useEffect(() => {
+    document.title = memory ? "灵稿 · 记忆" : title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : "灵稿 · 新对话";
+  }, [title, tid, memory]);
 
   // ---- 切换线程 ----
 
   // how：push 记进浏览器历史（点左栏的对话、新对话）；replace 换掉当前这条（当前对话删了、打不开）；none 地址栏已经是了
   const select = (id, how = "push") => {
-    if (id === tidRef.current && id) return;
+    if (id === tidRef.current && id && !memoryRef.current) return;
+    setMemory(false);
     ctl.current.abort();
     ctl.current = new AbortController();
     gen.current += 1;
@@ -100,6 +116,14 @@ export default function Workspace() {
     setBusy(false);
     if (how !== "none") navigate(chatPath(id), how === "push");
     if (id) restore(id, gen.current);
+  };
+
+  // 打开记忆页：先像点了新对话那样放下当前对话（连接断开，服务器上的执行照常跑），再换成记忆页
+  const openMemory = (how = "push") => {
+    if (memoryRef.current) return;
+    select(null, "none");
+    setMemory(true);
+    if (how !== "none") navigate(MEMORY_PATH, how === "push");
   };
 
   // 打开一个线程：取状态；服务器上还在跑，就接上这次执行的事件流（从这次执行的头一个事件补发）
@@ -380,8 +404,10 @@ export default function Workspace() {
 
   return (
     <div className="ws">
-      <Sidebar threads={threads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={select} manage={manage} />
-      <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} />
+      <Sidebar threads={threads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={select} manage={manage}
+        memory={memory} onMemory={openMemory} />
+      {memory ? <MemoryPage />
+        : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} />}
     </div>
   );
 }
@@ -401,7 +427,7 @@ function rowSub(t, now) {
   return "";
 }
 
-function Sidebar({ threads, current, st, live, busy, now, onSelect, manage }) {
+function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memory, onMemory }) {
   const [menu, setMenu] = useState(null); // 打开菜单的那一行：{t, rect}
   const [renaming, setRenaming] = useState(null); // 正在改名的线程 id
   // 列表每隔几秒取一次；当前这个线程以页面手上的状态为准，刚新建、列表里还没有的先补一行
@@ -421,7 +447,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage }) {
         <span className="name">灵稿</span>
         <span className="tag">对话</span>
       </div>
-      <button className="ws-new" onClick={() => onSelect(null)} aria-current={!current ? "page" : undefined}>
+      <button className="ws-new" onClick={() => onSelect(null)} aria-current={!current && !memory ? "page" : undefined}>
         <IconPlus size={15} /> 新对话
       </button>
       <nav className="ws-groups" aria-label="对话列表">
@@ -456,7 +482,11 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage }) {
           );
         })}
       </nav>
-      <a className="ws-alt" href="#poster">宣传海报</a>
+      <div className="ws-foot">
+        <a href={MEMORY_PATH} aria-current={memory ? "page" : undefined}
+          onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onMemory(); }}>记忆</a>
+        <a href="#poster">宣传海报</a>
+      </div>
       {menu && (
         <RowMenu key={menu.t.thread_id} t={menu.t} rect={menu.rect} onClose={() => setMenu(null)}
           onRename={() => { setRenaming(menu.t.thread_id); setMenu(null); }}
