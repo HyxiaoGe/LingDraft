@@ -106,7 +106,7 @@ def _view(r: BaseRunner, thread_id: str) -> dict:
     return view
 
 
-def _dir(r: BaseRunner, thread_id: str) -> Path:
+def _dir(r: GraphRunner, thread_id: str) -> Path:
     try:
         return r.thread_dir(thread_id)
     except ValueError:

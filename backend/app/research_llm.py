@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app import aio, config
 from app.graph.research import history, prompts
 from app.graph.research.compaction import RECALL_TOOL as RECALL
-from app.model_guard import ContentBlocked, GuardedChatModel
+from app.model_guard import ContentBlocked, GuardedChatModel, guard_key
 from app.tools.gateway import GatewayClient
 from app.tools.research_tools import TIME_TOOL, make_research_tools
 
@@ -136,8 +136,9 @@ class ThinkingTimer(BaseCallbackHandler):
 
 
 def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: str = "high", timeout: int = 180,
-                    callbacks: list | None = None, max_tokens: int | None = None) -> BaseChatModel:
+                    callbacks: list | None = None, max_tokens: int | None = None, guard: str | None = None) -> BaseChatModel:
     """按提供方构造聊天模型。每次调用都过熔断，服务商的错误换成 ModelUnavailable / ContentBlocked（见 app.model_guard）。
+    熔断默认按模型名记，同一个模型的各种用途一起断开；guard 给了就这个用途单独记（见 LiveResearchPlanner 的起标题）。
 
     DeepSeek 思考模式下：带工具的请求要把 reasoning_content 原样传回（langchain-openai / langchain-deepseek 都不做，这里补）。
     同一轮里的不传接口报 400；之前几轮的照它现在的文档也传，会拼进上下文，只传这一轮的话，下一轮上一轮的消息变了，前缀缓存从那里断
@@ -147,7 +148,8 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
         from langchain_openai import ChatOpenAI
 
         class ChatArk(GuardedChatModel, ChatOpenAI):
-            pass
+            def _guard_key(self) -> str:
+                return guard_key(GuardedChatModel._guard_key(self), guard)
 
         if not config.ARK_API_KEY:
             raise RuntimeError("未设置 ARK_API_KEY")
@@ -164,6 +166,9 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
         raise RuntimeError("未设置 DEEPSEEK_API_KEY")
 
     class ChatDeepSeekRT(GuardedChatModel, ChatDeepSeek):
+        def _guard_key(self) -> str:
+            return guard_key(GuardedChatModel._guard_key(self), guard)
+
         def _get_request_payload(self, input_, *, stop=None, **kwargs):
             payload = super()._get_request_payload(input_, stop=stop, **kwargs)
             if thinking and payload.get("tool_choice") not in (None, "auto", "none"):
@@ -210,8 +215,10 @@ class LiveResearchPlanner:
                                     callbacks=[ThinkingTimer()])
         # 快模型步骤（推荐问题、单条送审）不开思考：都是小活，开思考慢得多
         self._fast = make_chat_model(provider, model, thinking=False, timeout=120)
-        # 起标题照 Fusion 用轻量模型、不开思考、超时短：标题是锦上添花，慢了、坏了就用原话（见 graph.research.agent._TitleJob）
-        self._titler = make_chat_model(provider, light, thinking=False, timeout=TITLE_TIMEOUT, max_tokens=TITLE_MAX_TOKENS)
+        # 起标题照 Fusion 用轻量模型、不开思考、超时短：标题是锦上添花，慢了、坏了就用原话（见 graph.research.agent._TitleJob）。
+        # 熔断单独记：超时短只是不想等，不说明服务坏了，不能把同一个模型上的子 agent、写短版一起断开；
+        # 连续超时就先不起标题（断开期间直接用原话，回答也不用再等它）
+        self._titler = make_chat_model(provider, light, thinking=False, timeout=TITLE_TIMEOUT, max_tokens=TITLE_MAX_TOKENS, guard="起标题")
         # 对话太长时给之前几轮写短版：轻量模型、不开思考（见 graph.research.compaction）
         self._summarizer = make_chat_model(provider, light, thinking=False, timeout=120, max_tokens=SUMMARY_MAX_TOKENS)
         # 每天整理一次记忆：默认和主 agent 同一个模型、开思考，要判断一件事是长期的还是一次性的（见 config.DREAM_MODEL）
