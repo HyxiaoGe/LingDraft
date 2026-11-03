@@ -12,13 +12,11 @@ import threading
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 
-from app import aio
 from app.api.research_runner import StreamBuffer
 from app.graph.research import history, prompts, subagent
-from app.graph.research.graph import open_sqlite_checkpointer
 from app.graph.research.sources import EXCERPT_CHARS, cited, subagent_messages
 from app.research_llm import FakeResearchPlanner, FakeToolModel
-from tests.test_research import Chat, _answered, _kinds
+from tests.test_research import Chat, _answered, _kinds, _stored
 
 SUB_ITEMS = ["thinking", "step:search", "thinking", "step:read", "thinking", "text"]
 
@@ -339,11 +337,10 @@ def test_regenerate_after_stopping_a_subagent_starts_it_over():
     assert _answered(c.values()["messages"])
 
 
-def test_sqlite_round_trip_keeps_the_subagent_card(tmp_path):
-    db = tmp_path / "data" / "r.sqlite"
-    before = Chat(saver=aio.run(open_sqlite_checkpointer(db)))
+def test_stored_round_trip_keeps_the_subagent_card():
+    before = Chat(saver=_stored())
     before.say("分头查一下杭州美食")
-    after = Chat(saver=aio.run(open_sqlite_checkpointer(db)))  # 像服务重启
+    after = Chat(saver=_stored())  # 像服务重启
     assert after.view()["turns"] == before.view()["turns"] and after.view()["sources"] == before.view()["sources"]
 
 

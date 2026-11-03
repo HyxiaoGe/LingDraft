@@ -1,8 +1,8 @@
-"""对话场景的事件循环：一个后台线程上跑一个 asyncio 循环，agent 的执行、检查点和长期记忆的读写都在它上面。
+"""对话场景的事件循环：一个后台线程上跑一个 asyncio 循环，agent 的执行、检查点、长期记忆和运行记录的读写都在它上面。
 
-异步的检查点、Store（AsyncSqliteSaver、AsyncPostgresSaver 这些）绑定创建它们的那个循环，所以要有一个固定的循环：
+异步的检查点、Store（AsyncPostgresSaver、AsyncPostgresStore）和它们共用的连接池绑定创建它们的那个循环，所以要有一个固定的循环：
 接口的请求（uvicorn 的线程池里）、整理记忆的定时任务、命令行、评测和测试都经 run 把事交给它、等结果。
-不用 uvicorn 的循环：运行器在第一次用到时才建，测试里每个 TestClient 都开自己的循环，连接池跟着哪个循环走说不准。
+不用 uvicorn 的循环：测试里每个 TestClient 都开自己的循环，连接池跟着哪个循环走说不准。
 页面读事件流不进这个循环：事件日志是线程安全的（见 api.runner.LocalEventLog），SSE 在 uvicorn 的循环里读。
 
 用户点停止时，运行器在这个循环里取消正在跑的那次执行（见 api.research_runner），在等的模型、搜索、画图马上断开。
@@ -22,8 +22,7 @@ _mu = threading.Lock()
 
 
 def loop() -> asyncio.AbstractEventLoop:
-    """对话的事件循环，第一次用到时起。线程是守护线程：进程退出不等它。
-    在它上面建的 aiosqlite 连接，工作线程跟着它也是守护线程（线程的 daemon 随创建它的线程），不会让进程退不出去。"""
+    """对话的事件循环，第一次用到时起。线程是守护线程：进程退出不等它。"""
     global _loop
     with _mu:
         if _loop is None:

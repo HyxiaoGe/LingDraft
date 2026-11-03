@@ -9,7 +9,7 @@ uv run python -m app.evals.research --case weather --case fact
 uv run python -m app.evals.research --case cost --repeat 3 --no-sources
 ```
 
-每个用例用独立的内存检查点，不碰本机的服务和 sqlite；走和页面同一个运行器。
+每个用例用独立的内存检查点，不碰本机的服务和配置的库；走和页面同一个运行器。
 结果写到 `data/evals/research-<时间>.json`（每轮的对话、步骤、用量、检查结果、引用核对），
 同名的 `.md` 是给人看的对话记录。终端打印每个用例的检查结果和合计用量。
 

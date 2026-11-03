@@ -11,6 +11,7 @@ import ast
 import asyncio
 import contextvars
 import time
+import traceback
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
@@ -20,16 +21,19 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.graph import START
 from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
+from langgraph.store.postgres.aio import AsyncPostgresStore
+from psycopg_pool import PoolTimeout
 
 from app import aio, config
-from app.api.run_store import ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, RunStore, open_run_store
+from app.api.run_store import ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, PostgresRunStore, RunStore
 from app.api.runner import BaseRunner, RunConflict, _sse_text, jsonable, log
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, now, stop_turn
-from app.graph.research.graph import build_graph, open_checkpointer, open_store, thread_ids
+from app.graph.research.graph import NO_POSTGRES, build_graph, make_serde, postgres_pool, thread_ids
 from app.graph.research.memory import MemoryBook, next_at
 from app.graph.research.sources import collect_sources, subagent_messages
 from app.graph.research.state import Turn
@@ -206,6 +210,25 @@ def _failure_text(errors: list[str]) -> str:
     return _error_text(real) if real else CUT_SHORT
 
 
+async def open_storage(url: str) -> tuple[AsyncPostgresSaver, AsyncPostgresStore, PostgresRunStore]:
+    """对话的存储：检查点、长期记忆的 Store、运行记录，存在同一个 Postgres 里、共用一个连接池（见 graph.postgres_pool）。
+    表没建的先建（检查点的 setup 会跑完 LangGraph 的迁移）。没配库、连不上都抛 RuntimeError，服务启动时就报出来（见 main 的 lifespan）。
+    Store 不开向量搜索：dev 的库没有 pgvector，记忆整份取出来放进系统提示词，用不上按相似度查（见 memory.py）。"""
+    pool = await postgres_pool(url)
+    try:
+        saver = AsyncPostgresSaver(pool, serde=make_serde())
+        await saver.setup()  # 连不上的话停在这里：Store 一建就起后台任务，连不上时不建它
+        store, runs = AsyncPostgresStore(pool), PostgresRunStore(pool)
+        await store.setup()
+        await runs.setup()
+    except BaseException as e:
+        await pool.close()
+        if isinstance(e, PoolTimeout):
+            raise RuntimeError(NO_POSTGRES) from e
+        raise
+    return saver, store, runs
+
+
 class ResearchRunner(BaseRunner):
     """对话场景的运行器。执行都在对话的事件循环里（见 app.aio）：每次执行是一个任务，同时最多跑 workers 个，多出来的排队；
     点停止就取消正在跑的那一轮，正在等的模型、工具马上断开。下面这些 _ 开头的协程和占位、队列的状态都只在那个循环里用。
@@ -219,11 +242,13 @@ class ResearchRunner(BaseRunner):
         fake = config.USE_FAKE_PLANNER if fake is None else fake
         self.planner = planner or (FakeResearchPlanner() if fake else LiveResearchPlanner())
         data = Path(data_dir or config.DATA_DIR)
-        saver = checkpointer or aio.run(open_checkpointer(data))
-        # 运行记录、长期记忆和检查点存在一处：传了检查点（测试、评测用内存的）就记在内存里，不碰数据目录和配置的库
-        self.memory = MemoryBook(store or (InMemoryStore() if checkpointer is not None else aio.run(open_store(data))))
-        self.graph = build_graph(self.planner, saver, self.memory)
-        self.run_store = run_store or (MemoryRunStore() if checkpointer is not None else open_run_store(data))
+        if checkpointer is None:  # 检查点、长期记忆、运行记录都存在配置的 Postgres 里（见 open_storage）；没配库、连不上抛 RuntimeError
+            checkpointer, db_store, db_runs = aio.run(open_storage(config.DATABASE_URL))
+            store, run_store = store or db_store, run_store or db_runs
+        # 传了检查点（测试、评测用内存的）：长期记忆、运行记录没传的也记在内存里，不碰配置的库
+        self.memory = MemoryBook(store or InMemoryStore())
+        self.graph = build_graph(self.planner, checkpointer, self.memory)
+        self.run_store = run_store or MemoryRunStore()
         self.images = ImageStore(data / "images")  # 画好的图，按对话分目录
         self.workers = workers or config.RESEARCH_WORKERS
         self._slots = asyncio.BoundedSemaphore(self.workers)  # 同时跑的执行
@@ -312,11 +337,11 @@ class ResearchRunner(BaseRunner):
 
     def unqueue(self, thread_id: str) -> str | None:
         """撤回排着的话，返回原文（页面放回输入框）；已经发出去了、或者没有排着的，返回 None。"""
-        return self.run_store.take_pending(thread_id, QUEUE)
+        return aio.run(self.run_store.take_pending(thread_id, QUEUE))
 
     def unguide(self, thread_id: str) -> str | None:
         """撤回等着插进这一轮的话，返回原文；已经插进去了、或者没有，返回 None。"""
-        return self.run_store.take_pending(thread_id, GUIDE)
+        return aio.run(self.run_store.take_pending(thread_id, GUIDE))
 
     async def _snapshot(self, thread_id: str) -> AsyncIterator[str]:
         yield _sse_text({"event": "state", "data": await aio.call(self._astate_view(thread_id))})
@@ -401,11 +426,19 @@ class ResearchRunner(BaseRunner):
             self._inflight -= 1
             self.events.close(run)
 
-    async def _arecord(self, write: Callable[[RunStore], None]) -> None:
-        await asyncio.to_thread(self._record, write)
+    async def _arecord(self, write: Callable[[RunStore], Awaitable[None]]) -> None:
+        """写运行记录。写不上只打日志，不影响执行本身。"""
+        try:
+            await write(self.run_store)
+        except Exception:  # noqa: BLE001
+            log.warning("运行记录没写上", exc_info=True)
 
     async def _afinish(self, run: str, status: str, error: BaseException | None = None) -> None:
-        await asyncio.to_thread(self._finish, run, status, error)
+        if error is None:
+            await self._arecord(lambda s: s.finish(run, status))
+            return
+        tb = "".join(traceback.format_exception(error))
+        await self._arecord(lambda s: s.finish(run, status, type(error).__name__, str(error), tb))
 
     def _cancel(self, thread_id: str) -> None:
         """在事件循环里取消这个线程正在跑的这一轮。只认点了停止的那次：停止传过来之前这一轮已经结束、下一轮已经开跑的，不动它。"""
@@ -523,10 +556,10 @@ class ResearchRunner(BaseRunner):
         key = self._run_key(thread_id)
         async with self._queue_mu:
             if not self.runs.admit(key):
-                if (await asyncio.to_thread(self.run_store.get_pending, thread_id, QUEUE)
-                        or await asyncio.to_thread(self.run_store.get_pending, thread_id, GUIDE)):
+                if (await self.run_store.get_pending(thread_id, QUEUE)
+                        or await self.run_store.get_pending(thread_id, GUIDE)):
                     raise AlreadyPending("上面那句还没发出去，先撤回改好再发")
-                return await asyncio.to_thread(self.run_store.put_pending, thread_id, QUEUE, text.strip())
+                return await self.run_store.put_pending(thread_id, QUEUE, text.strip())
         try:
             await self._aaccept(thread_id, text)
             await self._alaunch(thread_id, "say")
@@ -541,15 +574,15 @@ class ResearchRunner(BaseRunner):
         async with self._queue_mu:  # 和这一轮结束时的交接错开：在锁里看到还在跑，结束时一定看得到这句话
             if self.runs.get(self._run_key(thread_id)) is None:
                 return None
-            text = await asyncio.to_thread(self.run_store.take_pending, thread_id, QUEUE)
+            text = await self.run_store.take_pending(thread_id, QUEUE)
             if text:
-                return await asyncio.to_thread(self.run_store.put_pending, thread_id, GUIDE, text)
-            return await asyncio.to_thread(self.run_store.get_pending, thread_id, GUIDE)
+                return await self.run_store.put_pending(thread_id, GUIDE, text)
+            return await self.run_store.get_pending(thread_id, GUIDE)
 
     async def _take_guide(self, thread_id: str) -> HumanMessage | None:
         """主 agent 调模型之前取等着插进这一轮的话。取不到就当没有：话留在库里，这一轮结束时退回去排着。
         取的时候点了停止：等它取完，取到的放回去（这一轮收尾时照常退回去排着），不然这句话就丢了。"""
-        job = asyncio.ensure_future(asyncio.to_thread(self.run_store.take_pending, thread_id, GUIDE))
+        job = asyncio.ensure_future(self.run_store.take_pending(thread_id, GUIDE))
         try:
             text = await asyncio.shield(job)
         except asyncio.CancelledError:
@@ -564,7 +597,7 @@ class ResearchRunner(BaseRunner):
         try:
             text = await job
             if text:
-                await asyncio.to_thread(self.run_store.put_pending, thread_id, GUIDE, text, front=True)
+                await self.run_store.put_pending(thread_id, GUIDE, text, front=True)
         except Exception:  # noqa: BLE001
             log.warning("停下时取出来的插话没放回去：%s", self._run_key(thread_id), exc_info=True)
 
@@ -576,14 +609,14 @@ class ResearchRunner(BaseRunner):
         key = self._run_key(thread_id)
         async with self._queue_mu:
             try:
-                if left := await asyncio.to_thread(self.run_store.take_pending, thread_id, GUIDE):
-                    await asyncio.to_thread(self.run_store.put_pending, thread_id, QUEUE, left, front=True)
+                if left := await self.run_store.take_pending(thread_id, GUIDE):
+                    await self.run_store.put_pending(thread_id, QUEUE, left, front=True)
             except Exception:  # noqa: BLE001
                 log.warning("没插进去的话没退回去排着：%s", key, exc_info=True)
             text = None
             if status in (SUCCESS, STOPPED):
                 try:
-                    text = await asyncio.to_thread(self.run_store.take_pending, thread_id, QUEUE)
+                    text = await self.run_store.take_pending(thread_id, QUEUE)
                 except Exception:  # noqa: BLE001  取不到就当没有，话留在库里，页面会放回输入框
                     log.warning("排着的话没取出来：%s", key, exc_info=True)
             self.runs.release(key)
@@ -603,7 +636,7 @@ class ResearchRunner(BaseRunner):
     async def _put_back(self, thread_id: str, text: str) -> None:
         """取出来却没发出去的话放回去，排在这期间又说的话前面；页面看到线程空闲还排着话，会放回输入框。"""
         try:
-            await asyncio.to_thread(self.run_store.put_pending, thread_id, QUEUE, text, front=True)
+            await self.run_store.put_pending(thread_id, QUEUE, text, front=True)
         except Exception:  # noqa: BLE001
             log.warning("排着的话没放回去：%s", self._run_key(thread_id), exc_info=True)
 
@@ -675,7 +708,7 @@ class ResearchRunner(BaseRunner):
         async with self._ahold(thread_id):
             await self._adrop_suggestions(thread_id)
             self._titles.pop(thread_id, None)
-            await asyncio.to_thread(self.run_store.delete_thread, thread_id)
+            await self.run_store.delete_thread(thread_id)
             await self.memory.aforget_thread(thread_id)  # 只删整理过哪几轮的记录；从这段对话记下的记忆不动（记的是人）
             await self.graph.checkpointer.adelete_thread(thread_id)
             await asyncio.to_thread(self.images.drop, thread_id)
@@ -733,16 +766,16 @@ class ResearchRunner(BaseRunner):
 
     def recover(self) -> None:
         """服务启动时调一次：上次进程退出时还在排队、在跑的运行，记成没跑完（lost）。单进程部署，这时它们都已经停了。"""
-        if n := self.run_store.sweep():
+        if n := aio.run(self.run_store.sweep()):
             log.warning("上次进程退出时有 %d 次运行没跑完，已记成 lost", n)
 
     def thread_runs(self, thread_id: str) -> list[dict]:
         """这段对话的每次运行，新的在前。堆栈不给：网站没有登录，堆栈只留在库和日志里。"""
-        return [_public(r) for r in self.run_store.for_thread(thread_id)]
+        return [_public(r) for r in aio.run(self.run_store.for_thread(thread_id))]
 
     def recent_runs(self, status: str | None = None, limit: int = 50) -> list[dict]:
         """所有对话里最近的运行，可以只看某个状态（比如 error）。"""
-        return [_public(r) for r in self.run_store.recent(status, limit)]
+        return [_public(r) for r in aio.run(self.run_store.recent(status, limit))]
 
     # ---- 长期记忆 ----
 
@@ -783,8 +816,8 @@ class ResearchRunner(BaseRunner):
             "turns": jsonable(conversation(v["messages"], v.get("turns", []))),
             "sources": {s.id: s.model_dump() for s in collect_sources(v["messages"])},
             # 排着、这一轮答完就发的话（{text, created_at, updated_at}）；没有为 None
-            "queued_message": await asyncio.to_thread(self.run_store.get_pending, thread_id, QUEUE),
-            "guided_message": await asyncio.to_thread(self.run_store.get_pending, thread_id, GUIDE),  # 等着插进这一轮的话，同上
+            "queued_message": await self.run_store.get_pending(thread_id, QUEUE),
+            "guided_message": await self.run_store.get_pending(thread_id, GUIDE),  # 等着插进这一轮的话，同上
         }
 
     def _title_of(self, thread_id: str, v: dict) -> str:

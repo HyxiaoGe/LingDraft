@@ -17,7 +17,7 @@ from langchain_core.messages.tool import tool_call_chunk
 from langgraph._internal._constants import ERROR
 from langgraph.checkpoint.memory import InMemorySaver
 
-from app import aio, research_llm
+from app import aio, config, research_llm
 from app.api import research_runner
 from app.api.research_runner import NothingToRegenerate, NotIdle, ResearchRunner, StreamBuffer
 from app.api.runner import RunConflict
@@ -25,7 +25,7 @@ from app.api.runner import LocalRunRegistry
 from app.graph.research import history, prompts
 from app.graph.research import agent as agent_mod
 from app.graph.research.agent import CHINA_TZ, WEEKDAYS, system_prompt, turn_started
-from app.graph.research.graph import make_serde, memory_checkpointer, open_sqlite_checkpointer
+from app.graph.research.graph import make_serde, memory_checkpointer
 from app.graph.research.sources import cited, collect_sources, url_key
 from app.graph.research.state import Turn
 from app.model_guard import ModelUnavailable
@@ -81,8 +81,10 @@ class Chat:
         return self.r.graph.get_state({"configurable": {"thread_id": self.tid}}).values
 
 
-def _sqlite(path: Path):
-    return aio.run(open_sqlite_checkpointer(path))
+def _stored():
+    """存起来的检查点（见 conftest 的 _storage）：没设测试库时是这个测试共用的内存检查点（也要序列化），设了是 Postgres。
+    再取一次像服务重启：新的 agent、新的连接。"""
+    return aio.run(research_runner.open_storage(config.DATABASE_URL))[0]
 
 
 @pytest.fixture
@@ -615,7 +617,7 @@ def test_edit_replaces_the_last_question_and_answers_again(chat, monkeypatch):
 
 
 def test_rename_and_delete(tmp_path):
-    c = Chat(saver=_sqlite(tmp_path / "r.sqlite"))
+    c = Chat(saver=_stored())
     c.say("直接答：先问一句")
     c.r.rename(c.tid, "新标题")
     assert c.view()["title"] == "新标题" and c.view()["status"] == "idle"
@@ -743,13 +745,12 @@ def test_model_unavailable_fails_the_turn_and_retry_continues():
 # ---- 检查点 ----
 
 
-def test_sqlite_round_trip_and_continue(tmp_path):
-    db = tmp_path / "data" / "r.sqlite"
-    c = Chat(saver=_sqlite(db))
+def test_stored_round_trip_and_continue():
+    c = Chat(saver=_stored())
     c.say("查一下局部修改")
     c.say("直接答：为什么", stop_on=_first("delta", kind="text"))
     before = c.view()
-    again = Chat(saver=_sqlite(db))  # 像服务重启：新的连接、新的 agent
+    again = Chat(saver=_stored())  # 像服务重启
     after = again.view()
     for key in ("title", "turns", "sources", "status"):
         assert after[key] == before[key], key
