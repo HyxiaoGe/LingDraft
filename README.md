@@ -12,10 +12,10 @@
 flowchart TB
     UI["页面（React）"] -- "说话 · 排队 · 插话 · 停止" --> API["FastAPI"]
     API -- "SSE 事件流<br/>断线续看" --> UI
-    API --> Runner["运行器<br/>占位 · 排队 · 取消<br/>事件日志"]
-    Runner -- "aupdate_state + astream<br/>subgraphs=True" --> Main["主 agent · V4 Pro<br/>create_agent<br/>+ 5 个中间件"]
+    API --> Runner["运行器<br/>排队 · 取消<br/>事件日志"]
+    Runner -- "aupdate_state + astream<br/>subgraphs=True" --> Main["主 agent · Pro<br/>create_agent<br/>+ 5 个中间件"]
     Main -- "task，并行派出" --> Sub["子 agent · Flash<br/>create_agent<br/>按工具限次"]
-    Main --> Tools["搜索 · 读网页 · 天气<br/>画图 · 时间 · recall"]
+    Main --> Tools["搜索 · 读网页<br/>天气 · 画图<br/>时间 · recall"]
     Sub --> Tools
     Runner --- PG[("Postgres<br/>检查点 · Store<br/>运行记录")]
     Dream["每天整理<br/>长期记忆"] --> PG
