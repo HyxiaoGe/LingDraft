@@ -199,6 +199,13 @@ def _error_text(err: str) -> str:
     return err
 
 
+def _failure_text(errors: list[str]) -> str:
+    """这一轮没跑完的原因（errors 是检查点里各步的错误，见 _error_text）。几个工具同时跑、一个抛了错，LangGraph 会取消其余还在跑的，
+    被取消的也可能记一条 CancelledError：给真正出错的那条。只有被取消的（进程退出时整轮被掐断），和没有错误记录一样是半路停了。"""
+    real = next((e for e in errors if e.partition("(")[0] != asyncio.CancelledError.__name__), None)
+    return _error_text(real) if real else CUT_SHORT
+
+
 class ResearchRunner(BaseRunner):
     """对话场景的运行器。执行都在对话的事件循环里（见 app.aio）：每次执行是一个任务，同时最多跑 workers 个，多出来的排队；
     点停止就取消正在跑的那一轮，正在等的模型、工具马上断开。下面这些 _ 开头的协程和占位、队列的状态都只在那个循环里用。
@@ -796,8 +803,7 @@ class ResearchRunner(BaseRunner):
             return ("queued" if run["queued"] else "running"), None
         if not snap.next:
             return "idle", None
-        err = next((t.error for t in snap.tasks if t.error), None)
-        return "failed", _error_text(str(err)) if err else CUT_SHORT
+        return "failed", _failure_text([str(t.error) for t in snap.tasks if t.error])
 
 
 async def _settle(mark: object) -> None:
