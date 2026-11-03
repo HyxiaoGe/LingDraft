@@ -94,6 +94,10 @@ stopped_call = "The user stopped this turn before this tool call finished. It wa
 invalid_call = "This tool call was not executed because its arguments are not valid JSON{% if error %} ({{ error }}){% endif %}, so it is not a factual result. You may correct the arguments against the announced schema and call the tool again."
 # 内容审核拦下的搜索、读页结果：去掉的内容换成这句（页面上显示的说明在 history.BLOCKED_NOTE）
 material_blocked = "This content was rejected by the model service's content moderation and has been removed. Do not use it or guess what it said."
+# 主 agent 一轮里调模型到了上限（agent.MAX_MODEL_CALLS）：最后一次不许调工具（tool_choice=none），这一段作为一条用户消息接在这次请求的最后（不存进记录）。
+# 照 subagent.last_call；它在请求里是用户消息的位置，所以说明它不是用户的话、回答的语言照用户的
+last_call = """[Last step]
+This turn has used all the steps available to it. Do not call any tool. Answer the user's request now from what you have found so far, and say what remains unverified. This note comes from the system, not from the user; keep your reasoning and your answer in the language of the user's request."""
 
 # ---- 子 agent：主 agent 用 task 工具派出去的，在自己的上下文里查完交回一份报告 ----
 # 系统提示词按 subagent.SYSTEM_PROMPT 的顺序拼；current_date、tool_failure、sources 用 [agent] 的同名段。
