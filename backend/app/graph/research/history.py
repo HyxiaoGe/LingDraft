@@ -76,6 +76,21 @@ def blocked_reason(m: BaseMessage) -> str | None:
     return m.response_metadata.get(BLOCKED) if isinstance(m, AIMessage) else None
 
 
+def streamed_something(m: AIMessage) -> bool:
+    """点停止时流出来的半截消息里有东西：有正文，或者只想了还没写。主 agent、子 agent 的都按这个决定存不存。"""
+    return bool(text_of(m).strip() or m.additional_kwargs.get("reasoning_content"))
+
+
+def is_stopped_thought(m: BaseMessage) -> bool:
+    """点停止时只想了、正文一个字没写的那半截：存着给页面看（思考了什么、想了多久），不发给模型。
+    发过去就是一条没有正文的回复，接口不一定收；想了一半的东西对下一轮也没用。不发和这一条没存时发出去的一样。"""
+    return isinstance(m, AIMessage) and bool(m.response_metadata.get(STOPPED)) and not m.tool_calls and not text_of(m).strip()
+
+
+def without_stopped_thoughts(messages: list[BaseMessage]) -> list[BaseMessage]:
+    return [m for m in messages if not is_stopped_thought(m)]
+
+
 def without_blocked_turns(messages: list[BaseMessage]) -> list[BaseMessage]:
     """去掉因内容审核停下的那几轮（从用户的话到这一轮结束）：带着它们，之后的每次请求都会被拦。"""
     turns: list[list[BaseMessage]] = []

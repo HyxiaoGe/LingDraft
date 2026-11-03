@@ -430,6 +430,39 @@ def test_stop_while_writing_keeps_what_was_streamed(chat, monkeypatch):
     assert v["turns"][-1]["record"]["outcome"] == "ok" and len(v["turns"]) == 2
 
 
+def test_stop_while_thinking_keeps_the_thought(chat, monkeypatch):
+    """还在想、正文一个字没写就点停止：想到的和想了多久存下来，停下前后页面上看到的一样（子 agent 的本来就这样）。
+    这半截不发给模型：下一轮模型收到的和它没存时一样。"""
+    orig_chunks, orig_message, once, seen = FakeToolModel._chunks, FakeToolModel._message, [True], []
+
+    def chunks(self, msg):
+        for c in orig_chunks(self, msg):
+            yield c
+            if c.additional_kwargs.get("reasoning_content") and once:  # 思考吐出去、正文还没开始，用户点了停止
+                once.clear()
+                time.sleep(0.05)
+                chat.r.stop(chat.tid)
+
+    def message(self, messages):
+        seen.append([m.id for m in messages])
+        return orig_message(self, messages)
+
+    monkeypatch.setattr(FakeToolModel, "_chunks", chunks)
+    monkeypatch.setattr(FakeToolModel, "_message", message)
+    monkeypatch.setattr(research_llm, "FAKE_CHUNK_GAP_S", 0.02)
+    v = chat.say("直接答：说说看")
+    (turn,) = v["turns"]
+    assert v["status"] == "idle" and turn["record"]["outcome"] == "stopped" and _kinds(turn) == ["thinking"]
+    (partial,) = _turn_messages(chat)
+    assert partial.response_metadata[history.STOPPED] and partial.content == "" and history.is_stopped_thought(partial)
+    assert turn["items"][0]["text"] == partial.additional_kwargs["reasoning_content"] and turn["items"][0]["ms"] >= 30
+    assert turn["record"]["usage"]["model_calls"] == 0
+    seen.clear()
+    v = chat.say("直接答：接着说")
+    assert v["turns"][-1]["record"]["outcome"] == "ok" and _kinds(v["turns"][0]) == ["thinking"]
+    assert seen and all(partial.id not in ids for ids in seen)
+
+
 def test_stop_right_after_a_search_keeps_it(chat):
     """页面收到搜索做完马上点停止：那一步可能还没存进检查点，停下以后它还是做完的，来源也在。"""
     v = chat.say("查一下局部修改", stop_on=lambda e: e["event"] == "step" and not e["data"]["step"]["pending"])

@@ -137,7 +137,8 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         try:
             emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
             prompt = system_prompt(turn_started(request), memory=await memory_text(self.memory))
-            resp = await handler(request.override(system_message=SystemMessage(prompt)))
+            # 之前几轮点停止时只想了没写的半截不发（见 history.is_stopped_thought）
+            resp = await handler(request.override(system_message=SystemMessage(prompt), messages=history.without_stopped_thoughts(request.messages)))
             if job is None:
                 return resp
             return ExtendedModelResponse(model_response=resp, command=Command(update={"title": await job.result(TITLE_WAIT)}))
@@ -171,7 +172,8 @@ def _retrying(msgs: list) -> bool:
 
 
 def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list[BaseMessage]] | None = None) -> dict[str, Any]:
-    """用户点了停止，这一轮到此为止：没跑完的工具调用补上结果，已经流出来的正文（partial）存成这一轮的回复，记下这一轮。
+    """用户点了停止，这一轮到此为止：没跑完的工具调用补上结果，已经流出来的思考和正文（partial）存成这一轮的回复，记下这一轮。
+    只想了、正文还没写的也存：页面上停下前后看到的一样；它不发给模型（见 history.is_stopped_thought）。
     返回的更新以 TURN_END 的名义写进检查点。这一轮还没开始（排队时就停了）也要补一条记录。
     subagents 是还没跑完的子 agent 已经做了的（task 调用 id → 消息），存进补上的那条结果，页面上的子任务卡留着它做过的事；
     它已经查到了来源的，补上的结果里给主 agent 列出这些来源（来源卡上的内容），下一轮主 agent 用得上（2026-11-02 Sean 定）。
@@ -188,7 +190,7 @@ def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list
             if found := collect_sources(sub):
                 m.content = prompts.render("tools.task.stopped", sources=_stopped_sources(found))
     new: list = turn_msgs + fixes
-    if partial is not None and history.text_of(partial).strip():
+    if partial is not None and history.streamed_something(partial):
         new.append(partial)
     turns = list(values.get("turns", []))
     if not turns or turns[-1].id != human.id:
