@@ -11,3 +11,6 @@ frontend/dist/
 
 # dev 上 compose 挂进容器的数据目录（对话里画的图、网站图标）
 /data/
+
+# 文档不进仓库：docs 是指向 ~/Sync/LingDraft/docs 的链接，Syncthing 同步到 Windows（2026-11-03 Sean 定）
+/docs
