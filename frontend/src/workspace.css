@@ -215,14 +215,19 @@ button.ws-proc-head:hover { color: var(--ink); }
   display: flex; flex-direction: column; gap: 10px; animation: ws-in .25s var(--ease); margin: 2px 0; }
 .ws-card.warn { border-color: var(--warn-line); background: var(--warn-soft); }
 
-/* 天气卡片：逐日几列，下面是 24 小时的气温（靛青折线）和降水概率（蓝色柱子） */
+/* 天气卡片：逐日几列（问了某一天时只有一行），下面是接下来 24 小时里几个小时的气温（靛青折线）和降水概率（蓝色柱子） */
 .ws-weather { --rain: #4a86c8; gap: 12px; }
 .ws-weather-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .ws-weather-head > svg { flex: none; color: var(--accent); }
 .ws-weather-head .place { font-weight: 600; }
 .ws-weather-head .adm { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-weather-head .by { margin-left: auto; flex: none; font-size: 12px; color: var(--muted); }
-.ws-weather-days { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.ws-weather-head .on { flex: none; font-size: 12.5px; color: var(--ink2); }
+.ws-weather-days { display: grid; grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)); gap: 6px; }
+/* 只有问的那一天：排成一行（图标、天气、气温、风），是哪天写在标题上 */
+.ws-weather-days.one .ws-weather-day { flex-direction: row; justify-content: flex-start; gap: 12px; padding: 8px 12px; }
+.ws-weather-days.one .ws-weather-day > svg { margin: 0; }
+.ws-weather-days.one .when { display: none; }
 .ws-weather-day { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 6px; border-radius: var(--r); text-align: center; }
 .ws-weather-day.today { background: var(--accent-soft); }
 .ws-weather-day .when b { font-size: 13px; font-weight: 600; }

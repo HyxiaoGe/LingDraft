@@ -225,28 +225,11 @@ Do not use this tool when:
 Results: the page's main content in Markdown, with id, the source id you cite in the answer. ok=false means the page could not be read and kind gives the reason; unless retryable=true, do not retry the same URL, and use another source instead. Long content is truncated (truncated=true); the part cut off was not read and must not be treated as read."""
 url = "Complete URL to read, including http:// or https://."
 
-# Fusion: qweather.*（灵稿的天气工具没有当前位置和指定日期，结果的字段也不一样，按灵稿的改了）
+# 天气工具的说明在 agent-tools 的 weather-service 里（Fusion 和灵稿共用，照 Fusion 踩过的坑写的），连上时取来；
+# 这里只有接在它后面的灵稿自己的话（天气卡片、查不到时用哪个工具），和没调成时给模型的话（见 app.tools.weather_mcp）
 [tools.get_weather]
-description = """Query the weather forecast (QWeather) for a named place. The result has a daily forecast for 4 days starting today in days: date, daytime and nighttime conditions, high and low temperatures, and daytime wind. It also has a summary of the next 24 hours in hourly_summary: window; temp_min and temp_max; max_pop and max_pop_time, the peak precipitation probability and its time; precip_hours, the number of hours with precipitation; first_precip_time and last_precip_time; and precip_total in millimeters. The last three are omitted when no precipitation is forecast, and hourly_summary is absent when hourly data is unavailable. The forecast is shown to the user as a weather card with the daily forecast and a 24-hour chart of temperature and precipitation probability, so do not recite it day by day.
-
-Forecasts are available for cities and districts or counties, not for whole provinces. For a place inside a city (e.g. West Lake), pass the complete place text as the user wrote it and do not add a city the user did not provide. When the user asks about a whole province or region (e.g. Hunan), query its capital or main city instead (e.g. Changsha) and say in the answer which city it represents. Call only for an affirmative target the user explicitly wants queried, never for a negated, excluded, or explicitly unwanted place. If it fails or cannot cover the requested information, such as dates beyond the forecast, past weather, current conditions, humidity, air quality, or alerts, use other announced tools such as search_web or read_page to obtain authoritative evidence, with explicit citations and coverage limits.
-
-Hard result-usage constraints:
-- Refer only to dates, daytime and nighttime conditions, high and low temperatures, wind direction, and wind strength actually returned in days, plus hourly_summary when it is present.
-- hourly_summary covers only its window within the next 24 hours: temperature range, peak precipitation probability and its time, number of hours with precipitation, first and last precipitation times, and total precipitation. Use it to answer questions about rain or temperature within that window. Its times carry the place's local UTC offset; state them as local clock times.
-- The daily forecast gives only daytime and nighttime conditions; a question about a specific time of day can be answered more precisely only from hourly_summary within its window, otherwise say the daily granularity cannot confirm it. A returned condition such as "cloudy" does not prove that rain, thunder, snow, or strong wind is absent; absence must come from returned fields.
-- If the requested date is outside days and no authoritative source gives that exact date's forecast, state only that its weather is unavailable and give the returned forecast range. Do not add other days' weather or historical climate statistics.
-- Do not add current temperature, humidity, air quality, alerts, flooding, congestion, or delays. Mention precipitation probability or amount only as returned in hourly_summary.
-- location in the result is an administrative-area resolution; do not describe it as weather for a specific building or street.
-- Practical advice such as carrying an umbrella or whether conditions suit an activity should follow from the returned forecast.
-- When the user asks about one date and one condition, answer briefly without recapping adjacent days or unrelated metrics.
-
-On failure the result has ok=false and kind:
-- location_not_found: The weather service could not find this place, so no forecast was fetched. Forecasts are available for cities and districts, not for scenic spots, streets, or buildings. If the place clearly belongs to a known city or district from the conversation, call get_weather again with that city or district; otherwise tell the user the place was not found and ask for its city.
-- ambiguous_location: The place name matches several different areas, so no forecast was fetched; candidates lists them. If the conversation already makes clear which one the user means, call get_weather again with location set exactly to that candidate text. Otherwise ask the user which one they mean and list the candidates in plain words. Do not guess.
-- Any other kind is a weather service error: when retryable=true you may query once more; otherwise use search_web.
-In every case, do not fabricate weather facts."""
-location = "For a named place, use the complete place text explicitly supplied by the user, such as 广州, 杭州西湖区, or Paris; for a whole province or region, use its capital or main city instead."
+lingdraft = """In LingDraft the forecast is shown to the user as a weather card that credits QWeather, with the daily forecast and, when hourly data is returned, a chart of temperature and precipitation probability, so do not recite it day by day. When this tool fails or cannot cover what the user asked, use search_web and read_page to find authoritative sources."""
+unavailable = "The weather service returned no usable result. Answer from available information and do not fabricate weather facts."
 
 # 灵稿自己的：Fusion 把几点钟接在最新一条用户消息后面，每轮都会断上一轮的前缀缓存，灵稿改成工具（2026-11-01 Sean 定）。
 # “只在跟几点有关时用、不然别提”照 Fusion agent_loop.current_time 的说法

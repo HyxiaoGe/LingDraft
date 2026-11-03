@@ -62,6 +62,10 @@ CUT_SHORT = "上次运行没跑完就停了"
 # 出错、点停止也算结束，结束前把做到哪儿存下来，重试从断点接着跑；进程直接崩掉或被杀，这一轮做到一半的没存，重试从头跑这一轮。
 # 执行中页面要的东西（来源、标题、进度）都跟着事件走，不从库里取。
 DURABILITY = "exit"
+# MCP 的工具（现在只有天气）：起服务时连不上就每隔几秒再试，到这么久还不行先不带它起来，之后在后台每分钟试一次
+TOOLS_STARTUP_S = 30
+TOOLS_STARTUP_RETRY_S = 5
+TOOLS_RETRY_S = 60
 SETTLE_S = 30  # 点停止以后，等这一轮在事件循环里起的任务（比如收尾存检查点）都结束，最多等这么久
 _TURN: contextvars.ContextVar[object | None] = contextvars.ContextVar("research_turn", default=None)  # 这一轮起的任务上下文里都带着它
 DELTA_S = 0.08  # 逐字片段攒这么久发一次
@@ -252,6 +256,10 @@ class ResearchRunner(BaseRunner):
             store, run_store = store or db_store, run_store or db_runs
         # 传了检查点（测试、评测用内存的）：长期记忆、运行记录没传的也记在内存里，不碰配置的库
         self.memory = MemoryBook(store or InMemoryStore())
+        self._checkpointer = checkpointer
+        self._tools_retry = None  # 起服务时没连上 MCP 的工具：后台接着试的那个任务（见 _keep_connecting）
+        if not aio.run(self._connect_tools()):
+            self._tools_retry = asyncio.run_coroutine_threadsafe(self._keep_connecting(), aio.loop())
         self.graph = build_graph(self.planner, checkpointer, self.memory)
         self.run_store = run_store or MemoryRunStore()
         self.images = ImageStore(data / "images")  # 画好的图，按对话分目录
@@ -271,6 +279,34 @@ class ResearchRunner(BaseRunner):
         # 占位都经过这把锁（见 _aadmit）：话排进去时看线程在不在跑、这一轮结束时退掉占位并取走排着的话，两件事不会交错，
         # 不会出现话排进去了、这一轮却已经结束没人发的情况（中间要等运行记录的库）
         self._queue_mu = asyncio.Lock()
+
+    async def _connect_tools(self) -> bool:
+        """连上 MCP 的工具（现在只有天气，见 app.tools.weather_mcp）。连不上每隔几秒再试，到 TOOLS_STARTUP_S 还不行就先不带它：
+        天气挂了不该让整个对话起不来。密钥不对、网关没放行也一样先不带，日志里报错。"""
+        deadline = time.monotonic() + TOOLS_STARTUP_S
+        while True:
+            try:
+                await self.planner.connect_tools()
+                return True
+            except Exception as e:
+                if time.monotonic() + TOOLS_STARTUP_RETRY_S >= deadline:
+                    log.error("没连上 MCP 的工具（天气），先不带它起来，后台每 %d 秒再试：%s: %s", TOOLS_RETRY_S, type(e).__name__, e)
+                    return False
+                log.warning("没连上 MCP 的工具（天气），%d 秒后再试：%s: %s", TOOLS_STARTUP_RETRY_S, type(e).__name__, e)
+            await asyncio.sleep(TOOLS_STARTUP_RETRY_S)
+
+    async def _keep_connecting(self) -> None:
+        """起服务时没连上 MCP 的工具：每分钟再试，连上了换上带它的 agent。正在跑的那几轮用的还是旧的，下一轮起用新的。"""
+        while True:
+            await asyncio.sleep(TOOLS_RETRY_S)
+            try:
+                await self.planner.connect_tools()
+            except Exception as e:
+                log.warning("还是没连上 MCP 的工具（天气）：%s: %s", type(e).__name__, e)
+                continue
+            self.graph = build_graph(self.planner, self._checkpointer, self.memory)
+            log.info("连上了 MCP 的工具（天气），换上带它的 agent")
+            return
 
     @staticmethod
     def _cfg(thread_id: str) -> dict:

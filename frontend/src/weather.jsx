@@ -1,13 +1,16 @@
-// 天气卡片：get_weather 查到的预报（和风天气，见 app/tools/weather.py）。上面是逐日几列，下面是接下来 24 小时：
+// 天气卡片：get_weather 查到的预报（和风天气，agent-tools 的 weather-service，见 backend/app/tools/weather_mcp.py）。
+// 上面是逐日几列（问了某一天、在预报范围内时只有那一天，排成一行），下面是接下来 24 小时里的几个小时：
 // 气温折线和降水概率柱子分上下两条，共用时间轴，不叠在一张图上（单位不同，不用两套纵轴）
 import { useLayoutEffect, useRef, useState } from "react";
 import { IconCloud, IconCloudSun, IconFog, IconRain, IconSnow, IconSun, IconThunder } from "./icons.jsx";
 import { stamp } from "./research.js";
 
-// 这一轮查到的天气，一个地方一张：同一个地方查了几次，位置按第一次、内容用最后一次
+// 这一轮查到的天气，一个地方的一天一张（没指定哪天的算一张）：同样的查了几次，位置按第一次、内容用最后一次
 export function forecastsOf(items) {
   const by = new Map();
-  for (const i of items) if (i.type === "step" && i.kind === "weather" && i.weather) by.set(i.weather.location, i.weather);
+  for (const i of items) {
+    if (i.type === "step" && i.kind === "weather" && i.weather) by.set(`${i.weather.location}|${i.weather.requested_date || ""}`, i.weather);
+  }
   return [...by.values()];
 }
 
@@ -25,24 +28,31 @@ export function skyIcon(text = "") {
 
 const WEEK = "日一二三四五六";
 const monthDay = (date) => `${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日`;
-const dayName = (date, today) => (date === today ? "今天" : `周${WEEK[new Date(`${date}T00:00:00`).getDay()]}`);
+const nextDay = (date) => new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+const weekday = (date) => `周${WEEK[new Date(`${date}T00:00:00`).getDay()]}`;
+const dayName = (date, today) => (date === today ? "今天" : date === nextDay(today) ? "明天" : weekday(date));
+// 逐小时里某个小时是哪天：今天、明天写字，再往后写日期
+const dayWord = (date, today) => (date === today ? "今天" : date === nextDay(today) ? "明天" : monthDay(date));
 const deg = (t) => `${Math.round(t)}°`;
 
 export function WeatherCard({ fc }) {
   const parts = fc.location.split("·");
   const at = stamp(fc.fetched_at);
+  // 问了某一天、预报里有：只有这一天，排成一行，是哪天写在标题上
+  const one = fc.days.length === 1 && fc.days[0].date === fc.requested_date;
   return (
     <section className="ws-card ws-weather" aria-label={`${fc.location}的天气预报`}>
       <div className="ws-weather-head">
         <IconCloudSun size={15} />
         <span className="place">{parts.at(-1)}</span>
         {parts.length > 1 && <span className="adm">{parts.slice(0, -1).join("·")}</span>}
+        {one && <span className="on">{dayName(fc.requested_date, fc.today)} {monthDay(fc.requested_date)}</span>}
         <span className="by" title={at?.full}>和风天气{at && ` · ${at.text} 更新`}</span>
       </div>
-      <div className="ws-weather-days">
+      <div className={"ws-weather-days" + (one ? " one" : "")} style={{ "--n": fc.days.length }}>
         {fc.days.map((d) => <Day key={d.date} d={d} today={fc.today} />)}
       </div>
-      {fc.hourly.length > 1 && <Hourly hours={fc.hourly} />}
+      {fc.hourly.length > 1 && <Hourly hours={fc.hourly} today={fc.today} />}
     </section>
   );
 }
@@ -73,7 +83,14 @@ const POP_LABEL = 30; // 降水概率到这么多才在柱子上写数
 
 // 当地钟点：直接从时间里取，不经浏览器的时区换算
 const hourOf = (t) => Number(t.slice(11, 13));
-const hourName = (h, first) => `${h.time.slice(0, 10) === first.time.slice(0, 10) ? "" : "明天"}${hourOf(h.time)}时`;
+const hourName = (h, today) => `${dayWord(h.time.slice(0, 10), today)}${hourOf(h.time)}时`;
+// 图上画的是哪段时间：同一天写一次是哪天，跨天两头都写
+const spanName = (hours, today) => {
+  const [a, b] = [hours[0].time, hours.at(-1).time];
+  return a.slice(0, 10) === b.slice(0, 10)
+    ? `${dayWord(a.slice(0, 10), today)} ${hourOf(a)}时–${hourOf(b)}时`
+    : `${hourName(hours[0], today)}–${hourName(hours.at(-1), today)}`;
+};
 
 // 柱子：顶上两个角圆，底边贴着基线
 const barPath = (x, y, w, h) => {
@@ -81,7 +98,7 @@ const barPath = (x, y, w, h) => {
   return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
 };
 
-function Hourly({ hours }) {
+function Hourly({ hours, today }) {
   const box = useRef(null);
   const [w, setW] = useState(0);
   const [at, setAt] = useState(null); // 悬停的那个小时
@@ -105,7 +122,8 @@ function Hourly({ hours }) {
   const bw = Math.min(step * 0.6, 14);
   // 钟点和气温每 3 小时写一个，第一个小时总写；离第一个太近的不写，免得挤在一起
   const ticks = hours.map((h, i) => i === 0 || (hourOf(h.time) % 3 === 0 && i >= 2));
-  const summary = `接下来 24 小时气温 ${deg(Math.min(...temps))} 到 ${deg(Math.max(...temps))}` + (hasPop ? `，降水概率最高 ${maxPop}%` : "");
+  const span = spanName(hours, today);
+  const summary = `${span}气温 ${deg(Math.min(...temps))} 到 ${deg(Math.max(...temps))}` + (hasPop ? `，降水概率最高 ${maxPop}%` : "");
   const pick = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
     setAt(Math.max(0, Math.min(hours.length - 1, Math.round((e.clientX - r.left - PAD) / step))));
@@ -115,10 +133,10 @@ function Hourly({ hours }) {
   return (
     <div className="ws-hourly">
       <div className="ws-hourly-head">
-        <span className="title">接下来 24 小时</span>
+        <span className="title">{span}</span>
         {h ? (
           <span className="read">
-            <b>{hourName(h, hours[0])}</b> {h.text} · {deg(h.temp)}
+            <b>{hourName(h, today)}</b> {h.text} · {deg(h.temp)}
             {h.pop != null && ` · 降水概率 ${h.pop}%`}{h.precip > 0 && ` · ${h.precip} 毫米`}
           </span>
         ) : (
@@ -147,7 +165,7 @@ function Hourly({ hours }) {
               <g key={p.time}>
                 <circle className="dot" cx={x(i)} cy={y(p.temp)} r={3} />
                 <text className="t" x={x(i)} y={y(p.temp) - 8}>{deg(p.temp)}</text>
-                <text x={x(i)} y={HEIGHT - 4}>{i > 0 && hourOf(p.time) === 0 ? "明天0时" : `${hourOf(p.time)}时`}</text>
+                <text x={x(i)} y={HEIGHT - 4}>{i > 0 && hourOf(p.time) === 0 ? `${dayWord(p.time.slice(0, 10), today)}0时` : `${hourOf(p.time)}时`}</text>
               </g>
             ))}
             {h && <circle className="dot on" cx={x(at)} cy={y(h.temp)} r={4.5} />}
