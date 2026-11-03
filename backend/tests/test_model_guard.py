@@ -9,6 +9,7 @@ from typing import Any
 import httpx2
 import openai
 import pytest
+from langchain_openai.chat_models._client_utils import StreamChunkTimeoutError
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
@@ -88,6 +89,7 @@ def clock(monkeypatch) -> Clock:
 
 def test_reasons_come_from_the_protocol():
     assert unavailable_reason(openai.APITimeoutError(request=REQ)) == "超时"
+    assert unavailable_reason(StreamChunkTimeoutError(120.0, model_name="deepseek-v4-pro")) == "超时"  # 异步流式太久没片段
     assert unavailable_reason(openai.APIConnectionError(request=REQ)) == "连接失败"
     assert [unavailable_reason(status(c)) for c in (401, 402, 500, 503)] == ["密钥无效", "余额不足", "服务端出错", "服务端出错"]
     assert unavailable_reason(openai.APIError("流里的错误", REQ, body={"message": "boom"})) == "服务端出错"
@@ -208,6 +210,19 @@ def test_async_calls_go_through_the_same_breaker(clock):
             [c async for c in m.astream("hi")]
         assert e.value.output
         with pytest.raises(ModelUnavailable, match="服务端资源不足"):
+            [c async for c in m.astream("hi")]
+
+    run_async(go())
+
+
+def test_async_stream_that_stalls_is_a_timeout_and_counts(clock):
+    """服务端排队、一直不出字：langchain-openai 抛它自己的超时（异步才有），一样换成超时、算进熔断，页面上不出现英文原话。"""
+
+    async def go():
+        m = Guarded(script=[StreamChunkTimeoutError(120.0, model_name="deepseek-v4-pro"), StreamChunkTimeoutError(120.0)])
+        with pytest.raises(ModelUnavailable, match="超时.*稍后再试"):
+            [c async for c in m.astream("hi")]
+        with pytest.raises(ModelUnavailable, match="超时.*约 3 分钟后再试"):  # 第二次：断开
             [c async for c in m.astream("hi")]
 
     run_async(go())

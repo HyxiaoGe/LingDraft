@@ -2,6 +2,7 @@
 
 只认服务商给的协议信号：HTTP 状态、连接错误、流里的错误事件、流结束原因，以及 DeepSeek 内容审核拦下请求时固定的错误文字。
 连接错误、超时、429、5xx 由 SDK 先重试（max_retries）；这里看的是重试用完以后的结果。
+异步流式调用时 langchain-openai 另有一个超时：太久收不到片段抛 TimeoutError，不重试，也算超时。
 
 熔断：同一个模型连续 FAILURES 次不可用就断开 COOLDOWN_S 秒，这期间的调用直接失败、不发请求；
 冷却完放一个调用去试，成功就恢复，失败接着断开。请求本身的错误（400 之类）说明服务答复了，不算不可用。
@@ -45,7 +46,9 @@ def is_blocked(e: BaseException) -> bool:
 
 def unavailable_reason(e: BaseException) -> str | None:
     """服务不可用的原因，一句话给人看；不是这一类错误返回 None。"""
-    if isinstance(e, openai.APITimeoutError):
+    # TimeoutError：异步流式调用时 langchain-openai 自己的超时（stream_chunk_timeout，默认 120 秒没收到一个片段就抛）。
+    # 服务端排队时只发保活注释、连接不断，SDK 的超时不会触发，只有它会
+    if isinstance(e, openai.APITimeoutError | TimeoutError):
         return "超时"
     if isinstance(e, openai.APIConnectionError):  # 流读到一半断开也包成这个
         return "连接失败"
