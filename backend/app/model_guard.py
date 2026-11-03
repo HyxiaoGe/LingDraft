@@ -15,7 +15,7 @@ import logging
 import math
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
 import openai
@@ -170,6 +170,45 @@ class GuardedChatModel:
         try:
             try:
                 for chunk in super()._stream(messages, stop=stop, run_manager=run_manager, **kwargs):  # type: ignore[misc]
+                    finish = (chunk.generation_info or {}).get("finish_reason") or finish
+                    yield chunk
+            except Exception as e:
+                err = self._translate(key, e)
+                if err is e:
+                    raise
+                raise err from e
+            self._settle(key, finish)
+        finally:
+            if probe:
+                self.breaker.release(key)
+
+    # 异步的两个和上面一样：对话 agent 在事件循环里异步地调（见 app.aio），整理记忆、评测的裁判还是同步的。
+    # 点了停止时调用被取消（CancelledError 不是 Exception），不算服务的对错，试探的名额让出来
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs: Any):
+        key = self._guard_key()
+        probe = self.breaker.check(key)
+        try:
+            try:
+                res = await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)  # type: ignore[misc]
+            except Exception as e:
+                err = self._translate(key, e)
+                if err is e:
+                    raise
+                raise err from e
+            self._settle(key, (res.generations[0].generation_info or {}).get("finish_reason") if res.generations else None)
+            return res
+        finally:
+            if probe:
+                self.breaker.release(key)
+
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs: Any) -> AsyncIterator:
+        key = self._guard_key()
+        probe = self.breaker.check(key)
+        finish = None
+        try:
+            try:
+                async for chunk in super()._astream(messages, stop=stop, run_manager=run_manager, **kwargs):  # type: ignore[misc]
                     finish = (chunk.generation_info or {}).get("finish_reason") or finish
                     yield chunk
             except Exception as e:

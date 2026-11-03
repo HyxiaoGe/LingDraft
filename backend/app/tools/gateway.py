@@ -213,19 +213,20 @@ class GatewayClient:
         scene: str = "research",
         caller_user: str | None = None,
         timeout: float = 35.0,
-        transport: httpx.BaseTransport | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if not api_key:
             raise GatewayError("未设置 AGENT_TOOLS_API_KEY")
         headers = {"Authorization": f"Bearer {api_key}", "X-Caller-Scene": scene}
         if caller_user:
             headers["X-Caller-User"] = caller_user
-        self._client = httpx.Client(base_url=base_url.rstrip("/"), headers=headers, timeout=timeout, transport=transport)
+        # 异步的：在对话的事件循环里用（见 app.aio），用户点了停止，在等的请求马上断开
+        self._client = httpx.AsyncClient(base_url=base_url.rstrip("/"), headers=headers, timeout=timeout, transport=transport)
 
-    def close(self) -> None:
-        self._client.close()
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
-    def search(self, query: str, *, count: int = 5, kind: str = "web", freshness: str | None = None,
+    async def search(self, query: str, *, count: int = 5, kind: str = "web", freshness: str | None = None,
                domains: list[str] | None = None) -> list[SearchHit]:
         """freshness 是 pd / pw / pm / py（近一天、周、月、年）；domains 限定站点。"""
         payload: dict[str, Any] = {"query": query, "type": kind, "count": max(1, min(count, 20))}
@@ -234,7 +235,7 @@ class GatewayClient:
         if domains:
             payload["domain_filters"] = list(domains)
         try:
-            resp = self._client.post("/search/search", json=payload)
+            resp = await self._client.post("/search/search", json=payload)
         except httpx.TimeoutException as e:
             raise GatewayError(f"搜索超时：{e}", kind="timeout", retryable=True) from e
         except httpx.HTTPError as e:
@@ -258,12 +259,12 @@ class GatewayClient:
             for r in body.results if r.url
         ]
 
-    def read(self, url: str, *, full: bool = False, max_chars: int = READ_MAX_CHARS) -> ReadResult:
+    async def read(self, url: str, *, full: bool = False, max_chars: int = READ_MAX_CHARS) -> ReadResult:
         params: dict[str, Any] = {"url": url}
         if full:
             params["full"] = "true"
         try:
-            resp = self._client.get("/reader/read", params=params)
+            resp = await self._client.get("/reader/read", params=params)
         except httpx.TimeoutException:
             return ReadResult(ok=False, url=url, kind="timeout", message="读取超时", retryable=True)
         except httpx.HTTPError as e:
@@ -310,19 +311,19 @@ class GatewayClient:
             retryable=resp.status_code in (502, 503, 504),
         )
 
-    def weather_cities(self, location: str, *, lang: str = "zh", number: int = 10) -> list[City]:
+    async def weather_cities(self, location: str, *, lang: str = "zh", number: int = 10) -> list[City]:
         """lang=en 时按英文名查（中文名查 “Paris” 查不到巴黎）。"""
-        return self._weather("/v1/cities", {"location": location, "number": number, "lang": lang}, _Cities).cities
+        return (await self._weather("/v1/cities", {"location": location, "number": number, "lang": lang}, _Cities)).cities
 
-    def weather_daily(self, location_id: str) -> list[Day]:
-        return self._weather("/v1/forecast/daily", {"location_id": location_id}, _Daily).daily
+    async def weather_daily(self, location_id: str) -> list[Day]:
+        return (await self._weather("/v1/forecast/daily", {"location_id": location_id}, _Daily)).daily
 
-    def weather_hourly(self, location_id: str) -> list[Hour]:
-        return self._weather("/v1/forecast/hourly", {"location_id": location_id}, _Hourly).hourly
+    async def weather_hourly(self, location_id: str) -> list[Hour]:
+        return (await self._weather("/v1/forecast/hourly", {"location_id": location_id}, _Hourly)).hourly
 
-    def _weather(self, path: str, params: dict[str, Any], schema: type[BaseModel]) -> Any:
+    async def _weather(self, path: str, params: dict[str, Any], schema: type[BaseModel]) -> Any:
         try:
-            resp = self._client.get("/weather" + path, params=params)
+            resp = await self._client.get("/weather" + path, params=params)
         except httpx.TimeoutException as e:
             raise GatewayError("查天气超时", kind="timeout", retryable=True) from e
         except httpx.HTTPError as e:
@@ -345,10 +346,10 @@ class GatewayClient:
         except ValidationError as e:
             raise GatewayError(f"天气服务返回的格式不对（{_brief(e)}）", kind="bad_response") from e
 
-    def generate_image(self, payload: dict[str, Any], *, scene: str) -> ImageResult:
+    async def generate_image(self, payload: dict[str, Any], *, scene: str) -> ImageResult:
         """出一张图（payload 是 image-service 的 /v1/generate 参数）。scene 是 chat_image / image_edit，网关和 image-service 按它统计。"""
         try:
-            resp = self._client.post("/image/v1/generate", json=payload, headers={"X-Caller-Scene": scene}, timeout=IMAGE_TIMEOUT)
+            resp = await self._client.post("/image/v1/generate", json=payload, headers={"X-Caller-Scene": scene}, timeout=IMAGE_TIMEOUT)
         except httpx.TimeoutException as e:
             raise ImageError("生图超时", kind="upstream_timeout", retryable=True) from e
         except httpx.HTTPError as e:
@@ -378,17 +379,17 @@ class GatewayClient:
         status = (body.reference_search or {}).get("status")
         return ImageResult(path=path, model=body.model, reference_search_status=status if status in REFERENCE_SEARCH_STATUSES else None)
 
-    def image_file(self, path: str) -> tuple[bytes, str]:
+    async def image_file(self, path: str) -> tuple[bytes, str]:
         """取回 image-service 出的图：(内容, MIME 类型)。只认它静态目录下的 PNG / JPEG / WebP，最大 10 MB。"""
         if not _IMAGE_PATH.fullmatch(path):
             raise ImageError("图片地址不对", kind="invalid_response")
         try:
-            with self._client.stream("GET", "/image" + path, timeout=DOWNLOAD_TIMEOUT) as resp:
+            async with self._client.stream("GET", "/image" + path, timeout=DOWNLOAD_TIMEOUT) as resp:
                 mime = (resp.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
                 if resp.status_code != 200 or mime not in IMAGE_MIME_TYPES:
                     raise ImageError(f"取图失败：HTTP {resp.status_code} {mime}", kind="image_download_failed", retryable=True)
                 chunks, size = [], 0
-                for chunk in resp.iter_bytes():
+                async for chunk in resp.aiter_bytes():
                     size += len(chunk)
                     if size > MAX_IMAGE_BYTES:
                         raise ImageError("图片太大", kind="image_too_large")

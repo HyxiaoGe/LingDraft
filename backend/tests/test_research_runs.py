@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.constants import START
 
+from app import aio
 from app.api import main as api_main
 from app.api import runner as runner_mod
 from app.api.research_runner import ResearchRunner
@@ -118,12 +119,16 @@ def test_research_threads_run_in_parallel(tmp_path):
 
 def test_failed_submit_gives_back_slots(tmp_path):
     one = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=1)
-    real = one.executor._pool
-    one.executor._pool = type("Down", (), {"submit": lambda self, fn: (_ for _ in ()).throw(RuntimeError("线程池已关闭"))})()
+
+    def down(work):
+        work.close()
+        raise RuntimeError("事件循环已关闭")
+
+    one._spawn = down
     with pytest.raises(RuntimeError):
         one.start("sub00001", SIMPLE)
     assert one.runs.get(one._run_key("sub00001")) is None  # 线程的占位退了
-    one.executor._pool = real
+    del one._spawn
     # 话已经落盘了：这时线程算没跑完，只能重试
     ev = run_async(_drain(one.retry("sub00001")))
     assert ev[0][2]["queued"] is False  # 执行器的名额也退了，不会把下一次误报成排队
@@ -322,7 +327,7 @@ def test_retry_does_not_redo_searches(tmp_path):
 
 def test_accepted_thread_survives_restart_before_running(tmp_path):
     one = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=1)
-    one.executor._pool = type("Stuck", (), {"submit": lambda self, fn: None})()  # 收下了但一直没轮到，进程就停了
+    one._spawn = lambda work: work.close()  # 收下了但一直没轮到，进程就停了
 
     async def go():
         s = one.start("acc00001", SIMPLE)
@@ -343,7 +348,7 @@ def test_run_cut_short_is_failed_and_retryable(client, rr):
     # 进程在两步之间停了（比如重启）：检查点没走完，也没有记下错误
     cfg = {"configurable": {"thread_id": "cut00001"}}
     rr.graph.update_state(cfg, {"messages": [HumanMessage(SIMPLE)]}, as_node=START)
-    rr.graph.invoke(None, cfg, interrupt_before=["tools"])
+    aio.run(rr.graph.ainvoke(None, cfg, interrupt_before=["tools"]))
     st = state(client, "cut00001")
     assert st["status"] == "failed" and "没跑完" in st["error"]
     end = last(events(_retry(client, "cut00001")), "state")

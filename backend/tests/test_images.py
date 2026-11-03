@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
@@ -19,7 +20,7 @@ from app.research_llm import FAKE_IMAGE_FILTERED, FakeResearchPlanner, FakeToolM
 from app.tools import images
 from app.tools.gateway import GatewayAuthError, GatewayClient, ImageError
 from app.tools.research_tools import make_research_tools
-from tests.research_helpers import new
+from tests.research_helpers import blocking, new
 from tests.test_research import Chat, _answered, _kinds
 
 
@@ -31,14 +32,14 @@ class Recorded:
         self.block = block
         self._images = _fake_image_service()
 
-    def __call__(self, req: httpx.Request) -> httpx.Response:
+    async def __call__(self, req: httpx.Request) -> httpx.Response:
         if req.url.path == "/image/v1/generate":
             self.generate.append((json.loads(req.content), req.headers["x-caller-scene"]))
             if self.block is not None:
-                self.block.wait(10)
-            return self._images(req)
+                await asyncio.to_thread(self.block.wait, 10)  # 在线程里等，不卡对话的事件循环（点了停止，这里跟着取消）
+            return await self._images(req)
         if req.url.path.startswith("/image/static/"):
-            return self._images(req)
+            return await self._images(req)
         return httpx.Response(404)
 
 
@@ -120,8 +121,8 @@ def test_draw_passes_ratio_quality_style_and_regenerate(tmp_path, gw):
 def test_reference_photo_not_found_is_told_to_the_model(tmp_path):
     service = _fake_image_service()
 
-    def handler(req: httpx.Request) -> httpx.Response:
-        res = service(req)
+    async def handler(req: httpx.Request) -> httpx.Response:
+        res = await service(req)
         if req.url.path == "/image/v1/generate":
             return httpx.Response(200, json={**res.json(), "reference_search": {"status": "none_accepted"}})
         return res
@@ -255,7 +256,7 @@ def test_image_file_checks_type_and_size():
             return httpx.Response(200, content=b"<html>", headers={"content-type": "text/html"})
         return httpx.Response(200, content=b"img", headers={"content-type": "image/webp; q=1"})
 
-    client = GatewayClient("http://gw", "k", scene="research", transport=httpx.MockTransport(handler))
+    client = blocking(GatewayClient("http://gw", "k", scene="research", transport=httpx.MockTransport(handler)))
     assert client.image_file("/static/images/ok.webp") == (b"img", "image/webp")
     for path, kind in (("/static/images/big.png", "image_too_large"), ("/static/images/page.png", "image_download_failed"),
                        ("/static/../secret.png", "invalid_response")):

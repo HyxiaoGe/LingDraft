@@ -12,10 +12,8 @@ import math
 import re
 import shutil
 import uuid
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Literal, TypeVar, get_args
+from typing import Literal, get_args
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from PIL import Image, UnidentifiedImageError
@@ -32,13 +30,11 @@ MAX_PROMPT_CHARS = 1000
 MAX_STYLE_CHARS = 60
 MAX_REFERENCE_SUBJECT_CHARS = 80
 MAX_IMAGES_PER_TURN = 3
-STOP_POLL_S = 0.25  # 等出图时隔这么久看一次用户点没点停止
 _ID = re.compile(r"[0-9a-f]{12}")
 _FILE = re.compile(r"[0-9a-f]{12}\.(?:png|jpg|webp)")
 _THREAD = re.compile(r"[0-9A-Za-z_-]{1,64}")
 _FORMATS = {"PNG": ("png", "image/png"), "JPEG": ("jpg", "image/jpeg"), "WEBP": ("webp", "image/webp")}
 
-T = TypeVar("T")
 
 
 class ImageStore:
@@ -135,15 +131,3 @@ def inspect_image(data: bytes) -> tuple[str, str, int, int]:
         raise ValueError(f"不支持的图片格式：{fmt}")
     ext, mime = _FORMATS[fmt]
     return ext, mime, w, h
-
-
-def wait_stoppable(fn: Callable[[], T], check_stop: Callable[[], None]) -> T:
-    """在另一个线程里做 fn，边等边查用户点没点停止：点了就由 check_stop 抛出，不等它做完（做完的结果丢掉）。"""
-    pool = ThreadPoolExecutor(max_workers=1)
-    fut = pool.submit(fn)
-    pool.shutdown(wait=False)
-    while True:
-        try:
-            return fut.result(timeout=STOP_POLL_S)
-        except TimeoutError:
-            check_stop()

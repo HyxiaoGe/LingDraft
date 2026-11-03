@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from typing import Any
 
 import httpx2
@@ -12,6 +14,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from pydantic import Field
 
+from tests.research_helpers import run_async
 from app.model_guard import BLOCKED_MESSAGE, Breaker, ContentBlocked, GuardedChatModel, ModelUnavailable, unavailable_reason
 
 REQ = httpx2.Request("POST", "https://api.test/chat/completions")
@@ -49,6 +52,19 @@ class Scripted(BaseChatModel):
         if isinstance(act, Exception):
             raise act
         yield ChatGenerationChunk(message=AIMessageChunk(content=""), generation_info={"finish_reason": act})
+
+    # 异步的照同步的来（真的聊天模型类自己实现异步，不经过同步的；这里点名调 Scripted 的，免得又过一遍熔断）。"hang" 是一直不回
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs: Any) -> ChatResult:
+        if self.script and self.script[0] == "hang":
+            self.script.pop(0)
+            await asyncio.sleep(10)
+        return Scripted._generate(self, messages, stop, run_manager, **kwargs)
+
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs: Any):
+        for chunk in Scripted._stream(self, messages, stop, run_manager, **kwargs):
+            yield chunk
+            await asyncio.sleep(0)
 
 
 class Guarded(GuardedChatModel, Scripted):
@@ -150,3 +166,48 @@ def test_rate_limit_fails_the_call_but_does_not_open_the_breaker(clock):
     with pytest.raises(ModelUnavailable, match="服务端出错.*稍后再试"):  # 限流说明服务答复了：前面那次不可用不再接着算，没断开
         m.invoke("hi")
     assert m.invoke("hi").content == "好" and len(m.calls) == 5
+
+
+def test_async_calls_go_through_the_same_breaker(clock):
+    """对话 agent 异步地调（ainvoke、astream）：一样过熔断、一样换错误；点了停止被取消的调用不算对错，试探的名额让出来。"""
+
+    async def go():
+        m = Guarded(script=[status(500), openai.APIConnectionError(request=REQ)])
+        for _ in range(2):
+            with pytest.raises(ModelUnavailable):
+                await m.ainvoke("hi")
+        with pytest.raises(ModelUnavailable, match="约 3 分钟后再试"):  # 断开中：不发请求
+            await m.ainvoke("hi")
+        assert len(m.calls) == 2
+        clock.t += 181
+        stream = m.astream("hi")
+        await stream.__anext__()  # 试探还没有结果
+        with pytest.raises(ModelUnavailable):
+            await m.ainvoke("hi")
+        await stream.aclose()  # 中途不读了：名额让给下一个
+        assert (await m.ainvoke("hi")).content == "好"
+
+        m.script = [status(500), status(500)]
+        for _ in range(2):
+            with pytest.raises(ModelUnavailable):
+                await m.ainvoke("hi")
+        clock.t += 181
+        m.script = ["hang"]
+        probe = asyncio.ensure_future(m.ainvoke("hi"))
+        await asyncio.sleep(0.05)
+        probe.cancel()  # 点了停止
+        with contextlib.suppress(asyncio.CancelledError):
+            await probe
+        assert (await m.ainvoke("hi")).content == "好"  # 取消的试探没有定论：名额让出来，这一次去试、成功就恢复
+
+        m.script = [openai.APIError("x", REQ, body={"message": BLOCKED_MESSAGE}), "content_filter", "insufficient_system_resource"]
+        with pytest.raises(ContentBlocked) as e:
+            [c async for c in m.astream("hi")]
+        assert not e.value.output
+        with pytest.raises(ContentBlocked) as e:
+            [c async for c in m.astream("hi")]
+        assert e.value.output
+        with pytest.raises(ModelUnavailable, match="服务端资源不足"):
+            [c async for c in m.astream("hi")]
+
+    run_async(go())

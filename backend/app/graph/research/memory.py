@@ -78,6 +78,15 @@ class Conversation:
     seen: dict[str, str] = field(default_factory=dict)  # 整理完记下：这段对话现在所有算数的轮（轮 id → 内容的指纹）
 
 
+def _in_order(found: Iterable) -> list[dict]:
+    rows = [{"id": r.key, **r.value} for r in found]
+    return sorted(rows, key=lambda x: (x.get("created_at", ""), x["id"]))
+
+
+def _prompt_lines(items: list[dict]) -> str:
+    return "\n".join(f"- {m['text']}" for m in items)
+
+
 def _time(s: str) -> datetime | None:
     try:
         return datetime.fromisoformat(s) if s else None
@@ -162,23 +171,29 @@ class MemoryBook:
         self._dreaming = threading.Lock()
 
     # ---- 读 ----
+    # 同步的给整理记忆的后台线程和记忆页用，a 开头的给对话的事件循环里用（agent 每次调模型都取一次，见 agent.memory_text）
 
     def items(self) -> list[dict]:
         """全部记忆，先记下的在前：{"id", "text", "created_at", "updated_at", "thread_id"}。"""
-        rows = [{"id": r.key, **r.value} for r in self.store.search(ITEMS, limit=MAX_ITEMS)]
-        return sorted(rows, key=lambda x: (x.get("created_at", ""), x["id"]))
+        return _in_order(self.store.search(ITEMS, limit=MAX_ITEMS))
+
+    async def aitems(self) -> list[dict]:
+        return _in_order(await self.store.asearch(ITEMS, limit=MAX_ITEMS))
 
     def prompt_text(self) -> str:
         """放进系统提示词的那份：一条一行。没有记忆是空串（系统提示词里就没有这一段）。"""
-        return "\n".join(f"- {m['text']}" for m in self.items())
+        return _prompt_lines(self.items())
+
+    async def aprompt_text(self) -> str:
+        return _prompt_lines(await self.aitems())
 
     def last_dream(self) -> dict | None:
         item = self.store.get(DREAMS, LAST)
         return item.value if item else None
 
-    def forget_thread(self, thread_id: str) -> None:
+    async def aforget_thread(self, thread_id: str) -> None:
         """删对话时调：只删整理过哪几轮的记录，记忆不动。"""
-        self.store.delete(THREADS, thread_id)
+        await self.store.adelete(THREADS, thread_id)
 
     def _seen(self, thread_id: str) -> dict[str, str]:
         item = self.store.get(THREADS, thread_id)

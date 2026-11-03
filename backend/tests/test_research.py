@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import time
@@ -13,7 +14,9 @@ import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.messages.tool import tool_call_chunk
+from langgraph.checkpoint.memory import InMemorySaver
 
+from app import aio, research_llm
 from app.api import research_runner
 from app.api.research_runner import NothingToRegenerate, NotIdle, ResearchRunner, StreamBuffer
 from app.api.runner import RunConflict
@@ -21,7 +24,7 @@ from app.api.runner import LocalRunRegistry
 from app.graph.research import history, prompts
 from app.graph.research import agent as agent_mod
 from app.graph.research.agent import CHINA_TZ, WEEKDAYS, system_prompt, turn_started
-from app.graph.research.graph import memory_checkpointer, open_sqlite_checkpointer
+from app.graph.research.graph import make_serde, memory_checkpointer, open_sqlite_checkpointer
 from app.graph.research.sources import cited, collect_sources, url_key
 from app.graph.research.state import Turn
 from app.model_guard import ModelUnavailable
@@ -31,7 +34,7 @@ from app.tools.research_tools import make_research_tools
 
 
 class Chat:
-    """像页面那样一句一句说：写进检查点 → 跑到这一轮结束。不经过执行器，事件同步拿到。
+    """像页面那样一句一句说：写进检查点 → 跑到这一轮结束。不经过排队和运行记录，等这一轮跑完拿到事件。
     运行占位用自己的一份：停止靠它传话（stop_on 在收到某个事件时点停止）。会画图的要给 tmp_path，图存在那里。"""
 
     def __init__(self, tmp_path: Path | None = None, planner: FakeResearchPlanner | None = None, saver=None, tid: str = "t1") -> None:
@@ -57,14 +60,17 @@ class Chat:
             self.r.stop(self.tid)
         self.r.runs.started(key)
         self.events = []
+
+        def out(ev: dict) -> None:  # 在对话的事件循环里调：点停止和页面一样，马上取消这一轮
+            self.events.append(ev)
+            if stop_on and stop_on(ev):
+                self.r.stop(self.tid)
+
         try:
-            for ev in self.r._graph_events(self.tid, None):
-                self.events.append(ev)
-                if stop_on and stop_on(ev):
-                    self.r.stop(self.tid)
+            self.r.run_turn(self.tid, None, out)
         finally:
             self.r.runs.release(key)
-        self.events += list(self.r._after_run(self.tid))  # 这一轮结束之后起推荐问题
+        self.events += self.r.suggest(self.tid)  # 这一轮结束之后起推荐问题
         return self.view()
 
     def view(self) -> dict:
@@ -72,6 +78,10 @@ class Chat:
 
     def values(self) -> dict:
         return self.r.graph.get_state({"configurable": {"thread_id": self.tid}}).values
+
+
+def _sqlite(path: Path):
+    return aio.run(open_sqlite_checkpointer(path))
 
 
 @pytest.fixture
@@ -187,9 +197,9 @@ def test_title_runs_alongside_the_answer():
     p._model.gates.append(Seen())
     orig, saw_model = p.title, []
 
-    def title(text):
-        saw_model.append(model_called.wait(5))  # 回答要是等着标题，这里等不到模型
-        return orig(text)
+    async def title(text):
+        saw_model.append(await asyncio.to_thread(model_called.wait, 5))  # 回答要是等着标题，这里等不到模型
+        return await orig(text)
 
     p.title = title
     chat = Chat(planner=p)
@@ -210,23 +220,26 @@ def test_title_falls_back_to_the_words():
 def test_long_title_is_cut():
     """模型没照要求写短：去掉首尾空白，超过 30 个字截掉。"""
     p = FakeResearchPlanner()
-    p.title = lambda text: " " + "一个很长的标题" * 10 + "\n"
+    async def title(text):
+        return " " + "一个很长的标题" * 10 + "\n"
+
+    p.title = title
     assert Chat(planner=p).say("直接答：一句话")["title"] == ("一个很长的标题" * 10)[:30]
 
 
 def test_slow_title_falls_back_and_the_late_one_is_dropped(monkeypatch):
-    """第一次调模型结束后再等一会儿还没起好：用原话；之后才起好的不再发、不再改。"""
+    """第一次调模型结束后再等一会儿还没起好：用原话，还在起的不要了（取消）；不会再发、再改。"""
     monkeypatch.setattr(agent_mod, "TITLE_WAIT", 0.2)
     p = FakeResearchPlanner()
     gate = threading.Event()
     orig, done = p.title, threading.Event()
 
-    def title(text):
-        gate.wait(5)
+    async def title(text):
         try:
-            return orig(text)
+            await asyncio.to_thread(gate.wait, 5)
+            return await orig(text)
         finally:
-            done.set()
+            done.set()  # 取消了也走到这里
 
     p.title = title
     chat = Chat(planner=p)
@@ -242,7 +255,7 @@ def test_live_title_keeps_what_the_model_wrote():
     """标题原样用模型给的（只去掉首尾空白）：书名号、引号是标题的一部分，代码不删。"""
     p = LiveResearchPlanner.__new__(LiveResearchPlanner)
     p._titler = FakeListChatModel(responses=[" 《三体》里的“黑暗森林” \n"])
-    assert p.title("三体里的黑暗森林是什么意思") == "《三体》里的“黑暗森林”"
+    assert aio.run(p.title("三体里的黑暗森林是什么意思")) == "《三体》里的“黑暗森林”"
 
 
 def test_system_prompt_dates_are_beijing_with_weekday_anchors():
@@ -363,8 +376,32 @@ def _first(event: str, node: str | None = None, kind: str | None = None):
     return match
 
 
+def test_stop_while_the_finished_turn_is_being_saved_counts_as_answered():
+    """点停止正好落在这一轮答完、存检查点的时候：LangGraph 让存检查点在后台接着做，等它存完再看，这一轮算答完，答完的不被冲掉。"""
+
+    class SlowSaver(InMemorySaver):
+        armed = False
+
+        async def aput(self, *a, **kw):
+            if self.armed:  # 这一轮最后一次存检查点（DURABILITY 是 exit，只在结束时存）：存的时候点停止，连点两次
+                self.armed = False
+                c.r.stop(c.tid)
+                c.r.stop(c.tid)
+                await asyncio.sleep(0.3)
+            return await super().aput(*a, **kw)
+
+    saver = SlowSaver(serde=make_serde())
+    c = Chat(saver=saver)
+    c.r.accept(c.tid, "直接答：说说看")
+    saver.armed = True
+    v = c.run()
+    (turn,) = v["turns"]
+    assert turn["record"]["outcome"] == "ok" and turn["items"][-1]["text"] == "直接回答：这个问题不用查。"
+    assert c.r.graph.get_state({"configurable": {"thread_id": c.tid}}).next == ()
+
+
 def test_stop_while_writing_keeps_what_was_streamed(chat, monkeypatch):
-    """正文流到一半点停止：模型的流在下一个片段就断开，已经流出来的思考和正文存成这一轮的回复，思考用时也存下来。"""
+    """正文流到一半点停止：模型的流马上断开，已经流到页面的思考和正文存成这一轮的回复，思考用时也存下来。"""
     orig, once = FakeToolModel._chunks, [True]
 
     def chunks(self, msg):
@@ -377,6 +414,7 @@ def test_stop_while_writing_keeps_what_was_streamed(chat, monkeypatch):
                 chat.r.stop(chat.tid)
 
     monkeypatch.setattr(FakeToolModel, "_chunks", chunks)
+    monkeypatch.setattr(research_llm, "FAKE_CHUNK_GAP_S", 0.02)  # 吐出来的片段先到页面，再取消
     v = chat.say("直接答：说说看")
     full = "直接回答：这个问题不用查。"
     (turn,) = v["turns"]
@@ -392,14 +430,30 @@ def test_stop_while_writing_keeps_what_was_streamed(chat, monkeypatch):
     assert v["turns"][-1]["record"]["outcome"] == "ok" and len(v["turns"]) == 2
 
 
-def test_stop_during_a_search_waits_for_it_then_stops(chat):
-    """搜索开始以后点停止：正在跑的搜索不打断，做完再停；不再读页、不再回复。"""
-    v = chat.say("查一下局部修改", stop_on=lambda ev: ev["event"] == "step" and ev["data"]["step"]["pending"])
+def test_stop_right_after_a_search_keeps_it(chat):
+    """页面收到搜索做完马上点停止：那一步可能还没存进检查点，停下以后它还是做完的，来源也在。"""
+    v = chat.say("查一下局部修改", stop_on=lambda e: e["event"] == "step" and not e["data"]["step"]["pending"])
     (turn,) = v["turns"]
-    assert _kinds(turn) == ["thinking", "step:search"] and turn["items"][-1]["ok"] and turn["record"]["outcome"] == "stopped"
-    assert v["status"] == "idle" and len(v["sources"]) == 3
-    assert _answered(chat.values()["messages"])
-    assert chat.say("直接答：好")["turns"][-1]["record"]["outcome"] == "ok"
+    (first, *_) = [i for i in turn["items"] if i["type"] == "step"]
+    assert turn["record"]["outcome"] == "stopped" and first["ok"] and first["source_ids"]
+    assert set(first["source_ids"]) <= v["sources"].keys() and _answered(chat.values()["messages"])
+
+
+def test_stop_during_a_search_does_not_wait_for_it():
+    """搜索开始以后点停止：正在等的搜索马上断开，不等它返回；这一步显示停止了，不再读页、不再回复。"""
+    async def slow(req: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(10)  # 慢搜索：停止要是等它，这个测试要等 10 秒
+        return _search_returns(_hits("内容一"))(req)
+
+    c = Chat(planner=_with_gateway(FakeResearchPlanner(), slow))
+    t0 = time.monotonic()
+    v = c.say("查一下局部修改", stop_on=lambda ev: ev["event"] == "step" and ev["data"]["step"]["pending"])
+    (turn,) = v["turns"]
+    step = turn["items"][-1]
+    assert time.monotonic() - t0 < 3 and turn["record"]["outcome"] == "stopped" and v["status"] == "idle"
+    assert _kinds(turn) == ["thinking", "step:search"] and not step["ok"] and step["message"] == "停止了，没有做完"
+    assert v["sources"] == {} and _answered(c.values()["messages"])
+    assert c.say("直接答：好")["turns"][-1]["record"]["outcome"] == "ok"
 
 
 def test_stop_before_the_tools_run_closes_the_calls(chat):
@@ -487,7 +541,7 @@ def test_edit_replaces_the_last_question_and_answers_again(chat, monkeypatch):
 
 
 def test_rename_and_delete(tmp_path):
-    c = Chat(saver=open_sqlite_checkpointer(tmp_path / "r.sqlite"))
+    c = Chat(saver=_sqlite(tmp_path / "r.sqlite"))
     c.say("直接答：先问一句")
     c.r.rename(c.tid, "新标题")
     assert c.view()["title"] == "新标题" and c.view()["status"] == "idle"
@@ -554,7 +608,10 @@ def test_blocked_search_hit_is_dropped_and_the_turn_goes_on():
 def test_whole_batch_dropped_when_no_single_hit_is_blocked(monkeypatch):
     """单条都能过（合在一起才拦）：这次搜索的结果整个去掉，按搜索失败交给 agent。"""
     p = _with_gateway(FakeResearchPlanner(), _search_returns(_hits("内容一", f"内容二{FAKE_BLOCKED}")))
-    monkeypatch.setattr(p, "blocked", lambda texts: [False] * len(texts))
+    async def blocked(texts):
+        return [False] * len(texts)
+
+    monkeypatch.setattr(p, "blocked", blocked)
     v = Chat(planner=p).say("比较两款笔记软件")
     step = _search_step(v)
     assert not step["ok"] and step["message"] == history.BLOCKED_NOTE
@@ -589,11 +646,11 @@ def test_blocked_output_stops_the_turn_and_drops_what_was_streamed(chat):
 class FlakyModel(FakeToolModel):
     fails: list[int] = []
 
-    def _stream(self, messages, stop=None, run_manager=None, **kwargs):
+    def _ready(self, messages):  # 同步、异步调用都先走这里
         if self.fails:
             self.fails.pop()
             raise ModelUnavailable("模型服务暂时不可用（服务端出错），约 3 分钟后再试")
-        yield from super()._stream(messages, stop, run_manager, **kwargs)
+        return super()._ready(messages)
 
 
 def test_model_unavailable_fails_the_turn_and_retry_continues():
@@ -614,11 +671,11 @@ def test_model_unavailable_fails_the_turn_and_retry_continues():
 
 def test_sqlite_round_trip_and_continue(tmp_path):
     db = tmp_path / "data" / "r.sqlite"
-    c = Chat(saver=open_sqlite_checkpointer(db))
+    c = Chat(saver=_sqlite(db))
     c.say("查一下局部修改")
     c.say("直接答：为什么", stop_on=_first("delta", kind="text"))
     before = c.view()
-    again = Chat(saver=open_sqlite_checkpointer(db))  # 像服务重启：新的连接、新的 agent
+    again = Chat(saver=_sqlite(db))  # 像服务重启：新的连接、新的 agent
     after = again.view()
     for key in ("title", "turns", "sources", "status"):
         assert after[key] == before[key], key
@@ -706,7 +763,7 @@ def test_url_variants_get_one_id():
 
     def call(name, msgs, **args):
         rt = ToolRuntime(state={"messages": msgs}, context=None, config={}, stream_writer=lambda _: None, tool_call_id="c", store=None)
-        return tools[name].invoke({"name": name, "args": {**args, "runtime": rt}, "id": f"c{len(msgs)}", "type": "tool_call"})
+        return aio.run(tools[name].ainvoke({"name": name, "args": {**args, "runtime": rt}, "id": f"c{len(msgs)}", "type": "tool_call"}))
 
     found = call("search_web", [], query="q")
     hits = json.loads(found.content)

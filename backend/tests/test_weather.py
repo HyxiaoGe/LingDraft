@@ -15,6 +15,7 @@ from app.tools.gateway import City, Day, GatewayAuthError, GatewayClient, Gatewa
 from app.tools.research_tools import make_research_tools
 from app.graph.research.state import WeatherHour
 from app.tools.weather import CACHE_SECONDS, Unresolved, WeatherService, city_label, select_city, summarize_hourly
+from tests.research_helpers import blocking, invoke
 from tests.test_research import Chat
 
 
@@ -64,6 +65,10 @@ def _client(handler) -> GatewayClient:
     return GatewayClient("http://gw", "k1", scene="research", transport=httpx.MockTransport(handler))
 
 
+def _sync(handler):
+    return blocking(_client(handler))
+
+
 def test_weather_client_paths_and_parse():
     seen = []
 
@@ -73,7 +78,7 @@ def test_weather_client_paths_and_parse():
             return httpx.Response(200, json={"cities": [{"location_id": "1", "name": "广州", "adm1": "广东省", "adm2": "广州", "country": "中国", "rank": 11}]})
         return httpx.Response(200, json={"daily": [{"date": "2026-10-31", "text_day": "晴", "text_night": "晴", "temp_max": "32", "temp_min": "22"}]})
 
-    c = _client(handler)
+    c = _sync(handler)
     assert c.weather_cities("广州")[0].name == "广州"
     assert c.weather_daily("1")[0].temp_max == "32"
     assert seen == [("/weather/v1/cities", {"location": "广州", "number": "10", "lang": "zh"}), ("/weather/v1/forecast/daily", {"location_id": "1"})]
@@ -88,13 +93,13 @@ def test_weather_client_paths_and_parse():
 ])
 def test_weather_client_failures_are_typed(status, body, kind, retryable):
     with pytest.raises(GatewayError) as e:
-        _client(lambda req: httpx.Response(status, json=body)).weather_cities("广州")
+        _sync(lambda req: httpx.Response(status, json=body)).weather_cities("广州")
     assert not isinstance(e.value, GatewayAuthError) and (e.value.kind, e.value.retryable) == (kind, retryable)
 
 
 def test_weather_not_allowed_is_an_auth_error():
     with pytest.raises(GatewayAuthError):
-        _client(lambda req: httpx.Response(403, json={"error": "service_not_allowed"})).weather_cities("广州")
+        _sync(lambda req: httpx.Response(403, json={"error": "service_not_allowed"})).weather_cities("广州")
 
 
 # ---- 整理预报、缓存 ----
@@ -106,17 +111,17 @@ class FakeWeather:
     def __init__(self, cities=(GZ,), hourly_error: Exception | None = None) -> None:
         self.cities, self.hourly_error, self.calls = list(cities), hourly_error, []
 
-    def weather_cities(self, location, lang="zh", number=10):
+    async def weather_cities(self, location, lang="zh", number=10):
         self.calls.append(("cities", location, lang))
         return self.cities
 
-    def weather_daily(self, location_id):
+    async def weather_daily(self, location_id):
         self.calls.append(("daily", location_id))
         dates = ["2026-10-30", "2026-10-31", "2026-10-31", "坏日期", "2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05"]
         return [Day(date=d, text_day="晴", text_night="多云", temp_max="?" if d == "2026-11-02" else "30", temp_min="20",
                     wind_dir_day="北风", wind_scale_day="1-3") for d in dates]
 
-    def weather_hourly(self, location_id):
+    async def weather_hourly(self, location_id):
         self.calls.append(("hourly", location_id))
         if self.hourly_error:
             raise self.hourly_error
@@ -128,7 +133,7 @@ class FakeWeather:
 
 def test_forecast_from_local_today_and_cached_for_half_an_hour():
     gw, t = FakeWeather(), [0.0]
-    svc = WeatherService(gw, clock=lambda: t[0], now=lambda: datetime(2026, 10, 31, 15, tzinfo=UTC))
+    svc = blocking(WeatherService(gw, clock=lambda: t[0], now=lambda: datetime(2026, 10, 31, 15, tzinfo=UTC)))
     fc = svc.forecast("广州")
     # 当地今天从逐小时的第一个小时来；昨天、重复、日期坏的、数字坏的都不要；最多 4 天
     assert fc.today == "2026-10-31" and [d.date for d in fc.days] == ["2026-10-31", "2026-11-01", "2026-11-03", "2026-11-04"]
@@ -142,7 +147,7 @@ def test_forecast_from_local_today_and_cached_for_half_an_hour():
 
 def test_hourly_failure_keeps_daily_and_uses_china_date():
     gw = FakeWeather(hourly_error=GatewayError("down", kind="upstream_unavailable"))
-    fc = WeatherService(gw, now=lambda: datetime(2026, 10, 31, 17, tzinfo=UTC)).forecast("广州")  # 北京时间 11 月 1 日 1 点
+    fc = blocking(WeatherService(gw, now=lambda: datetime(2026, 10, 31, 17, tzinfo=UTC))).forecast("广州")  # 北京时间 11 月 1 日 1 点
     assert fc.hourly == [] and fc.today == "2026-11-01"
 
 
@@ -162,7 +167,7 @@ def test_hourly_summary_gives_the_peak_and_the_wet_hours():
 
 def test_english_names_are_looked_up_in_english():
     gw = FakeWeather(cities=[city("Paris", "Île-de-France", "Paris", country="France", rank=10)])
-    WeatherService(gw).forecast("France·Île-de-France·Paris")
+    blocking(WeatherService(gw)).forecast("France·Île-de-France·Paris")
     assert gw.calls[0] == ("cities", "Paris", "en")
 
 
@@ -174,7 +179,7 @@ def _weather_tool(client):
 
 
 def _call(tool, location: str) -> ToolMessage:
-    return tool.invoke({"name": "get_weather", "args": {"location": location}, "id": "c1", "type": "tool_call"})
+    return invoke(tool, {"name": "get_weather", "args": {"location": location}, "id": "c1", "type": "tool_call"})
 
 
 def test_tool_returns_forecast_or_tells_the_agent_why_not():

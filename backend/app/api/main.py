@@ -189,6 +189,8 @@ async def export_zip(thread_id: str):
 
 
 # ---- 对话场景（模块和接口路径沿用 research） ----
+# 接口都是普通函数，FastAPI 放到线程池里跑：运行器的同步方法把活交给对话的事件循环、等结果（见 app.aio），不卡住这里的事件循环。
+# 事件流（SSE）照旧在这里的事件循环里读事件日志。
 
 
 class ResearchMessageBody(BaseModel):
@@ -211,24 +213,24 @@ def _text(body: ResearchMessageBody) -> str:
 
 
 @app.get("/api/memory")
-async def memory_view():
+def memory_view():
     """长期记忆：全部记忆和整理的时间。现在只能看（2026-11-03 Sean 定先展示）。"""
     return research().memory_view()
 
 
 @app.get("/api/research/threads")
-async def research_list():
+def research_list():
     """线程列表：所有对话的标题和状态。"""
     return {"threads": research().list_threads()}
 
 
 @app.post("/api/research/threads")
-async def research_create(body: ResearchMessageBody):
+def research_create(body: ResearchMessageBody):
     return _sse(research().start(str(uuid.uuid4()), _text(body)))
 
 
 @app.post("/api/research/threads/{thread_id}/messages")
-async def research_say(thread_id: str, body: ResearchMessageBody):
+def research_say(thread_id: str, body: ResearchMessageBody):
     """接着说。运行中、上一轮没跑完时返回 409。"""
     r = research()
     _view(r, thread_id)
@@ -240,7 +242,7 @@ async def research_say(thread_id: str, body: ResearchMessageBody):
 
 
 @app.post("/api/research/threads/{thread_id}/queue")
-async def research_queue(thread_id: str, body: ResearchMessageBody):
+def research_queue(thread_id: str, body: ResearchMessageBody):
     """正在回答时又说的话：排着，这一轮答完或停下就接着发。返回 {"queued": 排着的那句}。
     这一轮刚好答完了就直接发，返回 {"queued": null}，页面去接事件流（/events）。
     已经有一句没发出去（排着或等着插进这一轮）、或上一轮没跑完时返回 409。"""
@@ -254,7 +256,7 @@ async def research_queue(thread_id: str, body: ResearchMessageBody):
 
 
 @app.delete("/api/research/threads/{thread_id}/queue")
-async def research_unqueue(thread_id: str):
+def research_unqueue(thread_id: str):
     """撤回排着的话，返回 {"text": 原文}，页面放回输入框；已经发出去了或没有，text 是 null。"""
     r = research()
     _view(r, thread_id)
@@ -262,7 +264,7 @@ async def research_unqueue(thread_id: str):
 
 
 @app.post("/api/research/threads/{thread_id}/guide")
-async def research_guide(thread_id: str):
+def research_guide(thread_id: str):
     """排着的话不等这一轮答完，插进这一轮：主 agent 下一次调模型之前放进对话；这一轮没再调模型就结束了的，照常排着发。
     返回 {"guided": 等着插进去的那句}；已经没在跑了（排着的话已经发出去了）是 null。"""
     r = research()
@@ -271,7 +273,7 @@ async def research_guide(thread_id: str):
 
 
 @app.delete("/api/research/threads/{thread_id}/guide")
-async def research_unguide(thread_id: str):
+def research_unguide(thread_id: str):
     """撤回等着插进这一轮的话，返回 {"text": 原文}，页面放回输入框；已经插进去了或没有，text 是 null。"""
     r = research()
     _view(r, thread_id)
@@ -279,7 +281,7 @@ async def research_unguide(thread_id: str):
 
 
 @app.post("/api/research/threads/{thread_id}/stop")
-async def research_stop(thread_id: str):
+def research_stop(thread_id: str):
     """让正在跑（或排队）的这一轮停下；停下的结果从事件流里来。没在跑的返回 409。"""
     r = research()
     _view(r, thread_id)
@@ -289,7 +291,7 @@ async def research_stop(thread_id: str):
 
 
 @app.post("/api/research/threads/{thread_id}/regenerate")
-async def research_regenerate(thread_id: str):
+def research_regenerate(thread_id: str):
     """最后一轮重新回答。运行中、上一轮没跑完、还没有回答时返回 409。"""
     r = research()
     _view(r, thread_id)
@@ -300,7 +302,7 @@ async def research_regenerate(thread_id: str):
 
 
 @app.post("/api/research/threads/{thread_id}/edit")
-async def research_edit(thread_id: str, body: ResearchMessageBody):
+def research_edit(thread_id: str, body: ResearchMessageBody):
     """改了最后那句话，按新的话重新回答。运行中、上一轮没跑完、还没有说过话时返回 409。"""
     r = research()
     _view(r, thread_id)
@@ -312,7 +314,7 @@ async def research_edit(thread_id: str, body: ResearchMessageBody):
 
 
 @app.patch("/api/research/threads/{thread_id}")
-async def research_rename(thread_id: str, body: ResearchTitleBody):
+def research_rename(thread_id: str, body: ResearchTitleBody):
     """改标题，返回列表里的这一行。运行中、上一轮没跑完时返回 409。"""
     r = research()
     _view(r, thread_id)
@@ -327,7 +329,7 @@ async def research_rename(thread_id: str, body: ResearchTitleBody):
 
 
 @app.delete("/api/research/threads/{thread_id}")
-async def research_delete(thread_id: str):
+def research_delete(thread_id: str):
     """删掉这段对话，找不回来。运行中返回 409。"""
     r = research()
     _view(r, thread_id)
@@ -339,7 +341,7 @@ async def research_delete(thread_id: str):
 
 
 @app.post("/api/research/threads/{thread_id}/retry")
-async def research_retry(thread_id: str):
+def research_retry(thread_id: str):
     """失败的线程从断开的那一步接着跑；没失败的返回 409。"""
     r = research()
     _view(r, thread_id)
@@ -350,7 +352,7 @@ async def research_retry(thread_id: str):
 
 
 @app.get("/api/research/threads/{thread_id}/events")
-async def research_events(thread_id: str, after: str | None = None):
+def research_events(thread_id: str, after: str | None = None):
     """接上线程当前这次执行的事件流（after 是收到的最后一个事件 id），以 end 事件收尾；断线、刷新后用。"""
     r = research()
     _view(r, thread_id)
@@ -358,7 +360,7 @@ async def research_events(thread_id: str, after: str | None = None):
 
 
 @app.get("/api/research/threads/{thread_id}/runs")
-async def research_thread_runs(thread_id: str):
+def research_thread_runs(thread_id: str):
     """这段对话的每次运行（新的在前）：怎么来的、状态、时间、出错的原因。排查问题用，页面不用。"""
     r = research()
     _view(r, thread_id)
@@ -369,7 +371,7 @@ RUNS_LIMIT = 200
 
 
 @app.get("/api/research/runs")
-async def research_runs(status: str | None = None, limit: int = 50):
+def research_runs(status: str | None = None, limit: int = 50):
     """所有对话里最近的运行，status 只看某个状态（比如 error）。排查问题用，页面不用。"""
     if status is not None and status not in STATUSES:
         raise HTTPException(400, f"status 只能是 {'、'.join(STATUSES)}")
@@ -379,12 +381,12 @@ async def research_runs(status: str | None = None, limit: int = 50):
 
 
 @app.get("/api/research/threads/{thread_id}/state")
-async def research_state(thread_id: str):
+def research_state(thread_id: str):
     return _view(research(), thread_id)
 
 
 @app.get("/api/research/threads/{thread_id}/images/{name}")
-async def research_image(thread_id: str, name: str):
+def research_image(thread_id: str, name: str):
     """对话里画的图。文件名是图片编号，内容不会变，浏览器可以一直缓存；对话删了图也跟着删。"""
     path = research().images.path(thread_id, name)
     if path is None:
