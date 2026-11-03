@@ -1,5 +1,5 @@
 // 天气卡片：get_weather 查到的预报（和风天气，agent-tools 的 weather-service，见 backend/app/tools/weather_mcp.py）。
-// 上面是逐日几列（问了某一天、在预报范围内时只有那一天，排成一行），下面是接下来 24 小时里的几个小时：
+// 上面是逐日几列（问了某一天、在预报范围内时只有那一天，排成一行；不在范围内没有卡片），下面是逐小时：没问哪天是接下来 24 小时，问了 7 天内的某天是那天的
 // 气温折线和降水概率柱子分上下两条，共用时间轴，不叠在一张图上（单位不同，不用两套纵轴）
 import { useLayoutEffect, useRef, useState } from "react";
 import { IconCloud, IconCloudSun, IconFog, IconRain, IconSnow, IconSun, IconThunder } from "./icons.jsx";

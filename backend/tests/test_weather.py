@@ -21,8 +21,12 @@ from app.tools.weather_mcp import WEATHER_TOOL, WeatherMiddleware, WeatherTool, 
 from tests.test_research import Chat
 
 
+def _ahead(days: int) -> str:
+    return (datetime.now(timezone(timedelta(hours=8))) + timedelta(days=days)).date().isoformat()
+
+
 def _tomorrow() -> str:
-    return (datetime.now(timezone(timedelta(hours=8))) + timedelta(days=1)).date().isoformat()
+    return _ahead(1)
 
 
 def _call(location: str, requested_date: str | None = None, cid: str = "c1") -> dict:
@@ -172,7 +176,15 @@ def test_step_turns_the_result_into_a_card():
 
     day = history.step_of(_call("广州", _tomorrow()), _ask(tool, "广州", _tomorrow())).weather
     assert day.requested_date == _tomorrow() and [d.date for d in day.days] == [_tomorrow()]
-    assert day.hourly and all(h.time.startswith(_tomorrow()) for h in day.hourly)  # 逐小时只留那天的
+    assert len(day.hourly) == 24 and all(h.time.startswith(_tomorrow()) for h in day.hourly)  # 逐小时是那天一整天的
+    far = history.step_of(_call("广州", _ahead(14)), _ask(tool, "广州", _ahead(14))).weather
+    assert [d.date for d in far.days] == [_ahead(14)] and far.hourly == []  # 7 天以后只有逐日
+
+    # 不在预报范围里：服务一天都不给，没有卡片，过程里说能查哪几天
+    out = history.step_of(_call("广州", _ahead(20)), _ask(tool, "广州", _ahead(20)))
+    md = lambda iso: f"{int(iso[5:7])}月{int(iso[8:10])}日"  # noqa: E731
+    assert not out.ok and out.weather is None and out.title == "广东省·广州"
+    assert out.message == f"{md(_ahead(20))}不在预报范围里，能查 {md(_ahead(0))}–{md(_ahead(14))}"
 
     def message(result: ToolMessage) -> str:
         step = history.step_of(call, result)

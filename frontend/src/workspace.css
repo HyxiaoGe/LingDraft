@@ -215,7 +215,7 @@ button.ws-proc-head:hover { color: var(--ink); }
   display: flex; flex-direction: column; gap: 10px; animation: ws-in .25s var(--ease); margin: 2px 0; }
 .ws-card.warn { border-color: var(--warn-line); background: var(--warn-soft); }
 
-/* 天气卡片：逐日几列（问了某一天时只有一行），下面是接下来 24 小时里几个小时的气温（靛青折线）和降水概率（蓝色柱子） */
+/* 天气卡片：逐日几列（问了某一天时只有一行），下面是逐小时（接下来 24 小时，或者问的那天）的气温（靛青折线）和降水概率（蓝色柱子） */
 .ws-weather { --rain: #4a86c8; gap: 12px; }
 .ws-weather-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .ws-weather-head > svg { flex: none; color: var(--accent); }
