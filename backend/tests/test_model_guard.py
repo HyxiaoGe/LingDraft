@@ -235,8 +235,8 @@ def test_title_timeouts_only_break_titles(clock, monkeypatch):
     from app import config
     from app.research_llm import LiveResearchPlanner, make_chat_model
 
-    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "k")
-    monkeypatch.setattr(config, "RESEARCH_PROVIDER", "deepseek")
+    for name, value in (("DEEPSEEK_API_KEY", "k"), ("AGENT_TOOLS_API_KEY", "k"), ("RESEARCH_PROVIDER", "deepseek")):
+        monkeypatch.setattr(config, name, value)
     p = LiveResearchPlanner()
     flash = config.DEEPSEEK_FLASH_MODEL
     assert p._titler._guard_key() == f"{flash}·起标题" and p._summarizer._guard_key() == flash
