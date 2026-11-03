@@ -795,6 +795,60 @@ def test_model_call_cap_counts_this_turn_and_carries_over_a_retry(monkeypatch):
     assert turn["record"]["usage"]["model_calls"] == 3
 
 
+# ---- 模型生成到一半断了 ----
+
+
+def _streamed(events: list[dict], kind: str) -> dict[str, str]:
+    """页面收到的片段按消息 id 拼起来。"""
+    out: dict[str, str] = {}
+    for e in events:
+        if e["event"] == "delta" and e["data"]["kind"] == kind and not e["data"].get("task"):
+            out[e["data"]["id"]] = out.get(e["data"]["id"], "") + e["data"]["text"]
+    return out
+
+
+def test_model_breaking_midway_is_called_again_and_the_page_drops_the_half(chat, monkeypatch):
+    """写回答时流到一半断了：自动再调一次，这一轮照常答完。页面先收到半截，再收到 restart（带那条消息的 id）去掉它；
+    存下来的只有再调的那条，用量不算断掉的那次。"""
+    monkeypatch.setattr(agent_mod, "RESTART_WAIT_S", 0)
+    v = chat.say("中途断：比较两款笔记软件")
+    (turn,) = v["turns"]
+    assert v["status"] == "idle" and turn["record"]["outcome"] == "ok"
+    assert _kinds(turn) == ["thinking", "step:search", "thinking", "step:read", "thinking", "text"]
+    names = [e["event"] for e in chat.events]
+    (restart,) = [e["data"] for e in chat.events if e["event"] == "restart"]
+    half, answer = restart["id"], turn["items"][-1]
+    texts = _streamed(chat.events, "text")
+    assert texts[half] and answer["text"].startswith(texts[half]) and len(texts[half]) < len(answer["text"])  # 半截
+    assert half in _streamed(chat.events, "thinking")  # 它的思考也去掉
+    assert max(i for i, e in enumerate(chat.events) if e["event"] == "delta" and e["data"]["id"] == half) < names.index("restart")
+    assert answer["id"] != half and texts[answer["id"]] == answer["text"]
+    assert not [m for m in chat.values()["messages"] if m.id == half]
+    assert turn["record"]["usage"]["model_calls"] == 3
+
+
+def test_model_breaking_again_fails_the_turn_like_before(chat, monkeypatch):
+    """再调一次也断了：照常失败，页面给原因和重试。只再调一次。"""
+    monkeypatch.setattr(agent_mod, "RESTART_WAIT_S", 0)
+    with pytest.raises(ModelUnavailable):
+        chat.say("一直断：比较两款笔记软件")
+    v = chat.view()
+    assert v["status"] == "failed" and v["error"].startswith("模型服务暂时不可用（连接失败）")
+    assert len([e for e in chat.events if e["event"] == "restart"]) == 1  # 每再调一次发一条
+
+
+def test_stop_while_restarting_saves_no_half(chat, monkeypatch):
+    """断了、正在等着再调时点停止：页面已经去掉的半截不存成这一轮的回答。"""
+    monkeypatch.setattr(agent_mod, "RESTART_WAIT_S", 5)
+    started = time.monotonic()
+    v = chat.say("中途断：比较两款笔记软件", stop_on=lambda ev: ev["event"] == "restart")
+    assert time.monotonic() - started < 3  # 等着再调的时候点停止，马上就停
+    half = next(e["data"]["id"] for e in chat.events if e["event"] == "restart")
+    turn = v["turns"][-1]
+    assert v["status"] == "idle" and "text" not in _kinds(turn)
+    assert not [i for i in turn["items"] if i.get("id") == half]
+
+
 # ---- 检查点 ----
 
 

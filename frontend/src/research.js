@@ -233,6 +233,10 @@ export function addLive(l, ev, data) {
     stopThinking(items);
   } else if (ev === "phase") {
     return { ...l, phase: data.phase }; // 空档里在等什么（等模型、重写参数……），页面据此说明
+  } else if (ev === "restart") {
+    // 模型生成到一半断了、正在再调一次：刚才流出来的半截（思考和正文，id 是那条消息的；没流出东西时是空的）不要了，空档里说明在重新生成
+    const kept = data.id ? items.filter((x) => !((x.type === "thinking" || x.type === "text") && x.id === data.id)) : items;
+    return { ...l, items: kept, phase: "restart" };
   } else {
     return l;
   }

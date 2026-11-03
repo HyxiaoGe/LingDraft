@@ -3,6 +3,8 @@
 只认服务商给的协议信号：HTTP 状态、连接错误、流里的错误事件、流结束原因，以及 DeepSeek 内容审核拦下请求时固定的错误文字。
 连接错误、超时、429、5xx 由 SDK 先重试（max_retries）；这里看的是重试用完以后的结果。
 异步流式调用时 langchain-openai 另有一个超时：太久收不到片段抛 TimeoutError，不重试，也算超时。
+SDK 只重试发请求那一下（拿到状态码为止）。模型开始生成以后断的（流读到一半断开、流里来了错误、DeepSeek 资源不足、太久没片段）它不管，
+这几种换成 Interrupted：调用方可以把这次调用整个再发一次（对话 agent 再发一次，见 graph.research.agent.InterruptedRetryMiddleware）。
 
 熔断：同一个模型连续 FAILURES 次不可用就断开 COOLDOWN_S 秒，这期间的调用直接失败、不发请求；
 冷却完放一个调用去试，成功就恢复，失败接着断开。请求本身的错误（400 之类）说明服务答复了，不算不可用。
@@ -30,6 +32,15 @@ log = logging.getLogger(__name__)
 
 class ModelUnavailable(RuntimeError):
     """模型服务不可用：服务商出错、连不上、密钥或余额有问题，或者正在熔断。"""
+
+
+class Interrupted(ModelUnavailable):
+    """模型开始生成以后断了，SDK 不重试这种：整个再调一次多半能好。这次失败已经让熔断断开的不给这个（再调也会被拒）。
+    streamed：断之前已经流出了片段（页面上有半截，再调之前要去掉）。"""
+
+    def __init__(self, message: str, streamed: bool = False) -> None:
+        super().__init__(message)
+        self.streamed = streamed
 
 
 class ContentBlocked(RuntimeError):
@@ -88,8 +99,9 @@ class Breaker:
         if s and s["until"] is not None:
             log.warning("模型服务恢复：%s", key)
 
-    def failure(self, key: str, reason: str, detail: str = "") -> ModelUnavailable:
-        """记一次不可用，返回给调用方抛的错。连续够数（或者冷却后的试探也失败）就断开。"""
+    def failure(self, key: str, reason: str, detail: str = "", *, interrupted: bool = False, streamed: bool = False) -> ModelUnavailable:
+        """记一次不可用，返回给调用方抛的错。连续够数（或者冷却后的试探也失败）就断开。
+        interrupted：模型开始生成以后断的，没因此断开时给 Interrupted（streamed 照传），调用方可以再调一次。"""
         with self._mu:
             s = self._s.setdefault(key, {"fails": 0, "until": None, "reason": reason, "probing": False})
             s["fails"] += 1
@@ -99,7 +111,8 @@ class Breaker:
                 s["until"], s["probing"] = self.clock() + self.cooldown_s, False
         log.warning("模型服务不可用：%s，%s%s%s", key, reason, f"，断开 {self.cooldown_s:.0f} 秒" if opened else "",
                     f"（{detail[:300]}）" if detail else "")
-        return ModelUnavailable(_message(reason, self.cooldown_s if opened else None))
+        message = _message(reason, self.cooldown_s if opened else None)
+        return Interrupted(message, streamed) if interrupted and not opened else ModelUnavailable(message)
 
     def release(self, key: str) -> None:
         """试探的调用没有定论（中途不读了、别的错误）：名额让给下一个。成功、失败时已经处理过，这里不再变。"""
@@ -133,7 +146,8 @@ class GuardedChatModel:
     def _guard_key(self) -> str:
         return str(getattr(self, "model_name", "") or type(self).__name__)
 
-    def _translate(self, key: str, e: Exception) -> Exception:
+    def _translate(self, key: str, e: Exception, streamed: bool = False) -> Exception:
+        """streamed：流式调用里已经收到过片段。"""
         if is_blocked(e):
             self.breaker.success(key)  # 服务答复了
             return ContentBlocked(output=False)
@@ -142,14 +156,17 @@ class GuardedChatModel:
             return ModelUnavailable(_message("请求太频繁", None))
         reason = unavailable_reason(e)
         if reason:
-            return self.breaker.failure(key, reason, str(e))
+            # 开始生成以后断的：收到过片段，或者是 SDK 从不重试的那两种（流里的错误事件、langchain-openai 的片段超时）。
+            # 还没收到片段的连接错误、读超时是发请求那一下，SDK 已经重试过
+            interrupted = streamed or type(e) is openai.APIError or isinstance(e, TimeoutError)
+            return self.breaker.failure(key, reason, str(e), interrupted=interrupted, streamed=streamed)
         if isinstance(e, openai.APIStatusError):
             self.breaker.success(key)
         return e
 
-    def _settle(self, key: str, finish: str | None) -> None:
+    def _settle(self, key: str, finish: str | None, streamed: bool = False) -> None:
         if finish == "insufficient_system_resource":  # DeepSeek：推理资源不够，生成被打断
-            raise self.breaker.failure(key, "服务端资源不足")
+            raise self.breaker.failure(key, "服务端资源不足", interrupted=True, streamed=streamed)
         self.breaker.success(key)
         if finish == "content_filter":
             raise ContentBlocked(output=True)
@@ -174,18 +191,19 @@ class GuardedChatModel:
     def _stream(self, messages, stop=None, run_manager=None, **kwargs: Any) -> Iterator:
         key = self._guard_key()
         probe = self.breaker.check(key)
-        finish = None
+        finish, streamed = None, False
         try:
             try:
                 for chunk in super()._stream(messages, stop=stop, run_manager=run_manager, **kwargs):  # type: ignore[misc]
                     finish = (chunk.generation_info or {}).get("finish_reason") or finish
+                    streamed = True
                     yield chunk
             except Exception as e:
-                err = self._translate(key, e)
+                err = self._translate(key, e, streamed)
                 if err is e:
                     raise
                 raise err from e
-            self._settle(key, finish)
+            self._settle(key, finish, streamed)
         finally:
             if probe:
                 self.breaker.release(key)
@@ -213,18 +231,19 @@ class GuardedChatModel:
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs: Any) -> AsyncIterator:
         key = self._guard_key()
         probe = self.breaker.check(key)
-        finish = None
+        finish, streamed = None, False
         try:
             try:
                 async for chunk in super()._astream(messages, stop=stop, run_manager=run_manager, **kwargs):  # type: ignore[misc]
                     finish = (chunk.generation_info or {}).get("finish_reason") or finish
+                    streamed = True
                     yield chunk
             except Exception as e:
-                err = self._translate(key, e)
+                err = self._translate(key, e, streamed)
                 if err is e:
                     raise
                 raise err from e
-            self._settle(key, finish)
+            self._settle(key, finish, streamed)
         finally:
             if probe:
                 self.breaker.release(key)

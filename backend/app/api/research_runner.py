@@ -133,6 +133,11 @@ class StreamBuffer:
         self._deltas, self._last = [], time.monotonic()
         return out
 
+    def drop(self, task: str | None = None) -> str | None:
+        """这条消息不要了（调模型断了，正在再调一次）：不再当作流出来的半截，点停止时不存它。返回它的 id。"""
+        cur = self._cur.pop(task, None)
+        return cur.mid if cur is not None else None
+
     def partial(self, task: str | None = None) -> AIMessage | None:
         cur = self._cur.get(task)
         return cur.message() if cur is not None and cur.mid else None
@@ -487,6 +492,7 @@ class ResearchRunner(BaseRunner):
                             done: dict[str | None, list[ToolMessage]]) -> None:
         """agent 的流 → 页面事件。messages 只转发 model 节点的（快模型在别的节点里调用，不算）；
         custom 是中间件写的进度（step，做完的带来源）、标题（title）和阶段（phase：起标题、等模型这些空档在等什么）；updates 里改了 state 的节点做完发 node（页面不靠它）。
+        模型生成到一半断了、正在再调一次（restart，见 agent.InterruptedRetryMiddleware）：带上刚才流出来的那条消息的 id，页面去掉它；没流出东西是 None。
         子 agent（task 工具里跑的另一个 agent）的流要开 subgraphs 才有，按命名空间认出是哪个 task 调用派的：
         它的片段、进度、阶段带上 task（调用 id），页面放进那张子任务卡；它的节点做完不发 node。它的片段 langgraph_node 也是 model，只按节点名分不开。
         做完的 step 带着工具结果（result，不发给页面），记进 done：点停止时它那一步可能还没提交，收尾时补上（见 _write_stop）。"""
@@ -506,6 +512,8 @@ class ResearchRunner(BaseRunner):
                 if chunk["type"] == "subagent":
                     tasks[chunk["ns"]] = chunk["id"]
                     continue
+                if chunk["type"] == "restart":  # 前面的片段上面已经发出去了，页面收到这条再去掉
+                    chunk = {"type": "restart", "id": buf.drop(task) if chunk.get("streamed") else None}
                 if chunk["type"] == "title" and not task:
                     self._titles[thread_id] = chunk["title"]
                 if isinstance(result := chunk.get("result"), ToolMessage):

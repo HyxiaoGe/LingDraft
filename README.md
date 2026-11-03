@@ -2,7 +2,7 @@
 
 从一个想法，到一份拿得出手的作品。
 
-一个能搜、能读、回答会标来源的 AI 对话 agent，基于 LangGraph 和 DeepSeek。主 agent 和子 agent 都是 LangChain 的 `create_agent`，上面挂着自己写的 5 个中间件。运行层也是自己写的，管排队、停止、插话和断线续看。检查点、长期记忆和运行记录都存在 Postgres。
+一个能搜、能读、回答会标来源的 AI 对话 agent，基于 LangGraph 和 DeepSeek。主 agent 和子 agent 都是 LangChain 的 `create_agent`，上面挂着自己写的 7 个中间件。运行层也是自己写的，管排队、停止、插话和断线续看。检查点、长期记忆和运行记录都存在 Postgres。
 
 ![对话页：主 agent 把问题拆给三个子 agent 并行去查，再汇总回答](assets/screenshot.png)
 
@@ -13,7 +13,7 @@ flowchart TB
     UI["页面（React）"] -- "说话 · 排队 · 插话 · 停止" --> API["FastAPI"]
     API -- "SSE 事件流<br/>断线续看" --> UI
     API --> Runner["运行器<br/>排队 · 取消<br/>事件日志"]
-    Runner -- "aupdate_state + astream<br/>subgraphs=True" --> Main["主 agent · Pro<br/>create_agent<br/>+ 5 个中间件"]
+    Runner -- "aupdate_state + astream<br/>subgraphs=True" --> Main["主 agent · Pro<br/>create_agent<br/>+ 7 个中间件"]
     Main -- "task，并行派出" --> Sub["子 agent · Flash<br/>create_agent<br/>按工具限次"]
     Main --> Tools["搜索 · 读网页<br/>天气 · 画图<br/>时间 · recall"]
     Sub --> Tools
@@ -25,7 +25,7 @@ flowchart TB
 
 | 机制 | 用在哪 |
 |---|---|
-| `create_agent` + `AgentMiddleware` | 主 agent、子 agent 都由它搭；6 个自写中间件用到 `before_agent`、`abefore_model`、`awrap_model_call`、`awrap_tool_call`、`after_model`（`can_jump_to`）、`after_agent` |
+| `create_agent` + `AgentMiddleware` | 主 agent、子 agent 都由它搭；7 个自写中间件用到 `before_agent`、`abefore_model`、`awrap_model_call`、`awrap_tool_call`、`after_model`（`can_jump_to`）、`after_agent` |
 | `ExtendedModelResponse` + `Command(update=…)` | 中间件在一次模型调用里顺手改 state：写上起好的标题、换掉没通过审核的工具结果 |
 | `context_schema` / `ToolRuntime` | 图片存储、取插话这些运行时的东西从 context 传给工具和中间件，不进 state |
 | `aupdate_state(as_node=START)` + `astream(None)` | 用户的话先写进检查点再开跑，排队时服务重启也不丢 |

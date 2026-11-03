@@ -259,7 +259,7 @@ export default function Workspace() {
     } else if (ev === "title") {
       setLive((l) => (l ? { ...l, title: data.title } : l));
       refreshList();
-    } else if (ev === "delta" || ev === "step") {
+    } else if (ev === "delta" || ev === "step" || ev === "restart") {
       setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
     } else if (ev === "guide") { // 等着插的话放进这一轮了：从下面挪进过程里。之后又插了一句的话以服务器为准
       setLive((l) => addLive(l, ev, data));
