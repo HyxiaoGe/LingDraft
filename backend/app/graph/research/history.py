@@ -16,7 +16,7 @@ from app.graph.research.state import Forecast, GeneratedImage, ToolStep, Usage
 
 BLOCKED = "lingdraft_blocked"  # 一轮因内容审核停下时，系统补的那条模型消息 response_metadata 里的键，值是原因（见 agent.ContentGuard）
 STOPPED = "lingdraft_stopped"  # 用户点了停止时，已经流出来的那部分正文存成的模型消息 response_metadata 里的键
-GUIDE = "lingdraft_guide"  # 用户插进正在跑的这一轮的话：这条用户消息 additional_kwargs 里的键（见 agent.TurnMiddleware.before_model）
+GUIDE = "lingdraft_guide"  # 用户插进正在跑的这一轮的话：这条用户消息 additional_kwargs 里的键（见 agent.TurnMiddleware.abefore_model）
 IMAGE_TOOL = "generate_image"
 STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", IMAGE_TOOL: "image", SUBAGENT_TOOL: "task"}
 BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
@@ -212,12 +212,6 @@ def _task_step(cid: str, text: str, extra: dict, result: ToolMessage) -> ToolSte
         return ToolStep(id=cid, kind="task", text=text, source_ids=sids, **extra)
     code = result.artifact.get("failure") if isinstance(result.artifact, dict) else None
     return ToolStep(id=cid, kind="task", text=text, ok=False, source_ids=sids, message=TASK_FAILURES.get(code, TASK_FAILED), **extra)
-
-
-def collect_steps(messages: list[BaseMessage]) -> list[ToolStep]:
-    results = {m.tool_call_id: m for m in messages if isinstance(m, ToolMessage)}
-    steps = (step_of(tc, results.get(tc["id"])) for m in messages if isinstance(m, AIMessage) for tc in m.tool_calls)
-    return [s for s in steps if s is not None]
 
 
 # ---- 用量 ----

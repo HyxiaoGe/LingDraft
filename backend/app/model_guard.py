@@ -117,10 +117,15 @@ def _message(reason: str, wait_s: float | None) -> str:
 BREAKER = Breaker()
 
 
+def guard_key(model: str, use: str | None = None) -> str:
+    """熔断按什么记：默认模型名；某个用途单独记时是“模型名·用途”，日志里也看得出是哪个用途断开的。"""
+    return f"{model}·{use}" if use else model
+
+
 class GuardedChatModel:
     """放在聊天模型类的前面（多继承）：每次调用先过熔断，服务商的错误换成 ModelUnavailable / ContentBlocked。
 
-    同一个模型（model_name）共用一个熔断状态：调研 agent 和快模型步骤用的是同一个服务。
+    同一个模型（model_name）默认共用一个熔断状态：调研 agent 和快模型步骤用的是同一个服务。某个用途要单独记，子类改 _guard_key（见 guard_key）。
     """
 
     breaker = BREAKER  # 不加类型标注：混进 pydantic 的模型类里，标了会被当成字段

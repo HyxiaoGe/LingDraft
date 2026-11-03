@@ -226,3 +226,39 @@ def test_async_stream_that_stalls_is_a_timeout_and_counts(clock):
             [c async for c in m.astream("hi")]
 
     run_async(go())
+
+
+def test_title_timeouts_only_break_titles(clock, monkeypatch):
+    """起标题超时短，超时只说明不想等：单独记熔断。连续超时只停起标题，同一个模型上的子 agent、写短版照常调。"""
+    from langchain_deepseek import ChatDeepSeek
+
+    from app import config
+    from app.research_llm import LiveResearchPlanner, make_chat_model
+
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "k")
+    monkeypatch.setattr(config, "RESEARCH_PROVIDER", "deepseek")
+    p = LiveResearchPlanner()
+    flash = config.DEEPSEEK_FLASH_MODEL
+    assert p._titler._guard_key() == f"{flash}·起标题" and p._summarizer._guard_key() == flash
+    other = make_chat_model("deepseek", flash, thinking=False)  # 子 agent 默认也是它
+    calls = []
+
+    async def service(self, messages, stop=None, run_manager=None, **kwargs):
+        calls.append(self._guard_key())
+        if self is p._titler:
+            raise openai.APITimeoutError(request=REQ)
+        return ChatResult(generations=[ChatGeneration(message=AIMessage("好"), generation_info={"finish_reason": "stop"})])
+
+    monkeypatch.setattr(ChatDeepSeek, "_agenerate", service)
+
+    async def go():
+        for _ in range(2):
+            with pytest.raises(ModelUnavailable, match="超时"):
+                await p.title("问题")
+        with pytest.raises(ModelUnavailable, match="约 3 分钟后再试"):  # 起标题断开了：不发请求
+            await p.title("问题")
+        assert len(calls) == 2
+        assert (await other.ainvoke("hi")).content == "好"  # 同一个模型的其他用途没断开
+        assert (await p._summarizer.ainvoke("hi")).content == "好"
+
+    run_async(go())
