@@ -479,9 +479,10 @@ async def memory_text(memory: MemoryBook | None) -> str:
 
 
 def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook | None = None):
-    # subagent、compaction 用到本模块的东西，放在这里导入
+    # subagent、compaction 用到本模块的东西，放在这里导入（weather_mcp 用到 prompts，一起放这里）
     from app.graph.research.compaction import CompactionMiddleware, make_recall_tool
     from app.graph.research.subagent import make_task_tool
+    from app.tools.weather_mcp import WeatherMiddleware
 
     # recall 一直都在（工具列表变了前缀缓存整个断），只有压缩换成说明的内容才用得上；页面上不显示这一步
     tools = [*planner.tools(), make_task_tool(planner), make_recall_tool()]
@@ -495,6 +496,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
             ContentGuard(planner),  # 在 TurnMiddleware 里面：重发的请求也带着换好的系统提示词
             CompactionMiddleware(planner, tools, memory),  # 在 ContentGuard 里面：被内容审核停下的那几轮先去掉再压；用户插的话放进对话以后再估
             ToolProgressMiddleware(),
+            WeatherMiddleware(),  # 在 ToolProgressMiddleware 里面：过程记录看到的是整理好的天气结果
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
             ModelCallCapMiddleware(),  # 在压缩里面：末尾加的说明不经过压缩
             InterruptedRetryMiddleware(),  # 最里面：只重发调模型这一下

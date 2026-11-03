@@ -1,8 +1,7 @@
-"""agent 的工具：搜索、读网页、查天气、画图、取当前时间。工具描述在 app/graph/research/prompts.toml 的 [tools.*]。
+"""agent 的工具：搜索、读网页、画图、取当前时间。工具描述在 app/graph/research/prompts.toml 的 [tools.*]。
+查天气是 agent-tools 的 MCP 工具，见 app.tools.weather_mcp。
 
 搜索和读页的结果里每个网址带一个来源 id（见 app.graph.research.sources），模型在正文里用它引用。
-查天气的结果不是网页、不带来源 id：模型看逐日预报和逐小时的摘要；整份预报放在结果的 artifact 里（不发给模型），
-页面画成天气卡片，卡片上写明来自和风天气（见 app.tools.weather）。
 画图的结果模型只看到一句话（画成了、图片编号，或者没画成怎么跟用户说）；图的信息在 artifact 里，页面画成图片卡片（见 app.tools.images）。
 当前时间：系统提示词里只有日期，几点钟要模型自己来取。放进提示词的话每次请求都不一样，前缀缓存就断了；页面上不显示这一步。
 """
@@ -11,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 from langchain.tools import ToolRuntime
 from langchain_core.messages import ToolMessage
@@ -25,13 +24,13 @@ from app.graph.research.sources import known_in, source_id, url_key
 from app.graph.research.state import GeneratedImage
 from app.tools import images
 from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError, ImageError
-from app.tools.weather import CHINA_TZ, Unresolved, WeatherService, summarize_hourly
 
 MAX_COUNT = 10
 TIME_TOOL = "get_current_time"
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 MAX_DAYS = 365
 MAX_DOMAINS = 5
+CHINA_TZ = timezone(timedelta(hours=8))
 
 
 def _arg(tool_name: str, name: str) -> str:
@@ -51,10 +50,6 @@ class SearchArgs(BaseModel):
 
 class ReadArgs(BaseModel):
     url: str = Field(description=_arg("read_page", "url"))
-
-
-class WeatherArgs(BaseModel):
-    location: str = Field(description=_arg("get_weather", "location"))
 
 
 class ImageArgs(BaseModel):
@@ -95,8 +90,6 @@ def _failed(kind: str, message: str, retryable: bool = False, **extra) -> ToolEx
 
 
 def make_research_tools(client: GatewayClient) -> list:
-    weather = WeatherService(client)
-
     @tool("search_web", description=prompts.render("tools.search_web.description"), args_schema=SearchArgs,
           response_format="content_and_artifact")
     async def search_web(query: str, runtime: ToolRuntime, count: int = 5, recency_days: int | None = None,
@@ -130,29 +123,6 @@ def make_research_tools(client: GatewayClient) -> list:
         if res.get("ok"):
             res = {"id": source_id((res.get("url") or url).strip(), known_in(runtime.state)), **res}
         return json.dumps(res, ensure_ascii=False), {"retrieved_at": _now()}
-
-    @tool("get_weather", description=prompts.render("tools.get_weather.description"), args_schema=WeatherArgs,
-          response_format="content_and_artifact")
-    async def get_weather(location: str):
-        place = location.strip()
-        if not place:
-            raise _failed("bad_arguments", "location 是空的")
-        try:
-            fc = await weather.forecast(place)
-        except Unresolved as e:
-            if e.kind == "ambiguous_location":
-                raise _failed(e.kind, f"“{place}”对得上好几个地方，没有查", candidates=e.candidates) from e
-            raise _failed(e.kind, f"和风天气里没找到“{place}”") from e
-        except GatewayAuthError:
-            raise  # 密钥或网关放行的问题：让这次运行失败、把错误亮出来
-        except GatewayError as e:
-            raise _failed(e.kind, str(e), e.retryable) from e
-        seen = {"ok": True, **fc.model_dump(exclude={"hourly"})}
-        if summary := summarize_hourly(fc.hourly):
-            seen["hourly_summary"] = summary
-        return json.dumps(seen, ensure_ascii=False), {"retrieved_at": _now(), "forecast": fc.model_dump()}
-
-    get_weather.handle_tool_error = True
 
     @tool(TIME_TOOL, description=prompts.render(f"tools.{TIME_TOOL}.description"))
     def get_current_time() -> str:
@@ -225,4 +195,4 @@ def make_research_tools(client: GatewayClient) -> list:
         return result(note, {"attempted": True, "image": img.model_dump(), "source_url": config.IMAGE_SERVICE_URL.rstrip("/") + out.path,
                              "reference_search_status": out.reference_search_status}, ok=True)
 
-    return [search_web, read_page, get_weather, generate_image, get_current_time]
+    return [search_web, read_page, generate_image, get_current_time]

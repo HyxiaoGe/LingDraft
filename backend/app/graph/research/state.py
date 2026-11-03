@@ -55,14 +55,15 @@ class WeatherHour(BaseModel):
 
 
 class Forecast(BaseModel):
-    """一次查天气的结果（和风天气）。模型看的和页面上的天气卡片是同一份。"""
+    """一次查天气的结果（和风天气），页面画成天气卡片。由 weather-service 的结果换来（见 history.forecast_of）。"""
 
     model_config = ConfigDict(extra="forbid")
     location: str = Field(description="和风的地名，比如“广东省·广州”")
     today: str = Field(description="查的时候当地是哪天")
     fetched_at: str
-    days: list[WeatherDay] = Field(description="从今天起几天的逐日预报")
-    hourly: list[WeatherHour] = Field(default_factory=list, description="从现在起 24 小时；取不到时是空的")
+    requested_date: str | None = Field(default=None, description="问的是哪一天；在预报范围内时 days 只有这一天")
+    days: list[WeatherDay] = Field(description="从今天起几天的逐日预报，或者问的那一天")
+    hourly: list[WeatherHour] = Field(default_factory=list, description="接下来 24 小时里的几个小时（问了某一天时只有那天的）；取不到时是空的")
 
 
 class GeneratedImage(BaseModel):

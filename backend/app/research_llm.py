@@ -15,11 +15,13 @@ import re
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator, Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 import httpx
+from fastmcp import FastMCP
+from fastmcp.tools import ToolResult
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
@@ -34,6 +36,7 @@ from app.graph.research.compaction import RECALL_TOOL as RECALL
 from app.model_guard import ContentBlocked, GuardedChatModel, Interrupted, ModelUnavailable, guard_key
 from app.tools.gateway import GatewayClient
 from app.tools.research_tools import TIME_TOOL, make_research_tools
+from app.tools.weather_mcp import WEATHER_TOOL, WeatherTool, gateway_target
 
 PROBE_WORKERS = 4  # 单条送审同时发几个
 TITLE_TIMEOUT = 8  # 照 Fusion：起标题的超时（秒）
@@ -57,6 +60,8 @@ class ResearchPlanner(Protocol):
     def subagent_model(self) -> BaseChatModel: ...
 
     def tools(self) -> list: ...
+
+    async def connect_tools(self) -> None: ...  # 连上 MCP 的工具（现在只有天气）；连不上照常抛出，tools() 里先没有它（见 research_runner）
 
     async def title(self, text: str) -> str: ...
 
@@ -226,6 +231,7 @@ class LiveResearchPlanner:
                                         timeout=300)
         self._gateway = gateway or GatewayClient(config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY, scene="research")
         self._tools = make_research_tools(self._gateway)
+        self._weather = WeatherTool(lambda: gateway_target(config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY))
 
     def agent_model(self) -> BaseChatModel:
         return self._agent
@@ -234,7 +240,10 @@ class LiveResearchPlanner:
         return self._sub
 
     def tools(self) -> list:
-        return self._tools
+        return [*self._tools, *([self._weather.tool] if self._weather.tool else [])]
+
+    async def connect_tools(self) -> None:
+        await self._weather.connect()
 
     async def title(self, text: str) -> str:
         """调用方不带这次运行的上下文来调（见 agent._TitleJob），字不进页面。"""
@@ -275,33 +284,75 @@ class LiveResearchPlanner:
 # ---- 离线假实现 ----
 
 
-FAKE_CITIES = [
-    {"location_id": "101280101", "name": "广州", "adm1": "广东省", "adm2": "广州", "country": "中国", "rank": 11},
-    {"location_id": "101010300", "name": "朝阳", "adm1": "北京市", "adm2": "北京", "country": "中国", "rank": 15},
-    {"location_id": "101071201", "name": "朝阳", "adm1": "辽宁省", "adm2": "朝阳", "country": "中国", "rank": 23},
-]
-FAKE_SKY = ["晴", "多云", "小雨", "阴", "雷阵雨", "晴", "多云"]
+FAKE_PLACES = {"广州": "广东省·广州", "北京市·北京·朝阳": "北京市·北京·朝阳", "辽宁省·朝阳": "辽宁省·朝阳"}
+FAKE_SKY = ["晴", "多云", "小雨", "阴"]
+FAKE_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 
-def _fake_weather(path: str, params) -> httpx.Response:
-    """假的和风：城市只有广州和两个朝阳；预报从北京时间今天、这个小时起，下午有一阵雨。"""
+def _fake_forecast(location: str, requested_date: str | None) -> dict:
+    """假的 weather-service（结果的样子照真的，见 agent-tools 的 services/weather/README.md）：地方只有广州和两个朝阳；
+    逐日从北京时间今天起 4 天，逐小时从这个小时起 24 个、每天 14～16 点有雨。"""
+    if location.strip() == "朝阳":
+        return {"ok": False, "error": {"code": "ambiguous_location", "message": "The place name matches several areas.",
+                                       "retryable": False, "candidates": ["北京市·北京·朝阳", "辽宁省·朝阳"]}}
+    place = next((label for name, label in FAKE_PLACES.items() if name in location), None)
+    if place is None:
+        return {"ok": False, "error": {"code": "location_not_found", "message": "The weather service could not find this place.",
+                                       "retryable": False}}
     now = datetime.now(timezone(timedelta(hours=8))).replace(minute=0, second=0, microsecond=0)
-    if path == "/weather/v1/cities":
-        q = params.get("location", "")
-        return httpx.Response(200, json={"cities": [c for c in FAKE_CITIES if c["name"] in q or q in c["name"]]})
-    if path == "/weather/v1/forecast/daily":
-        days = [{"date": (now + timedelta(days=k)).date().isoformat(), "text_day": FAKE_SKY[k], "text_night": "晴",
-                 "temp_max": str(30 - k), "temp_min": str(21 - k), "wind_dir_day": "北风", "wind_scale_day": "1-3"} for k in range(7)]
-        return httpx.Response(200, json={"daily": days})
-    if path == "/weather/v1/forecast/hourly":
-        hours = []
-        for k in range(24):
-            t = now + timedelta(hours=k)
-            wet = 14 <= t.hour <= 16
-            hours.append({"time": t.isoformat(timespec="minutes"), "temp": str(22 + round(8 * max(0.0, 1 - abs(t.hour - 14) / 9))),
-                          "text": "小雨" if wet else "晴", "pop": "70" if wet else "0", "precip": "1.2" if wet else "0.0"})
-        return httpx.Response(200, json={"hourly": hours})
-    return httpx.Response(404, json={"error": "not_found"})
+    today = now.date()
+    days = [{"date": (d := today + timedelta(days=k)).isoformat(), "weekday": FAKE_WEEKDAYS[d.weekday()], "day_weather": FAKE_SKY[k],
+             "night_weather": "晴", "high_c": 30 - k, "low_c": 21 - k, "day_wind_direction": "北风", "day_wind_power": "1-3级"}
+            for k in range(4)]
+    hourly = []
+    for k in range(24):
+        at = now + timedelta(hours=k)
+        wet = 14 <= at.hour <= 16
+        hourly.append({"time": at.isoformat(), "temp_c": 22 + round(8 * max(0.0, 1 - abs(at.hour - 14) / 9)),
+                       "weather": "小雨" if wet else "晴", "pop": 70 if wet else 0, "precip_mm": 1.2 if wet else 0.0})
+    out: dict = {"ok": True, "resolved_location": place, "local_today": today.isoformat()}
+    limitations = []
+    if requested_date:
+        try:
+            ahead = (date.fromisoformat(requested_date) - today).days
+        except ValueError:
+            return {"ok": False, "error": {"code": "invalid_arguments", "message": "requested_date must be YYYY-MM-DD", "retryable": False}}
+        out["requested_date"] = requested_date
+        if not 0 <= ahead <= 1:  # 逐小时只在没指定日期、问今天或明天时取
+            hourly = []
+        if picked := [d for d in days if d["date"] == requested_date]:
+            days, hourly = picked, [h for h in hourly if h["time"][:10] == requested_date]
+        else:
+            limitations.append("requested_date_not_covered")
+    out |= {"day_count": len(days), "forecast_days": days}
+    if hourly:
+        wet = [h for h in hourly if h["precip_mm"] > 0]
+        peak = max(hourly, key=lambda h: h["pop"])
+        summary = {"window": f"{hourly[0]['time']} ~ {hourly[-1]['time']}", "temp_min_c": min(h["temp_c"] for h in hourly),
+                   "temp_max_c": max(h["temp_c"] for h in hourly), "max_pop_percent": peak["pop"], "max_pop_time": peak["time"],
+                   "precipitation_hours": len(wet)}
+        if wet:
+            summary |= {"first_precipitation_time": wet[0]["time"], "last_precipitation_time": wet[-1]["time"],
+                        "total_precip_mm": round(sum(h["precip_mm"] for h in wet), 1)}
+        out |= {"hourly": hourly, "hourly_summary": summary}
+    return out | {"fetched_at": now.isoformat(timespec="seconds"), "limitations": limitations}
+
+
+def fake_weather_server() -> FastMCP:
+    """进程内的假 weather-service（MCP），离线模式、测试、评测用。"""
+    server = FastMCP("weather")
+
+    @server.tool(name=WEATHER_TOOL, description="Get the weather forecast for a named place (offline fake of the QWeather service).",
+                 output_schema=None)
+    async def get_weather(location: str, requested_date: str | None = None) -> ToolResult:
+        res = _fake_forecast(location, requested_date)
+        if not res["ok"]:
+            text = f"No forecast was fetched: {res['error']['code']}. Do not fabricate weather facts."
+        else:
+            text = json.dumps({k: v for k, v in res.items() if k != "hourly"}, ensure_ascii=False)
+        return ToolResult(content=text, structured_content=res)
+
+    return server
 
 
 FAKE_IMAGE_FILTERED = "【违规图】"  # 画图的描述里有它，假 image-service 按内容审核没过拒绝
@@ -352,12 +403,10 @@ def _fake_image_service() -> Any:
 
 def fake_gateway_client(page_repeat: int = 5) -> GatewayClient:
     """用 MockTransport 模拟网关：每次搜索给 3 条稳定的候选，读页返回正文（第 3 条读不到；正文是一句话重复 page_repeat 遍）；
-    天气见 _fake_weather，画图见 _fake_image_service。"""
+    画图见 _fake_image_service；天气不走这里，见 fake_weather_server。"""
     images = _fake_image_service()
 
     async def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path.startswith("/weather/"):
-            return _fake_weather(req.url.path, req.url.params)
         if req.url.path == "/image/v1/generate" or req.url.path.startswith("/image/static/"):
             return await images(req)
         if req.url.path == "/search/search":
@@ -457,8 +506,8 @@ class FakeToolModel(BaseChatModel):
             return call(TIME_TOOL)
         if "直接答" in text:
             return "直接回答：这个问题不用查。", []
-        if "天气" in text and "get_weather" in self.bound and "get_weather" not in names:
-            return call("get_weather", location=text.split("天气")[0].strip()[:8] or "广州")
+        if "天气" in text and WEATHER_TOOL in self.bound and WEATHER_TOOL not in names:
+            return call(WEATHER_TOOL, location=text.split("天气")[0].strip()[:8] or "广州")
         if any(k in text for k in ("画", "改图", "再生成")) and "generate_image" in self.bound:
             return self._draw(text, messages, turn, call)
         if any(k in text for k in ("子任务", "分头", "派")) and "task" in self.bound:
@@ -612,6 +661,7 @@ class FakeResearchPlanner:
         self.dream_replies: list[str] = []  # 整理记忆时按顺序给这些回答；用完了照 dream 的说明
         self._gateway = gateway or fake_gateway_client()
         self._tools = make_research_tools(self._gateway)
+        self._weather = WeatherTool(fake_weather_server)
         self._model = FakeToolModel()
         self._sub_model = FakeToolModel(prefix="fake-sub")
 
@@ -622,7 +672,10 @@ class FakeResearchPlanner:
         return self._sub_model
 
     def tools(self) -> list:
-        return self._tools
+        return [*self._tools, *([self._weather.tool] if self._weather.tool else [])]
+
+    async def connect_tools(self) -> None:
+        await self._weather.connect()
 
     async def title(self, text: str) -> str:
         self.calls.append(("title", text))

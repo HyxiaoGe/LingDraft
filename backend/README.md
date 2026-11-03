@@ -39,7 +39,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - `COMPACT_TRIGGER_TOKENS`、`COMPACT_TARGET_TOKENS`：上下文压缩的触发线和压到多少，默认 20 万、10 万。
   - `LINGDRAFT_DREAM=0` 关掉每天按时整理记忆；`LINGDRAFT_DREAM_HOUR` 是北京时间几点整理，默认 3 点。
 - 外部服务：
-  - `AGENT_TOOLS_URL`、`AGENT_TOOLS_API_KEY`：agent-tools 网关，管搜索、读网页、天气、生图。
+  - `AGENT_TOOLS_URL`、`AGENT_TOOLS_API_KEY`：agent-tools 网关，管搜索、读网页、天气、生图。天气走网关的 MCP（`/weather/mcp`），起服务时连上取工具；连不上先不带天气起来，后台每分钟再试。
   - `IMAGE_SERVICE_URL`：image-service 自己的地址，改图时要把原图的地址交回去。
   - `FUSION_URL`：新对话页的“今日灵感”从 Fusion 取。
 
@@ -215,10 +215,10 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `prompts.toml`：给模型看的文字；`prompts.py` 只负责渲染。
 - `app/research_llm.py` `ResearchPlanner` 协议：`LiveResearchPlanner`（DeepSeek 或豆包 + 真实网关，各步用哪个模型见它的构造函数）/ `FakeResearchPlanner`（脚本化的假工具模型 + MockTransport 网关）
 - `app/tools/`：
-  - `gateway.py`：agent-tools 网关客户端，管搜索、读网页、天气、生图。
-  - `research_tools.py`：agent 的工具（`search_web` / `read_page` / `get_weather` / `generate_image` / `get_current_time`），描述在 `prompts.toml` 的 `[tools.*]`。
+  - `gateway.py`：agent-tools 网关客户端，管搜索、读网页、生图。
+  - `research_tools.py`：agent 的工具（`search_web` / `read_page` / `generate_image` / `get_current_time`），描述在 `prompts.toml` 的 `[tools.*]`。
   - `images.py`：画图、存图。
-  - `weather.py`：查天气、整理预报。
+  - `weather_mcp.py`：查天气。`get_weather` 是 agent-tools 的 MCP 工具（挑城市、整理预报、缓存、给模型的说明都在 weather-service 里，和 Fusion 共用），用 LangChain 的 MCP 适配器接进来；这里接上灵稿自己的一段说明，中间件把结果整理成模型看的文字，网关出问题算没查到、密钥不对让这一轮失败。
 - `app/model_guard.py` 模型服务出错的分类和熔断；`app/aio.py` 对话的事件循环
 - `app/evals/` + `evals/` 回放评测：用真实模型跑 `evals/research/cases.yaml`，按轨迹和裁判模型打分，用法和写用例的约定见 `evals/README.md`
 - `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）。

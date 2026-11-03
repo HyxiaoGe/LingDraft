@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from app.graph.research import prompts
 from app.graph.research.sources import SUBAGENT_TOOL, collect_sources, parse, subagent_messages
-from app.graph.research.state import Forecast, GeneratedImage, ToolStep, Usage
+from app.graph.research.state import Forecast, GeneratedImage, ToolStep, Usage, WeatherDay, WeatherHour
 
 BLOCKED = "lingdraft_blocked"  # 一轮因内容审核停下时，系统补的那条模型消息 response_metadata 里的键，值是原因（见 agent.ContentGuard）
 STOPPED = "lingdraft_stopped"  # 用户点了停止时，已经流出来的那部分正文存成的模型消息 response_metadata 里的键
@@ -178,8 +178,46 @@ def _failure(data: Any, result: ToolMessage) -> str:
     return str(data.get("message") or data.get("kind") or "")
 
 
+# weather-service 的错误码（见 agent-tools 的 services/weather/README.md）→ 页面上的说法；给模型的说明是服务给的英文
+WEATHER_FAILURES = {
+    "ambiguous_location": "对得上好几个地方",
+    "location_not_found": "和风天气里没找到这个地方",
+    "invalid_arguments": "查询的参数不对",
+}
+
+
+def forecast_of(data: dict) -> Forecast:
+    """weather-service 的整份结果（MCP 的 structuredContent）换成卡片要的样子。字段不对抛 ValidationError、KeyError、TypeError。"""
+    days = [WeatherDay(date=d["date"], day=d.get("day_weather", ""), night=d.get("night_weather", ""), high=d["high_c"], low=d["low_c"],
+                       wind=" ".join(x for x in (d.get("day_wind_direction"), d.get("day_wind_power")) if x))
+            for d in data["forecast_days"]]
+    hours = [WeatherHour(time=h["time"], temp=h["temp_c"], text=h.get("weather", ""), pop=h.get("pop"), precip=h.get("precip_mm"))
+             for h in data.get("hourly") or []]
+    return Forecast(location=data["resolved_location"], today=data["local_today"], fetched_at=data["fetched_at"],
+                    requested_date=data.get("requested_date"), days=days, hourly=hours)
+
+
 def _weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> ToolStep:
-    """卡片要的整份预报在 artifact 里；模型看的只有逐日和逐小时的摘要（见 research_tools.get_weather）。"""
+    """卡片要的整份预报在 artifact 里（MCP 的 structuredContent，见 app.tools.weather_mcp）；模型看的没有逐小时明细。"""
+    art = result.artifact if isinstance(result.artifact, dict) else {}
+    if "forecast" in art or "structured_content" not in art:  # 11-04 以前自己查和风时存下的
+        return _old_weather_step(cid, text, data, result)
+    sc = art["structured_content"]
+    if isinstance(sc, dict) and sc.get("ok") is True and result.status != "error":
+        try:
+            fc = forecast_of(sc)
+        except (ValidationError, KeyError, TypeError):
+            return ToolStep(id=cid, kind="weather", text=text, ok=False, message="天气结果的格式不对")
+        return ToolStep(id=cid, kind="weather", text=text, title=fc.location, weather=fc)
+    err = sc.get("error") if isinstance(sc, dict) else None
+    err = err if isinstance(err, dict) else {}
+    message = WEATHER_FAILURES.get(err.get("code"), "天气服务暂时查不到")
+    if err.get("code") == "ambiguous_location" and err.get("candidates"):
+        message += "：" + "、".join(str(c) for c in err["candidates"])
+    return ToolStep(id=cid, kind="weather", text=text, ok=False, message=message)
+
+
+def _old_weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> ToolStep:
     if isinstance(data, dict) and data.get("ok") and result.status != "error":
         try:
             fc = Forecast.model_validate(result.artifact.get("forecast") if isinstance(result.artifact, dict) else None)

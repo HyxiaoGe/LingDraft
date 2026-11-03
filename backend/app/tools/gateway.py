@@ -1,9 +1,8 @@
-"""agent-tools 网关客户端：搜索、网页读取、天气、生图。
+"""agent-tools 网关客户端：搜索、网页读取、生图（查天气走 MCP，见 app.tools.weather_mcp）。
 
 网关统一鉴权（Bearer 产品密钥）、记账、按前缀转发：
 - POST /search/search  → search-service
 - GET  /reader/read    → reader-service
-- GET  /weather/v1/... → weather-service（和风天气的只读代理；付费服务，网关里要给灵稿放行 weather）
 - POST /image/v1/generate → image-service（还要在 image-service 里登记灵稿，见它的 PRODUCTS）；
   出的图在 GET /image/static/images/...，公开地址，不用密钥
 """
@@ -55,66 +54,11 @@ class _ReadBody(BaseModel):
     provider: str | None = None
 
 
-class City(BaseModel):
-    """和风的一个城市或区县。查城市是模糊匹配，随便写什么都会返回几个，挑哪个见 app.tools.weather.select_city。"""
-
-    model_config = ConfigDict(extra="ignore")
-    location_id: str
-    name: str
-    adm1: str = ""  # 省
-    adm2: str = ""  # 市
-    country: str = ""
-    rank: int | None = None  # 越小越重要
-
-
-class Day(BaseModel):
-    """一天的预报，日期是当地日期；数字和风给的是字符串。"""
-
-    model_config = ConfigDict(extra="ignore")
-    date: str
-    text_day: str
-    text_night: str
-    temp_max: str
-    temp_min: str
-    wind_dir_day: str | None = None
-    wind_scale_day: str | None = None
-
-
-class Hour(BaseModel):
-    """一个小时的预报，时间带当地时区。"""
-
-    model_config = ConfigDict(extra="ignore")
-    time: str
-    temp: str
-    text: str
-    pop: str | None = None  # 降水概率 %
-    precip: str | None = None  # 降水量 mm
-
-
-class _Cities(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    cities: list[City]  # 查不到是 []
-
-
-class _Daily(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    daily: list[Day]
-
-
-class _Hourly(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    hourly: list[Hour]
-
-
 class _ImageBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
     image_url: str
     model: str | None = None
     reference_search: dict | None = None
-
-
-# weather-service 的失败码里再试一次可能就好的（见 agent-tools/services/weather/README.md）
-_WEATHER_RETRYABLE = {"upstream_timeout", "upstream_rate_limited", "upstream_unavailable"}
 
 
 def _brief(e: ValidationError) -> str:
@@ -310,41 +254,6 @@ class GatewayClient:
             message=(body.get("message") if isinstance(body, dict) else None) or resp.text[:200],
             retryable=resp.status_code in (502, 503, 504),
         )
-
-    async def weather_cities(self, location: str, *, lang: str = "zh", number: int = 10) -> list[City]:
-        """lang=en 时按英文名查（中文名查 “Paris” 查不到巴黎）。"""
-        return (await self._weather("/v1/cities", {"location": location, "number": number, "lang": lang}, _Cities)).cities
-
-    async def weather_daily(self, location_id: str) -> list[Day]:
-        return (await self._weather("/v1/forecast/daily", {"location_id": location_id}, _Daily)).daily
-
-    async def weather_hourly(self, location_id: str) -> list[Hour]:
-        return (await self._weather("/v1/forecast/hourly", {"location_id": location_id}, _Hourly)).hourly
-
-    async def _weather(self, path: str, params: dict[str, Any], schema: type[BaseModel]) -> Any:
-        try:
-            resp = await self._client.get("/weather" + path, params=params)
-        except httpx.TimeoutException as e:
-            raise GatewayError("查天气超时", kind="timeout", retryable=True) from e
-        except httpx.HTTPError as e:
-            raise GatewayError(f"查天气请求失败：{e}", kind="request_error", retryable=True) from e
-        if resp.status_code in (401, 403):  # 网关认不出密钥、或者没给灵稿放行天气
-            raise GatewayAuthError(f"查天气失败：HTTP {resp.status_code} {resp.text[:200]}", kind=f"http_{resp.status_code}")
-        try:
-            data = resp.json()
-        except ValueError as e:
-            raise GatewayError("天气服务返回的不是 JSON", kind="bad_response", retryable=True) from e
-        if resp.status_code != 200:
-            # weather-service 的失败是 {"error": {"code": ...}}；网关自己的失败是 {"error": "..."}
-            err = data.get("error") if isinstance(data, dict) else None
-            code = err.get("code") if isinstance(err, dict) else err if isinstance(err, str) else None
-            kind = code or f"http_{resp.status_code}"
-            raise GatewayError(f"查天气失败：{kind}", kind=kind,
-                               retryable=kind in _WEATHER_RETRYABLE or (not code and resp.status_code in (429, 502, 503, 504)))
-        try:
-            return schema.model_validate(data)
-        except ValidationError as e:
-            raise GatewayError(f"天气服务返回的格式不对（{_brief(e)}）", kind="bad_response") from e
 
     async def generate_image(self, payload: dict[str, Any], *, scene: str) -> ImageResult:
         """出一张图（payload 是 image-service 的 /v1/generate 参数）。scene 是 chat_image / image_edit，网关和 image-service 按它统计。"""

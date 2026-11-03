@@ -138,7 +138,7 @@ def test_tools_wrap_client():
         return httpx.Response(200, json={"title": "T", "content": "body", "provider": "direct"})
 
     tools = {t.name: t for t in make_research_tools(_client(handler))}
-    assert set(tools) == {"search_web", "read_page", "get_weather", "generate_image", "get_current_time"}
+    assert set(tools) == {"search_web", "read_page", "generate_image", "get_current_time"}  # 天气是 MCP 工具，见 test_weather
     hit = json.loads(invoke(tools["search_web"], _call("search_web", query="q")).content)[0]
     assert hit["url"] == "https://a" and hit["id"].startswith("s")
     page = invoke(tools["read_page"], _call("read_page", url="https://a"))
