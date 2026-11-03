@@ -63,7 +63,7 @@ class Forecast(BaseModel):
     fetched_at: str
     requested_date: str | None = Field(default=None, description="问的是哪一天；在预报范围内时 days 只有这一天")
     days: list[WeatherDay] = Field(description="从今天起几天的逐日预报，或者问的那一天")
-    hourly: list[WeatherHour] = Field(default_factory=list, description="接下来 24 小时里的几个小时（问了某一天时只有那天的）；取不到时是空的")
+    hourly: list[WeatherHour] = Field(default_factory=list, description="接下来 24 小时（问了 7 天内的某天时是那天的）；取不到、问得更远时是空的")
 
 
 class GeneratedImage(BaseModel):

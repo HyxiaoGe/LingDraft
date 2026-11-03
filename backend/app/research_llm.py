@@ -291,7 +291,7 @@ FAKE_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturd
 
 def _fake_forecast(location: str, requested_date: str | None) -> dict:
     """假的 weather-service（结果的样子照真的，见 agent-tools 的 services/weather/README.md）：地方只有广州和两个朝阳；
-    逐日从北京时间今天起 4 天，逐小时从这个小时起 24 个、每天 14～16 点有雨。"""
+    逐日从北京时间今天起 15 天（没问哪天给 4 天），逐小时从这个小时起 7 天（没问哪天给 24 个）、每天 14～16 点有雨。"""
     if location.strip() == "朝阳":
         return {"ok": False, "error": {"code": "ambiguous_location", "message": "The place name matches several areas.",
                                        "retryable": False, "candidates": ["北京市·北京·朝阳", "辽宁省·朝阳"]}}
@@ -301,11 +301,12 @@ def _fake_forecast(location: str, requested_date: str | None) -> dict:
                                        "retryable": False}}
     now = datetime.now(timezone(timedelta(hours=8))).replace(minute=0, second=0, microsecond=0)
     today = now.date()
-    days = [{"date": (d := today + timedelta(days=k)).isoformat(), "weekday": FAKE_WEEKDAYS[d.weekday()], "day_weather": FAKE_SKY[k],
-             "night_weather": "晴", "high_c": 30 - k, "low_c": 21 - k, "day_wind_direction": "北风", "day_wind_power": "1-3级"}
-            for k in range(4)]
+    days = [{"date": (d := today + timedelta(days=k)).isoformat(), "weekday": FAKE_WEEKDAYS[d.weekday()],
+             "day_weather": FAKE_SKY[k % len(FAKE_SKY)], "night_weather": "晴", "high_c": 30 - k, "low_c": 21 - k,
+             "day_wind_direction": "北风", "day_wind_power": "1-3级"}
+            for k in range(15)]
     hourly = []
-    for k in range(24):
+    for k in range(168):
         at = now + timedelta(hours=k)
         wet = 14 <= at.hour <= 16
         hourly.append({"time": at.isoformat(), "temp_c": 22 + round(8 * max(0.0, 1 - abs(at.hour - 14) / 9)),
@@ -318,12 +319,16 @@ def _fake_forecast(location: str, requested_date: str | None) -> dict:
         except ValueError:
             return {"ok": False, "error": {"code": "invalid_arguments", "message": "requested_date must be YYYY-MM-DD", "retryable": False}}
         out["requested_date"] = requested_date
-        if not 0 <= ahead <= 1:  # 逐小时只在没指定日期、问今天或明天时取
+        if not 0 <= ahead < 7:  # 逐小时只在没指定日期、问今天起 7 天内的某天时取
             hourly = []
         if picked := [d for d in days if d["date"] == requested_date]:
             days, hourly = picked, [h for h in hourly if h["time"][:10] == requested_date]
-        else:
+        else:  # 不在范围里：一天都不给，只给能查的头尾两天
+            out["forecast_range"] = {"first_date": days[0]["date"], "last_date": days[-1]["date"]}
+            days, hourly = [], []
             limitations.append("requested_date_not_covered")
+    else:
+        days, hourly = days[:4], hourly[:24]
     out |= {"day_count": len(days), "forecast_days": days}
     if hourly:
         wet = [h for h in hourly if h["precip_mm"] > 0]

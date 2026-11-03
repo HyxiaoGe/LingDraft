@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -197,6 +198,21 @@ def forecast_of(data: dict) -> Forecast:
                     requested_date=data.get("requested_date"), days=days, hourly=hours)
 
 
+def _month_day(iso: str) -> str:
+    d = date.fromisoformat(iso)
+    return f"{d.month}月{d.day}日"
+
+
+def _not_covered(data: dict) -> str:
+    """问的那天不在预报范围里：服务一天都不给，只给能查的头尾两天（forecast_range）。"""
+    rng = data.get("forecast_range") or {}
+    try:
+        asked = _month_day(data["requested_date"])
+        return f"{asked}不在预报范围里，能查 {_month_day(rng['first_date'])}–{_month_day(rng['last_date'])}"
+    except (KeyError, TypeError, ValueError):
+        return "问的那天不在预报范围里"
+
+
 def _weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> ToolStep:
     """卡片要的整份预报在 artifact 里（MCP 的 structuredContent，见 app.tools.weather_mcp）；模型看的没有逐小时明细。"""
     art = result.artifact if isinstance(result.artifact, dict) else {}
@@ -208,6 +224,8 @@ def _weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> ToolSt
             fc = forecast_of(sc)
         except (ValidationError, KeyError, TypeError):
             return ToolStep(id=cid, kind="weather", text=text, ok=False, message="天气结果的格式不对")
+        if not fc.days:  # 没有卡片可画
+            return ToolStep(id=cid, kind="weather", text=text, title=fc.location, ok=False, message=_not_covered(sc))
         return ToolStep(id=cid, kind="weather", text=text, title=fc.location, weather=fc)
     err = sc.get("error") if isinstance(sc, dict) else None
     err = err if isinstance(err, dict) else {}
