@@ -241,6 +241,7 @@ def test_in_memory_checkpointer_means_in_memory_records(tmp_path, monkeypatch):
 def test_no_database_fails_at_startup(monkeypatch):
     """没配库：服务启动时就报错，起不来，不会悄悄存到别处。"""
     monkeypatch.setattr(config, "DATABASE_URL", "")
+    monkeypatch.setattr(config, "USE_FAKE_PLANNER", True)  # CI 没有 .env：真实模型缺密钥会先报错
     monkeypatch.setattr(research_runner_mod, "open_storage", REAL_OPEN_STORAGE)  # conftest 换掉的换回来
     monkeypatch.setattr(api_main, "_research", None)
     with pytest.raises(RuntimeError, match="没配 LINGDRAFT_DATABASE_URL"), TestClient(api_main.app):
