@@ -234,6 +234,10 @@ class ResearchRunner(BaseRunner):
         # 用户又说了话、重新回答或删掉对话时撤掉：起好了也不写。撤掉和写检查点都在锁里，不会和用户那边的写交错
         self._suggest_mu = asyncio.Lock()
         self._suggest_for: dict[str, tuple[str, str, str]] = {}
+        # 线程 → 这次运行里起好、发给了页面的标题（见 _stream_graph）。答完的随调模型写进 state、停下的随停止写进去（见 _write_stop），
+        # 这时就不用记了；第一次调模型就出错的写不了 state（写了重试就接不上），记在这里：页面上还显示它，重试时直接用（ChatContext.title）。
+        # 只在进程里：服务重启了就没了，和以前一样跳回原话、重试时再起
+        self._titles: dict[str, str] = {}
         # 占位都经过这把锁（见 _aadmit）：话排进去时看线程在不在跑、这一轮结束时退掉占位并取走排着的话，两件事不会交错，
         # 不会出现话排进去了、这一轮却已经结束没人发的情况（中间要等运行记录的库）
         self._queue_mu = asyncio.Lock()
@@ -344,6 +348,8 @@ class ResearchRunner(BaseRunner):
         run = self.events.open(key)
         self._inflight += 1
         queued = self._inflight > self.workers
+        if not queued:  # 不用等空位就算在跑：占位一开始记成排队，这时取的状态（比如排着的话接着发时上一次执行最后那次）会闪一下“排队中”
+            self.runs.started(key)
         try:
             await self._arecord(lambda s: s.create(run, thread_id, kind, turn, config.VERSION or None))
             self.events.append(run, {"event": "thread", "data": {"thread_id": thread_id, "queued": queued}})  # 排队时也先把 id 给页面
@@ -440,6 +446,7 @@ class ResearchRunner(BaseRunner):
             # 点停止时这一轮刚好跑完了（检查点里已经是答完的样子）：算答完
         finally:
             self._running.pop(thread_id, None)
+        self._titles.pop(thread_id, None)  # 答完了：起好的标题随调模型写进 state 了
         await self._want_suggestions(thread_id)
         return None
 
@@ -450,7 +457,7 @@ class ResearchRunner(BaseRunner):
         子 agent（task 工具里跑的另一个 agent）的流要开 subgraphs 才有，按命名空间认出是哪个 task 调用派的：
         它的片段、进度、阶段带上 task（调用 id），页面放进那张子任务卡；它的节点做完不发 node。它的片段 langgraph_node 也是 model，只按节点名分不开。
         做完的 step 带着工具结果（result，不发给页面），记进 done：点停止时它那一步可能还没提交，收尾时补上（见 _write_stop）。"""
-        ctx = ChatContext(images=self.images, take_guide=lambda: self._take_guide(thread_id))
+        ctx = ChatContext(images=self.images, take_guide=lambda: self._take_guide(thread_id), title=self._titles.get(thread_id))
         async for ns, mode, chunk in self.graph.astream(inp, self._cfg(thread_id), context=ctx, stream_mode=["messages", "updates", "custom"],
                                                         subgraphs=True, durability=DURABILITY):
             task = tasks.get(ns[0]) if ns else None
@@ -466,6 +473,8 @@ class ResearchRunner(BaseRunner):
                 if chunk["type"] == "subagent":
                     tasks[chunk["ns"]] = chunk["id"]
                     continue
+                if chunk["type"] == "title" and not task:
+                    self._titles[thread_id] = chunk["title"]
                 if isinstance(result := chunk.get("result"), ToolMessage):
                     done.setdefault(task, []).append(result)
                 data = {k: v for k, v in chunk.items() if k not in ("type", "result")} | ({"task": task} if task else {})
@@ -502,7 +511,8 @@ class ResearchRunner(BaseRunner):
                 msgs.append(p)
             if msgs:
                 subs[call_id] = msgs
-        await self.graph.aupdate_state(cfg, stop_turn(v, partial, subs), as_node=TURN_END)
+        await self.graph.aupdate_state(cfg, stop_turn(v, partial, subs, title=self._titles.get(thread_id)), as_node=TURN_END)
+        self._titles.pop(thread_id, None)
 
     # ---- 回答时又说的话 ----
 
@@ -664,6 +674,7 @@ class ResearchRunner(BaseRunner):
         运行记录先删：删不掉就整个报错，对话还在，可以再删一次；反过来对话先没了，剩下的记录就再也删不到了。"""
         async with self._ahold(thread_id):
             await self._adrop_suggestions(thread_id)
+            self._titles.pop(thread_id, None)
             await asyncio.to_thread(self.run_store.delete_thread, thread_id)
             await self.memory.aforget_thread(thread_id)  # 只删整理过哪几轮的记录；从这段对话记下的记忆不动（记的是人）
             await self.graph.checkpointer.adelete_thread(thread_id)
@@ -764,7 +775,9 @@ class ResearchRunner(BaseRunner):
             "status": status,
             "error": error,
             "stopping": bool(run and run.get("stopping")),
-            "title": v.get("title") or history.requests(v["messages"])[0],
+            # 这一轮已经结束、推荐问题还在起（见 _suggest）：页面打开时接上事件流等着，起好了会再来一次状态
+            "suggesting": status == "idle" and thread_id in self._suggest_for,
+            "title": self._title_of(thread_id, v),
             "updated_at": snap.created_at,  # 最近一个检查点的时间
             "running_since": run.get("since") if run else None,  # 这次执行开始的时间；排队中、没在跑为 None
             "turns": jsonable(conversation(v["messages"], v.get("turns", []))),
@@ -773,6 +786,10 @@ class ResearchRunner(BaseRunner):
             "queued_message": await asyncio.to_thread(self.run_store.get_pending, thread_id, QUEUE),
             "guided_message": await asyncio.to_thread(self.run_store.get_pending, thread_id, GUIDE),  # 等着插进这一轮的话，同上
         }
+
+    def _title_of(self, thread_id: str, v: dict) -> str:
+        """页面上的标题：起好写进 state 的、改过的；没写进去的先看这次进程里起好过的（见 _titles），都没有用这段对话的第一句。"""
+        return v.get("title") or self._titles.get(thread_id) or history.requests(v["messages"])[0]
 
     async def _asummary_view(self, thread_id: str) -> dict | None:
         """线程列表里的一行：标题、状态。不存在返回 None。"""
@@ -784,7 +801,7 @@ class ResearchRunner(BaseRunner):
         status, _ = self._status(snap, run)
         return {
             "thread_id": thread_id,
-            "title": v.get("title") or history.requests(v["messages"])[0],
+            "title": self._title_of(thread_id, v),
             "status": status,
             "updated_at": snap.created_at,
             "running_since": run.get("since") if run else None,

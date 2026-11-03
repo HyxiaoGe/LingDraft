@@ -461,6 +461,16 @@ def test_stop_while_writing_keeps_what_was_streamed(chat, monkeypatch):
     assert v["turns"][-1]["record"]["outcome"] == "ok" and len(v["turns"]) == 2
 
 
+def test_stop_keeps_the_title_already_shown(chat, monkeypatch):
+    """标题起好、发给页面以后点停止：随停止写进 state，停下后页面上还是它，不跳回原话；之后几轮不再起。"""
+    monkeypatch.setattr(research_llm, "FAKE_CHUNK_GAP_S", 0.02)
+    v = chat.say("直接答：说说看", stop_on=lambda e: e["event"] == "title")
+    assert v["turns"][0]["record"]["outcome"] == "stopped" and v["title"] == "标题：直接答：说说看"
+    assert chat.values()["title"] == v["title"]
+    assert chat.say("直接答：接着说")["title"] == v["title"]
+    assert [n for n, _ in chat.planner.calls].count("title") == 1
+
+
 def test_stop_while_thinking_keeps_the_thought(chat, monkeypatch):
     """还在想、正文一个字没写就点停止：想到的和想了多久存下来，停下前后页面上看到的一样（子 agent 的本来就这样）。
     这半截不发给模型：下一轮模型收到的和它没存时一样。"""
