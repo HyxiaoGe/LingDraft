@@ -10,6 +10,7 @@
   推荐问题不在这一轮里起：正文写完这一轮就结束，运行器在结束之后再起（见 api.research_runner）。
 - ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度；做完的那一步带上它得到的来源。
 - InvalidToolCallRetryMiddleware：模型返回无法解析的工具调用时，让它带着解析错误重发，最多几次。
+- ModelCallCapMiddleware：一轮里调模型到了上限，最后一次不许调工具，用已经查到的回答（和子 agent 一样）。
 - ContentGuard：模型服务的内容审核拦下请求时，去掉没通过的搜索、读页结果接着跑；去不掉就停下这一轮，之后不再带进上下文。
 - CompactionMiddleware：对话太长时，发给模型的那份里把之前几轮压一压，state 不改（见 compaction）；压掉的原文用 recall 工具取回。
 工具里有 task：把一件查资料的事交给子 agent（见 subagent），一次回复里调几次就并行跑几个。
@@ -44,6 +45,7 @@ from app.tools.images import ImageStore
 
 TITLE_CHARS = 30  # 照 Fusion：标题超过这么长截掉；起标题失败时用用户原话的这么长
 TITLE_WAIT = 10  # 第一次调模型结束时标题还没起好，最多再等这么久（秒），再等不到用原话
+MAX_MODEL_CALLS = 20  # 主 agent 一轮最多调几次模型（2026-11-03 Sean 定）：只防跑飞，到 11-03 的真实对话每轮最多 2 次
 log = logging.getLogger(__name__)
 TURN_END = "TurnMiddleware.after_agent"  # 一轮的最后一个节点：在它名下写状态，线程就停在这一轮结束的地方
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -428,6 +430,24 @@ class ContentGuard(AgentMiddleware):
         return out
 
 
+class ModelCallCapMiddleware(AgentMiddleware):
+    """一轮里调模型到了上限（MAX_MODEL_CALLS）：最后一次不许调工具（tool_choice=none），请求末尾加一条说明（不存进记录），
+    让模型用已经查到的回答。页面上不另外说（2026-11-03 Sean 定）。做法照子 agent（见 subagent.SubagentPrompt）。
+    - 没有这个时主 agent 只靠 LangGraph 的 recursion_limit（默认 10007 步，要调两千来次模型才停），停下时这一轮失败、没有回答。
+    - 没用 LangChain 的 ModelCallLimitMiddleware：到了上限它塞一句英文就结束，模型拿不到最后一次；
+      run_limit 出错重试时从 0 重新数，thread_limit 按整段对话算，到了以后每一轮都直接结束。
+    - 次数按 state 里这一轮的模型消息数：出错重试接着数；用户插进这一轮的话不开新的一轮，也不重新数。
+    - 排在最里面：末尾那条说明是用户消息，压缩（CompactionMiddleware）按用户消息分轮，排在它外面会把这一轮当成之前的压掉。"""
+
+    async def awrap_model_call(self, request: ModelRequest, handler):
+        msgs = request.state["messages"]
+        calls = sum(isinstance(m, AIMessage) for m in msgs[history.last_human(msgs) + 1:])
+        if calls >= MAX_MODEL_CALLS - 1:
+            last = HumanMessage(prompts.render("agent.last_call"))
+            request = request.override(messages=[*request.messages, last], tool_choice="none")
+        return await handler(request)
+
+
 def _stop(reason: str) -> AIMessage:
     return AIMessage(content="", response_metadata={history.BLOCKED: reason})
 
@@ -455,6 +475,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
             CompactionMiddleware(planner, tools, memory),  # 在 ContentGuard 里面：被内容审核停下的那几轮先去掉再压；用户插的话放进对话以后再估
             ToolProgressMiddleware(),
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
+            ModelCallCapMiddleware(),  # 最里面：末尾加的说明不经过压缩
         ],
         checkpointer=checkpointer,
         store=memory.store if memory else None,

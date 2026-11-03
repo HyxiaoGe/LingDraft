@@ -742,6 +742,59 @@ def test_model_unavailable_fails_the_turn_and_retry_continues():
     assert v["status"] == "idle" and v["turns"][0]["items"][-1]["text"] == "直接回答：这个问题不用查。"
 
 
+# ---- 一轮调模型的上限 ----
+
+SEARCHING = ["thinking", "step:search", "step:search"]  # 假模型“一直搜”：每次并行搜两个
+
+
+def test_last_model_call_answers_without_tools(chat, monkeypatch):
+    """主 agent 一轮里调模型到了上限：最后一次不许调工具，用查到的回答。末尾那条说明只在请求里，不存进记录。"""
+    monkeypatch.setattr(agent_mod, "MAX_MODEL_CALLS", 3)
+    seen: list = []
+    decide = FakeToolModel._decide
+
+    def spy(self, messages):
+        seen.append((self.tool_choice, messages[-1]))
+        return decide(self, messages)
+
+    monkeypatch.setattr(FakeToolModel, "_decide", spy)
+    v = chat.say("一直搜笔记软件")
+    (turn,) = v["turns"]
+    assert _kinds(turn) == SEARCHING * 2 + ["thinking", "text"]
+    assert turn["items"][-1]["text"].startswith("不能再查了，按查到的说") and turn["record"]["outcome"] == "ok"
+    assert turn["record"]["usage"]["model_calls"] == 3 and turn["record"]["usage"]["searches"] == 4
+    assert [c for c, _ in seen] == [None, None, "none"]
+    assert seen[-1][1].content == prompts.render("agent.last_call")
+    assert not [m for m in _turn_messages(chat) if isinstance(m, HumanMessage)]
+
+
+class FailsAfterTools(FakeToolModel):
+    fails: list[int] = []
+
+    def _ready(self, messages):  # 工具结果回来以后的那次调用出错
+        if self.fails and isinstance(messages[-1], ToolMessage):
+            self.fails.pop()
+            raise ModelUnavailable("模型服务暂时不可用（连接失败），稍后再试")
+        return super()._ready(messages)
+
+
+def test_model_call_cap_counts_this_turn_and_carries_over_a_retry(monkeypatch):
+    """次数按这一轮算：上一轮用满了，这一轮从头数；这一轮中途出错，重试接着数，不从 0 开始。"""
+    monkeypatch.setattr(agent_mod, "MAX_MODEL_CALLS", 3)
+    p = FakeResearchPlanner()
+    p._model = FailsAfterTools()
+    c = Chat(planner=p)
+    c.say("一直搜笔记软件")
+    p._model.fails.append(1)
+    with pytest.raises(ModelUnavailable):
+        c.say("一直搜阅读器")
+    c.r.retry_input(c.tid)
+    v = c.run()
+    turn = v["turns"][-1]
+    assert _kinds(turn) == SEARCHING * 2 + ["thinking", "text"]
+    assert turn["record"]["usage"]["model_calls"] == 3
+
+
 # ---- 检查点 ----
 
 

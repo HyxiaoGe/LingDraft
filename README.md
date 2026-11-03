@@ -25,7 +25,7 @@ flowchart TB
 
 | 机制 | 用在哪 |
 |---|---|
-| `create_agent` + `AgentMiddleware` | 主 agent、子 agent 都由它搭；5 个自写中间件用到 `before_agent`、`abefore_model`、`awrap_model_call`、`awrap_tool_call`、`after_model`（`can_jump_to`）、`after_agent` |
+| `create_agent` + `AgentMiddleware` | 主 agent、子 agent 都由它搭；6 个自写中间件用到 `before_agent`、`abefore_model`、`awrap_model_call`、`awrap_tool_call`、`after_model`（`can_jump_to`）、`after_agent` |
 | `ExtendedModelResponse` + `Command(update=…)` | 中间件在一次模型调用里顺手改 state：写上起好的标题、换掉没通过审核的工具结果 |
 | `context_schema` / `ToolRuntime` | 图片存储、取插话这些运行时的东西从 context 传给工具和中间件，不进 state |
 | `aupdate_state(as_node=START)` + `astream(None)` | 用户的话先写进检查点再开跑，排队时服务重启也不丢 |
