@@ -185,7 +185,7 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
 
     async def abefore_model(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         all_msgs = state["messages"]
-        msgs = history.without_blocked_turns(all_msgs)
+        msgs = history.without_stopped_thoughts(history.without_blocked_turns(all_msgs))  # 和发给模型的一样估
         order = turn_order(all_msgs)
         c = state.get("compaction") or Compaction()
         turns = turns_of(msgs)

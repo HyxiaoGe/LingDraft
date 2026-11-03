@@ -491,7 +491,7 @@ class ResearchRunner(BaseRunner):
             msgs = _with_results(msgs, [*_pending_messages(tup), *done.get(call_id, [])])
             msgs += history.dangling(msgs, stopped=True)
             p = buf.partial(call_id) if buf else None
-            if p is not None and (p.content or p.additional_kwargs) and not any(m.id == p.id for m in msgs):
+            if p is not None and history.streamed_something(p) and not any(m.id == p.id for m in msgs):
                 msgs.append(p)
             if msgs:
                 subs[call_id] = msgs

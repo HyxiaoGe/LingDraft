@@ -244,7 +244,7 @@ function Turn({ t, st, live, running, suggesting, stopping, last, now, act }) {
       <div className="ws-ai">
         {(running || rec) && <Process items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} />}
         {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
-        <ImageCards steps={imagesOf(items)} tid={st?.thread_id} onRegenerate={last && idle ? act.say : null} />
+        <ImageCards steps={imagesOf(items)} tid={st?.thread_id} running={running} onRegenerate={last && idle ? act.say : null} />
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
         {running && <LiveLine live={live} items={items} stopping={stopping} />}
         {!running && <AnswerSources nums={nums} sources={st?.sources} />}
@@ -401,7 +401,7 @@ function Process({ items, st, nums, rec, running, failed, now }) {
 function ProcItems({ items, st, nums, running, hideUnknown = false }) {
   const cite = (sid) => (hideUnknown && !st?.sources?.[sid] ? null : <Mark n={nums[sid]} s={st?.sources?.[sid]} />);
   return items.map((it) => (it.type === "step" ? (it.kind === "task" ? <TaskCard key={`step:${it.id}`} s={it} st={st} nums={nums} running={running} />
-    : <ToolRow key={`step:${it.id}`} s={it} />)
+    : <ToolRow key={`step:${it.id}`} s={it} running={running} />)
     : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} running={running} thinking={running && it.live && it.ms == null} />
       : it.type === "blocked" ? <div key={`blocked:${it.id}`} className="ws-tool bad"><IconWarn size={12} /><span className="main">内容审核没通过，这个子任务停在这里</span></div>
         : it.type === "guide" ? <GuideNote key={`guide:${it.id}`} it={it} />
@@ -567,8 +567,10 @@ function Thinking({ it, running, thinking }) {
   );
 }
 
-function ToolRow({ s }) {
+// 还没有结果的一步（pending）：这一轮在跑就是还在做；没在跑了（这一轮出错停在这一步）就是没做完，和子任务卡一样说
+function ToolRow({ s, running }) {
   const Icon = { read: IconPage, weather: IconCloudSun, image: IconImage }[s.kind] || IconSearch;
+  const busy = running && s.pending;
   let main, sub;
   let bad = !s.ok;
   if (s.kind === "read") {
@@ -585,9 +587,13 @@ function ToolRow({ s }) {
     main = <>搜索「{s.text}」{s.limits.map((l) => <span key={l} className="lim">{l}</span>)}</>;
     sub = s.pending ? "搜索中…" : s.ok ? `${s.hits} 条结果${s.message ? `（${s.message}）` : ""}` : `没搜成：${s.message || "出错了"}`;
   }
+  if (s.pending && !busy) {
+    sub = "没做完";
+    bad = false;
+  }
   return (
-    <div className={"ws-tool" + (s.pending ? " pending" : bad ? " bad" : "")}>
-      {s.pending ? <Spinner size={12} /> : <Icon size={12} />}
+    <div className={"ws-tool" + (busy ? " pending" : bad ? " bad" : "")}>
+      {busy ? <Spinner size={12} /> : <Icon size={12} />}
       <span className="main" title={s.text}>{main}</span>
       {sub && <span className="sub" title={sub}>{sub}</span>}
     </div>

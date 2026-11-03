@@ -59,21 +59,22 @@ function useElapsed(id, running) {
   return Math.max(0, Math.floor(((running ? Date.now() : end.current) - firstSeen.get(id)) / 1000));
 }
 
-export function ImageCards({ steps, tid, onRegenerate }) {
+export function ImageCards({ steps, tid, running, onRegenerate }) {
   const [viewing, setViewing] = useState(null);
   if (!steps.length) return null;
   return (
     <div className="ws-images">
       {steps.map((s) => (s.image
         ? <ImageCard key={s.id} img={s.image} src={imageUrl(tid, s.image)} onOpen={(back) => setViewing({ img: s.image, back })} onRegenerate={onRegenerate} />
-        : <PendingCard key={s.id} s={s} />))}
+        : <PendingCard key={s.id} s={s} running={running} />))}
       {viewing && <Viewer img={viewing.img} src={imageUrl(tid, viewing.img)} onClose={() => { viewing.back?.focus(); setViewing(null); }} />}
     </div>
   );
 }
 
-function PendingCard({ s }) {
-  const running = !!s.pending;
+// 还在画的占位，或者没画成的说明。还没有结果、这一轮却不在跑了（出错停在这一步）：没画完，不再数秒
+function PendingCard({ s, running: turnRunning }) {
+  const running = turnRunning && !!s.pending;
   const secs = useElapsed(s.id, running);
   const [w, h] = ratioOf(s.aspect_ratio);
   const f = frame(w, h);
@@ -84,7 +85,7 @@ function PendingCard({ s }) {
           <div className="ws-image-wait" role="status">
             <Spinner size={13} /><span>正在生成图片</span><span className="secs" aria-hidden="true">· {secs} 秒</span>
           </div>
-        ) : <span className="ws-image-note">{s.message || "图片生成失败"}</span>}
+        ) : <span className="ws-image-note">{s.pending ? "没画完" : s.message || "图片生成失败"}</span>}
       </div>
     </figure>
   );

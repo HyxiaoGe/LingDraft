@@ -292,9 +292,11 @@ export default function Workspace() {
       if (r.done) return setSuggesting(false); // 等推荐问题时断了：不再接，下次打开线程能看到
       // 话被拒（400）、正在跑或上一轮没跑完（409）、连接断了（没有状态码）——都回服务器接上当前进度
       const recoverable = tidRef.current && (!e.status || e.status === 400 || e.status === 409);
-      if (e.status || !recoverable) setError(String(e.message || e));
+      // 被拒的话（说的、改的）服务器没存下来：不再显示在对话里，放回输入框，和排队没排上一样
+      const lost = recoverable && e.status ? said ?? extra.edit : null;
+      if (lost) setPutBack({ thread: tidRef.current, text: lost });
+      if (e.status || !recoverable) setError(lost ? `这句话没发出去，已经放回输入框（${e.message || e}）` : String(e.message || e));
       if (recoverable) {
-        // 被拒的话（说的、改的）没存下来，不再显示
         const rejected = e.status ? { said: null, edit: undefined, sentAt: undefined } : {};
         setLive((l) => ({ items: [], ...l, ...rejected, stage: e.status ? "服务器还在处理，等它完成" : "连接断了，正在重连…" }));
         return await follow(tidRef.current, g, errs, r);
