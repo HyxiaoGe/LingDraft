@@ -1,7 +1,7 @@
 """子 agent：主 agent 用 task 工具把一件查资料的事交给它，它在自己的上下文里搜、读，最后交回一份报告。
 
 - 子 agent 是另一个 create_agent：模型用快一些、便宜一些的（planner.subagent_model）；工具只有搜索、读页、取时间；
-  挂着内容审核、进度、无效调用重发这几个 middleware，和主 agent 的一样。它不能再派子 agent。
+  挂着内容审核、进度、无效调用重发、生成到一半断了再调一次这几个 middleware，和主 agent 的一样。它不能再派子 agent。
 - 主 agent 一次回复里调几次 task，这几个子 agent 就并行跑（每个工具调用是一个 Send 任务）。每轮最多 MAX_PER_TURN 个；
   同一个对话同时最多跑 MAX_RUNNING 个，多的排队：几个子 agent 各自再并行搜，搜索服务容易被打到限流。
 - 子 agent 调模型最多 MAX_MODEL_CALLS 次，最后一次不让它再调工具，用已经查到的写报告：这次请求的最后加一条说明（不存进记录），工具关掉。
@@ -40,6 +40,7 @@ from app.graph.research.agent import (
     CHINA_TZ,
     ChatContext,
     ContentGuard,
+    InterruptedRetryMiddleware,
     InvalidToolCallRetryMiddleware,
     ToolProgressMiddleware,
     _retrying,
@@ -119,6 +120,7 @@ def build_subagent(planner):
             ToolProgressMiddleware(),
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
             *(ToolBudget(t, n) for t, n in TOOL_BUDGET.items()),
+            InterruptedRetryMiddleware(),  # 最里面：只重发调模型这一下
         ],
         name="subagent",
     )

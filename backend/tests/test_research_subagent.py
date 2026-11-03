@@ -13,6 +13,7 @@ import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 
 from app.api.research_runner import StreamBuffer
+from app.graph.research import agent as agent_mod
 from app.graph.research import history, prompts, subagent
 from app.graph.research.sources import EXCERPT_CHARS, cited, subagent_messages
 from app.research_llm import FakeResearchPlanner, FakeToolModel
@@ -153,6 +154,22 @@ def test_last_model_call_writes_the_report_without_tools(monkeypatch):
     assert task["items"][-1]["text"].startswith("不能再查了")
     sub = subagent_messages(_task_results(c)[0])
     assert sum(isinstance(m, HumanMessage) for m in sub) == 1  # 最后那条说明只在请求里，不存进记录
+
+
+def test_subagent_breaking_midway_is_called_again(monkeypatch):
+    """子 agent 写报告时流到一半断了：它自己再调一次，子任务照常做完；restart 带着 task，页面在那张子任务卡里去掉半截。
+    子任务的说明里带着用户的话，主 agent 写汇总时也断一次，各自再调。"""
+    monkeypatch.setattr(agent_mod, "RESTART_WAIT_S", 0)
+    c = Chat()
+    v = c.say("子任务中途断杭州美食")
+    (turn,) = v["turns"]
+    (task,) = _tasks(turn)
+    assert v["status"] == "idle" and turn["record"]["outcome"] == "ok" and task["ok"]
+    restarts = [e["data"] for e in c.events if e["event"] == "restart"]
+    assert [r.get("task") for r in restarts] == [task["id"], None]
+    half = restarts[0]["id"]
+    assert any(e["event"] == "delta" and e["data"]["id"] == half and e["data"].get("task") == task["id"] for e in c.events)
+    assert _kinds(task)[-1] == "text" and not [i for i in task["items"] if i.get("id") == half]
 
 
 def test_budget_blocks_extra_calls_and_reminds_each_step(monkeypatch):

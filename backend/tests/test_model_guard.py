@@ -16,7 +16,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from pydantic import Field
 
 from tests.research_helpers import run_async
-from app.model_guard import BLOCKED_MESSAGE, Breaker, ContentBlocked, GuardedChatModel, ModelUnavailable, unavailable_reason
+from app.model_guard import BLOCKED_MESSAGE, Breaker, ContentBlocked, GuardedChatModel, Interrupted, ModelUnavailable, unavailable_reason
 
 REQ = httpx2.Request("POST", "https://api.test/chat/completions")
 _STATUS = {400: openai.BadRequestError, 401: openai.AuthenticationError, 429: openai.RateLimitError, 500: openai.InternalServerError}
@@ -28,7 +28,8 @@ def status(code: int, message: str = "x") -> openai.APIStatusError:
 
 
 class Scripted(BaseChatModel):
-    """按 script 依次给结果：异常就抛，字符串是这次的 finish_reason。流式先吐一段正文再给结果。"""
+    """按 script 依次给结果：异常就抛，字符串是这次的 finish_reason。流式先吐一段正文再给结果；
+    ("before", 异常) 是流式还没吐片段就抛（发请求那一下就失败）。"""
 
     script: list[Any] = Field(default_factory=list)
     calls: list[int] = Field(default_factory=list)
@@ -49,6 +50,8 @@ class Scripted(BaseChatModel):
 
     def _stream(self, messages, stop=None, run_manager=None, **kwargs: Any):
         act = self._next()
+        if isinstance(act, tuple):
+            raise act[1]
         yield ChatGenerationChunk(message=AIMessageChunk(content="好"))
         if isinstance(act, Exception):
             raise act
@@ -225,6 +228,40 @@ def test_async_stream_that_stalls_is_a_timeout_and_counts(clock):
         with pytest.raises(ModelUnavailable, match="超时.*约 3 分钟后再试"):  # 第二次：断开
             [c async for c in m.astream("hi")]
 
+    run_async(go())
+
+
+def test_breaking_after_generation_started_is_interrupted(clock):
+    """开始生成以后断的 SDK 不重试：读到一半断开、流里的错误事件、资源不足、片段超时都换成 Interrupted，调用方可以整个再调一次。
+    发请求那一下就失败的（还没有片段的连接错误）SDK 已经重试过，还是 ModelUnavailable；这次失败让熔断断开了的也是，再调也会被拒。"""
+
+    async def go():
+        conn = openai.APIConnectionError(request=REQ)
+        m = Guarded(script=[conn, "stop", ("before", conn), "stop", ("before", openai.APIError("x", REQ, body={"message": "boom"})), "stop",
+                            ("before", StreamChunkTimeoutError(120.0)), "stop", "insufficient_system_resource", conn])
+        with pytest.raises(Interrupted, match="连接失败.*稍后再试") as e:
+            [c async for c in m.astream("hi")]
+        assert e.value.streamed  # 页面上已经有半截
+        await m.ainvoke("hi")
+        with pytest.raises(ModelUnavailable) as e:
+            [c async for c in m.astream("hi")]
+        assert type(e.value) is ModelUnavailable
+        await m.ainvoke("hi")
+        for _ in range(2):  # 流里的错误事件、片段超时：还没有片段也是开始生成以后的事
+            with pytest.raises(Interrupted) as e:
+                [c async for c in m.astream("hi")]
+            assert not e.value.streamed
+            await m.ainvoke("hi")
+        with pytest.raises(Interrupted, match="服务端资源不足"):
+            [c async for c in m.astream("hi")]
+        with pytest.raises(ModelUnavailable, match="约 3 分钟后再试") as e:  # 连着第二次：断开了，不给再调
+            [c async for c in m.astream("hi")]
+        assert type(e.value) is ModelUnavailable
+
+    m = Guarded(script=[openai.APIConnectionError(request=REQ)])
+    with pytest.raises(Interrupted):  # 同步的流式一样
+        list(m.stream("hi"))
+    m.invoke("hi")
     run_async(go())
 
 

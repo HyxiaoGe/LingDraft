@@ -454,6 +454,7 @@ const TASK_PHASES = {
   model: "等待模型响应…",
   retry: "工具参数没写对，让模型重写…",
   guard: "部分资料没通过内容审核，去掉后重试…",
+  restart: "模型中途断了，正在重新生成…",
 };
 
 function taskActivity(s) {
@@ -605,6 +606,7 @@ const PHASES = {
   model: "等待模型响应…",
   retry: "工具参数没写对，让模型重写…",
   guard: "部分资料没通过内容审核，去掉后重试…",
+  restart: "模型中途断了，正在重新生成…",
 };
 
 // 好一会儿看不到新进展时冒一句俏皮话，按在等什么挑

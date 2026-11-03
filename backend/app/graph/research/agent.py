@@ -11,6 +11,7 @@
 - ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度；做完的那一步带上它得到的来源。
 - InvalidToolCallRetryMiddleware：模型返回无法解析的工具调用时，让它带着解析错误重发，最多几次。
 - ModelCallCapMiddleware：一轮里调模型到了上限，最后一次不许调工具，用已经查到的回答（和子 agent 一样）。
+- InterruptedRetryMiddleware：模型生成到一半断了，自动再调一次，页面去掉断掉的半截（子 agent 也挂）。
 - ContentGuard：模型服务的内容审核拦下请求时，去掉没通过的搜索、读页结果接着跑；去不掉就停下这一轮，之后不再带进上下文。
 - CompactionMiddleware：对话太长时，发给模型的那份里把之前几轮压一压，state 不改（见 compaction）；压掉的原文用 recall 工具取回。
 工具里有 task：把一件查资料的事交给子 agent（见 subagent），一次回复里调几次就并行跑几个。
@@ -40,12 +41,13 @@ from app.graph.research import history, prompts
 from app.graph.research.memory import MemoryBook
 from app.graph.research.sources import SUBAGENT_TOOL, collect_sources, parse
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Source, Turn
-from app.model_guard import ContentBlocked
+from app.model_guard import ContentBlocked, Interrupted
 from app.tools.images import ImageStore
 
 TITLE_CHARS = 30  # 照 Fusion：标题超过这么长截掉；起标题失败时用用户原话的这么长
 TITLE_WAIT = 10  # 第一次调模型结束时标题还没起好，最多再等这么久（秒），再等不到用原话
 MAX_MODEL_CALLS = 20  # 主 agent 一轮最多调几次模型（2026-11-03 Sean 定）：只防跑飞，到 11-03 的真实对话每轮最多 2 次
+RESTART_WAIT_S = 2  # 模型生成到一半断了，等这么久再调一次（DeepSeek 资源不足时马上再发多半还是不够）
 log = logging.getLogger(__name__)
 TURN_END = "TurnMiddleware.after_agent"  # 一轮的最后一个节点：在它名下写状态，线程就停在这一轮结束的地方
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -448,6 +450,25 @@ class ModelCallCapMiddleware(AgentMiddleware):
         return await handler(request)
 
 
+class InterruptedRetryMiddleware(AgentMiddleware):
+    """模型生成到一半断了（model_guard.Interrupted：流读到一半断开、流里来了错误、DeepSeek 资源不足、太久没片段，SDK 都不重试）：
+    等一会儿把这次调用整个再发一次，只再发一次；还不行就照常失败，页面给原因和重试（2026-11-03 Sean 定做）。
+    - 再发之前往自定义流里写一条 restart：运行器让页面去掉刚才流出来的半截，说明在重新生成；点停止时也不存那半截（见 api.research_runner）。
+    - 没用 LangChain 的 ModelRetryMiddleware：它分不出这几种和发请求时的错误（那些 SDK 已经重试过，再叠一层请求数是乘出来的），
+      也没法告诉页面去掉半截（见 docs/LangChain研究/01-出错时的处理.md）。
+    - 熔断照常记：这次失败算一次，再发也失败就是连续两次，断开；和用户点一次重试又失败一样。这次失败已经让熔断断开的不是 Interrupted，不再发。
+    - 排在最里面，只重发调模型这一下：系统提示词、压缩、标题都不重来。主 agent、子 agent 都挂。"""
+
+    async def awrap_model_call(self, request: ModelRequest, handler):
+        try:
+            return await handler(request)
+        except Interrupted as e:
+            log.warning("模型生成到一半断了，%s 秒后再调一次：%s", RESTART_WAIT_S, e)
+            emit({"type": "restart", "streamed": e.streamed})
+            await asyncio.sleep(RESTART_WAIT_S)
+            return await handler(request)
+
+
 def _stop(reason: str) -> AIMessage:
     return AIMessage(content="", response_metadata={history.BLOCKED: reason})
 
@@ -475,7 +496,8 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
             CompactionMiddleware(planner, tools, memory),  # 在 ContentGuard 里面：被内容审核停下的那几轮先去掉再压；用户插的话放进对话以后再估
             ToolProgressMiddleware(),
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
-            ModelCallCapMiddleware(),  # 最里面：末尾加的说明不经过压缩
+            ModelCallCapMiddleware(),  # 在压缩里面：末尾加的说明不经过压缩
+            InterruptedRetryMiddleware(),  # 最里面：只重发调模型这一下
         ],
         checkpointer=checkpointer,
         store=memory.store if memory else None,

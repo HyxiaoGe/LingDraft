@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app import aio, config
 from app.graph.research import history, prompts
 from app.graph.research.compaction import RECALL_TOOL as RECALL
-from app.model_guard import ContentBlocked, GuardedChatModel, guard_key
+from app.model_guard import ContentBlocked, GuardedChatModel, Interrupted, guard_key
 from app.tools.gateway import GatewayClient
 from app.tools.research_tools import TIME_TOOL, make_research_tools
 
@@ -415,6 +415,8 @@ class FakeToolModel(BaseChatModel):
     用户插进这一轮的话不改这些路径，给出文字回复时开头说一声收到了哪些（测试据此看模型有没有看到）。
     内容审核（模拟服务商）：请求里任何地方有 FAKE_BLOCKED 就整个拒绝；用户的话里有“查完就拦”时，有工具结果就拒绝；
     有“输出拦截”时，吐完思考后输出被截断。
+    模型服务生成到一半断了（Interrupted，模拟 model_guard 换好的错误）：用户的话里有“中途断”时，写文字回复时吐完思考和前半段正文就断，
+    这一轮里只断一次（主 agent、子 agent 各一次：子任务的说明里带着用户的话）；“一直断”：每次都断。
     """
 
     bound: list[str] = Field(default_factory=list)
@@ -543,10 +545,23 @@ class FakeToolModel(BaseChatModel):
         return chunks
 
     def _pieces(self, msg: AIMessage, messages: list[BaseMessage]) -> Iterator[ChatGenerationChunk]:
+        text = _turn_text(messages)
+        cut = bool(msg.content) and not msg.tool_calls and ("一直断" in text or ("中途断" in text and self._first_cut(messages)))
         for k, c in enumerate(self._chunks(msg)):  # 回调（on_llm_new_token）由 BaseChatModel 发
-            if k == 1 and "输出拦截" in _turn_text(messages):
+            if k == 1 and "输出拦截" in text:
                 raise ContentBlocked(output=True)
+            if k == 2 and cut:
+                raise Interrupted("模型服务暂时不可用（连接失败），稍后再试", streamed=True)
             yield ChatGenerationChunk(message=c)
+
+    def _first_cut(self, messages: list[BaseMessage]) -> bool:
+        """“中途断”：这一轮（按开始这一轮的那条用户消息）这个模型还没断过。"""
+        i = _turn_start(messages)
+        key = f"{self.prefix}:{messages[i].id if i >= 0 else ''}"
+        if key in _CUT:
+            return False
+        _CUT.add(key)
+        return True
 
     def _stream(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> Iterator[ChatGenerationChunk]:
         yield from self._pieces(self._ready(messages), messages)
@@ -558,6 +573,7 @@ class FakeToolModel(BaseChatModel):
 
 
 FAKE_BLOCKED = "【审核不通过】"
+_CUT: set[str] = set()  # 假模型“中途断”已经断过的（模型的前缀:这一轮那条用户消息的 id）
 FAKE_REMEMBER = "记住："  # 假模型整理记忆时，用户说的这几个字后面那句记成一条
 
 
