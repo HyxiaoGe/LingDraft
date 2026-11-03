@@ -80,7 +80,7 @@ class Recorder:
 
     def __init__(self, client) -> None:
         self._client = client
-        self._lock = threading.Lock()  # 同一步的多个工具调用可能并行执行
+        self._lock = threading.Lock()  # 同一步的多个工具调用并行执行（都在对话的事件循环里，锁里不等东西）
         self.searches: list[dict] = []  # 成功的搜索
         self.failed_searches: list[dict] = []
         self.reads: list[dict] = []
@@ -90,10 +90,10 @@ class Recorder:
         if text and text not in self.evidence.setdefault(url_key(url), []):
             self.evidence[url_key(url)].append(text)
 
-    def search(self, query: str, **kw):
+    async def search(self, query: str, **kw):
         call = {"query": query, "freshness": kw.get("freshness"), "domains": kw.get("domains") or []}
         try:
-            hits = self._client.search(query, **kw)
+            hits = await self._client.search(query, **kw)
         except GatewayError as e:  # 记下来照常抛给工具
             with self._lock:
                 self.failed_searches.append({**call, "kind": e.kind, "message": str(e)[:200]})
@@ -104,8 +104,8 @@ class Recorder:
                 self._keep(h.url, h.content)
         return hits
 
-    def read(self, url: str, **kw):
-        res = self._client.read(url, **kw)
+    async def read(self, url: str, **kw):
+        res = await self._client.read(url, **kw)
         with self._lock:
             self.reads.append({"url": url, "ok": res.ok, "kind": res.kind})
             if res.ok:
@@ -182,8 +182,9 @@ def play(runner, tid: str, turn: CaseTurn, rec: Recorder) -> dict:
     """说一句话，跑到这一轮结束。返回这一轮的记录。"""
     searches0, reads0 = rec.mark()
     runner.accept(tid, turn.say)
-    events = list(runner._graph_events(tid, None))
-    list(runner._after_run(tid))  # 这一轮结束之后起推荐问题
+    events: list[dict] = []
+    runner.run_turn(tid, None, events.append)
+    runner.suggest(tid)  # 这一轮结束之后起推荐问题
     view = runner.state_view(tid)
     msgs = runner.graph.get_state(runner._cfg(tid)).values["messages"]
     t = view["turns"][-1]

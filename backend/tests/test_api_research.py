@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from app import aio
 from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
 from app.graph.research.graph import memory_checkpointer, open_sqlite_checkpointer, thread_ids
@@ -74,8 +75,8 @@ def test_list_threads_with_status(client):
 
 
 def test_thread_ids_without_reading_checkpoints(tmp_path):
-    assert thread_ids(open_sqlite_checkpointer(tmp_path / "c.sqlite")) == []  # 表还没建
-    assert thread_ids(memory_checkpointer()) == []
+    assert aio.run(thread_ids(aio.run(open_sqlite_checkpointer(tmp_path / "c.sqlite")))) == []  # 表还没建
+    assert aio.run(thread_ids(memory_checkpointer())) == []
 
 
 # ---- 真实模型的适配（不发请求） ----

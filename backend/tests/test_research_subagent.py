@@ -5,13 +5,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
-import time
 
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 
+from app import aio
 from app.api.research_runner import StreamBuffer
 from app.graph.research import history, prompts, subagent
 from app.graph.research.graph import open_sqlite_checkpointer
@@ -115,13 +116,13 @@ def test_at_most_three_subagents_run_at_once(monkeypatch):
         def __init__(self, worker) -> None:
             self.worker = worker
 
-        def invoke(self, *a, **kw):
+        async def ainvoke(self, *a, **kw):
             with mu:
                 seen["now"] += 1
                 seen["max"] = max(seen["max"], seen["now"])
             try:
-                time.sleep(0.1)
-                return self.worker.invoke(*a, **kw)
+                await asyncio.sleep(0.1)
+                return await self.worker.ainvoke(*a, **kw)
             finally:
                 with mu:
                     seen["now"] -= 1
@@ -186,26 +187,35 @@ def test_budget_blocks_extra_calls_and_reminds_each_step(monkeypatch):
 
 
 def test_stop_inside_a_subagent_keeps_what_it_did():
-    """子 agent 搜完一次就点停止：两个子 agent 都停下，子任务显示停止了，卡片里留着它们已经做的搜索，来源也在；下一轮能接着说。"""
+    """子 agent 搜完一次就点停止：两个子 agent 都马上停下，子任务显示停止了，卡片里留着已经做完的搜索，来源也在；
+    还没做完的那一步显示成停止了，不会一直在转；下一轮能接着说。"""
     c = Chat()
     v = c.say("分头查一下杭州美食", stop_on=_first_sub_step_done)
     (turn,) = v["turns"]
     assert turn["record"]["outcome"] == "stopped" and v["status"] == "idle"
     tasks = _tasks(turn)
     assert [t["ok"] for t in tasks] == [False, False] and {t["message"] for t in tasks} == {"停止了，没有做完"}
-    # 停止在两个线程里先后生效：另一个可能已经接着读了一页，做到哪儿算哪儿
-    for t in tasks:
-        assert any(s["type"] == "step" and s["kind"] == "search" and s["ok"] for s in t["items"])
-    done = [s for t in tasks for s in t["items"] if s["type"] == "step" and s["ok"]]
+    # 另一个子 agent 的搜索可能还没回来：那一步停了，做到哪儿算哪儿
+    steps = [s for t in tasks for s in t["items"] if s["type"] == "step"]
+    assert all(t["items"] for t in tasks) and not any(s["pending"] for s in steps)
+    assert any(s["kind"] == "search" and s["ok"] for s in steps)
+    assert all(s["ok"] or s["message"] == "停止了，没有做完" for s in steps)
+    done = [s for s in steps if s["ok"]]
     assert {sid for s in done for sid in s["source_ids"]} <= v["sources"].keys()
     assert _answered(c.values()["messages"])
     assert c.say("直接答：好")["turns"][-1]["record"]["outcome"] == "ok"
 
 
 def test_stopped_subagent_hands_what_it_found_to_the_main_agent():
-    """子 agent 搜完一次就点停止：补上的结果里给主 agent 列出它已经查到的来源，和子任务卡上的一样，只有来源卡上的那些；
-    下一轮主 agent 的模型看得到。"""
+    """两个子 agent 都搜完一次就点停止：补上的结果里给主 agent 列出它已经查到的来源，和子任务卡上的一样，只有来源卡上的那些；
+    下一轮主 agent 的模型看得到。页面收到搜索做完马上就点：那一步可能还没存进子 agent 的检查点，也要算上。"""
     seen: list[list[BaseMessage]] = []
+    searched: set[str] = set()
+
+    def both_searched(e: dict) -> bool:
+        if _first_sub_step_done(e):
+            searched.add(e["data"]["task"])
+        return len(searched) == 2
 
     class Spy(FakeToolModel):
         def _message(self, messages: list[BaseMessage]):
@@ -215,8 +225,9 @@ def test_stopped_subagent_hands_what_it_found_to_the_main_agent():
     p = FakeResearchPlanner()
     p._model = Spy()
     c = Chat(planner=p)
-    v = c.say("分头查一下杭州美食", stop_on=_first_sub_step_done)
+    v = c.say("分头查一下杭州美食", stop_on=both_searched)
     results = {m.tool_call_id: m for m in _task_results(c)}
+    assert len(results) == 2
     for t in _tasks(v["turns"][0]):
         found = _handed_over(results[t["id"]])
         on_card = {sid for s in t["items"] if s["type"] == "step" and s["ok"] for sid in s["source_ids"]}
@@ -330,9 +341,9 @@ def test_regenerate_after_stopping_a_subagent_starts_it_over():
 
 def test_sqlite_round_trip_keeps_the_subagent_card(tmp_path):
     db = tmp_path / "data" / "r.sqlite"
-    before = Chat(saver=open_sqlite_checkpointer(db))
+    before = Chat(saver=aio.run(open_sqlite_checkpointer(db)))
     before.say("分头查一下杭州美食")
-    after = Chat(saver=open_sqlite_checkpointer(db))  # 像服务重启
+    after = Chat(saver=aio.run(open_sqlite_checkpointer(db)))  # 像服务重启
     assert after.view()["turns"] == before.view()["turns"] and after.view()["sources"] == before.view()["sources"]
 
 

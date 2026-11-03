@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta, timezone
 
 from app.graph.research.state import Forecast, WeatherDay, WeatherHour
@@ -146,13 +146,13 @@ class WeatherService:
         self._now = now
         self._cache: dict[tuple[str, str], tuple[float, list]] = {}
 
-    def forecast(self, location: str) -> Forecast:
+    async def forecast(self, location: str) -> Forecast:
         # 模型照候选的写法（“江西省·南昌·西湖”）再查时只拿最后一段去查，再按整个写法对
         lookup = location.rsplit(SEP, 1)[-1].strip() or location
-        city = select_city(location, self._client.weather_cities(lookup, lang="en" if lookup.isascii() else "zh"))
-        daily = self._cached("daily", city.location_id, self._client.weather_daily)
+        city = select_city(location, await self._client.weather_cities(lookup, lang="en" if lookup.isascii() else "zh"))
+        daily = await self._cached("daily", city.location_id, self._client.weather_daily)
         try:
-            hourly = _hours(self._cached("hourly", city.location_id, self._client.weather_hourly))
+            hourly = _hours(await self._cached("hourly", city.location_id, self._client.weather_hourly))
         except GatewayError:  # 逐小时只是卡片上的趋势图，取不到不耽误逐日预报
             hourly = []
         # 当地今天：逐小时从当地现在这个小时开始，带着当地时区；取不到就按北京时间
@@ -163,11 +163,11 @@ class WeatherService:
         return Forecast(location=city_label(city), today=today, fetched_at=self._now().isoformat(timespec="seconds"),
                         days=days, hourly=hourly)
 
-    def _cached(self, what: str, location_id: str, fetch: Callable[[str], list]) -> list:
+    async def _cached(self, what: str, location_id: str, fetch: Callable[[str], Awaitable[list]]) -> list:
         hit = self._cache.get((what, location_id))
         if hit and self._clock() - hit[0] < CACHE_SECONDS:
             return hit[1]
-        values = fetch(location_id)
+        values = await fetch(location_id)
         if values:
             now = self._clock()
             self._cache = {k: v for k, v in self._cache.items() if now - v[0] < CACHE_SECONDS}  # 过期的顺手清掉

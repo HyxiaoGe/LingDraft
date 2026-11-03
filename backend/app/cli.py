@@ -67,26 +67,28 @@ def poster(args) -> None:
         raise SystemExit(f"海报场景没有 {args.cmd}")
 
 
-def _print_events(events) -> None:
-    """逐字打印：思考和正文按片段接着写，工具步骤、标题各占一行。"""
-    current = None
-    for ev in events:
+class _Printer:
+    """逐字打印：思考和正文按片段接着写，工具步骤、标题各占一行。一个事件调一次。"""
+
+    def __init__(self) -> None:
+        self.current = None
+
+    def __call__(self, ev: dict) -> None:
         name, data = ev["event"], ev["data"]
         if name == "delta":
             key = (data["id"], data["kind"])
-            if key != current:
+            if key != self.current:
                 sys.stdout.write("\n[思考] " if data["kind"] == "thinking" else "\n[正文] ")
-                current = key
+                self.current = key
             sys.stdout.write(data["text"])
             sys.stdout.flush()
-            continue
-        current = None
+            return
+        self.current = None
         if name == "step" and not data["step"]["pending"]:
             s = data["step"]
             print(f"\n[{s['kind']}] {s['text']}  {'✓' if s['ok'] else '✗ ' + s['message']}")
         elif name == "title":
             print(f"[标题] {data['title']}")
-    print()
 
 
 def research(args) -> None:
@@ -109,7 +111,8 @@ def research(args) -> None:
         print(json.dumps({k: v.get(k) for k in ("status", "error", "title")}, ensure_ascii=False, indent=2))
         return
     print(f"thread_id: {tid}")
-    _print_events(r._graph_events(tid, None))
+    r.run_turn(tid, None, _Printer())
+    print()
     v = r.state_view(tid)
     print(f"== {v['status']}" + (f"：{v['error']}" if v.get("error") else ""))
 

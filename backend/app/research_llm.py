@@ -2,18 +2,19 @@
 
 agent 本身由 app.graph.research.agent 构建，这里提供它要的聊天模型和查资料的工具，以及几个不带工具的快模型步骤：
 起标题、推荐问题，内容审核拦下请求时把资料一条条单独送审，还有对话太长时给之前几轮写短版（见 graph.research.compaction）。
+这几步和 agent 一样在对话的事件循环里异步地跑（见 app.aio）；整理记忆（dream）在后台线程里，是同步的。
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
 import re
 import threading
 import time
-from collections.abc import Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import AsyncIterator, Iterator, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 from uuid import UUID, uuid4
@@ -27,7 +28,7 @@ from langgraph.constants import TAG_NOSTREAM
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, ConfigDict, Field
 
-from app import config
+from app import aio, config
 from app.graph.research import history, prompts
 from app.graph.research.compaction import RECALL_TOOL as RECALL
 from app.model_guard import ContentBlocked, GuardedChatModel
@@ -57,15 +58,15 @@ class ResearchPlanner(Protocol):
 
     def tools(self) -> list: ...
 
-    def title(self, text: str) -> str: ...
+    async def title(self, text: str) -> str: ...
 
-    def suggest(self, question: str, reply: str) -> list[str]: ...
+    async def suggest(self, question: str, reply: str) -> list[str]: ...
 
-    def blocked(self, texts: Sequence[str]) -> list[bool]: ...
+    async def blocked(self, texts: Sequence[str]) -> list[bool]: ...
 
-    def summarize(self, prompt: str) -> str: ...
+    async def summarize(self, prompt: str) -> str: ...
 
-    def dream(self, prompt: str) -> str: ...  # 整理记忆：提示词进，json 文字出（见 graph.research.memory）
+    def dream(self, prompt: str) -> str: ...  # 整理记忆：提示词进，json 文字出（见 graph.research.memory）。后台线程里调，同步的
 
 
 # ---- 思考计时 ----
@@ -97,7 +98,10 @@ class ThinkingClock:
 
 class ThinkingTimer(BaseCallbackHandler):
     """记下每次模型调用思考了多久（见 ThinkingClock），写进这条消息的 response_metadata[THINKING_MS]，随消息存进检查点。
-    只有流式调用才有片段，才计时。用户点了停止、调用没跑完的，由运行器存那半截消息时一起记（见 api.research_runner.StreamBuffer）。"""
+    只有流式调用才有片段，才计时。用户点了停止、调用没跑完的，由运行器存那半截消息时一起记（见 api.research_runner.StreamBuffer）。
+    run_inline：异步调用时直接在事件循环里调（只记个时间），不然每个片段都要转到线程池里调一次。"""
+
+    run_inline = True
 
     def __init__(self) -> None:
         self._mu = threading.Lock()
@@ -225,31 +229,34 @@ class LiveResearchPlanner:
     def tools(self) -> list:
         return self._tools
 
-    def title(self, text: str) -> str:
-        out = self._titler.invoke([("user", prompts.render("title.prompt", content=text))])
+    async def title(self, text: str) -> str:
+        """调用方不带这次运行的上下文来调（见 agent._TitleJob），字不进页面。"""
+        out = await self._titler.ainvoke([("user", prompts.render("title.prompt", content=text))])
         return str(out.content).strip()
 
-    def suggest(self, question: str, reply: str) -> list[str]:
-        res = _structured(self._fast, Suggestions).invoke([("user", prompts.render("suggest.prompt", question=question, reply=reply))])
+    async def suggest(self, question: str, reply: str) -> list[str]:
+        res = await _structured(self._fast, Suggestions).ainvoke([("user", prompts.render("suggest.prompt", question=question, reply=reply))])
         return [q.strip() for q in res.questions if q.strip()]
 
-    def blocked(self, texts: Sequence[str]) -> list[bool]:
-        """每段文字单独发一次（只有这段、不思考、只要 1 个 token），看内容审核拦不拦。服务不可用照常抛出。"""
+    async def blocked(self, texts: Sequence[str]) -> list[bool]:
+        """每段文字单独发一次（只有这段、不思考、只要 1 个 token），看内容审核拦不拦，同时最多 PROBE_WORKERS 个。服务不可用照常抛出。
+        在 agent 调模型的那一步里调：片段标 nostream，不进这次运行的消息流（不然页面上会当成回答）。"""
         probe = self._fast.bind(max_tokens=1)
+        slots = asyncio.Semaphore(PROBE_WORKERS)
 
-        def one(text: str) -> bool:
-            try:
-                probe.invoke([("user", text)])
-            except ContentBlocked:
-                return True
-            return False
+        async def one(text: str) -> bool:
+            async with slots:
+                try:
+                    await probe.ainvoke([("user", text)], config={"tags": [TAG_NOSTREAM]})
+                except ContentBlocked:
+                    return True
+                return False
 
-        with ThreadPoolExecutor(max_workers=PROBE_WORKERS) as pool:
-            return list(pool.map(one, texts))
+        return await aio.gather(*(one(t) for t in texts))
 
-    def summarize(self, prompt: str) -> str:
-        """在调用方的运行上下文里调（停止的回调跟着），片段标 nostream，不进这次运行的消息流。"""
-        out = self._summarizer.invoke([("user", prompt)], config={"tags": [TAG_NOSTREAM]})
+    async def summarize(self, prompt: str) -> str:
+        """在 agent 调模型之前那一步里调（点了停止跟着这次运行一起取消），片段标 nostream，不进这次运行的消息流。"""
+        out = await self._summarizer.ainvoke([("user", prompt)], config={"tags": [TAG_NOSTREAM]})
         return str(out.content).strip()
 
     def dream(self, prompt: str) -> str:
@@ -291,7 +298,8 @@ def _fake_weather(path: str, params) -> httpx.Response:
 
 
 FAKE_IMAGE_FILTERED = "【违规图】"  # 画图的描述里有它，假 image-service 按内容审核没过拒绝
-FAKE_IMAGE_SLOW = "慢慢画"  # 描述里有它，假 image-service 过几秒才出图（看占位、试停止）
+FAKE_CHUNK_GAP_S = 0.0  # 假模型异步流式时片段之间隔多久；测试停止时调大，让已经吐出的片段先到页面（真模型片段之间有网络的空档）
+FAKE_IMAGE_SLOW = "慢慢画"  # 描述里有它，假 image-service 过几秒才出图（看占位、试停止：点了停止马上断开）
 FAKE_IMAGE_SLOW_S = 6.0
 
 
@@ -312,7 +320,7 @@ def _fake_image_service() -> Any:
     """假 image-service：POST /image/v1/generate 出图，图在 GET /image/static/images/<id>.png。"""
     made: dict[str, bytes] = {}
 
-    def handle(req: httpx.Request) -> httpx.Response:
+    async def handle(req: httpx.Request) -> httpx.Response:
         if req.method == "GET":
             data = made.get(req.url.path.removeprefix("/image"))
             return httpx.Response(200, content=data, headers={"content-type": "image/png"}) if data else httpx.Response(404)
@@ -322,7 +330,7 @@ def _fake_image_service() -> Any:
             return httpx.Response(422, json={"error": "content_filtered", "message": "blocked", "retryable": False,
                                              "model": "doubao-seedream-5-0-flash"})
         if FAKE_IMAGE_SLOW in prompt:
-            time.sleep(FAKE_IMAGE_SLOW_S)
+            await asyncio.sleep(FAKE_IMAGE_SLOW_S)
         iid = f"fake{len(made) + 1}"
         path = f"/static/images/{iid}.png"
         made[path] = _fake_png(prompt, body.get("aspect_ratio") or "1:1", bool(body.get("reference_images")))
@@ -340,11 +348,11 @@ def fake_gateway_client(page_repeat: int = 5) -> GatewayClient:
     天气见 _fake_weather，画图见 _fake_image_service。"""
     images = _fake_image_service()
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    async def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path.startswith("/weather/"):
             return _fake_weather(req.url.path, req.url.params)
         if req.url.path == "/image/v1/generate" or req.url.path.startswith("/image/static/"):
-            return images(req)
+            return await images(req)
         if req.url.path == "/search/search":
             q = json.loads(req.content).get("query", "")
             slug = re.sub(r"\W+", "-", q)[:24] or "q"
@@ -406,6 +414,7 @@ class FakeToolModel(BaseChatModel):
     prefix: str = "fake"  # 消息 id 的前缀：子 agent 的假模型用另一个，和主 agent 的消息分得开
     tool_choice: str | None = None  # "none"：不许调工具，直接回复
     gates: list = Field(default_factory=list)  # 测试用：放进去的 threading.Event，每次调用先等它（模拟慢模型）；bind_tools 复制后还是同一个 list
+    # 异步调用时等闸门、定回复（_ready）放到线程里做：测试里改写 _message 的子类可以在里面同步地等，不卡事件循环
 
     @property
     def _llm_type(self) -> str:
@@ -503,13 +512,16 @@ class FakeToolModel(BaseChatModel):
         return AIMessage(content=content, tool_calls=valid, invalid_tool_calls=invalid, id=f"{self.prefix}-{len(messages)}-{uuid4().hex[:8]}",
                          additional_kwargs={"reasoning_content": "（假思考）先想一想。"}, usage_metadata=FAKE_USAGE)
 
-    def _wait(self) -> None:
+    def _ready(self, messages: list[BaseMessage]) -> AIMessage:
         for g in self.gates:
             g.wait(10)  # 10 秒兜底，测试不会永远卡住
+        return self._message(messages)
 
     def _generate(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> ChatResult:
-        self._wait()
-        return ChatResult(generations=[ChatGeneration(message=self._message(messages))])
+        return ChatResult(generations=[ChatGeneration(message=self._ready(messages))])
+
+    async def _agenerate(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> ChatResult:
+        return ChatResult(generations=[ChatGeneration(message=await asyncio.to_thread(self._ready, messages))])
 
     def _chunks(self, msg: AIMessage) -> list[AIMessageChunk]:
         """流式的片段：先吐思考，再分两段吐正文，最后吐工具调用（参数整段）和用量。"""
@@ -523,12 +535,19 @@ class FakeToolModel(BaseChatModel):
         chunks.append(AIMessageChunk(content="", id=msg.id, tool_call_chunks=tcc, usage_metadata=FAKE_USAGE, chunk_position="last"))
         return chunks
 
-    def _stream(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> Iterator[ChatGenerationChunk]:
-        self._wait()
-        for k, c in enumerate(self._chunks(self._message(messages))):  # 回调（on_llm_new_token）由 BaseChatModel 发
+    def _pieces(self, msg: AIMessage, messages: list[BaseMessage]) -> Iterator[ChatGenerationChunk]:
+        for k, c in enumerate(self._chunks(msg)):  # 回调（on_llm_new_token）由 BaseChatModel 发
             if k == 1 and "输出拦截" in _turn_text(messages):
                 raise ContentBlocked(output=True)
             yield ChatGenerationChunk(message=c)
+
+    def _stream(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> Iterator[ChatGenerationChunk]:
+        yield from self._pieces(self._ready(messages), messages)
+
+    async def _astream(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
+        for c in self._pieces(await asyncio.to_thread(self._ready, messages), messages):
+            yield c
+            await asyncio.sleep(FAKE_CHUNK_GAP_S)  # 片段之间让出事件循环，像真模型在等网络：点了停止在这里取消得到
 
 
 FAKE_BLOCKED = "【审核不通过】"
@@ -579,21 +598,21 @@ class FakeResearchPlanner:
     def tools(self) -> list:
         return self._tools
 
-    def title(self, text: str) -> str:
+    async def title(self, text: str) -> str:
         self.calls.append(("title", text))
         if self.fail_title:
             raise RuntimeError("假模型：起标题失败")
         return f"标题：{text[:8]}"
 
-    def suggest(self, question: str, reply: str) -> list[str]:
+    async def suggest(self, question: str, reply: str) -> list[str]:
         self.calls.append(("suggest", question))
         return [f"追问{k}：{question[:6]}" for k in (1, 2, 3)]
 
-    def blocked(self, texts: Sequence[str]) -> list[bool]:
+    async def blocked(self, texts: Sequence[str]) -> list[bool]:
         self.calls.append(("blocked", list(texts)))
         return [FAKE_BLOCKED in t for t in texts]
 
-    def summarize(self, prompt: str) -> str:
+    async def summarize(self, prompt: str) -> str:
         """短版：交来的那一轮里引用过的来源 id（最多 3 个）；压用户消息时是它的开头。"""
         self.calls.append(("summarize", prompt))
         if "<message>" in prompt:

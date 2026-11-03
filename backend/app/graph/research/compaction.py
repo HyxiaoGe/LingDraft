@@ -18,11 +18,9 @@ token 是估算的：照 DeepSeek 文档（Token 用量计算）的换算，英�
 
 from __future__ import annotations
 
-import contextvars
+import asyncio
 import json
 import logging
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest
@@ -174,7 +172,7 @@ def render_turn(turn: list[BaseMessage]) -> str:
 
 class CompactionMiddleware(AgentMiddleware[ResearchState]):
     """只挂在主 agent 上（子 agent 有搜索、读页的预算，上下文长不到这里）。
-    每次调模型之前（before_model）估一下，超了就把边界往后挪、写好短版，存进 state；调模型时（wrap_model_call）按 state 里的边界拼。
+    每次调模型之前（abefore_model）估一下，超了就把边界往后挪、写好短版，存进 state；调模型时（awrap_model_call）按 state 里的边界拼。
     在 ContentGuard 里面：被内容审核停下的那几轮先去掉，再压。"""
 
     state_schema = ResearchState
@@ -185,13 +183,13 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
         self.memory = memory  # 长期记忆在系统提示词里，估的时候算上
         self.tools_tokens = tokens(json.dumps([convert_to_openai_tool(t) for t in tools], ensure_ascii=False))  # 工具定义每次都发
 
-    def before_model(self, state: ResearchState, runtime) -> dict[str, Any] | None:
+    async def abefore_model(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         all_msgs = state["messages"]
         msgs = history.without_blocked_turns(all_msgs)
         order = turn_order(all_msgs)
         c = state.get("compaction") or Compaction()
         turns = turns_of(msgs)
-        base = tokens(system_prompt(turn_start(all_msgs, state), memory=memory_text(self.memory))) + self.tools_tokens
+        base = tokens(system_prompt(turn_start(all_msgs, state), memory=await memory_text(self.memory))) + self.tools_tokens
         costs = [size_of(_form(t, order, c)) for t in turns]
         size = base + sum(costs)
         if size <= config.COMPACT_TRIGGER_TOKENS:
@@ -227,7 +225,7 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
                 after = size_of([m for m in users if m not in long]) + SUMMARY_GUESS * len(long)
                 after += (tokens(written) if written else SUMMARY_GUESS) if summary else costs[i] - size_of(users)
                 size += after - costs[i]
-            self._summarize(picked, [t for _, t in old], order, new, runtime)
+            await self._summarize(picked, [t for _, t in old], order, new)
             size = base + sum(size_of(_form(t, order, new)) for t in turns)
         if new == c:
             return None
@@ -237,12 +235,12 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
             log.warning("上下文压缩后还是超过触发线：线程 %s 估算 %d token", _thread_id(), size)
         return {"compaction": new}
 
-    def _summarize(self, picked: list[tuple[list[BaseMessage], bool, list[HumanMessage]]], old: list[list[BaseMessage]],
-                   order: dict[str, int], new: Compaction, runtime) -> None:
+    async def _summarize(self, picked: list[tuple[list[BaseMessage], bool, list[HumanMessage]]], old: list[list[BaseMessage]],
+                         order: dict[str, int], new: Compaction) -> None:
         """给挑出来的几轮写短版、压特别长的用户消息（同时最多 SUMMARY_WORKERS 个），写好的存进 new，写一次就不再写。
         第二层的边界从最早起往后挪到最后挑的那一轮：中间没挑的（本来就短）直接过；要短版的写好了才过得去，写失败的那一轮停住，
         它先按第一层发，下次再超时接着从它写。用户消息压不成就照原样，不挡边界。
-        在这次运行的上下文里调快模型：用户点了停止，它吐片段时就停（StopCheck）；片段不进页面（标了 nostream）。"""
+        在这次运行里调快模型：用户点了停止，跟着这次运行一起取消；片段不进页面（标了 nostream，见 planner.summarize）。"""
         if not picked:
             return
         jobs: dict[tuple[str, str], str] = {}
@@ -254,19 +252,21 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
                     jobs[("user", m.id or "")] = prompts.render("compact.user_message", message=history.text_of(m))
         if jobs:
             emit({"type": "phase", "phase": "model"})  # 页面上不说在压缩（2026-11-03 Sean 定），按等模型显示
-        check_stop: Callable[[], None] = getattr(runtime.context, "check_stop", None) or (lambda: None)
+        slots = asyncio.Semaphore(SUMMARY_WORKERS)
+
+        async def write(p: str) -> str:
+            async with slots:
+                return (await self.planner.summarize(p)).strip()
+
         done: dict[tuple[str, str], str] = {}
-        with ThreadPoolExecutor(max_workers=SUMMARY_WORKERS, thread_name_prefix="compact") as pool:
-            futures = {key: pool.submit(contextvars.copy_context().run, self.planner.summarize, p) for key, p in jobs.items()}
-            for key, f in futures.items():
-                try:
-                    text = f.result().strip()
-                except Exception as e:  # noqa: BLE001  写失败的先按第一层发；点了停止的照常停
-                    check_stop()
-                    log.warning("上下文压缩：写短版失败（%s %s）：%s", key[0], key[1], e)
-                    continue
-                if text:
-                    done[key] = text
+        results = await asyncio.gather(*(write(p) for p in jobs.values()), return_exceptions=True)  # 点了停止时整个取消，照常抛出
+        for key, r in zip(jobs, results, strict=True):
+            if isinstance(r, BaseException):
+                if not isinstance(r, Exception):
+                    raise r
+                log.warning("上下文压缩：写短版失败（%s %s）：%s", key[0], key[1], r)  # 写失败的先按第一层发
+            elif r:
+                done[key] = r
         new.shortened.update({mid: text for (kind, mid), text in done.items() if kind == "user"})
         new.summaries.update({tid: text for (kind, tid), text in done.items() if kind == "turn"})
         need = {t[0].id for t, summary, _ in picked if summary}
@@ -281,10 +281,10 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
             if tid == last:
                 break
 
-    def wrap_model_call(self, request: ModelRequest, handler):
+    async def awrap_model_call(self, request: ModelRequest, handler):
         c = request.state.get("compaction")
         sent = compact(request.messages, c, turn_order(request.state["messages"])) if c else request.messages
-        resp = handler(request.override(messages=sent) if sent is not request.messages else request)
+        resp = await handler(request.override(messages=sent) if sent is not request.messages else request)
         mark = _mark(c)
         _check_cache(request.messages, resp, mark)
         for m in getattr(resp, "result", []):

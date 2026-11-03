@@ -13,18 +13,17 @@
 - ContentGuard：模型服务的内容审核拦下请求时，去掉没通过的搜索、读页结果接着跑；去不掉就停下这一轮，之后不再带进上下文。
 - CompactionMiddleware：对话太长时，发给模型的那份里把之前几轮压一压，state 不改（见 compaction）；压掉的原文用 recall 工具取回。
 工具里有 task：把一件查资料的事交给子 agent（见 subagent），一次回复里调几次就并行跑几个。
-用户点了停止时，运行器掐断这次运行，再用 stop_turn 把这一轮收尾（见 api.research_runner）。
+用户点了停止时，运行器取消这次运行（正在等的模型、工具马上断开），再用 stop_turn 把这一轮收尾（见 api.research_runner）。
+agent 在对话的事件循环里异步地跑（见 app.aio）：中间件里调模型、读写存储的都写成 a 开头的异步钩子，不做事的照常写同步的。
 """
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
 import json
 import logging
-import threading
-from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any, NotRequired
@@ -45,7 +44,6 @@ from app.tools.images import ImageStore
 
 TITLE_CHARS = 30  # 照 Fusion：标题超过这么长截掉；起标题失败时用用户原话的这么长
 TITLE_WAIT = 10  # 第一次调模型结束时标题还没起好，最多再等这么久（秒），再等不到用原话
-_TITLE_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="title")
 log = logging.getLogger(__name__)
 TURN_END = "TurnMiddleware.after_agent"  # 一轮的最后一个节点：在它名下写状态，线程就停在这一轮结束的地方
 CHINA_TZ = timezone(timedelta(hours=8))
@@ -57,13 +55,16 @@ MEMORY_SECTION = "agent.memory"
 AGENT_PROMPT = tuple(f"agent.{k}" for k in SYSTEM_SECTIONS)
 
 
+async def _no_guide() -> HumanMessage | None:
+    return None
+
+
 @dataclass(frozen=True)
 class ChatContext:
     """一次运行的上下文（create_agent 的 context，不进检查点），工具从 runtime.context 拿。"""
 
     images: ImageStore  # 画好的图存在哪儿
-    check_stop: Callable[[], None]  # 用户点了停止就抛出：要等很久的工具（画图）边等边查，不用等它做完
-    take_guide: Callable[[], HumanMessage | None] = lambda: None  # 取走用户插进这一轮的话（取一次就没了）；没有是 None
+    take_guide: Callable[[], Awaitable[HumanMessage | None]] = _no_guide  # 取走用户插进这一轮的话（取一次就没了）；没有是 None
 
 
 def now() -> str:
@@ -121,24 +122,28 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         human = msgs[history.last_human(msgs)]
         return {"turns": list(state.get("turns", [])) + [Turn(id=human.id, started_at=now())]}
 
-    def before_model(self, state: ResearchState, runtime) -> dict[str, Any] | None:
+    async def abefore_model(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         """用户插进这一轮的话：这次调模型之前放进对话（排在已有的工具结果后面），页面同时收到一条 guide 把它放进过程里。
         子 agent 不取：它的话等主 agent 下一次调模型（子 agent 都做完以后）。"""
-        msg = runtime.context.take_guide() if runtime.context else None
+        msg = await runtime.context.take_guide() if runtime.context else None
         if msg is None:
             return None
         emit({"type": "guide", "id": msg.id, "text": history.text_of(msg), "sent_at": msg.additional_kwargs.get("sent_at", "")})
         return {"messages": [msg]}
 
-    def wrap_model_call(self, request: ModelRequest, handler):
+    async def awrap_model_call(self, request: ModelRequest, handler):
         # 还没有标题就和这次调模型同时起，按这段对话的第一句（第一轮出错、停下时还没写进去的，下一次调模型补上）
         job = None if request.state.get("title") else _TitleJob(self.planner, history.requests(request.state["messages"])[0])
-        emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
-        prompt = system_prompt(turn_started(request), memory=memory_text(self.memory))
-        resp = handler(request.override(system_message=SystemMessage(prompt)))
-        if job is None:
-            return resp
-        return ExtendedModelResponse(model_response=resp, command=Command(update={"title": job.result(TITLE_WAIT)}))
+        try:
+            emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
+            prompt = system_prompt(turn_started(request), memory=await memory_text(self.memory))
+            resp = await handler(request.override(system_message=SystemMessage(prompt)))
+            if job is None:
+                return resp
+            return ExtendedModelResponse(model_response=resp, command=Command(update={"title": await job.result(TITLE_WAIT)}))
+        finally:
+            if job is not None:
+                job.cancel()  # 出错、点了停止时标题不要了（下一次调模型再起）；已经定下来的不受影响
 
     def after_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         msgs = state["messages"]
@@ -215,11 +220,10 @@ def _fallback_title(text: str) -> str:
 class _TitleJob:
     """照 Fusion，起标题和回答同时跑，不让回答等它：起好了马上发给页面；这次调模型结束时写进 state，还没起好就再等一会儿。
     模型返回的只去掉首尾空白（引号、书名号是标题的一部分，不删），太长截掉；出错、等不到用用户原话。先定下来的算数，之后的不再发、不再改。
-    在另一个线程里调模型：不带这次运行的回调，点停止不打断它，它的字也不进这次运行的流。
+    另起一个任务调模型，用空的上下文：不带这次运行的回调，它的字不进这次运行的流（不然页面上会当成回答）。
     往流里写要在图的上下文里（写的时候按上下文认是哪个图），所以起头时复制一份上下文，发标题时在它里面写。"""
 
     def __init__(self, planner, text: str) -> None:
-        self._lock = threading.Lock()
         self._title: str | None = None
         self._text = text
         try:
@@ -227,50 +231,51 @@ class _TitleJob:
         except RuntimeError:  # 不在流式运行里（例如测试直接 invoke）
             self._write = None
         self._ctx = contextvars.copy_context()
-        self._future = _TITLE_POOL.submit(self._run, planner)
+        self._task = asyncio.get_running_loop().create_task(self._run(planner), context=contextvars.Context())
 
-    def _run(self, planner) -> None:
+    async def _run(self, planner) -> None:
         try:
-            title = planner.title(self._text).strip()[:TITLE_CHARS]
+            title = (await planner.title(self._text)).strip()[:TITLE_CHARS]
         except Exception as e:  # noqa: BLE001  起标题失败不影响回答，用原话
             log.warning("起标题失败，用原话：%s", e)
             title = ""
         self._settle(title or _fallback_title(self._text))
 
     def _settle(self, title: str) -> None:
-        with self._lock:
-            if self._title is not None:
-                return
-            self._title = title
+        if self._title is not None:  # 都在同一个事件循环里，不会同时进来
+            return
+        self._title = title
         if self._write is not None:  # 只有先定下来的那一次走到这里，复制的上下文不会同时进两次
             self._ctx.run(self._write, {"type": "title", "title": title})
 
-    def result(self, wait: float) -> str:
-        try:
-            self._future.result(timeout=wait)
-        except FutureTimeout:
+    async def result(self, wait: float) -> str:
+        done, _ = await asyncio.wait({self._task}, timeout=wait)
+        if not done:
             log.warning("起标题超过 %s 秒，先用原话", wait)
-            self._future.cancel()  # 同时起标题的太多、还没轮到的，不用再起了
             self._settle(_fallback_title(self._text))
         return self._title or _fallback_title(self._text)
+
+    def cancel(self) -> None:
+        self._task.cancel()
 
 
 class ToolProgressMiddleware(AgentMiddleware):
     """工具开始时写一步（pending），做完再写一次带结果的。两次用同一个 id（工具调用 id），页面据此把它们和存下来的记录对上。
-    做完的那一步带上它得到的来源（来源卡的内容）：一轮跑完才存检查点（见 ResearchRunner._graph_events），
-    执行中页面从库里取不到这一轮的来源，正文里的引用要靠这里给的才能显示成编号。"""
+    做完的那一步带上它得到的来源（来源卡的内容）：一轮跑完才存检查点（见 research_runner.DURABILITY），
+    执行中页面从库里取不到这一轮的来源，正文里的引用要靠这里给的才能显示成编号。
+    还带上工具结果本身（result，runner 不发给页面）：点了停止时这一步可能还没提交，runner 靠它把页面上已经做完的留下。"""
 
-    def wrap_tool_call(self, request, handler):
+    async def awrap_tool_call(self, request, handler):
         call = request.tool_call
         step = history.step_of(call, None)
         if step is None:
-            return handler(request)
+            return await handler(request)
         emit({"type": "step", "step": step.model_dump()})
-        result = handler(request)
+        result = await handler(request)
         msg = _result_message(result)
         done = history.step_of(call, msg)
         if done is not None:
-            emit({"type": "step", "step": done.model_dump(), "sources": _step_sources(request.state, msg, done.source_ids)})
+            emit({"type": "step", "step": done.model_dump(), "sources": _step_sources(request.state, msg, done.source_ids), "result": msg})
         return result
 
 
@@ -343,16 +348,16 @@ class ContentGuard(AgentMiddleware):
         super().__init__()
         self.planner = planner
 
-    def wrap_model_call(self, request: ModelRequest, handler):
+    async def awrap_model_call(self, request: ModelRequest, handler):
         request = request.override(messages=history.without_blocked_turns(request.messages))
         try:
-            return handler(request)
+            return await handler(request)
         except ContentBlocked as e:
             if e.output:
                 return _stop("output")
-            return self._recover(request, handler)
+            return await self._recover(request, handler)
 
-    def _recover(self, request: ModelRequest, handler):
+    async def _recover(self, request: ModelRequest, handler):
         msgs = request.messages
         start = next((i + 1 for i in range(len(msgs) - 1, -1, -1) if isinstance(msgs[i], AIMessage)), 0)
         tail = [m for m in msgs[start:] if isinstance(m, ToolMessage)]
@@ -365,13 +370,13 @@ class ContentGuard(AgentMiddleware):
             return _stop(reason)
         emit({"type": "phase", "phase": "guard"})
         whole = {m.id: _withdrawn(m) for m in material}
-        found = self._drop_blocked(material)
+        found = await self._drop_blocked(material)
         tries = [found] if found else []
         if any(k not in found or found[k].content != w.content for k, w in whole.items()):  # 单条去掉的就是整批时不重复试
             tries.append(whole)
         for repl in tries:
             try:
-                resp = handler(request.override(messages=[repl.get(m.id, m) for m in msgs]))
+                resp = await handler(request.override(messages=[repl.get(m.id, m) for m in msgs]))
             except ContentBlocked as e:
                 if e.output:
                     return _stop("output")
@@ -379,7 +384,7 @@ class ContentGuard(AgentMiddleware):
             return ExtendedModelResponse(model_response=resp, command=Command(update={"messages": list(repl.values())}))
         return _stop(reason)
 
-    def _drop_blocked(self, material: list[ToolMessage]) -> dict[str, ToolMessage]:
+    async def _drop_blocked(self, material: list[ToolMessage]) -> dict[str, ToolMessage]:
         """单条送审，返回 {消息 id: 去掉没通过内容后的结果}；一条都没拦下是空的。"""
         pieces: list[tuple[int, int | None, str]] = []  # (第几条结果, 搜索结果里的第几条（None 是整条）, 送审的文字)
         for i, m in enumerate(material):
@@ -389,7 +394,7 @@ class ContentGuard(AgentMiddleware):
             else:
                 pieces.append((i, None, history.text_of(m)))
         bad: dict[int, set[int | None]] = {}
-        for (i, k, _), hit in zip(pieces, self.planner.blocked([t for _, _, t in pieces]), strict=True):
+        for (i, k, _), hit in zip(pieces, await self.planner.blocked([t for _, _, t in pieces]), strict=True):
             if hit:
                 bad.setdefault(i, set()).add(k)
         out: dict[str, ToolMessage] = {}
@@ -409,9 +414,9 @@ def _stop(reason: str) -> AIMessage:
     return AIMessage(content="", response_metadata={history.BLOCKED: reason})
 
 
-def memory_text(memory: MemoryBook | None) -> str:
+async def memory_text(memory: MemoryBook | None) -> str:
     """每次调主 agent 都现取：记忆只在每天整理时变，取到的一天里都一样。"""
-    return memory.prompt_text() if memory else ""
+    return await memory.aprompt_text() if memory else ""
 
 
 def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook | None = None):

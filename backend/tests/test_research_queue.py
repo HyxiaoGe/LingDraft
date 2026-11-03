@@ -199,10 +199,10 @@ def test_queued_message_is_put_back_when_it_cannot_be_sent(client, rr, monkeypat
     with _Running(client, rr, tid, "直接答：第二句") as run:
         _queue(client, tid, "直接答：第三句")
 
-        def broken(thread_id, text):
+        async def broken(thread_id, text):
             raise RuntimeError("库挂了")
 
-        monkeypatch.setattr(rr, "accept", broken)
+        monkeypatch.setattr(rr, "_aaccept", broken)
     end = last(run.evs, "state")
     assert end["status"] == "idle" and len(end["turns"]) == 2 and end["queued_message"]["text"] == "直接答：第三句"
 

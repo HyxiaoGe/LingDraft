@@ -7,7 +7,7 @@ import psycopg
 import pytest
 from langgraph.types import Command
 
-from app import config
+from app import aio, config
 from app.api import run_store
 from app.graph.poster.graph import build_graph, memory_checkpointer
 from app.graph.research import graph as research_graph
@@ -32,18 +32,25 @@ def _postgres(monkeypatch):
                 c.execute(sql)
             except psycopg.errors.UndefinedTable:  # 还没有哪个测试建过表
                 pass
-    opened = []
-    real = research_graph.open_postgres_checkpointer
-    monkeypatch.setattr(research_graph, "open_postgres_checkpointer", lambda url: opened.append(real(url)) or opened[-1])
+    opened = []  # 检查点和长期记忆的是异步的连接池（在对话的事件循环里），运行记录的是同步的
+    for name in ("open_postgres_checkpointer", "open_postgres_store"):
+        monkeypatch.setattr(research_graph, name, _keep(getattr(research_graph, name), opened))
     stores = []
     real_store = run_store.PostgresRunStore
     monkeypatch.setattr(run_store, "PostgresRunStore", lambda url: stores.append(real_store(url)) or stores[-1])
-    memories = []
-    real_memory = research_graph.open_postgres_store
-    monkeypatch.setattr(research_graph, "open_postgres_store", lambda url: memories.append(real_memory(url)) or memories[-1])
     yield
-    for pool in [saver.conn for saver in opened] + [store.pool for store in stores] + [m.conn for m in memories]:  # 每个运行器各有连接池（检查点、运行记录、长期记忆各一个），用完关掉，免得连接数攒满
-        pool.close()
+    # 每个运行器各有连接池（检查点、运行记录、长期记忆各一个），用完关掉，免得连接数攒满
+    for x in opened:
+        aio.run(x.conn.close())
+    for store in stores:
+        store.pool.close()
+
+
+def _keep(open_, opened: list):
+    async def wrapped(url):
+        opened.append(await open_(url))
+        return opened[-1]
+    return wrapped
 
 
 @pytest.fixture

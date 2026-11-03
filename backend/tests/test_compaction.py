@@ -60,17 +60,17 @@ def low(monkeypatch):
 
 @pytest.fixture
 def changes(monkeypatch) -> list[Compaction]:
-    """每次压缩边界挪动时 before_model 写进 state 的。"""
+    """每次压缩边界挪动时 abefore_model 写进 state 的。"""
     out: list[Compaction] = []
-    orig = CompactionMiddleware.before_model
+    orig = CompactionMiddleware.abefore_model
 
-    def spy(self, state, runtime):
-        res = orig(self, state, runtime)
+    async def spy(self, state, runtime):
+        res = await orig(self, state, runtime)
         if res:
             out.append(res["compaction"])
         return res
 
-    monkeypatch.setattr(CompactionMiddleware, "before_model", spy)
+    monkeypatch.setattr(CompactionMiddleware, "abefore_model", spy)
     return out
 
 
@@ -319,10 +319,10 @@ def test_failed_summary_stops_the_boundary_and_is_retried_later(summarize_low, m
     state = {"fail": True}
     orig = p.summarize
 
-    def flaky(prompt):
+    async def flaky(prompt):
         if state["fail"] and "第1个问题" in prompt.split("<turn>")[-1]:
             raise RuntimeError("假模型：写短版失败")
-        return orig(prompt)
+        return await orig(prompt)
 
     p.summarize = flaky
     ask(chat, 1, start=3)

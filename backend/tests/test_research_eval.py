@@ -19,6 +19,7 @@ from app.evals.research import (
 )
 from app.research_llm import FakeResearchPlanner, fake_gateway_client
 from app.tools.gateway import GatewayClient
+from tests.research_helpers import blocking
 
 
 class FakeJudge:
@@ -105,7 +106,7 @@ def test_search_service_down_is_an_error_not_a_failure():
 
 
 def test_recorder_keeps_text_per_url():
-    rec = Recorder(fake_gateway_client())
+    rec = blocking(Recorder(fake_gateway_client()))
     hits = rec.search("q", count=3, freshness="pm", domains=["example.test"])
     rec.read(hits[0].url)
     assert rec.searches[0]["freshness"] == "pm" and rec.searches[0]["domains"] == ["example.test"]

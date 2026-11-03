@@ -210,7 +210,7 @@ def test_memory_page_over_http(tmp_path):
     body = client.get("/api/memory").json()
     assert body["memories"] == [] and body["last_dream"] is None
     r.accept("t1", "直接答 记住：己")
-    list(r._graph_events("t1", None))
+    r.run_turn("t1")
     r.dream()
     body = client.get("/api/memory").json()
     assert [m["text"] for m in body["memories"]] == ["己"] and set(body["memories"][0]) == {"id", "text", "created_at", "updated_at"}

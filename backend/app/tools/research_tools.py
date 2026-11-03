@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 
@@ -98,13 +99,13 @@ def make_research_tools(client: GatewayClient) -> list:
 
     @tool("search_web", description=prompts.render("tools.search_web.description"), args_schema=SearchArgs,
           response_format="content_and_artifact")
-    def search_web(query: str, runtime: ToolRuntime, count: int = 5, recency_days: int | None = None,
-                   domains: list[str] | None = None):
+    async def search_web(query: str, runtime: ToolRuntime, count: int = 5, recency_days: int | None = None,
+                         domains: list[str] | None = None):
         sites = [d.strip() for d in domains or [] if d.strip()]
         if problem := _bad_args(count, recency_days, sites):
             raise _failed("bad_arguments", problem)
         try:
-            hits = client.search(query, count=count, freshness=freshness(recency_days), domains=sites)
+            hits = await client.search(query, count=count, freshness=freshness(recency_days), domains=sites)
         except GatewayAuthError:
             raise  # 密钥配置问题：让这次运行失败、把错误亮出来，改好配置再重试
         except GatewayError as e:
@@ -124,20 +125,20 @@ def make_research_tools(client: GatewayClient) -> list:
 
     @tool("read_page", description=prompts.render("tools.read_page.description"), args_schema=ReadArgs,
           response_format="content_and_artifact")
-    def read_page(url: str, runtime: ToolRuntime):
-        res = client.read(url).to_dict()
+    async def read_page(url: str, runtime: ToolRuntime):
+        res = (await client.read(url)).to_dict()
         if res.get("ok"):
             res = {"id": source_id((res.get("url") or url).strip(), known_in(runtime.state)), **res}
         return json.dumps(res, ensure_ascii=False), {"retrieved_at": _now()}
 
     @tool("get_weather", description=prompts.render("tools.get_weather.description"), args_schema=WeatherArgs,
           response_format="content_and_artifact")
-    def get_weather(location: str):
+    async def get_weather(location: str):
         place = location.strip()
         if not place:
             raise _failed("bad_arguments", "location 是空的")
         try:
-            fc = weather.forecast(place)
+            fc = await weather.forecast(place)
         except Unresolved as e:
             if e.kind == "ambiguous_location":
                 raise _failed(e.kind, f"“{place}”对得上好几个地方，没有查", candidates=e.candidates) from e
@@ -159,11 +160,12 @@ def make_research_tools(client: GatewayClient) -> list:
         return json.dumps({"now": now.strftime("%Y-%m-%d %H:%M"), "weekday": WEEKDAYS[now.weekday()], "timezone": "Asia/Shanghai"})
 
     @tool(IMAGE_TOOL, description=prompts.render(f"tools.{IMAGE_TOOL}.description"), args_schema=ImageArgs)
-    def generate_image(prompt: str, runtime: ToolRuntime, aspect_ratio: str | None = None, style: str | None = None,
-                       regenerate: bool = False, reference_subject: str | None = None, quality: str | None = None,
-                       source_image_id: str | None = None):
+    async def generate_image(prompt: str, runtime: ToolRuntime, aspect_ratio: str | None = None, style: str | None = None,
+                             regenerate: bool = False, reference_subject: str | None = None, quality: str | None = None,
+                             source_image_id: str | None = None):
         """照 Fusion 的 ImageGenerationToolHandler。没画成（包括没去画）的结果 status=error，artifact 里记着原因；
-        真去画了的记 attempted（这一轮画了几次按它算，见 images.attempts_before）。"""
+        真去画了的记 attempted（这一轮画了几次按它算，见 images.attempts_before）。
+        出图要等很久：用户点了停止，这次运行被取消，在等的请求跟着断开，出到一半的图不要了。"""
         msgs = runtime.state.get("messages", [])
 
         def result(content: str, artifact: dict, ok: bool) -> ToolMessage:
@@ -203,13 +205,13 @@ def make_research_tools(client: GatewayClient) -> list:
         ctx = runtime.context
         thread_id = runtime.config["configurable"]["thread_id"]
         try:
-            out = images.wait_stoppable(lambda: client.generate_image(payload, scene="image_edit" if source else "chat_image"), ctx.check_stop)
-            data, _ = images.wait_stoppable(lambda: client.image_file(out.path), ctx.check_stop)
+            out = await client.generate_image(payload, scene="image_edit" if source else "chat_image")
+            data, _ = await client.image_file(out.path)
             ext, mime, width, height = images.inspect_image(data)
             iid = images.new_id()
             img = GeneratedImage(id=iid, file=f"{iid}.{ext}", mime_type=mime, width=width, height=height, prompt=text,
                                  aspect_ratio=ratio, model=out.model, edited_from=source[0].id if source else None)
-            ctx.images.save(thread_id, img.file, data)
+            await asyncio.to_thread(ctx.images.save, thread_id, img.file, data)
         except GatewayAuthError:
             raise  # 网关没放行或 image-service 没登记灵稿：配置问题，让这次运行失败、把错误亮出来
         except ImageError as e:

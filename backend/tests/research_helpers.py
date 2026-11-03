@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import threading
 import time
@@ -10,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from langchain_core.messages import BaseMessage, ToolMessage
 
+from app import aio
 from app.api.research_runner import ResearchRunner
 from app.research_llm import FakeResearchPlanner, FakeToolModel
 
@@ -79,13 +81,19 @@ def say(client, tid: str, text: str, **kw):
 
 
 def hold(planner, name: str) -> threading.Event:
-    """让 planner 的这一步停在闸门上，模拟慢模型。10 秒兜底，修复前的代码不会把测试永远卡住。"""
+    """让 planner 的这一步停在闸门上，模拟慢模型。10 秒兜底，修复前的代码不会把测试永远卡住。
+    异步的步骤（起标题、推荐问题这些）在线程里等闸门，不卡对话的事件循环。"""
     gate = threading.Event()
     orig = getattr(planner, name)
 
-    def slow(*a, **kw):
-        gate.wait(10)
-        return orig(*a, **kw)
+    if inspect.iscoroutinefunction(orig):
+        async def slow(*a, **kw):
+            await asyncio.to_thread(gate.wait, 10)
+            return await orig(*a, **kw)
+    else:
+        def slow(*a, **kw):
+            gate.wait(10)
+            return orig(*a, **kw)
 
     setattr(planner, name, slow)
     return gate
@@ -111,3 +119,28 @@ def wait_until(fn, timeout: float = 10) -> bool:
             return True
         time.sleep(0.05)
     return False
+
+
+class _Blocking:
+    def __init__(self, inner) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._inner, name)
+        if not callable(attr):
+            return attr
+
+        def call(*a, **kw):
+            out = attr(*a, **kw)
+            return aio.run(out) if inspect.isawaitable(out) else out
+        return call
+
+
+def blocking(x):
+    """测试里同步地用异步的客户端、服务（网关客户端、天气）：返回协程的方法在对话的事件循环里跑完再返回。"""
+    return _Blocking(x)
+
+
+def invoke(tool, call):
+    """工具都是异步的：在对话的事件循环里调一次，返回结果。"""
+    return aio.run(tool.ainvoke(call))

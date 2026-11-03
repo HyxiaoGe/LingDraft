@@ -19,9 +19,9 @@
 
 from __future__ import annotations
 
-import threading
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import NotRequired
 from weakref import WeakValueDictionary
@@ -73,7 +73,7 @@ class SubagentPrompt(AgentMiddleware[SubagentState]):
 
     state_schema = SubagentState
 
-    def wrap_model_call(self, request: ModelRequest, handler):
+    async def awrap_model_call(self, request: ModelRequest, handler):
         emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
         try:
             at = datetime.fromisoformat(request.state.get("started_at") or "")
@@ -88,7 +88,7 @@ class SubagentPrompt(AgentMiddleware[SubagentState]):
             used = request.state.get("thread_tool_call_count") or {}
             tools = [(t, used.get(t, 0), max(0, n - used.get(t, 0))) for t, n in TOOL_BUDGET.items()]
             request = request.override(messages=[*request.messages, HumanMessage(prompts.render("subagent.budget", tools=tools))])
-        return handler(request)
+        return await handler(request)
 
 
 class ToolBudget(ToolCallLimitMiddleware):
@@ -143,25 +143,19 @@ def launched_before(messages: list[BaseMessage], call_id: str | None) -> int:
     return n
 
 
-_slots: WeakValueDictionary[str, threading.BoundedSemaphore] = WeakValueDictionary()
-_slots_mu = threading.Lock()
+_slots: WeakValueDictionary[str, asyncio.BoundedSemaphore] = WeakValueDictionary()  # 都在对话的事件循环里用，不用加锁
 
 
-@contextmanager
-def _slot(thread_id: str, call_id: str, check_stop: Callable[[], None]) -> Iterator[None]:
-    """占一个这个对话的子 agent 名额；满了就等，等的时候点了停止就不等了。等的时候页面的卡片上说一声在排队。"""
-    with _slots_mu:
-        sem = _slots.get(thread_id)
-        if sem is None:
-            sem = _slots[thread_id] = threading.BoundedSemaphore(MAX_RUNNING)
-    if not sem.acquire(blocking=False):
+@asynccontextmanager
+async def _slot(thread_id: str, call_id: str) -> AsyncIterator[None]:
+    """占一个这个对话的子 agent 名额；满了就等（点了停止，等着的跟着这次运行一起取消）。等的时候页面的卡片上说一声在排队。"""
+    sem = _slots.get(thread_id)
+    if sem is None:
+        sem = _slots[thread_id] = asyncio.BoundedSemaphore(MAX_RUNNING)
+    if sem.locked():
         emit({"type": "phase", "phase": "queued", "task": call_id})
-        while not sem.acquire(timeout=0.2):
-            check_stop()
-    try:
+    async with sem:
         yield
-    finally:
-        sem.release()
 
 
 class TaskArgs(BaseModel):
@@ -173,7 +167,7 @@ def make_task_tool(planner):
     worker = build_subagent(planner)
 
     @tool(SUBAGENT_TOOL, description=prompts.render("tools.task.description", max_per_turn=MAX_PER_TURN), args_schema=TaskArgs)
-    def task(title: str, prompt: str, runtime: ToolRuntime) -> ToolMessage:
+    async def task(title: str, prompt: str, runtime: ToolRuntime) -> ToolMessage:
         msgs = runtime.state.get("messages", [])
 
         def result(content: str, ok: bool = True, sub: list[BaseMessage] | None = None, **art) -> ToolMessage:
@@ -188,9 +182,8 @@ def make_task_tool(planner):
         emit({"type": "subagent", "id": runtime.tool_call_id, "ns": conf.get("checkpoint_ns", "")})
         inp = {"messages": [HumanMessage(prompt.strip())], "started_at": turn_start(msgs, runtime.state).isoformat(),
                "parent_sources": known_ids(msgs)}
-        check_stop = runtime.context.check_stop if runtime.context else (lambda: None)  # 测试里直接 invoke 时没有 context
-        with _slot(conf["thread_id"], runtime.tool_call_id, check_stop):
-            out = worker.invoke(inp, context=runtime.context)
+        async with _slot(conf["thread_id"], runtime.tool_call_id):
+            out = await worker.ainvoke(inp, context=runtime.context)
         sub = out["messages"]
         if any(history.blocked_reason(m) for m in sub):
             return result(prompts.render("tools.task.blocked"), ok=False, sub=sub, failure="blocked")
