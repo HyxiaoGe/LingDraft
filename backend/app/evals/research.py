@@ -5,7 +5,7 @@
 所以顺带检查流式片段的消息 id 和存下来的对得上。结果写到 data/evals/research-<时间>.json，对话记录写到同名的 .md。
 
 每轮的检查：跑完了、有回复（这一轮的结果是 ok，最后一条模型消息有正文）、正文里引用的来源都存在；
-expect 里写了的才检查：搜没搜、读到几篇、取没取当前时间。judge 写了就由裁判模型按标准看这一轮的正文（回答质量）。
+expect 里写了的才检查：搜没搜、读到几篇、取没取当前时间、查没查（搜索、读页、天气、子任务任一）。judge 写了就由裁判模型按标准看这一轮的正文（回答质量）。
 正文里带来源角标的说法交给裁判模型逐条拿 agent 当时看到的材料核对（来源对不对，--no-sources 不做）。
 """
 
@@ -26,15 +26,18 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.graph.research import history
 from app.graph.research.graph import memory_checkpointer
-from app.graph.research.sources import SOURCE_ID, cited, url_key
+from app.graph.research.sources import SOURCE_ID, SUBAGENT_TOOL, cited, url_key
 from app.prompting import PromptFile
 from app.tools.gateway import GatewayError
 from app.tools.research_tools import TIME_TOOL
+from app.tools.weather_mcp import WEATHER_TOOL
 
 BACKEND = Path(__file__).resolve().parents[2]
 CASES_FILE = BACKEND / "evals" / "research" / "cases.yaml"
 RESULTS_DIR = BACKEND / "data" / "evals"
 PROMPTS = PromptFile(Path(__file__).with_name("prompts.toml"))
+# 去外面查东西的工具：主 agent 调了其中任一个就算这一轮查过（取当前时间、recall 不算）
+LOOKUP_TOOLS = {"search_web", "read_page", WEATHER_TOOL, SUBAGENT_TOOL}
 EVIDENCE_CHARS = 8000  # 每个来源给裁判看的材料上限（读页本身截到 6000 字）
 
 
@@ -48,6 +51,7 @@ class Expect(BaseModel):
     searched: bool | None = None
     min_reads: int | None = None
     checked_time: bool | None = None
+    looked_up: bool | None = None  # 这一轮查没查：搜索、读页、天气、子任务任一（Fusion 11-04 没调工具就编了天气）
 
 
 class CaseTurn(BaseModel):
@@ -200,6 +204,7 @@ def play(runner, tid: str, turn: CaseTurn, rec: Recorder) -> dict:
             "suggestions": rec_turn.get("suggestions", []), "usage": rec_turn.get("usage"), "outcome": rec_turn.get("outcome"),
             "searches": rec.searches[searches0:], "reads": rec.reads[reads0:],
             "time_checks": sum(1 for m in ais for tc in m.tool_calls if tc["name"] == TIME_TOOL), "calls": calls,
+            "lookups": [tc["name"] for m in ais for tc in m.tool_calls if tc["name"] in LOOKUP_TOOLS],
             "stream_ids_match": streamed == stored, "view": view}
 
 
@@ -221,6 +226,9 @@ def turn_checks(turn: CaseTurn, played: dict) -> list[dict]:
         out.append(_check("min_reads", n >= e.min_reads, f"读到 {n} 篇"))
     if e.checked_time is not None:
         out.append(_check("checked_time", bool(played["time_checks"]) == e.checked_time, f"取了 {played['time_checks']} 次时间"))
+    if e.looked_up is not None:
+        looked = played["lookups"]
+        out.append(_check("looked_up", bool(looked) == e.looked_up, "、".join(looked) if looked else "没查"))
     return out
 
 
