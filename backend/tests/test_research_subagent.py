@@ -295,6 +295,39 @@ def test_regenerate_drops_the_old_subagent_work():
     assert len(_tasks(v["turns"][0])) == 1 and len(_task_results(c)) == 1
 
 
+def test_edit_and_resend_drops_the_old_subagent_work_and_its_sources():
+    """改了最后那句话再问：旧的子任务卡、结果、用量和它们查到的来源都去掉，子 agent 按改过的话重新查。"""
+    c = Chat()
+    old = {s["url"] for s in c.say("子任务查一下杭州美食")["sources"].values()}
+    c.r.regenerate_input(c.tid, "子任务查一下成都美食")
+    v = c.run()
+    (turn,) = v["turns"]
+    (task,) = _tasks(turn)
+    assert task["ok"] and task["text"] == "查子任务查一下成都美食1" and _kinds(task) == SUB_ITEMS
+    assert len(_task_results(c)) == 1
+    assert turn["record"]["usage"]["subagents"] == 1 and turn["record"]["subagent_usage"]["searches"] == 1
+    new = {s["url"] for s in v["sources"].values()}
+    assert old and new and not old & new and all("成都" in u for u in new)
+    assert set(task["source_ids"]) <= v["sources"].keys()
+
+
+def test_regenerate_after_stopping_a_subagent_starts_it_over():
+    """子 agent 做到一半点了停止，再重新回答：重新派的子 agent 从头查，不接着停下的那个的检查点；停下的卡不留，用量只算这一次。"""
+    c = Chat()
+    c.say("分头查一下杭州美食", stop_on=_first_sub_step_done)
+    v = c.regenerate()
+    (turn,) = v["turns"]
+    assert turn["record"]["outcome"] == "ok" and v["status"] == "idle"
+    tasks = _tasks(turn)
+    assert [t["ok"] for t in tasks] == [True, True] and all(_kinds(t) == SUB_ITEMS for t in tasks)
+    assert len(_task_results(c)) == 2
+    searched = [e for e in c.events if e["event"] == "step" and "task" in e["data"]
+                and e["data"]["step"]["kind"] == "search" and not e["data"]["step"]["pending"]]
+    assert {e["data"]["task"] for e in searched} == {t["id"] for t in tasks} and len(searched) == 2  # 这一次两个都重新搜了
+    assert turn["record"]["subagent_usage"]["searches"] == 2
+    assert _answered(c.values()["messages"])
+
+
 def test_sqlite_round_trip_keeps_the_subagent_card(tmp_path):
     db = tmp_path / "data" / "r.sqlite"
     before = Chat(saver=open_sqlite_checkpointer(db))
