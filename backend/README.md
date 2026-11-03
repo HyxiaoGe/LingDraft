@@ -221,7 +221,6 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `weather.py`：查天气、整理预报。
 - `app/model_guard.py` 模型服务出错的分类和熔断；`app/aio.py` 对话的事件循环
 - `app/evals/` + `evals/` 回放评测：用真实模型跑 `evals/research/cases.yaml`，按轨迹和裁判模型打分，用法和写用例的约定见 `evals/README.md`
-- `scripts/` 早先的探针，验证的是当时带提问卡的流程，结果记在 `../docs/probe/`；和现在的对话链路无关，不保证还跑得通
 - `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）。
   - 海报（`#poster`）：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出。
   - 对话页：`src/workspace.jsx` 左边是对话列表（改名、导出、删除）和记忆页入口，右边是对话。`timeline.jsx` 里每一轮先是过程（思考、搜索、读页、子任务按先后，跑的时候展开，跑完收起），然后是天气卡片、画的图，再是带来源角标的正文和这条回答用到的来源，最后一轮下面是推荐问题；回答时又说的话贴在输入框上沿。
