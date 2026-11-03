@@ -8,6 +8,7 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
+from app import aio
 from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
 from app.api.run_store import GUIDE, QUEUE
@@ -211,16 +212,16 @@ def test_queued_message_is_put_back_when_it_cannot_be_sent(client, rr, monkeypat
 def test_queued_message_survives_restart(tmp_path):
     one = ResearchRunner(fake=True, data_dir=tmp_path / "data")
     tid = new(_client(one), "直接答：先说一句")["thread_id"]
-    one.run_store.put_pending(tid, QUEUE, "重启前排着的")
+    aio.run(one.run_store.put_pending(tid, QUEUE, "重启前排着的"))
     two = ResearchRunner(fake=True, data_dir=tmp_path / "data")
     assert two.state_view(tid)["queued_message"]["text"] == "重启前排着的"
 
 
 def test_delete_thread_drops_its_queued_message(client, rr):
     tid = new(client, "直接答：先说一句")["thread_id"]
-    rr.run_store.put_pending(tid, QUEUE, "还排着")
+    aio.run(rr.run_store.put_pending(tid, QUEUE, "还排着"))
     assert client.delete(f"/api/research/threads/{tid}").status_code == 200
-    assert rr.run_store.get_pending(tid, QUEUE) is None
+    assert aio.run(rr.run_store.get_pending(tid, QUEUE)) is None
 
 
 # ---- 插进正在跑的这一轮 ----
@@ -369,7 +370,7 @@ def test_guide_when_nothing_to_guide(client, rr):
     with _Running(client, rr, tid, "直接答：第二句", gate):
         assert gate.waiting.wait(10)
         assert _guide(client, tid).json() == {"guided": None}
-        rr.run_store.put_pending(tid, GUIDE, "已经等着的")
+        aio.run(rr.run_store.put_pending(tid, GUIDE, "已经等着的"))
         assert _guide(client, tid).json()["guided"]["text"] == "已经等着的"
         _unguide(client, tid)
     _settled(client, tid, 2)

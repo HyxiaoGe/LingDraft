@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from app import aio
 from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
-from app.graph.research.graph import memory_checkpointer, open_sqlite_checkpointer, thread_ids
+from app.graph.research.graph import memory_checkpointer, thread_ids
 from tests.research_helpers import events, last, say
 
 
@@ -75,8 +75,12 @@ def test_list_threads_with_status(client):
 
 
 def test_thread_ids_without_reading_checkpoints(tmp_path):
-    assert aio.run(thread_ids(aio.run(open_sqlite_checkpointer(tmp_path / "c.sqlite")))) == []  # 表还没建
     assert aio.run(thread_ids(memory_checkpointer())) == []
+    rr = ResearchRunner(fake=True, data_dir=tmp_path / "data")  # 存储见 conftest 的 _storage：设了测试库时是 Postgres
+    assert aio.run(thread_ids(rr.graph.checkpointer)) == []
+    rr.accept("t1", "直接答：你好")
+    rr.run_turn("t1")
+    assert aio.run(thread_ids(rr.graph.checkpointer)) == ["t1"]
 
 
 # ---- 真实模型的适配（不发请求） ----

@@ -65,7 +65,7 @@ ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-flash-2
 BACKGROUND_ENABLED = _flag("LINGDRAFT_BACKGROUND", True)
 USE_FAKE_PLANNER = _flag("LINGDRAFT_FAKE", False)
 RESEARCH_WORKERS = int(os.environ.get("LINGDRAFT_RESEARCH_WORKERS", "4"))  # 同时跑几个调研线程，多出来的排队
-# 对话的检查点存 Postgres（postgresql://用户:密码@主机:端口/库）；不配存 DATA_DIR 下的 SQLite
+# 对话（检查点、长期记忆、运行记录）存 Postgres（postgresql://用户:密码@主机:端口/库）；没配服务起不来
 DATABASE_URL = os.environ.get("LINGDRAFT_DATABASE_URL", "")
 # 前端构建出来的页面（frontend/dist）：部署时由后端一起出页面（镜像里配好了）；本机开发不配，页面由 Vite 出
 STATIC_DIR = os.environ.get("LINGDRAFT_STATIC_DIR", "")

@@ -1,8 +1,8 @@
 """运行记录：每次执行（发一句话、重试、重新回答……）一行，存进库里，事后能查历史运行和失败原因。
 
 学的是 LangGraph Agent Server 的 run：执行登记（RunRegistry）在进程内存里，跑完就没了；这里把每次执行的来历、状态、时间、错误落盘。
-和检查点存在一处：配了 LINGDRAFT_DATABASE_URL 就是 Postgres 的 runs 表，没配是数据目录下的 runs.sqlite，测试和评测用内存的。
-时间由存储自己记（UTC）。删掉对话时它的运行记录一起删。
+和检查点、长期记忆存在同一个 Postgres 里，共用一个连接池（见 ResearchRunner 的 open_storage）；测试和评测用内存的。
+都是协程，在对话的事件循环里调（连接池绑定那个循环）。时间由存储自己记（UTC）。删掉对话时它的运行记录一起删。
 
 同一个库里还有一张 pending_messages：回答进行中用户又说的话，等着交给 agent（Agent Server 的双发策略里的 enqueue）。
 每个对话、每种方式一行：排队（queue）是这一轮结束后开新的一轮发；插话（guide）是插进正在跑的这一轮，主 agent 下一次调模型前放进对话。
@@ -11,16 +11,10 @@
 
 from __future__ import annotations
 
-import sqlite3
-import threading
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, Protocol
 
-from psycopg.rows import dict_row
-from psycopg_pool import ConnectionPool
-
-from app import config
+from psycopg_pool import AsyncConnectionPool
 
 QUEUED, RUNNING, SUCCESS, STOPPED, ERROR, LOST = "queued", "running", "success", "stopped", "error", "lost"
 # success：跑到头了（这一轮的结果另看检查点里的轮记录，比如被内容审核拦下）；stopped：用户点了停止；
@@ -36,19 +30,19 @@ class RunStore(Protocol):
     """一行的字段见 FIELDS：kind 是这次执行怎么来的（new / say / retry / regenerate / edit），turn_id 是这一轮用户那句话的消息 id，
     version 是跑它的代码版本（部署时的提交号）。列表都是新的在前（按写入的先后，同一毫秒建的也分得清），时间是 ISO 字符串。"""
 
-    def create(self, run_id: str, thread_id: str, kind: str, turn_id: str | None, version: str | None) -> None: ...
-    def started(self, run_id: str) -> None: ...
-    def finish(self, run_id: str, status: str, error_type: str | None = None, error: str | None = None,
-               traceback: str | None = None) -> None: ...
-    def for_thread(self, thread_id: str) -> list[dict]: ...
-    def recent(self, status: str | None, limit: int) -> list[dict]: ...
-    def sweep(self) -> int: ...  # 还在排队、在跑的记成 lost，返回条数。只在服务启动时调：单进程部署，这时它们都已经没在跑了
-    def delete_thread(self, thread_id: str) -> None: ...  # 运行记录和排着的话一起删
+    async def create(self, run_id: str, thread_id: str, kind: str, turn_id: str | None, version: str | None) -> None: ...
+    async def started(self, run_id: str) -> None: ...
+    async def finish(self, run_id: str, status: str, error_type: str | None = None, error: str | None = None,
+                     traceback: str | None = None) -> None: ...
+    async def for_thread(self, thread_id: str) -> list[dict]: ...
+    async def recent(self, status: str | None, limit: int) -> list[dict]: ...
+    async def sweep(self) -> int: ...  # 还在排队、在跑的记成 lost，返回条数。只在服务启动时调：单进程部署，这时它们都已经没在跑了
+    async def delete_thread(self, thread_id: str) -> None: ...  # 运行记录和排着的话一起删
 
     # 排着的话：{"text", "created_at", "updated_at"}
-    def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False) -> dict: ...  # 接在排着的那句后面（front：放到前面），没有就新建
-    def get_pending(self, thread_id: str, mode: str) -> dict | None: ...
-    def take_pending(self, thread_id: str, mode: str) -> str | None: ...  # 取出来并删掉；两处同时取，只有一处拿得到
+    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False) -> dict: ...  # 接在排着的那句后面（front：放到前面），没有就新建
+    async def get_pending(self, thread_id: str, mode: str) -> dict | None: ...
+    async def take_pending(self, thread_id: str, mode: str) -> str | None: ...  # 取出来并删掉；两处同时取，只有一处拿得到
 
 
 def _now() -> datetime:
@@ -64,164 +58,60 @@ def _iso(t: Any) -> str | None:
 
 
 class MemoryRunStore:
+    """测试、评测用。只在一个事件循环里用，方法里没有 await，一个调用做完别的才进来，不用锁。"""
+
     def __init__(self) -> None:
-        self._mu = threading.Lock()
         self._rows: dict[str, dict] = {}  # 按写入的先后
         self._pending: dict[tuple[str, str], dict] = {}
 
-    def create(self, run_id: str, thread_id: str, kind: str, turn_id: str | None, version: str | None) -> None:
-        row = dict.fromkeys(FIELDS) | {"id": run_id, "thread_id": thread_id, "kind": kind, "turn_id": turn_id, "status": QUEUED,
-                                        "created_at": _iso(_now()), "version": version}
-        with self._mu:
-            self._rows[run_id] = row
+    async def create(self, run_id: str, thread_id: str, kind: str, turn_id: str | None, version: str | None) -> None:
+        self._rows[run_id] = dict.fromkeys(FIELDS) | {"id": run_id, "thread_id": thread_id, "kind": kind, "turn_id": turn_id,
+                                                       "status": QUEUED, "created_at": _iso(_now()), "version": version}
 
-    def started(self, run_id: str) -> None:
-        with self._mu:
-            if row := self._rows.get(run_id):
-                row.update(status=RUNNING, started_at=_iso(_now()))
+    async def started(self, run_id: str) -> None:
+        if row := self._rows.get(run_id):
+            row.update(status=RUNNING, started_at=_iso(_now()))
 
-    def finish(self, run_id: str, status: str, error_type: str | None = None, error: str | None = None,
-               traceback: str | None = None) -> None:
-        with self._mu:
-            if row := self._rows.get(run_id):
-                row.update(status=status, ended_at=_iso(_now()), error_type=error_type, error=error, traceback=traceback)
+    async def finish(self, run_id: str, status: str, error_type: str | None = None, error: str | None = None,
+                     traceback: str | None = None) -> None:
+        if row := self._rows.get(run_id):
+            row.update(status=status, ended_at=_iso(_now()), error_type=error_type, error=error, traceback=traceback)
 
     def _newest(self, rows) -> list[dict]:
         return [dict(r) for r in reversed(list(rows))]
 
-    def for_thread(self, thread_id: str) -> list[dict]:
-        with self._mu:
-            return self._newest(r for r in self._rows.values() if r["thread_id"] == thread_id)
+    async def for_thread(self, thread_id: str) -> list[dict]:
+        return self._newest(r for r in self._rows.values() if r["thread_id"] == thread_id)
 
-    def recent(self, status: str | None, limit: int) -> list[dict]:
-        with self._mu:
-            return self._newest(r for r in self._rows.values() if status is None or r["status"] == status)[:limit]
+    async def recent(self, status: str | None, limit: int) -> list[dict]:
+        return self._newest(r for r in self._rows.values() if status is None or r["status"] == status)[:limit]
 
-    def sweep(self) -> int:
-        with self._mu:
-            rows = [r for r in self._rows.values() if r["status"] in (QUEUED, RUNNING)]
-            for r in rows:
-                r.update(status=LOST, ended_at=_iso(_now()))
+    async def sweep(self) -> int:
+        rows = [r for r in self._rows.values() if r["status"] in (QUEUED, RUNNING)]
+        for r in rows:
+            r.update(status=LOST, ended_at=_iso(_now()))
         return len(rows)
 
-    def delete_thread(self, thread_id: str) -> None:
-        with self._mu:
-            self._rows = {k: r for k, r in self._rows.items() if r["thread_id"] != thread_id}
-            self._pending = {k: r for k, r in self._pending.items() if k[0] != thread_id}
+    async def delete_thread(self, thread_id: str) -> None:
+        self._rows = {k: r for k, r in self._rows.items() if r["thread_id"] != thread_id}
+        self._pending = {k: r for k, r in self._pending.items() if k[0] != thread_id}
 
-    def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False) -> dict:
+    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False) -> dict:
         now = _iso(_now())
-        with self._mu:
-            row = self._pending.get((thread_id, mode))
-            if row is None:
-                row = self._pending[(thread_id, mode)] = {"text": text, "created_at": now, "updated_at": now}
-            else:
-                row.update(text=text + JOIN + row["text"] if front else row["text"] + JOIN + text, updated_at=now)
-            return dict(row)
+        row = self._pending.get((thread_id, mode))
+        if row is None:
+            row = self._pending[(thread_id, mode)] = {"text": text, "created_at": now, "updated_at": now}
+        else:
+            row.update(text=text + JOIN + row["text"] if front else row["text"] + JOIN + text, updated_at=now)
+        return dict(row)
 
-    def get_pending(self, thread_id: str, mode: str) -> dict | None:
-        with self._mu:
-            row = self._pending.get((thread_id, mode))
-            return dict(row) if row else None
+    async def get_pending(self, thread_id: str, mode: str) -> dict | None:
+        row = self._pending.get((thread_id, mode))
+        return dict(row) if row else None
 
-    def take_pending(self, thread_id: str, mode: str) -> str | None:
-        with self._mu:
-            row = self._pending.pop((thread_id, mode), None)
-            return row["text"] if row else None
-
-
-class _SqlRunStore:
-    """两种库共用的 SQL；占位符写成 %s，SQLite 换成 ?。子类给 _exec（执行一条，返回字典行）。"""
-
-    _COLS = ", ".join(FIELDS)
-    _SEQ = "seq"  # 写入的先后
-
-    def _exec(self, sql: str, params: tuple = ()) -> list[dict]:
-        raise NotImplementedError
-
-    def create(self, run_id: str, thread_id: str, kind: str, turn_id: str | None, version: str | None) -> None:
-        self._exec("INSERT INTO runs (id, thread_id, kind, turn_id, status, created_at, version) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                   (run_id, thread_id, kind, turn_id, QUEUED, self._time(_now()), version))
-
-    def started(self, run_id: str) -> None:
-        self._exec("UPDATE runs SET status = %s, started_at = %s WHERE id = %s", (RUNNING, self._time(_now()), run_id))
-
-    def finish(self, run_id: str, status: str, error_type: str | None = None, error: str | None = None,
-               traceback: str | None = None) -> None:
-        self._exec("UPDATE runs SET status = %s, ended_at = %s, error_type = %s, error = %s, traceback = %s WHERE id = %s",
-                   (status, self._time(_now()), error_type, error, traceback, run_id))
-
-    def for_thread(self, thread_id: str) -> list[dict]:
-        return self._rows(f"SELECT {self._COLS} FROM runs WHERE thread_id = %s ORDER BY {self._SEQ} DESC", (thread_id,))
-
-    def recent(self, status: str | None, limit: int) -> list[dict]:
-        if status is None:
-            return self._rows(f"SELECT {self._COLS} FROM runs ORDER BY {self._SEQ} DESC LIMIT %s", (limit,))
-        return self._rows(f"SELECT {self._COLS} FROM runs WHERE status = %s ORDER BY {self._SEQ} DESC LIMIT %s", (status, limit))
-
-    def sweep(self) -> int:
-        return len(self._exec("UPDATE runs SET status = %s, ended_at = %s WHERE status IN (%s, %s) RETURNING id",
-                              (LOST, self._time(_now()), QUEUED, RUNNING)))
-
-    def delete_thread(self, thread_id: str) -> None:
-        self._exec("DELETE FROM runs WHERE thread_id = %s", (thread_id,))
-        self._exec("DELETE FROM pending_messages WHERE thread_id = %s", (thread_id,))
-
-    def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False) -> dict:
-        merged = "excluded.text || CAST(%s AS TEXT) || pending_messages.text" if front else "pending_messages.text || CAST(%s AS TEXT) || excluded.text"
-        now = self._time(_now())
-        return self._rows("INSERT INTO pending_messages (thread_id, mode, text, created_at, updated_at) VALUES (%s, %s, %s, %s, %s) "
-                          f"ON CONFLICT (thread_id, mode) DO UPDATE SET text = {merged}, updated_at = excluded.updated_at "
-                          "RETURNING text, created_at, updated_at", (thread_id, mode, text, now, now, JOIN))[0]
-
-    def get_pending(self, thread_id: str, mode: str) -> dict | None:
-        rows = self._rows("SELECT text, created_at, updated_at FROM pending_messages WHERE thread_id = %s AND mode = %s", (thread_id, mode))
-        return rows[0] if rows else None
-
-    def take_pending(self, thread_id: str, mode: str) -> str | None:
-        rows = self._exec("DELETE FROM pending_messages WHERE thread_id = %s AND mode = %s RETURNING text", (thread_id, mode))
-        return rows[0]["text"] if rows else None
-
-    def _rows(self, sql: str, params: tuple) -> list[dict]:
-        return [{k: _iso(v) if k.endswith("_at") else v for k, v in r.items()} for r in self._exec(sql, params)]
-
-    @staticmethod
-    def _time(t: datetime) -> Any:
-        return t
-
-
-_SQLITE_DDL = (
-    """CREATE TABLE IF NOT EXISTS runs (
-        id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, kind TEXT NOT NULL, turn_id TEXT, status TEXT NOT NULL,
-        created_at TEXT NOT NULL, started_at TEXT, ended_at TEXT, error_type TEXT, error TEXT, traceback TEXT, version TEXT)""",
-    "CREATE INDEX IF NOT EXISTS runs_thread_idx ON runs (thread_id)",
-    "CREATE INDEX IF NOT EXISTS runs_status_idx ON runs (status)",
-    """CREATE TABLE IF NOT EXISTS pending_messages (
-        thread_id TEXT NOT NULL, mode TEXT NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-        PRIMARY KEY (thread_id, mode))""",
-)
-
-
-class SqliteRunStore(_SqlRunStore):
-    """一个连接加一把锁。时间存 ISO 字符串（UTC、毫秒）。先后用 rowid：新行总比现有的都大。"""
-
-    _SEQ = "rowid"
-
-    def __init__(self, path: Path) -> None:
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self._mu = threading.Lock()
-        self._conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
-        self._conn.row_factory = sqlite3.Row
-        for sql in _SQLITE_DDL:
-            self._conn.execute(sql)
-
-    def _exec(self, sql: str, params: tuple = ()) -> list[dict]:
-        with self._mu:
-            return [dict(r) for r in self._conn.execute(sql.replace("%s", "?"), params).fetchall()]
-
-    @staticmethod
-    def _time(t: datetime) -> Any:
-        return _iso(t)
+    async def take_pending(self, thread_id: str, mode: str) -> str | None:
+        row = self._pending.pop((thread_id, mode), None)
+        return row["text"] if row else None
 
 
 _POSTGRES_DDL = (
@@ -238,28 +128,70 @@ _POSTGRES_DDL = (
 )
 
 
-class PostgresRunStore(_SqlRunStore):
-    """和检查点同一个库、各用各的小连接池（写法同 graph.open_postgres_checkpointer）。表没建的先建。"""
 
-    def __init__(self, url: str) -> None:
-        self.pool = ConnectionPool(url, min_size=1, max_size=2, timeout=10, open=True, check=ConnectionPool.check_connection,
-                                   kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row})
-        try:
-            with self.pool.connection() as conn:
-                for sql in _POSTGRES_DDL:
-                    conn.execute(sql)
-        except BaseException:
-            self.pool.close()
-            raise
+class PostgresRunStore:
+    """用对话的连接池（检查点、长期记忆也用它，见 ResearchRunner 的 open_storage），每条语句从池子里取一个连接。
+    先后用 seq（自增列）：同一毫秒建的也分得清。"""
 
-    def _exec(self, sql: str, params: tuple = ()) -> list[dict]:
-        with self.pool.connection() as conn:
-            cur = conn.execute(sql, params)
-            return cur.fetchall() if cur.description else []
+    _COLS = ", ".join(FIELDS)
 
+    def __init__(self, pool: AsyncConnectionPool) -> None:
+        self.pool = pool  # 连接参数见 graph.postgres_pool：自动提交、行是字典
 
-def open_run_store(data_dir: Path) -> RunStore:
-    """和 graph.open_checkpointer 同一个规则：配了 LINGDRAFT_DATABASE_URL 就存 Postgres，没配存数据目录下的 SQLite。"""
-    if config.DATABASE_URL:
-        return PostgresRunStore(config.DATABASE_URL)
-    return SqliteRunStore(Path(data_dir) / "runs.sqlite")
+    async def setup(self) -> None:
+        """表没建的先建。"""
+        async with self.pool.connection() as conn:
+            for sql in _POSTGRES_DDL:
+                await conn.execute(sql)
+
+    async def _exec(self, sql: str, params: tuple = ()) -> list[dict]:
+        async with self.pool.connection() as conn:
+            cur = await conn.execute(sql, params)
+            return await cur.fetchall() if cur.description else []
+
+    async def _rows(self, sql: str, params: tuple) -> list[dict]:
+        return [{k: _iso(v) if k.endswith("_at") else v for k, v in r.items()} for r in await self._exec(sql, params)]
+
+    async def create(self, run_id: str, thread_id: str, kind: str, turn_id: str | None, version: str | None) -> None:
+        await self._exec("INSERT INTO runs (id, thread_id, kind, turn_id, status, created_at, version) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                         (run_id, thread_id, kind, turn_id, QUEUED, _now(), version))
+
+    async def started(self, run_id: str) -> None:
+        await self._exec("UPDATE runs SET status = %s, started_at = %s WHERE id = %s", (RUNNING, _now(), run_id))
+
+    async def finish(self, run_id: str, status: str, error_type: str | None = None, error: str | None = None,
+                     traceback: str | None = None) -> None:
+        await self._exec("UPDATE runs SET status = %s, ended_at = %s, error_type = %s, error = %s, traceback = %s WHERE id = %s",
+                         (status, _now(), error_type, error, traceback, run_id))
+
+    async def for_thread(self, thread_id: str) -> list[dict]:
+        return await self._rows(f"SELECT {self._COLS} FROM runs WHERE thread_id = %s ORDER BY seq DESC", (thread_id,))
+
+    async def recent(self, status: str | None, limit: int) -> list[dict]:
+        if status is None:
+            return await self._rows(f"SELECT {self._COLS} FROM runs ORDER BY seq DESC LIMIT %s", (limit,))
+        return await self._rows(f"SELECT {self._COLS} FROM runs WHERE status = %s ORDER BY seq DESC LIMIT %s", (status, limit))
+
+    async def sweep(self) -> int:
+        return len(await self._exec("UPDATE runs SET status = %s, ended_at = %s WHERE status IN (%s, %s) RETURNING id",
+                                    (LOST, _now(), QUEUED, RUNNING)))
+
+    async def delete_thread(self, thread_id: str) -> None:
+        await self._exec("DELETE FROM runs WHERE thread_id = %s", (thread_id,))
+        await self._exec("DELETE FROM pending_messages WHERE thread_id = %s", (thread_id,))
+
+    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False) -> dict:
+        merged = "excluded.text || CAST(%s AS TEXT) || pending_messages.text" if front else "pending_messages.text || CAST(%s AS TEXT) || excluded.text"
+        now = _now()
+        return (await self._rows("INSERT INTO pending_messages (thread_id, mode, text, created_at, updated_at) VALUES (%s, %s, %s, %s, %s) "
+                                 f"ON CONFLICT (thread_id, mode) DO UPDATE SET text = {merged}, updated_at = excluded.updated_at "
+                                 "RETURNING text, created_at, updated_at", (thread_id, mode, text, now, now, JOIN)))[0]
+
+    async def get_pending(self, thread_id: str, mode: str) -> dict | None:
+        rows = await self._rows("SELECT text, created_at, updated_at FROM pending_messages WHERE thread_id = %s AND mode = %s",
+                                (thread_id, mode))
+        return rows[0] if rows else None
+
+    async def take_pending(self, thread_id: str, mode: str) -> str | None:
+        rows = await self._exec("DELETE FROM pending_messages WHERE thread_id = %s AND mode = %s RETURNING text", (thread_id, mode))
+        return rows[0]["text"] if rows else None

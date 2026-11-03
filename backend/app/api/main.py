@@ -26,7 +26,9 @@ from app.graph.research.memory import DreamSchedule
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """服务起来时开整理记忆的定时任务（见 graph.research.memory.DreamSchedule），关掉时停。"""
+    """服务起来时先打开对话的存储：没配库、连不上就报错，服务起不来（见 research_runner.open_storage）。
+    再开整理记忆的定时任务（见 graph.research.memory.DreamSchedule），关掉时停。"""
+    research()
     schedule = None
     if config.DREAM_ENABLED:
         schedule = DreamSchedule(lambda: research().dream(), lambda: research().memory.last_dream(), config.DREAM_HOUR)
@@ -37,7 +39,7 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="LingDraft PoC", lifespan=lifespan)
-_research_mu = threading.Lock()  # 整理记忆的线程和请求可能同时第一次用到运行器，只建一个
+_research_mu = threading.Lock()  # 服务启动时建好；测试不走启动流程，请求可能同时第一次用到运行器，只建一个
 _runner: GraphRunner | None = None
 _research: ResearchRunner | None = None
 _favicons: Favicons | None = None
@@ -61,7 +63,7 @@ def research() -> ResearchRunner:
     with _research_mu:
         if _research is None:
             _research = ResearchRunner()
-            _research.recover()  # 进程里第一次用到：之前留下的“还在跑”的运行记录都是上一个进程的
+            _research.recover()  # 进程里第一次建：之前留下的“还在跑”的运行记录都是上一个进程的
         return _research
 
 

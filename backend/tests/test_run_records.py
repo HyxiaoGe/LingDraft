@@ -8,11 +8,13 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
-from app import config
+from app import aio, config
 from app.api import main as api_main
-from app.api import run_store as run_store_mod
+from app.api import research_runner as research_runner_mod
 from app.api.research_runner import ResearchRunner
-from app.api.run_store import LOST, QUEUE, MemoryRunStore, SqliteRunStore
+from app.api.research_runner import open_storage as REAL_OPEN_STORAGE  # 导入时还没被 conftest 换掉
+from app.api.run_store import LOST, QUEUE, MemoryRunStore, PostgresRunStore
+from app.graph.research.graph import postgres_pool
 from tests.research_helpers import SIMPLE, events, flaky_runner, hold_model, last, new, say, wait_until
 
 
@@ -37,18 +39,33 @@ def _runs(client, tid: str) -> list[dict]:
     return resp.json()["runs"]
 
 
-# ---- 存储本身：内存、SQLite，设了 LINGDRAFT_TEST_DATABASE_URL 时还有 Postgres ----
+# ---- 存储本身：内存，设了 LINGDRAFT_TEST_DATABASE_URL 时还有 Postgres ----
 
-@pytest.fixture(params=["memory", "sqlite", "postgres"])
-def store(request, tmp_path):
+class _Sync:
+    """存储的方法都是协程（在对话的事件循环里调）：测试里同步地调，转到那个循环里做。"""
+
+    def __init__(self, store) -> None:
+        self._store = store
+
+    def __getattr__(self, name: str):
+        method = getattr(self._store, name)
+        return lambda *a, **kw: aio.run(method(*a, **kw))
+
+
+@pytest.fixture(params=["memory", "postgres"])
+def store(request):
     if request.param == "memory":
-        yield MemoryRunStore()
-    elif request.param == "sqlite":
-        yield SqliteRunStore(tmp_path / "runs.sqlite")
-    else:
-        if not config.DATABASE_URL:
-            pytest.skip("没设 LINGDRAFT_TEST_DATABASE_URL")
-        yield run_store_mod.PostgresRunStore(config.DATABASE_URL)  # 连接池由 conftest 关
+        yield _Sync(MemoryRunStore())
+        return
+    if not config.DATABASE_URL:
+        pytest.skip("没设 LINGDRAFT_TEST_DATABASE_URL")
+    pool = aio.run(postgres_pool(config.DATABASE_URL))
+    try:
+        s = PostgresRunStore(pool)
+        aio.run(s.setup())
+        yield _Sync(s)
+    finally:
+        aio.run(pool.close())
 
 
 def test_store_keeps_each_run(store):
@@ -143,7 +160,7 @@ def test_failed_run_keeps_its_error_after_retry(tmp_path, caplog):
     assert any("执行出错" in r.getMessage() and r.exc_info for r in caplog.records)
     (run,) = _runs(http, tid)
     assert (run["status"], run["error_type"], run["error"]) == ("error", "RuntimeError", "假模型：网络断了")
-    assert "Traceback" in rr.run_store.for_thread(tid)[0]["traceback"]
+    assert "Traceback" in aio.run(rr.run_store.for_thread(tid))[0]["traceback"]
     end = last(events(http.post(f"/api/research/threads/{tid}/retry")), "state")
     assert end["status"] == "idle" and end["error"] is None
     retry, first = _runs(http, tid)
@@ -170,12 +187,11 @@ def test_stopped_run_is_recorded(client, rr):
 
 
 def test_records_survive_restart_and_unfinished_ones_become_lost(tmp_path):
-    """进程重启：运行记录还在（没配库时在数据目录下的 runs.sqlite）；上次没跑完的，服务启动时记成 lost。"""
+    """进程重启：运行记录还在；上次没跑完的，服务启动时记成 lost。再建一个运行器像重启（存储见 conftest 的 _storage）。"""
     one = ResearchRunner(fake=True, data_dir=tmp_path / "data")
-    assert isinstance(one.run_store, SqliteRunStore) or config.DATABASE_URL
     st = new(_client(one), SIMPLE)
-    one.run_store.create("cut", st["thread_id"], "say", None, None)  # 像是重启前正在跑的一次
-    one.run_store.started("cut")
+    aio.run(one.run_store.create("cut", st["thread_id"], "say", None, None))  # 像是重启前正在跑的一次
+    aio.run(one.run_store.started("cut"))
     two = ResearchRunner(fake=True, data_dir=tmp_path / "data")
     two.recover()
     runs = {r["id"]: r["status"] for r in two.thread_runs(st["thread_id"])}
@@ -185,7 +201,7 @@ def test_records_survive_restart_and_unfinished_ones_become_lost(tmp_path):
 def test_delete_thread_deletes_its_runs(client, rr):
     a, b = new(client, SIMPLE), new(client, SIMPLE)
     assert client.delete(f"/api/research/threads/{a['thread_id']}").status_code == 200
-    assert rr.run_store.for_thread(a["thread_id"]) == [] and len(_runs(client, b["thread_id"])) == 1
+    assert aio.run(rr.run_store.for_thread(a["thread_id"])) == [] and len(_runs(client, b["thread_id"])) == 1
 
 
 def test_runs_api_checks_its_input(client):
@@ -198,7 +214,7 @@ def test_runs_api_checks_its_input(client):
 
 def test_record_write_failure_does_not_break_the_run(tmp_path, caplog):
     class Broken(MemoryRunStore):
-        def create(self, *a, **kw):
+        async def create(self, *a, **kw):
             raise RuntimeError("库挂了")
 
         started = finish = create
@@ -210,9 +226,23 @@ def test_record_write_failure_does_not_break_the_run(tmp_path, caplog):
     assert sum("运行记录没写上" in r.getMessage() for r in caplog.records) == 3
 
 
-def test_in_memory_checkpointer_means_in_memory_records(tmp_path):
-    """测试、评测传内存的检查点：运行记录也在内存里，不碰数据目录和配置的库。"""
+def test_in_memory_checkpointer_means_in_memory_records(tmp_path, monkeypatch):
+    """测试、评测传内存的检查点：运行记录、长期记忆也在内存里，不碰配置的库。"""
+    from langgraph.store.memory import InMemoryStore
+
+    from app.api import research_runner
     from app.graph.research.graph import memory_checkpointer
 
+    monkeypatch.setattr(research_runner, "open_storage", None)  # 一调就报错
     rr = ResearchRunner(fake=True, data_dir=tmp_path / "data", checkpointer=memory_checkpointer())
-    assert isinstance(rr.run_store, MemoryRunStore) and not (tmp_path / "data" / "runs.sqlite").exists()
+    assert isinstance(rr.run_store, MemoryRunStore) and isinstance(rr.memory.store, InMemoryStore)
+
+
+def test_no_database_fails_at_startup(monkeypatch):
+    """没配库：服务启动时就报错，起不来，不会悄悄存到别处。"""
+    monkeypatch.setattr(config, "DATABASE_URL", "")
+    monkeypatch.setattr(research_runner_mod, "open_storage", REAL_OPEN_STORAGE)  # conftest 换掉的换回来
+    monkeypatch.setattr(api_main, "_research", None)
+    with pytest.raises(RuntimeError, match="没配 LINGDRAFT_DATABASE_URL"), TestClient(api_main.app):
+        pass
+    assert api_main._research is None

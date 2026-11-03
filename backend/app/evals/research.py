@@ -1,7 +1,7 @@
 """对话回放评测：用真实模型按用例跑对话（evals/research/cases.yaml），每轮做几项自动检查，导出对话记录。
 
 用法（在 backend 目录）：uv run python -m app.evals.research [--case id ...] [--repeat N] [--jobs N] [--no-sources]
-每个用例用独立的内存检查点，不碰本机的服务和 sqlite；走和页面同一个运行器（ResearchRunner），
+每个用例用独立的内存检查点，不碰本机的服务和配置的库；走和页面同一个运行器（ResearchRunner），
 所以顺带检查流式片段的消息 id 和存下来的对得上。结果写到 data/evals/research-<时间>.json，对话记录写到同名的 .md。
 
 每轮的检查：跑完了、有回复（这一轮的结果是 ok，最后一条模型消息有正文）、正文里引用的来源都存在；

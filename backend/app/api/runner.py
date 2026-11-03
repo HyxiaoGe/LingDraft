@@ -1,8 +1,8 @@
-"""两种场景共用的执行基础：占位、事件日志、读流（断线、刷新后接着读）、运行记录；海报场景的执行器也在这里（GraphRunner）。
+"""两种场景共用的执行基础：占位、事件日志、读流（断线、刷新后接着读）；海报场景的执行器也在这里（GraphRunner）。
 
 同一个线程同时只能有一次执行：请求被接受时就占位（排队也算），执行结束才释放，浏览器断开不影响。
 执行的事件先进日志、再由连接去读：断线或刷新后按事件 id 接着读，执行本身不受连接影响。
-每次执行还记一行运行记录（run_store，见 app.api.run_store），和事件日志用同一个 id；出错时连同堆栈一起记下，也打进日志。
+对话的每次执行还记一行运行记录（见 app.api.run_store、ResearchRunner._arecord），和事件日志用同一个 id；出错时连同堆栈一起记下，也打进日志。
 怎么执行各场景自己写：海报是同步的图，放进一个工作线程跑（Playwright 同步浏览器绑定线程，PoC 不需要并发渲染）；
 对话是对话事件循环里的任务（见 app.api.research_runner.ResearchRunner）。
 """
@@ -13,7 +13,6 @@ import json
 import logging
 import re
 import threading
-import traceback
 import uuid
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable, Iterator
@@ -26,7 +25,6 @@ from langgraph.types import Command
 from pydantic import BaseModel
 
 from app import config
-from app.api.run_store import ERROR, SUCCESS, RunStore
 from app.graph.poster.graph import build_graph, open_sqlite_checkpointer
 from app.graph.poster.nodes import _element_view
 from app.llm import ArkPlanner, FakePlanner
@@ -251,37 +249,18 @@ def jsonable(x: Any) -> Any:
 
 
 class BaseRunner:
-    """场景无关的部分：占位（runs）、事件日志（events）、把日志读成 SSE（_stream、follow）、运行记录（run_store）。
+    """场景无关的部分：占位（runs）、事件日志（events）、把日志读成 SSE（_stream、follow）。
     子类定义状态视图（state_view）和怎么执行。"""
 
     api_prefix = "/api/threads"
     runs: RunRegistry = _runs
     events: EventLog = _log
-    run_store: RunStore | None = None  # 没有就不记运行记录
 
     def _run_key(self, thread_id: str) -> str:
         return f"{self.api_prefix}:{thread_id}"
 
     def state_view(self, thread_id: str) -> dict:
         raise NotImplementedError
-
-    # ---- 运行记录 ----
-
-    def _record(self, write: Callable[[RunStore], None]) -> None:
-        """写运行记录。写不上只打日志，不影响执行本身。"""
-        if self.run_store is None:
-            return
-        try:
-            write(self.run_store)
-        except Exception:  # noqa: BLE001
-            log.warning("运行记录没写上", exc_info=True)
-
-    def _finish(self, run: str, status: str, error: BaseException | None = None) -> None:
-        if error is None:
-            self._record(lambda s: s.finish(run, status))
-            return
-        tb = "".join(traceback.format_exception(error))
-        self._record(lambda s: s.finish(run, status, type(error).__name__, str(error), tb))
 
     # ---- 读流 ----
 
@@ -415,10 +394,10 @@ class GraphRunner(BaseRunner):
     # ---- 执行 ----
 
     def start(self, thread_id: str, request: str, product_image: str | None) -> AsyncIterator[str]:
-        return self._submit(thread_id, lambda: {"request": request, "product_image": product_image}, "new")
+        return self._submit(thread_id, lambda: {"request": request, "product_image": product_image})
 
     def resume(self, thread_id: str, payload: dict) -> AsyncIterator[str]:
-        return self._submit(thread_id, lambda: Command(resume=payload), "resume")
+        return self._submit(thread_id, lambda: Command(resume=payload))
 
     def _graph_events(self, thread_id: str, inp: Any) -> Iterator[dict]:
         cfg = {"configurable": {"thread_id": thread_id}}
@@ -436,13 +415,13 @@ class GraphRunner(BaseRunner):
                 else:
                     yield {"event": "node", "data": self._summarize(thread_id, node, update)}
 
-    def _submit(self, thread_id: str, make_input: Callable[[], Any], kind: str) -> AsyncIterator[str]:
-        """占位 → 算出图的输入（不通过就退位）→ 提交执行。占着位，别的请求改不了这个线程。kind 是这次执行怎么来的，记进运行记录。"""
+    def _submit(self, thread_id: str, make_input: Callable[[], Any]) -> AsyncIterator[str]:
+        """占位 → 算出图的输入（不通过就退位）→ 提交执行。占着位，别的请求改不了这个线程。"""
         key = self._run_key(thread_id)
         if not self.runs.admit(key):
             raise RunConflict("这一步还在处理，等它完成后再提交")
         try:
-            return self._launch(thread_id, make_input(), kind)
+            return self._launch(thread_id, make_input())
         except BaseException:
             self.runs.release(key)
             raise
@@ -451,28 +430,22 @@ class GraphRunner(BaseRunner):
         for ev in events:
             self.events.append(run, ev)
 
-    def _launch(self, thread_id: str, inp: Any, kind: str) -> AsyncIterator[str]:
-        """开一段新的事件日志、记一行运行记录并提交执行，返回读这段日志的 SSE。执行结束才释放占位：浏览器断开、没人读都照常跑完。"""
+    def _launch(self, thread_id: str, inp: Any) -> AsyncIterator[str]:
+        """开一段新的事件日志并提交执行，返回读这段日志的 SSE。执行结束才释放占位：浏览器断开、没人读都照常跑完。"""
         key = self._run_key(thread_id)
         run = self.events.open(key)
         queued = self.executor.reserve()
-        self._record(lambda s: s.create(run, thread_id, kind, None, config.VERSION or None))
 
         def work():
             try:
                 self.runs.started(key)
-                self._record(lambda s: s.started(run))
                 self.events.append(run, {"event": "started", "data": {}})
-                status, error = ERROR, None  # 被 Exception 以外的打断（进程要退出）也记成出错
                 try:
                     self._pump(run, self._graph_events(thread_id, inp))
-                    status = SUCCESS
                 except Exception as e:  # noqa: BLE001
-                    error = e
                     log.exception("执行出错：%s 运行 %s", key, run)
                     self.events.append(run, {"event": "error", "data": {"message": str(e)}})
                 finally:
-                    self._finish(run, status, error)
                     self.runs.release(key)
                 try:
                     self.events.append(run, {"event": "state", "data": self.state_view(thread_id)})
@@ -484,9 +457,8 @@ class GraphRunner(BaseRunner):
         try:
             self.events.append(run, {"event": "thread", "data": {"thread_id": thread_id, "queued": queued}})  # 排队时也先把 id 给页面
             self.executor.submit(work)
-        except BaseException as e:
+        except BaseException:
             self.executor.release()
             self.events.close(run)
-            self._finish(run, ERROR, e)
             raise
         return self._stream(run)
