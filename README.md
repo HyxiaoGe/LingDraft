@@ -11,15 +11,14 @@
 ```mermaid
 flowchart TB
     UI["页面（React）"] -- "说话 · 排队 · 插话 · 停止" --> API["FastAPI"]
-    API -- "SSE 事件流，断线带事件 id 续看" --> UI
-    API --> Runner["运行器<br/>运行占位 · 排队 · 取消 · 事件日志"]
-    Runner -- "aupdate_state + astream<br/>messages / updates / custom，subgraphs=True" --> Main
-    Main["主 agent：create_agent（DeepSeek V4 Pro）<br/>中间件：Turn · ContentGuard · Compaction<br/>ToolProgress · InvalidToolCallRetry"]
-    Main -- "task，并行派出" --> Sub["子 agent：create_agent（Flash）<br/>每步提醒剩余次数 · 按工具硬上限"]
-    Main --> Tools["搜索 · 读网页 · 天气 · 画图 · 取时间 · recall"]
+    API -- "SSE 事件流<br/>断线续看" --> UI
+    API --> Runner["运行器<br/>占位 · 排队 · 取消<br/>事件日志"]
+    Runner -- "aupdate_state + astream<br/>subgraphs=True" --> Main["主 agent · V4 Pro<br/>create_agent<br/>+ 5 个中间件"]
+    Main -- "task，并行派出" --> Sub["子 agent · Flash<br/>create_agent<br/>按工具限次"]
+    Main --> Tools["搜索 · 读网页 · 天气<br/>画图 · 时间 · recall"]
     Sub --> Tools
-    Runner --- PG[("Postgres<br/>AsyncPostgresSaver：检查点<br/>AsyncPostgresStore：长期记忆<br/>运行记录")]
-    Dream["每天 3 点整理长期记忆"] --> PG
+    Runner --- PG[("Postgres<br/>检查点 · Store<br/>运行记录")]
+    Dream["每天整理<br/>长期记忆"] --> PG
 ```
 
 ## LangGraph 在这里怎么用
