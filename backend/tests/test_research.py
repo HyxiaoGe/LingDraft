@@ -14,6 +14,7 @@ import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.messages.tool import tool_call_chunk
+from langgraph._internal._constants import ERROR
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app import aio, research_llm
@@ -363,6 +364,36 @@ def test_search_auth_error_fails_the_run():
         c.say("比较两款笔记软件")
     v = c.view()
     assert v["status"] == "failed" and "401" in v["error"]
+
+
+def test_failed_parallel_search_shows_the_real_error():
+    """同时搜两个，一个密钥出错：LangGraph 把还在等的另一个取消，也给它记一条 CancelledError。
+    页面上说的是真正出错的原因（401），不是被连带取消的那条。"""
+    async def handler(req: httpx.Request) -> httpx.Response:
+        if json.loads(req.content)["query"].endswith("a"):  # 第一个还在等，第二个出错时被取消
+            await asyncio.sleep(5)
+            return httpx.Response(200, json={"results": []})
+        return httpx.Response(401, json={"error": "unauthorized"})
+
+    c = Chat(planner=_with_gateway(FakeResearchPlanner(), handler))
+    with pytest.raises(GatewayAuthError):
+        c.say("一直搜：笔记软件")
+    snap = c.r.graph.get_state({"configurable": {"thread_id": c.tid}})
+    (cancelled,) = [t for t in snap.tasks if not t.error]
+    # 被取消的那条是取消生效后才写的，赶不赶得上 LangGraph 收尾看时机：真实运行里赶上了（11-03 网关密钥填错时），这里照它（_runner.commit）补上
+    c.saver.put_writes(snap.config, [(ERROR, asyncio.CancelledError())], cancelled.id)
+    errors = [str(t.error) for t in c.r.graph.get_state({"configurable": {"thread_id": c.tid}}).tasks if t.error]
+    assert len(errors) == 2 and errors[0] == "CancelledError()"  # 被取消的排在前面：以前页面上显示的就是它
+    v = c.view()
+    assert v["status"] == "failed" and "401" in v["error"] and "Cancelled" not in v["error"]
+
+
+def test_failure_text_skips_cancelled_tasks():
+    """只有被取消的（进程退出时整轮被掐断）：就是半路停了，和没有错误记录时一样说。"""
+    auth = "GatewayAuthError('搜索失败：HTTP 401')"
+    assert research_runner._failure_text(["CancelledError()", auth]) == "搜索失败：HTTP 401"
+    assert research_runner._failure_text(["CancelledError()"]) == research_runner._failure_text([]) == research_runner.CUT_SHORT
+    assert research_runner._failure_text(["RuntimeError('x')", auth]) == "x"  # 都是真出错的，照旧给第一条
 
 
 # ---- 停止 ----
