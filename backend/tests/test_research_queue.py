@@ -120,6 +120,7 @@ def test_said_while_running_goes_after_the_turn(client, rr):
     # 这次执行最后的状态里，排着的话已经发出去了：线程又在跑新的一轮
     end_of_run = last(run.evs, "state")
     assert end_of_run["queued_message"] is None and len(end_of_run["turns"]) == 3
+    assert end_of_run["status"] == "running"  # 有空位，接着发的这一轮马上就跑：不闪一下“排队中”
     assert end_of_run["turns"][2]["user"] == "直接答：第三句"
     assert ("phase", {"phase": "suggest"}) not in run.evs
     end = _settled(client, tid, 3)

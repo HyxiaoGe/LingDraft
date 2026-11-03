@@ -135,12 +135,28 @@ export default function Workspace() {
       if (ACTIVE.has(s.status)) {
         setLive({ items: [], turnsAtStart: s.turns.length, stage: s.status === "queued" ? QUEUED : null });
         await follow(id, g, []);
-      } else takeBack(id, leftover(s)); // 没在跑却还排着话：上次那一轮出错了、或服务重启时没跑完
+      } else {
+        takeBack(id, leftover(s)); // 没在跑却还排着话：上次那一轮出错了、或服务重启时没跑完
+        if (s.suggesting) awaitSuggestions(id, g);
+      }
     } catch (e) {
       if (g !== gen.current) return;
       if (e.status === 404) select(null, "replace"); // 线程确实不在了才换成新对话；网络抖动时地址留着，刷新还能再试
       setError(e.status === 404 ? "这个对话不存在，可能已经删掉了" : `打开失败：${e.message || e}`);
     }
+  }
+
+  // 打开时这一轮已经结束、推荐问题还在起（刷新、切回来）：接上事件流等着，服务器从现在接着发（不从头补发整轮），起好了会再来一次状态。
+  // 流结束了再取一次状态为准（起好的那次状态正好在接上之前发出去了、或者没起成）；又说了话（连接被换掉）就不等了
+  async function awaitSuggestions(id, g) {
+    setSuggesting(true);
+    const sig = ctl.current.signal;
+    const show = (s) => { if (g === gen.current && !sig.aborted && !ACTIVE.has(s.status)) setSt(s); };
+    try {
+      await followResearchThread(id, null, (ev, data) => { if (ev === "state") show(data); }, sig);
+      show(await getResearchState(id));
+    } catch { /* 下次打开再看 */ }
+    if (g === gen.current && !sig.aborted) setSuggesting(false);
   }
 
   // 接上服务器上这次执行：补发断线期间漏掉的事件，再接着收；连不上就隔一会儿重连。

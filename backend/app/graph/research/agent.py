@@ -65,6 +65,8 @@ class ChatContext:
 
     images: ImageStore  # 画好的图存在哪儿
     take_guide: Callable[[], Awaitable[HumanMessage | None]] = _no_guide  # 取走用户插进这一轮的话（取一次就没了）；没有是 None
+    # 上一次运行已经起好、页面上已经显示了，却没写进 state 的标题（那次第一次调模型出错了，出错的线程写不了 state）：这次直接用，不再起一个不一样的
+    title: str | None = None
 
 
 def now() -> str:
@@ -132,8 +134,12 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         return {"messages": [msg]}
 
     async def awrap_model_call(self, request: ModelRequest, handler):
-        # 还没有标题就和这次调模型同时起，按这段对话的第一句（第一轮出错、停下时还没写进去的，下一次调模型补上）
-        job = None if request.state.get("title") else _TitleJob(self.planner, history.requests(request.state["messages"])[0])
+        # 还没有标题就和这次调模型同时起，按这段对话的第一句；起好了随这次调模型的结果写进 state。
+        # 停下的随停止写进去（stop_turn）；出错的写不了，上次起好的从 ChatContext.title 来，不再起
+        job = None
+        if not request.state.get("title"):
+            known = request.runtime.context.title if request.runtime and request.runtime.context else None
+            job = _TitleJob(self.planner, history.requests(request.state["messages"])[0], known=known)
         try:
             emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
             prompt = system_prompt(turn_started(request), memory=await memory_text(self.memory))
@@ -171,7 +177,8 @@ def _retrying(msgs: list) -> bool:
     return bool(tail) and all(isinstance(m, ToolMessage) for m in tail) and any(isinstance(m.artifact, dict) and m.artifact.get("hidden") for m in tail)
 
 
-def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list[BaseMessage]] | None = None) -> dict[str, Any]:
+def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list[BaseMessage]] | None = None,
+              title: str | None = None) -> dict[str, Any]:
     """用户点了停止，这一轮到此为止：没跑完的工具调用补上结果，已经流出来的思考和正文（partial）存成这一轮的回复，记下这一轮。
     只想了、正文还没写的也存：页面上停下前后看到的一样；它不发给模型（见 history.is_stopped_thought）。
     返回的更新以 TURN_END 的名义写进检查点。这一轮还没开始（排队时就停了）也要补一条记录。
@@ -197,7 +204,10 @@ def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list
         turns.append(Turn(id=human.id, started_at=now()))
     turns[-1] = turns[-1].model_copy(update={"ended_at": now(), "suggestions": [], "usage": history.usage_of(new),
                                              "subagent_usage": history.subagent_usage(new), "outcome": "stopped"})
-    return {"messages": new, "turns": turns}
+    out: dict[str, Any] = {"messages": new, "turns": turns}
+    if title and not values.get("title"):  # 停下时标题已经起好、页面已经显示了：存下来，不然停下后跳回原话，下一轮又起一个不一样的
+        out["title"] = title
+    return out
 
 
 def _stopped_sources(found: list[Source]) -> str:
@@ -223,9 +233,10 @@ class _TitleJob:
     """照 Fusion，起标题和回答同时跑，不让回答等它：起好了马上发给页面；这次调模型结束时写进 state，还没起好就再等一会儿。
     模型返回的只去掉首尾空白（引号、书名号是标题的一部分，不删），太长截掉；出错、等不到用用户原话。先定下来的算数，之后的不再发、不再改。
     另起一个任务调模型，用空的上下文：不带这次运行的回调，它的字不进这次运行的流（不然页面上会当成回答）。
-    往流里写要在图的上下文里（写的时候按上下文认是哪个图），所以起头时复制一份上下文，发标题时在它里面写。"""
+    往流里写要在图的上下文里（写的时候按上下文认是哪个图），所以起头时复制一份上下文，发标题时在它里面写。
+    known 是上一次运行已经起好的（见 ChatContext.title）：直接定下来，不调模型。"""
 
-    def __init__(self, planner, text: str) -> None:
+    def __init__(self, planner, text: str, known: str | None = None) -> None:
         self._title: str | None = None
         self._text = text
         try:
@@ -233,7 +244,11 @@ class _TitleJob:
         except RuntimeError:  # 不在流式运行里（例如测试直接 invoke）
             self._write = None
         self._ctx = contextvars.copy_context()
-        self._task = asyncio.get_running_loop().create_task(self._run(planner), context=contextvars.Context())
+        self._task: asyncio.Task | None = None
+        if known:
+            self._settle(known)
+        else:
+            self._task = asyncio.get_running_loop().create_task(self._run(planner), context=contextvars.Context())
 
     async def _run(self, planner) -> None:
         try:
@@ -251,14 +266,15 @@ class _TitleJob:
             self._ctx.run(self._write, {"type": "title", "title": title})
 
     async def result(self, wait: float) -> str:
-        done, _ = await asyncio.wait({self._task}, timeout=wait)
-        if not done:
+        task = self._task
+        if task is not None and not (await asyncio.wait({task}, timeout=wait))[0]:
             log.warning("起标题超过 %s 秒，先用原话", wait)
             self._settle(_fallback_title(self._text))
         return self._title or _fallback_title(self._text)
 
     def cancel(self) -> None:
-        self._task.cancel()
+        if self._task is not None:
+            self._task.cancel()
 
 
 class ToolProgressMiddleware(AgentMiddleware):

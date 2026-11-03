@@ -300,16 +300,36 @@ def test_failed_turn_keeps_content_and_can_retry(tmp_path):
 
 
 def test_title_is_kept_once_a_model_call_goes_through(tmp_path):
-    """标题在第一次调模型结束时写进 state：那次调用出错就没写上（起得快的话页面已经拿到了），重试时再起一次、写进去。"""
+    """标题在第一次调模型结束时写进 state：那次调用出错、标题还没起好，就没有标题，重试时再起一次、写进去。"""
     rr = flaky_runner(tmp_path, lambda messages: True)
+    gate = hold(rr.planner, "title")  # 标题起得慢：模型先出错，起标题跟着这次调用取消
     http = _client(rr)
     ev = events(http.post("/api/research/threads", json={"text": SIMPLE}))
     st = last(ev, "state")
-    assert st["status"] == "failed"
+    assert st["status"] == "failed" and st["title"] == SIMPLE and not any(e == "title" for e, _ in ev)
     assert not rr.graph.get_state({"configurable": {"thread_id": st["thread_id"]}}).values.get("title")
+    gate.set()  # 重试时标题照常起
     end = last(events(_retry(http, st["thread_id"])), "state")
     assert end["status"] == "idle" and end["title"] == f"标题：{SIMPLE[:8]}"
-    assert [n for n, _ in rr.planner.calls].count("title") == 2
+
+
+def test_title_shown_before_a_failure_stays(tmp_path):
+    """第一次调模型出错时标题已经起好、页面已经显示了：出错的线程写不了 state（写了重试就接不上），运行器记着它。
+    失败后页面上、对话列表里还是它，重试时直接用、不再起一个不一样的，重试答完写进 state。"""
+    rr = flaky_runner(tmp_path, lambda messages: wait_until(lambda: bool(rr._titles)))  # 标题发到运行器以后模型才出错
+    http = _client(rr)
+    titled = f"标题：{SIMPLE[:8]}"
+    ev = events(http.post("/api/research/threads", json={"text": SIMPLE}))
+    st = last(ev, "state")
+    tid = st["thread_id"]
+    assert st["status"] == "failed" and [d["title"] for e, d in ev if e == "title"] == [titled]
+    assert not rr.graph.get_state({"configurable": {"thread_id": tid}}).values.get("title")
+    assert st["title"] == titled and state(http, tid)["title"] == titled
+    assert {r["thread_id"]: r["title"] for r in http.get("/api/research/threads").json()["threads"]}[tid] == titled
+    end = last(events(_retry(http, tid)), "state")
+    assert end["status"] == "idle" and end["title"] == titled
+    assert rr.graph.get_state({"configurable": {"thread_id": tid}}).values["title"] == titled
+    assert [n for n, _ in rr.planner.calls].count("title") == 1 and not rr._titles
 
 
 def test_retry_does_not_redo_searches(tmp_path):
@@ -335,7 +355,7 @@ def test_accepted_thread_survives_restart_before_running(tmp_path):
         await s.aclose()
 
     run_async(go())
-    assert one.state_view("acc00001")["status"] == "queued"
+    assert one.state_view("acc00001")["status"] == "running"  # 有空位，收下就算在跑（没真跑起来进程就停了）
     fresh = ResearchRunner(fake=True, data_dir=tmp_path / "data")
     fresh.events, fresh.runs = LocalEventLog(), LocalRunRegistry()
     v = fresh.state_view("acc00001")
@@ -404,6 +424,29 @@ def test_turn_ends_before_suggestions(client, rr):
     assert done["status"] == "idle" and done["turns"][1]["record"]["suggestions"] == []
     assert len(more["turns"][1]["record"]["suggestions"]) == 3 and more["title"] == "改过"  # 改名和写推荐问题都在
     assert state(client, tid)["turns"][1]["record"]["suggestions"] == more["turns"][1]["record"]["suggestions"]
+
+
+def test_open_while_suggesting_reads_on_from_now(client, rr):
+    """这一轮已经结束、推荐问题还在起的时候打开页面（刷新、切回来）：状态里说正在起；接上事件流从现在接着读，不从头补发整轮
+    （补发时页面会把答完的一轮当成正在跑的再显示一遍），起好了收到带推荐问题的状态。"""
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    gate = hold(rr.planner, "suggest")
+    first: dict = {}
+    t = threading.Thread(target=lambda: first.setdefault("resp", say(client, tid, SIMPLE)))
+    t.start()
+    try:
+        assert wait_until(lambda: _ended(client, tid, 2) and _logged(rr, tid)[-1] == {"event": "phase", "data": {"phase": "suggest"}})
+        assert state(client, tid)["suggesting"]
+        threading.Timer(0.3, gate.set).start()
+        got = run_async(_drain(rr.follow(tid, None)))
+    finally:
+        gate.set()
+        t.join(30)
+    whole = events(first["resp"])  # 说话那次连接收到的整次执行（最后一件是 end，序号从 1 起）
+    assert [e for _, e, _ in got] == ["state", "end"] and _seq(got[0][0]) == len(whole) - 1
+    assert got[0][2] == last(whole, "state")  # 就是这次执行最后那次状态：只收到了起好推荐问题以后的
+    assert len(got[0][2]["turns"][1]["record"]["suggestions"]) == 3 and not got[0][2]["suggesting"]
+    assert not state(client, tid)["suggesting"]
 
 
 def test_saying_more_drops_pending_suggestions(client, rr):

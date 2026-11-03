@@ -426,13 +426,18 @@ class BaseRunner:
         """接上这个线程当前的执行。after 是页面收到的最后一个事件 id。
 
         执行还没结束：属于这次执行就从它后面接着读，否则（刷新过、或是上一次执行的 id）从头补发。
+        这一轮已经结束（占位退了）、日志还开着，只差收尾的事件（对话是推荐问题）：没见过这次执行的页面打开时拿到的已经是结束后的状态，
+        从现在接着读，不从头补发整轮（补发时页面会把答完的一轮当成正在跑的再显示一遍）。
         已经结束：只补这个页面自己那次执行没收到的尾巴；其余情况（没见过这次执行、日志没了、进程重启过）只发当前状态。
         """
-        run = self.events.current(self._run_key(thread_id))
+        key = self._run_key(thread_id)
+        run = self.events.current(key)
         prev, _, n = (after or "").rpartition("-")
         if run is not None:
             start = int(n) if prev == run and n.isdigit() else 0
             evs, ended = self.events.read(run, start)
+            if not ended and not start and evs and self.runs.get(key) is None:
+                return self._stream(run, evs[-1][0])
             if not ended or (start and evs):
                 return self._stream(run, start)
         return self._snapshot(thread_id)
