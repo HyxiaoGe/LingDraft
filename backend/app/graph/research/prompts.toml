@@ -319,6 +319,18 @@ blocked = "The sub-agent was stopped because the model service's content moderat
 # 一个来源都还没查到的，用 agent.stopped_call
 stopped = """The user stopped this turn before this sub-agent finished, so it returned no report. Before it stopped, it had found the sources below. Each has its title, URL, and an excerpt: the opening of the page text if the sub-agent read the page ("excerpt_from": "page"), otherwise the search snippet ("excerpt_from": "search"). This is unchecked raw material, not findings. If you use it, cite the sources by their ids and claim no more than the excerpts show.
 {{ sources }}"""
+# 子 agent 出错了、没写出报告（模型服务不可用、意外的错误）：这个子任务算没做成，别的子任务和主 agent 照常（2026-11-03 Sean 定）。
+# 已经查到的来源照停止时那样交给主 agent；怎么补上这部分由主 agent 定：再派一个、自己查，或者先答、说明哪部分没查到
+error = """This sub-agent failed before it wrote a report: {{ cause }}.
+{% if sources -%}
+Before it failed, it had found the sources below. Each has its title, URL, and an excerpt: the opening of the page text if the sub-agent read the page ("excerpt_from": "page"), otherwise the search snippet ("excerpt_from": "search"). This is unchecked raw material, not findings. If you use it, cite the sources by their ids and claim no more than the excerpts show.
+{{ sources }}
+{% else -%}
+It had found no sources. Do not guess what it would have found.
+{% endif -%}
+Decide how to cover this part: launch it again, look it up yourself, or answer with what you have and tell the user what is missing."""
+error_unavailable = "its model service was unavailable (a new sub-agent would use the same model)"
+error_internal = "it hit an internal error"
 
 # ---- 上下文压缩（见 compaction）：对话太长时，发给主 agent 的那份里之前几轮换成说明或短版。灵稿自己的，Fusion 没有 ----
 # 换成说明、短版的那几轮，每次调模型拼出来的都一样，前缀缓存接得上；所以这里不能有时间、随机的东西。

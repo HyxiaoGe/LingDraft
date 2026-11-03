@@ -199,7 +199,7 @@ def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list
         if m.name == SUBAGENT_TOOL and (sub := (subagents or {}).get(m.tool_call_id)):
             m.artifact = {**(m.artifact or {}), "messages": messages_to_dict(sub)}
             if found := collect_sources(sub):
-                m.content = prompts.render("tools.task.stopped", sources=_stopped_sources(found))
+                m.content = prompts.render("tools.task.stopped", sources=found_sources_brief(found))
     new: list = turn_msgs + fixes
     if partial is not None and history.streamed_something(partial):
         new.append(partial)
@@ -214,8 +214,8 @@ def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list
     return out
 
 
-def _stopped_sources(found: list[Source]) -> str:
-    """停下的子 agent 已经查到的来源，给主 agent 看的：只有来源卡上的内容（标题、网址、开头一段），读过的整页正文不给。"""
+def found_sources_brief(found: list[Source]) -> str:
+    """没交回报告的子 agent（用户点了停止、出错了）已经查到的来源，给主 agent 看的：只有来源卡上的内容（标题、网址、开头一段），读过的整页正文不给。"""
     return json.dumps([{"id": s.id, "title": s.title, "url": s.url, **({"published_at": s.published_at} if s.published_at else {}),
                         "excerpt_from": "page" if s.excerpt_kind == "body" else "search", "excerpt": s.excerpt} for s in found],
                       ensure_ascii=False)

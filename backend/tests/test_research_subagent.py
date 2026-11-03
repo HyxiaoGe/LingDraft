@@ -9,6 +9,7 @@ import asyncio
 import json
 import threading
 
+import httpx
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 
@@ -17,7 +18,8 @@ from app.graph.research import agent as agent_mod
 from app.graph.research import history, prompts, subagent
 from app.graph.research.sources import EXCERPT_CHARS, cited, subagent_messages
 from app.research_llm import FakeResearchPlanner, FakeToolModel
-from tests.test_research import Chat, _answered, _kinds, _stored
+from app.tools.gateway import GatewayAuthError
+from tests.test_research import Chat, _answered, _kinds, _stored, _with_gateway
 
 SUB_ITEMS = ["thinking", "step:search", "thinking", "step:read", "thinking", "text"]
 
@@ -115,13 +117,14 @@ def test_at_most_three_subagents_run_at_once(monkeypatch):
         def __init__(self, worker) -> None:
             self.worker = worker
 
-        async def ainvoke(self, *a, **kw):
+        async def astream(self, *a, **kw):
             with mu:
                 seen["now"] += 1
                 seen["max"] = max(seen["max"], seen["now"])
             try:
                 await asyncio.sleep(0.1)
-                return await self.worker.ainvoke(*a, **kw)
+                async for values in self.worker.astream(*a, **kw):
+                    yield values
             finally:
                 with mu:
                     seen["now"] -= 1
@@ -276,7 +279,8 @@ def test_subagent_stopped_before_it_found_anything_says_only_that_it_stopped():
 
 
 def test_retry_continues_the_subagent_where_it_failed():
-    """子 agent 搜完以后调模型出错，这一轮失败；重试时它接着自己的检查点跑：不重搜，任务说明也不会多一份，预算接着算。"""
+    """子 agent 搜完以后网关密钥出错（配置问题，不当作子任务没做成），这一轮失败；
+    重试时它接着自己的检查点跑：不重搜，任务说明也不会多一份，预算接着算。"""
     armed, notes = [True], []
 
     class Flaky(FakeToolModel):
@@ -285,13 +289,13 @@ def test_retry_continues_the_subagent_where_it_failed():
                 notes.append(str(messages[-1].content).splitlines()[1])
             if armed[0] and any(isinstance(m, ToolMessage) for m in messages):
                 armed[0] = False
-                raise RuntimeError("假模型：网络断了")
+                raise GatewayAuthError("搜索失败：HTTP 401")
             return super()._message(messages)
 
     p = FakeResearchPlanner()
     p._sub_model = Flaky(prefix="fake-sub")
     c = Chat(planner=p)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(GatewayAuthError):
         c.say("子任务查一下杭州美食")
     assert c.view()["status"] == "failed"
     c.r.retry_input(c.tid)
@@ -302,6 +306,50 @@ def test_retry_continues_the_subagent_where_it_failed():
     assert sum(isinstance(m, HumanMessage) for m in subagent_messages(result)) == 1
     budget = subagent.TOOL_BUDGET["search_web"]
     assert notes[:2] == [f"search_web Budget Used: 1, search_web Budget Remaining: {budget - 1}"] * 2  # 出错那次、重试那次
+
+
+def test_a_failed_subagent_leaves_the_others_and_the_main_agent_alone():
+    """分头派两个，第 1 个搜完以后模型服务不可用：它算没做成，卡片留着它做过的那次搜索；另一个照常做完，主 agent 照常汇总。
+    交回给主 agent 的说明里有出错的原因和它已经查到的来源，怎么补上由主 agent 定。"""
+    c = Chat()
+    v = c.say("分头出错杭州美食")
+    (turn,) = v["turns"]
+    failed, done = _tasks(turn)
+    assert v["status"] == "idle" and turn["record"]["outcome"] == "ok"
+    assert not failed["ok"] and failed["message"] == history.TASK_FAILURES["unavailable"]
+    assert _kinds(failed) == ["thinking", "step:search"] and failed["source_ids"]
+    assert done["ok"] and _kinds(done) == SUB_ITEMS
+    assert turn["items"][-1]["text"].startswith("汇总：[")
+    results = {m.tool_call_id: m for m in _task_results(c)}
+    note = str(results[failed["id"]].content)
+    assert note.startswith("This sub-agent failed before it wrote a report: its model service was unavailable")
+    assert all(f'"id": "{sid}"' in note for sid in failed["source_ids"])
+    assert turn["record"]["subagent_usage"]["searches"] == 2  # 没做成的那个做过的也算
+
+
+def test_an_unexpected_error_in_a_subagent_is_reported_the_same_way():
+    """子 agent 里出了意外的错（代码 bug 之类）：一样算没做成、日志里记下，这一轮照常。"""
+
+    class Broken(FakeToolModel):
+        def _message(self, messages: list[BaseMessage]):
+            raise RuntimeError("假模型：出了个 bug")
+
+    p = FakeResearchPlanner()
+    p._sub_model = Broken(prefix="fake-sub")
+    v = Chat(planner=p).say("子任务查一下杭州美食")
+    (turn,) = v["turns"]
+    (task,) = _tasks(turn)
+    assert turn["record"]["outcome"] == "ok" and turn["items"][-1]["text"] == "汇总：子任务没查到。"
+    assert not task["ok"] and task["message"] == history.TASK_FAILURES["error"]
+
+
+def test_a_gateway_auth_error_in_a_subagent_still_fails_the_turn():
+    """网关密钥不对：主 agent 自己查也一样失败，这一轮照旧失败，页面亮出原因。"""
+    c = Chat(planner=_with_gateway(FakeResearchPlanner(), lambda req: httpx.Response(401, json={"error": "unauthorized"})))
+    with pytest.raises(GatewayAuthError):
+        c.say("子任务查一下杭州美食")
+    v = c.view()
+    assert v["status"] == "failed" and "401" in v["error"]
 
 
 def test_moderation_stop_in_a_subagent_is_reported_and_the_turn_goes_on():

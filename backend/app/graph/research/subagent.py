@@ -9,10 +9,13 @@
 - 搜索、读页各有预算（TOOL_BUDGET）。只写在提示词里管不住 Flash，它会一直查到调用上限（见 docs/LangGraph研究/06-子agent查个没完.md）：
   - 超了的调用不执行，模型收到一条“不要再调”（LangChain 的 ToolCallLimitMiddleware，continue 模式）；
   - 每次工具结果回来，请求末尾加一条各工具用了几次、还剩几次（BATS 的 Budget Tracker，不存进记录）。真实模型里守住预算靠的是这一条。
+- 子 agent 出错了（模型服务不可用、意外的错误）：这个子任务算没做成，交回它已经查到的来源，别的子任务和主 agent 照常，
+  怎么补上这部分由主 agent 定（2026-11-03 Sean 定；调模型断了的已经由 InterruptedRetryMiddleware 再调过，这里不再重试）。
+  网关密钥不对还是让这一轮失败：主 agent 自己查也一样失败，配置问题要亮出来。
 - 子 agent 的检查点跟着主 agent 的存储（create_agent 不传 checkpointer），存在 tools:<任务 id> 这个命名空间下：
-  这一轮中途出错，重试时同一个任务接着它自己的检查点跑，做过的搜索、读页不重来。
+  这一轮中途失败（网关密钥不对、服务重启），重试时同一个任务接着它自己的检查点跑，做过的搜索、读页不重来。
 - 交回给主 agent 的只有报告（工具结果的 content）。子 agent 的整段消息放在 artifact 里，模型看不到；
-  用户点了停止、还没写完报告的，交回的是它已经查到的来源（见 agent.stop_turn）。
+  用户点了停止、出错了，还没写完报告的，交回的是它已经查到的来源（见 agent.stop_turn、tools.task.error）。
   页面的子任务卡、这一轮的来源和用量从这里读（见 sources.subagent_messages）。
 - 运行器要知道子 agent 的流是哪个 task 调用的：开跑前往自定义流里写一条 subagent（调用 id 和命名空间），运行器自己用，不发给页面。
 """
@@ -20,6 +23,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -32,6 +36,7 @@ from langchain.agents.middleware.types import AgentMiddleware, AgentState, Model
 from langchain.tools import ToolRuntime
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage, messages_to_dict
 from langchain_core.tools import tool
+from langgraph.errors import GraphBubbleUp
 from pydantic import BaseModel, Field
 
 from app import config
@@ -45,13 +50,17 @@ from app.graph.research.agent import (
     ToolProgressMiddleware,
     _retrying,
     emit,
+    found_sources_brief,
     system_prompt,
     turn_start,
 )
-from app.graph.research.sources import SUBAGENT_TOOL, known_ids
+from app.graph.research.sources import SUBAGENT_TOOL, collect_sources, known_ids
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES
+from app.model_guard import ModelUnavailable
+from app.tools.gateway import GatewayAuthError
 from app.tools.research_tools import TIME_TOOL
 
+log = logging.getLogger(__name__)
 SUBAGENT_TOOLS = ("search_web", "read_page", TIME_TOOL)
 MAX_PER_TURN = 5  # 每轮最多派几个（2026-11-01 Sean 定 3～5 个）
 MAX_RUNNING = 3  # 同一个对话同时最多跑几个，多的排队
@@ -184,9 +193,21 @@ def make_task_tool(planner):
         emit({"type": "subagent", "id": runtime.tool_call_id, "ns": conf.get("checkpoint_ns", "")})
         inp = {"messages": [HumanMessage(prompt.strip())], "started_at": turn_start(msgs, runtime.state).isoformat(),
                "parent_sources": known_ids(msgs)}
-        async with _slot(conf["thread_id"], runtime.tool_call_id):
-            out = await worker.ainvoke(inp, context=runtime.context)
-        sub = out["messages"]
+        sub: list[BaseMessage] = []
+        try:
+            async with _slot(conf["thread_id"], runtime.tool_call_id):
+                # 和 ainvoke 一样跑，边跑边记下做到哪儿了：出错时交回已经做了的
+                async for values in worker.astream(inp, context=runtime.context, stream_mode="values"):
+                    sub = values["messages"]
+        except (GatewayAuthError, GraphBubbleUp):
+            raise
+        except Exception as e:  # 这个子任务算没做成，别的子任务、主 agent 照常（点停止是 CancelledError，不在这里）
+            unavailable = isinstance(e, ModelUnavailable)
+            (log.warning if unavailable else log.exception)("子 agent 出错，这个子任务算没做成：%s，%r", runtime.tool_call_id, e)
+            found = collect_sources(sub)
+            note = prompts.render("tools.task.error", sources=found_sources_brief(found) if found else "",
+                                  cause=prompts.render("tools.task.error_unavailable" if unavailable else "tools.task.error_internal"))
+            return result(note, ok=False, sub=sub, failure="unavailable" if unavailable else "error")
         if any(history.blocked_reason(m) for m in sub):
             return result(prompts.render("tools.task.blocked"), ok=False, sub=sub, failure="blocked")
         report = history.final_text(sub)

@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app import aio, config
 from app.graph.research import history, prompts
 from app.graph.research.compaction import RECALL_TOOL as RECALL
-from app.model_guard import ContentBlocked, GuardedChatModel, Interrupted, guard_key
+from app.model_guard import ContentBlocked, GuardedChatModel, Interrupted, ModelUnavailable, guard_key
 from app.tools.gateway import GatewayClient
 from app.tools.research_tools import TIME_TOOL, make_research_tools
 
@@ -417,6 +417,7 @@ class FakeToolModel(BaseChatModel):
     有“输出拦截”时，吐完思考后输出被截断。
     模型服务生成到一半断了（Interrupted，模拟 model_guard 换好的错误）：用户的话里有“中途断”时，写文字回复时吐完思考和前半段正文就断，
     这一轮里只断一次（主 agent、子 agent 各一次：子任务的说明里带着用户的话）；“一直断”：每次都断。
+    子 agent 出错：用户的话里有“出错”时，派出去的第 1 个子 agent 搜完以后模型服务不可用（ModelUnavailable），别的子 agent 照常。
     """
 
     bound: list[str] = Field(default_factory=list)
@@ -446,6 +447,8 @@ class FakeToolModel(BaseChatModel):
         def call(tool: str, **args) -> tuple[str, list[dict]]:
             return "", [{"name": tool, "args": args, "id": f"call_{tool}_{n}"}]
 
+        if "出错" in text and "第1方面" in text and hits:  # 只有子 agent 的任务说明里有“第N方面”
+            raise ModelUnavailable("模型服务暂时不可用（连接失败），稍后再试")
         if self.tool_choice == "none":
             return (f"不能再查了，按查到的说 [{hits[0]['id']}]。" if hits else "不能再查了，没查到。"), []
         if "坏JSON" in text and (not bad or "一直坏" in text) and not names:
