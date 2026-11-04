@@ -2,24 +2,26 @@
 
 from __future__ import annotations
 
-import httpx
+import json
+
+from langchain_core.messages import AIMessage, ToolMessage
 
 from app.evals.research import (
     Case,
     CaseTurn,
     CitationJudgement,
     CitationVerdict,
-    Recorder,
     RubricJudgement,
     load_cases,
+    material,
     run_case,
     summary_line,
+    text_for,
     transcript,
     turn_checks,
 )
-from app.research_llm import FakeResearchPlanner, fake_gateway_client
-from app.tools.gateway import GatewayClient
-from tests.research_helpers import blocking
+from app.research_llm import FakeResearchPlanner
+from tests.test_research import failing_search
 
 
 class FakeJudge:
@@ -38,9 +40,8 @@ class FakeJudge:
         return RubricJudgement(passed=True, reason="假裁判")
 
 
-def _run(turns: list[dict], judge=None, gateway=fake_gateway_client) -> dict:
-    return run_case(Case.model_validate({"id": "x", "source": "测试", "turns": turns}), lambda rec: FakeResearchPlanner(gateway=rec),
-                    gateway, judge or FakeJudge())
+def _run(turns: list[dict], judge=None, planner=FakeResearchPlanner) -> dict:
+    return run_case(Case.model_validate({"id": "x", "source": "测试", "turns": turns}), planner, judge or FakeJudge())
 
 
 def _failed(r: dict) -> list[tuple[int, str]]:
@@ -98,20 +99,48 @@ def test_reply_is_the_last_model_message():
 
 def test_search_service_down_is_an_error_not_a_failure():
     """搜索一次都没成功：测的是搜索服务，记为出错，不算对话链路没通过。"""
-    def down():
-        return GatewayClient("http://gw", "k", transport=httpx.MockTransport(lambda req: httpx.Response(400, text="bad header")))
+    async def down(query: str) -> str:
+        raise RuntimeError("Client failed to connect")
 
-    r = _run([{"say": "比较两款笔记软件"}], gateway=down)
-    assert not r["passed"] and r["error"].startswith("RuntimeError: 搜索全部失败")
+    r = _run([{"say": "比较两款笔记软件"}], planner=lambda: failing_search(down))
+    assert not r["passed"] and r["error"].startswith("RuntimeError: 搜索全部失败（unavailable）")
 
 
-def test_recorder_keeps_text_per_url():
-    rec = blocking(Recorder(fake_gateway_client()))
-    hits = rec.search("q", count=3, freshness="pm", domains=["example.test"])
-    rec.read(hits[0].url)
-    assert rec.searches[0]["freshness"] == "pm" and rec.searches[0]["domains"] == ["example.test"]
-    assert "正文" in rec.text_for(hits[0].url) and "长摘要" in rec.text_for(hits[0].url)
-    assert rec.text_for("https://nowhere.test") == "（没有记录到材料）"
+def _tool(name: str, cid: str, body, status: str = "success", artifact=None) -> ToolMessage:
+    return ToolMessage(content=json.dumps(body, ensure_ascii=False), name=name, tool_call_id=cid, status=status, artifact=artifact)
+
+
+def test_material_keeps_what_the_agent_saw_per_url():
+    """搜了什么、读了什么、每个网址看到的文字，都从消息里取：新旧两种搜索结果都认，没做成的记下错误码。"""
+    calls = AIMessage(content="", tool_calls=[
+        {"name": "search_web", "args": {"query": "q", "recency_days": 30, "domains": ["example.test"]}, "id": "c1"},
+        {"name": "search_web", "args": {"query": "old"}, "id": "c2"},
+        {"name": "search_web", "args": {"query": "down"}, "id": "c3"},
+        {"name": "read_page", "args": {"url": "https://a.test/1"}, "id": "c4"},
+        {"name": "read_page", "args": {"url": "https://a.test/3"}, "id": "c5"}])
+    msgs = [calls,
+            _tool("search_web", "c1", {"ok": True, "query": "q", "results": [{"id": "s1", "url": "https://a.test/1", "title": "A", "snippet": "摘要一"}]}),
+            _tool("search_web", "c2", [{"id": "s2", "url": "https://a.test/2", "title": "B", "description": "短", "content": "旧的长摘要"}]),
+            ToolMessage(content="No search was run.", name="search_web", tool_call_id="c3", status="error",
+                        artifact={"error": {"code": "unavailable", "retryable": True}}),
+            _tool("read_page", "c4", {"id": "s1", "ok": True, "url": "https://a.test/1", "title": "A", "content": "正文一"}),
+            ToolMessage(content="The page does not exist.", name="read_page", tool_call_id="c5", status="error",
+                        artifact={"error": {"code": "page_not_found", "retryable": False, "status": 404}})]
+    m = material(msgs)
+    assert m["searches"] == [{"query": "q", "recency_days": 30, "domains": ["example.test"], "urls": ["https://a.test/1"]},
+                             {"query": "old", "recency_days": None, "domains": [], "urls": ["https://a.test/2"]}]
+    assert [(f["query"], f["code"]) for f in m["failed_searches"]] == [("down", "unavailable")]
+    assert m["reads"] == [{"url": "https://a.test/1", "ok": True, "code": None}, {"url": "https://a.test/3", "ok": False, "code": "page_not_found"}]
+    assert text_for(m["evidence"], "https://A.test/1#top") == "摘要一\n\n正文一" and text_for(m["evidence"], "https://a.test/2") == "旧的长摘要"
+    assert text_for(m["evidence"], "https://nowhere.test") == "（没有记录到材料）"
+
+
+def test_subagent_searches_count_as_searched():
+    """主 agent 只派了子任务：子 agent 的搜索、读页也算这一轮的材料。"""
+    r = _run([{"say": "子任务查一下向量库", "expect": {"searched": True, "min_reads": 1}}])
+    assert ("searched", True) in [(c["name"], c["passed"]) for c in r["turns"][0]["checks"]]
+    assert ("min_reads", True) in [(c["name"], c["passed"]) for c in r["turns"][0]["checks"]]
+    assert r["turns"][0]["lookups"] == ["task"]
 
 
 def test_citation_outside_brackets_fails_cite_format():

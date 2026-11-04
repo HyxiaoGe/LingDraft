@@ -39,7 +39,7 @@ from langgraph.types import Command
 
 from app.graph.research import history, prompts
 from app.graph.research.memory import MemoryBook
-from app.graph.research.sources import SUBAGENT_TOOL, collect_sources, parse
+from app.graph.research.sources import SEPARATORS, SUBAGENT_TOOL, collect_sources, parse, search_hits
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Source, Turn
 from app.model_guard import ContentBlocked, Interrupted
 from app.tools.images import ImageStore
@@ -410,9 +410,9 @@ class ContentGuard(AgentMiddleware):
         """单条送审，返回 {消息 id: 去掉没通过内容后的结果}；一条都没拦下是空的。"""
         pieces: list[tuple[int, int | None, str]] = []  # (第几条结果, 搜索结果里的第几条（None 是整条）, 送审的文字)
         for i, m in enumerate(material):
-            data = parse(m)
-            if m.name == "search_web" and isinstance(data, list):
-                pieces += [(i, k, json.dumps(h, ensure_ascii=False)) for k, h in enumerate(data)]
+            hits = search_hits(parse(m)) if m.name == "search_web" else None
+            if hits is not None:
+                pieces += [(i, k, json.dumps(h, ensure_ascii=False)) for k, h in enumerate(hits)]
             else:
                 pieces.append((i, None, history.text_of(m)))
         bad: dict[int, set[int | None]] = {}
@@ -423,12 +423,14 @@ class ContentGuard(AgentMiddleware):
         for i, ks in bad.items():
             m = material[i]
             data = parse(m)
-            kept = [h for k, h in enumerate(data) if k not in ks] if None not in ks and isinstance(data, list) else []
+            hits = search_hits(data) if m.name == "search_web" else None
+            kept = [h for k, h in enumerate(hits) if k not in ks] if None not in ks and hits is not None else []
             if not kept:
                 out[m.id] = _withdrawn(m)
                 continue
             art = {**(m.artifact if isinstance(m.artifact, dict) else {}), "blocked": len(ks)}
-            out[m.id] = m.model_copy(update={"content": json.dumps(kept, ensure_ascii=False), "artifact": art})
+            body = kept if isinstance(data, list) else {**data, "results": kept}  # 11-05 以前存下的是一串条目
+            out[m.id] = m.model_copy(update={"content": json.dumps(body, ensure_ascii=False, separators=SEPARATORS), "artifact": art})
         return out
 
 
@@ -479,10 +481,11 @@ async def memory_text(memory: MemoryBook | None) -> str:
 
 
 def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook | None = None):
-    # subagent、compaction 用到本模块的东西，放在这里导入（weather_mcp 用到 prompts，一起放这里）
+    # subagent、compaction 用到本模块的东西，放在这里导入（weather_mcp、web_mcp 用到 prompts，一起放这里）
     from app.graph.research.compaction import CompactionMiddleware, make_recall_tool
     from app.graph.research.subagent import make_task_tool
     from app.tools.weather_mcp import WeatherMiddleware
+    from app.tools.web_mcp import WebToolsMiddleware
 
     # recall 一直都在（工具列表变了前缀缓存整个断），只有压缩换成说明的内容才用得上；页面上不显示这一步
     tools = [*planner.tools(), make_task_tool(planner), make_recall_tool()]
@@ -497,6 +500,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
             CompactionMiddleware(planner, tools, memory),  # 在 ContentGuard 里面：被内容审核停下的那几轮先去掉再压；用户插的话放进对话以后再估
             ToolProgressMiddleware(),
             WeatherMiddleware(),  # 在 ToolProgressMiddleware 里面：过程记录看到的是整理好的天气结果
+            WebToolsMiddleware(),  # 同上：搜索、读页的结果带上来源 id
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
             ModelCallCapMiddleware(),  # 在压缩里面：末尾加的说明不经过压缩
             InterruptedRetryMiddleware(),  # 最里面：只重发调模型这一下

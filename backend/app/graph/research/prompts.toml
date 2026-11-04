@@ -161,9 +161,12 @@ budget = """<budget>
 
 # ---- 工具描述（description 是工具说明，其余键是同名参数的说明） ----
 
-# Fusion: ai_tools.web_search_*（url_read 换成 read_page；条数是灵稿搜索服务的范围；年份不写死：工具描述在启动时就定了）
+# 搜索、读页的说明在 agent-tools 的 search-service、reader-service 里（Fusion 和灵稿共用：结果的样子、怎么准确使用结果、
+# 失败了怎么办、参数），连上时取来；lingdraft 是接在后面的灵稿自己的话（见 app.tools.web_mcp）：什么时候用、怎么搜、搜够没有、
+# 来源 id。brief 是没连上时占位工具的说明；unavailable、quota_exhausted 是服务没给结果（连不上、网关今天的上限到了）时给模型的话。
+# Fusion: ai_tools.web_search_*（url_read 换成 read_page；年份不写死：工具描述在启动时就定了）
 [tools.search_web]
-description = """Search the web for current information. Use this tool when:
+lingdraft = """Use this tool when:
 - The user asks about the latest news, current events, or real-time data such as weather, stock prices, or sports scores.
 - The request contains freshness-sensitive wording such as 'latest', 'today', 'currently', or the current year.
 - The user asks about a fact that may be uncertain or outdated.
@@ -176,7 +179,6 @@ Natural-request decision rules:
 
 Search strategy:
 - You choose the query angles, batches, result count, and languages. A simple factual question usually needs one or two queries; a broader one, such as a news roundup, a comparison, or analysis of a current event, needs a few complementary queries. Issue independent queries in parallel as multiple search_web calls in the same response.
-- Choose count for each query (1-10, default 5).
 - Search in the language of the likely original sources; a translated query helps when it reaches different reporting. Answer in the user's language.
 - Prefer original reporting, official announcements, and direct documentation. Spend a later batch only on a gap that matters to the answer, with a new angle rather than a paraphrase of an earlier query.
 
@@ -187,11 +189,6 @@ Deciding you have enough:
 - Stop when new results repeat what you already have. If a specific fact is still missing after two or three rephrased attempts, it is probably not published where search can reach; say so and answer with what you found.
 - Check carefully where the answer depends on it: exact numbers, dates, prices, rules, and conditions the user asked about. For those, prefer the primary source, use read_page when snippets are incomplete or disagree, and report conflicts between sources.
 
-Using results accurately:
-- Keep each claim, number, unit, place, and time attached to the specific entity and event its source describes. Preserve aggregation scope: a total across batches, an amount per batch, an annual amount, and a cumulative amount are not interchangeable. Do not add qualifiers such as 'each', 'per year', or 'cumulative' unless the source supports them; if the scope is ambiguous or figures do not reconcile, say so. Do not fill in unreported years or infer recurring annual activity from a few dated events. A publisher or site name is not automatically the subject of the event. Do not transfer figures or dates between similar entities or events.
-- A publication date is metadata about the page, not necessarily the event date. If an attribution, date, calculation basis, or requested detail is missing or ambiguous, state what is unknown; do not invent a plausible explanation. Not reported or not announced does not mean that a result or event does not exist.
-- Attribute each claim to the source that made it; do not say a publisher confirmed something you only saw quoted elsewhere.
-
 Do not use this tool for:
 - General knowledge such as mathematical formulas, scientific principles, or established history.
 - General explanations of stable background, historical causes, or known policy effects, such as why the iPhone moved from Lightning to USB-C.
@@ -200,15 +197,14 @@ Do not use this tool for:
 - Requests that explicitly ask for an answer from existing model knowledge.
 - Casual conversation or emotional support, such as greetings, identity questions, or simple arithmetic.
 
-Results: a list of candidate sources, each with id, title, url, description, content, and published_at. content is a few excerpts cut from the page, with gaps; it is not the full page. id is the source id you cite in the answer. If the search service fails, the result has ok=false and a reason: when retryable=true you may search once more; otherwise rephrase the query or continue with what you have."""
-query = "A concise, focused query for one evidence need. Use the language of the likely original sources, not necessarily the user's language. For independent angles, issue separate search_web calls in the same response. Include dates only when they help: the current date is given in the system prompt, and earlier dates are valid for historical evidence. Do not automatically add the current year or repeat a query without a new evidence objective."
-count = "Requested result count for this query, from 1 to 10; default 5. Choose based on the breadth of the evidence need. The search service may return fewer results."
-recency_days = "Optional recency window in days, from 1 through 365. Omit for no time filter; do not exclude older original reporting needed to explain a current event. The search service rounds the window up to 1, 7, 31, or 365 days, so 90 means the past year."
-domains = "Optional domain filters: at most 5 valid domains, for example openai.com."
+In LingDraft each result also has an id: the source id you cite in the answer."""
+brief = "Search the web for current information and get candidate sources."
+unavailable = "No search was run: the search service could not be reached. You may retry once; if it fails again, answer from what you already have and say that current information could not be looked up. Do not fabricate facts."
+quota_exhausted = "No search was run: the search service has used up its quota for today, so further searches will fail the same way. Do not search again; answer from what you already have and say that current information could not be looked up. Do not fabricate facts."
 
 # Fusion: prompt_templates/url-read-tool-description.j2、ai_tools.url（灵稿不预读用户消息里的网址，去掉了那一条）
 [tools.read_page]
-description = """Read the content of a specified URL. Use this tool when:
+lingdraft = """Use this tool when:
 - The user asks you to view, analyze, or summarize a webpage link.
 - The conversation refers to a specific URL whose content must be retrieved.
 - A search result needs deeper reading, especially to verify a key fact, official announcement, primary source, or source detail.
@@ -222,8 +218,10 @@ Do not use this tool when:
 - There is no specific URL to read.
 - The task requires finding information rather than reading a particular page; use search_web instead.
 
-Results: the page's main content in Markdown, with id, the source id you cite in the answer. ok=false means the page could not be read and kind gives the reason; unless retryable=true, do not retry the same URL, and use another source instead. Long content is truncated (truncated=true); the part cut off was not read and must not be treated as read."""
-url = "Complete URL to read, including http:// or https://."
+In LingDraft a page that was read also has an id: the source id you cite in the answer. When content is truncated, the part cut off was not read; do not treat it as read."""
+brief = "Read one web page and get its text."
+unavailable = "Not read: the page-reading service could not be reached. You may retry once; if it fails again, use search results and pages already read, and say what could not be checked. The page cannot be used as evidence; do not fabricate its content."
+quota_exhausted = "Not read: the page-reading service has used up its quota for today, so other pages will fail the same way. Do not keep trying other pages; continue with search results and pages already read, and say what could not be checked. The page cannot be used as evidence; do not fabricate its content."
 
 # 天气工具的说明在 agent-tools 的 weather-service 里（Fusion 和灵稿共用，照 Fusion 踩过的坑写的），连上时取来；
 # 这里只有接在它后面的灵稿自己的话（天气卡片、查不到时用哪个工具），和没调成时给模型的话（见 app.tools.weather_mcp）

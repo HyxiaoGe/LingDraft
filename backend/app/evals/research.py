@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -22,13 +21,13 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 import yaml
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.graph.research import history
 from app.graph.research.graph import memory_checkpointer
-from app.graph.research.sources import SOURCE_ID, SUBAGENT_TOOL, cited, url_key
+from app.graph.research.sources import SOURCE_ID, SUBAGENT_TOOL, cited, flatten, hit_text, parse, search_hits, url_key
 from app.prompting import PromptFile
-from app.tools.gateway import GatewayError
 from app.tools.research_tools import TIME_TOOL
 from app.tools.weather_mcp import WEATHER_TOOL
 
@@ -38,7 +37,7 @@ RESULTS_DIR = BACKEND / "data" / "evals"
 PROMPTS = PromptFile(Path(__file__).with_name("prompts.toml"))
 # 去外面查东西的工具：主 agent 调了其中任一个就算这一轮查过（取当前时间、recall 不算）
 LOOKUP_TOOLS = {"search_web", "read_page", WEATHER_TOOL, SUBAGENT_TOOL}
-EVIDENCE_CHARS = 8000  # 每个来源给裁判看的材料上限（读页本身截到 6000 字）
+EVIDENCE_CHARS = 10000  # 每个来源给裁判看的材料上限（读页本身截到 8000 字，再加上搜索摘要）
 
 
 # ---- 用例 ----
@@ -76,55 +75,49 @@ def load_cases(path: Path = CASES_FILE) -> list[Case]:
     return cases
 
 
-# ---- 记录 agent 看到的材料 ----
+# ---- agent 看到的材料 ----
 
 
-class Recorder:
-    """包一层网关客户端：记下每次搜索和读页的参数和结果，裁判按 agent 当时看到的材料核对引用。"""
+def _code(m: ToolMessage, data: Any) -> str | None:
+    if err := history.tool_error(m):
+        return err["code"]
+    return data.get("kind") if isinstance(data, dict) else None  # 11-05 以前的样子，和内容审核去掉的
 
-    def __init__(self, client) -> None:
-        self._client = client
-        self._lock = threading.Lock()  # 同一步的多个工具调用并行执行（都在对话的事件循环里，锁里不等东西）
-        self.searches: list[dict] = []  # 成功的搜索
-        self.failed_searches: list[dict] = []
-        self.reads: list[dict] = []
-        self.evidence: dict[str, list[str]] = {}
 
-    def _keep(self, url: str, text: str) -> None:
-        if text and text not in self.evidence.setdefault(url_key(url), []):
-            self.evidence[url_key(url)].append(text)
+def material(messages: list[BaseMessage]) -> dict:
+    """从对话消息里取出 agent 看到的材料，子 agent 查到的也算：搜了什么（成功的、没成的）、读了什么，
+    每个网址看到的文字（搜索摘要、读到的正文），裁判按它核对引用。"""
+    flat = flatten(messages)
+    args = {tc["id"]: tc.get("args") or {} for m in flat if isinstance(m, AIMessage) for tc in m.tool_calls}
+    out: dict[str, Any] = {"searches": [], "failed_searches": [], "reads": [], "evidence": {}}
 
-    async def search(self, query: str, **kw):
-        call = {"query": query, "freshness": kw.get("freshness"), "domains": kw.get("domains") or []}
-        try:
-            hits = await self._client.search(query, **kw)
-        except GatewayError as e:  # 记下来照常抛给工具
-            with self._lock:
-                self.failed_searches.append({**call, "kind": e.kind, "message": str(e)[:200]})
-            raise
-        with self._lock:
-            self.searches.append({**call, "urls": [h.url for h in hits]})
+    def keep(url: str, text: str) -> None:
+        if url and text and text not in (seen := out["evidence"].setdefault(url_key(url), [])):
+            seen.append(text)
+
+    for m in flat:
+        if not isinstance(m, ToolMessage) or m.name not in ("search_web", "read_page") or history.not_run(m):
+            continue
+        a, data = args.get(m.tool_call_id, {}), parse(m)
+        if m.name == "search_web":
+            call = {"query": a.get("query"), "recency_days": a.get("recency_days"), "domains": a.get("domains") or []}
+            hits = search_hits(data) if m.status != "error" else None
+            if hits is None:
+                out["failed_searches"].append({**call, "code": _code(m, data), "message": history.text_of(m)[:200]})
+                continue
+            out["searches"].append({**call, "urls": [h.get("url") for h in hits]})
             for h in hits:
-                self._keep(h.url, h.content)
-        return hits
+                keep(str(h.get("url") or ""), hit_text(h))
+        else:
+            ok = m.status != "error" and isinstance(data, dict) and data.get("ok") is True
+            out["reads"].append({"url": a.get("url"), "ok": ok, "code": None if ok else _code(m, data)})
+            if ok:
+                keep(str(data.get("url") or a.get("url") or ""), str(data.get("content") or ""))
+    return out
 
-    async def read(self, url: str, **kw):
-        res = await self._client.read(url, **kw)
-        with self._lock:
-            self.reads.append({"url": url, "ok": res.ok, "kind": res.kind})
-            if res.ok:
-                self._keep(url, res.content)
-        return res
 
-    def __getattr__(self, name: str):
-        return getattr(self._client, name)  # 画图这些不当引用材料，不记，直接转给网关客户端（查天气走 MCP，不经过这里）
-
-    def text_for(self, url: str) -> str:
-        return "\n\n".join(self.evidence.get(url_key(url), []))[:EVIDENCE_CHARS] or "（没有记录到材料）"
-
-    def mark(self) -> tuple[int, int]:
-        with self._lock:
-            return len(self.searches), len(self.reads)
+def text_for(evidence: dict[str, list[str]], url: str) -> str:
+    return "\n\n".join(evidence.get(url_key(url), []))[:EVIDENCE_CHARS] or "（没有记录到材料）"
 
 
 # ---- 裁判 ----
@@ -182,9 +175,8 @@ def _check(name: str, passed: bool, detail: str = "") -> dict:
     return {"name": name, "passed": bool(passed), "detail": detail}
 
 
-def play(runner, tid: str, turn: CaseTurn, rec: Recorder) -> dict:
-    """说一句话，跑到这一轮结束。返回这一轮的记录。"""
-    searches0, reads0 = rec.mark()
+def play(runner, tid: str, turn: CaseTurn) -> dict:
+    """说一句话，跑到这一轮结束。返回这一轮的记录；view（页面看到的）、evidence（整段对话的材料）不进结果文件。"""
     runner.accept(tid, turn.say)
     events: list[dict] = []
     runner.run_turn(tid, None, events.append)
@@ -195,17 +187,19 @@ def play(runner, tid: str, turn: CaseTurn, rec: Recorder) -> dict:
     rec_turn = t["record"] or {}
     streamed = {e["data"]["id"] for e in events if e["event"] == "delta"}
     stored = {i["id"] for i in t["items"] if i["type"] in ("thinking", "text")}
-    ais = [m for m in msgs[history.last_human(msgs) + 1:] if m.type == "ai"]
+    this = msgs[history.last_human(msgs) + 1:]
+    ais = [m for m in this if m.type == "ai"]
+    seen = material(this)
     # 每次调模型的输入和其中命中缓存的，看前缀缓存接没接上（上一轮发过的这一轮第一次调用就该命中）
     calls = [{"input": m.usage_metadata["input_tokens"], "cached": (m.usage_metadata.get("input_token_details") or {}).get("cache_read", 0)}
              for m in ais if m.usage_metadata]
     return {"say": turn.say, "events": len(events), "status": view["status"], "error": view.get("error"),
             "reply": history.final_text(msgs[history.last_human(msgs) + 1:]), "items": t["items"],
             "suggestions": rec_turn.get("suggestions", []), "usage": rec_turn.get("usage"), "outcome": rec_turn.get("outcome"),
-            "searches": rec.searches[searches0:], "reads": rec.reads[reads0:],
+            "searches": seen["searches"], "failed_searches": seen["failed_searches"], "reads": seen["reads"],
             "time_checks": sum(1 for m in ais for tc in m.tool_calls if tc["name"] == TIME_TOOL), "calls": calls,
             "lookups": [tc["name"] for m in ais for tc in m.tool_calls if tc["name"] in LOOKUP_TOOLS],
-            "stream_ids_match": streamed == stored, "view": view}
+            "stream_ids_match": streamed == stored, "view": view, "evidence": material(msgs)["evidence"]}
 
 
 def turn_checks(turn: CaseTurn, played: dict) -> list[dict]:
@@ -232,31 +226,29 @@ def turn_checks(turn: CaseTurn, played: dict) -> list[dict]:
     return out
 
 
-def judge_citations(judge: Judge, question: str, played: dict, rec: Recorder) -> list[dict]:
+def judge_citations(judge: Judge, question: str, played: dict) -> list[dict]:
     """正文里带角标的说法逐条拿引用的来源材料核对。正文没有引用就不核对。"""
     ids = cited(played["reply"])
     srcs = played["view"]["sources"]
     if not ids:
         return []
-    sources = [{"id": i, "url": srcs[i]["url"], "text": rec.text_for(srcs[i]["url"])} for i in ids if i in srcs]
+    sources = [{"id": i, "url": srcs[i]["url"], "text": text_for(played["evidence"], srcs[i]["url"])} for i in ids if i in srcs]
     return [v.model_dump() for v in judge.citations(question, played["reply"], sources).verdicts]
 
 
 # ---- 跑一个用例 ----
 
 
-def run_case(case: Case, make_planner: Callable[[Recorder], Any], make_gateway: Callable[[], Any], judge: Judge,
-             run: int = 1, check_sources: bool = True) -> dict:
+def run_case(case: Case, make_planner: Callable[[], Any], judge: Judge, run: int = 1, check_sources: bool = True) -> dict:
     from app.api.research_runner import ResearchRunner
 
     started = time.time()
-    rec = Recorder(make_gateway())
     result: dict[str, Any] = {"id": case.id, "run": run, "turns": []}
     try:
-        runner = ResearchRunner(planner=make_planner(rec), checkpointer=memory_checkpointer())
+        runner = ResearchRunner(planner=make_planner(), checkpointer=memory_checkpointer())
         tid = f"eval-{case.id}-{run}"
         for turn in case.turns:
-            played = play(runner, tid, turn, rec)
+            played = play(runner, tid, turn)
             checks = turn_checks(turn, played)
             citations: list[dict] = []
             if played["status"] == "idle" and played["reply"]:
@@ -264,15 +256,16 @@ def run_case(case: Case, make_planner: Callable[[Recorder], Any], make_gateway: 
                     v = judge.rubric(turn.say, turn.judge, played["reply"])
                     checks.append(_check("judge", v.passed, v.reason))
                 if check_sources:
-                    citations = judge_citations(judge, turn.say, played, rec)
+                    citations = judge_citations(judge, turn.say, played)
                     bad = [c["statement"][:40] for c in citations if c["verdict"] == "unsupported"]
                     if citations:
                         checks.append(_check("sources_supported", not bad, "；".join(bad) or f"{len(citations)} 条都有依据"))
-            result["turns"].append({**{k: v for k, v in played.items() if k != "view"}, "checks": checks, "citations": citations})
+            result["turns"].append({**{k: v for k, v in played.items() if k not in ("view", "evidence")}, "checks": checks, "citations": citations})
             if played["status"] != "idle":
                 break
-        if rec.failed_searches and not rec.searches:  # 测的是搜索服务，不是对话链路
-            raise RuntimeError(f"搜索全部失败：{rec.failed_searches[0]['message']}")
+        failed = [s for t in result["turns"] for s in t["failed_searches"]]
+        if failed and not any(t["searches"] for t in result["turns"]):  # 测的是搜索服务，不是对话链路
+            raise RuntimeError(f"搜索全部失败（{failed[0]['code']}）：{failed[0]['message']}")
         all_checks = [c for t in result["turns"] for c in t["checks"]]
         result["passed"] = all(c["passed"] for c in all_checks) and len(result["turns"]) == len(case.turns)
         result["usage"] = _total([t["usage"] for t in result["turns"] if t["usage"]])
@@ -328,7 +321,6 @@ def transcript(results: list[dict]) -> str:
 def main(argv: list[str] | None = None) -> int:
     from app import config
     from app.research_llm import LiveResearchPlanner
-    from app.tools.gateway import GatewayClient
 
     ap = argparse.ArgumentParser(description="对话回放评测（真实模型）")
     ap.add_argument("--case", action="append", help="只跑这些用例（可以写多次）")
@@ -343,13 +335,11 @@ def main(argv: list[str] | None = None) -> int:
         ap.error(f"没有这些用例：{sorted(set(args.case) - {c.id for c in cases})}")
     judge = LiveJudge()
 
-    def gateway():
-        return GatewayClient(config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY, scene="research_eval")  # 网关记账时和真实对话分开
-
     jobs = [(c, i + 1) for c in cases for i in range(args.repeat)]
     results = []
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        futures = [pool.submit(run_case, c, lambda rec: LiveResearchPlanner(gateway=rec), gateway, judge, n, not args.no_sources) for c, n in jobs]
+        # 调 agent-tools 用 research_eval 场景：网关记账时和真实对话分开
+        futures = [pool.submit(run_case, c, lambda: LiveResearchPlanner(scene="research_eval"), judge, n, not args.no_sources) for c, n in jobs]
         for f in as_completed(futures):
             results.append(f.result())
             print(summary_line(results[-1]), flush=True)

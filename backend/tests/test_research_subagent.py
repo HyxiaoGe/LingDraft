@@ -9,7 +9,6 @@ import asyncio
 import json
 import threading
 
-import httpx
 import pytest
 from langchain_core.messages import AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 
@@ -19,7 +18,7 @@ from app.graph.research import history, prompts, subagent
 from app.graph.research.sources import EXCERPT_CHARS, cited, subagent_messages
 from app.research_llm import FakeResearchPlanner, FakeToolModel
 from app.tools.gateway import GatewayAuthError
-from tests.test_research import Chat, _answered, _kinds, _stored, _with_gateway
+from tests.test_research import Chat, _answered, _auth_fails, _kinds, _stored, failing_search
 
 SUB_ITEMS = ["thinking", "step:search", "thinking", "step:read", "thinking", "text"]
 
@@ -345,7 +344,7 @@ def test_an_unexpected_error_in_a_subagent_is_reported_the_same_way():
 
 def test_a_gateway_auth_error_in_a_subagent_still_fails_the_turn():
     """网关密钥不对：主 agent 自己查也一样失败，这一轮照旧失败，页面亮出原因。"""
-    c = Chat(planner=_with_gateway(FakeResearchPlanner(), lambda req: httpx.Response(401, json={"error": "unauthorized"})))
+    c = Chat(planner=failing_search(_auth_fails))
     with pytest.raises(GatewayAuthError):
         c.say("子任务查一下杭州美食")
     v = c.view()

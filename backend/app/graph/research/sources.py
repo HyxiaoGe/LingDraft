@@ -1,7 +1,9 @@
 """来源：从搜索、读页的工具结果里取出来，不另外存。
 
-每个网址的 id 由网址算出来（`s` 加 6 位十六进制），工具结果里直接带给模型，正文里用它引用。
+每个网址的 id 由网址算出来（`s` 加 6 位十六进制），工具结果里直接带给模型，正文里用它引用（见 app.tools.web_mcp）。
 同一个网址在整条线程里永远是同一个 id：并行的几次搜索各自算，也对得上。
+搜索结果有两种样子（search_hits 两种都认）：11-05 起是搜索服务的结果（{"ok": true, "query", "results": [...]}，每条带 id、
+title、url、snippet、published_at），之前存下的是一串条目（每条带 id、title、url、description、content、published_at）。
 子 agent 的搜索、读页结果在 task 工具结果的 artifact 里（见 subagent_messages），也算这条线程的来源。
 """
 
@@ -20,6 +22,7 @@ from app.graph.research.state import Source
 
 SUBAGENT_TOOL = "task"  # 主 agent 派子 agent 的工具（见 app.graph.research.subagent）
 EXCERPT_CHARS = 400  # 来源卡上显示的原文开头；模型自己看的是完整的工具结果
+SEPARATORS = (",", ":")  # 搜索、读页的结果给模型的 JSON 不带空格（照搜索、读页服务给的，省 token）
 SOURCE_ID = re.compile(r"\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\]")  # 正文里的引用：[s3fa9c1]
 
 _DEFAULT_PORT = {"http": 80, "https": 443}
@@ -72,6 +75,20 @@ def parse(msg: ToolMessage) -> Any:
         return None
 
 
+def search_hits(data: Any) -> list[dict] | None:
+    """一条搜索结果里的条目；不是成功的搜索结果是 None。"""
+    if isinstance(data, list):  # 11-05 以前存下的
+        return [h for h in data if isinstance(h, dict)]
+    if isinstance(data, dict) and data.get("ok") is True and isinstance(data.get("results"), list):
+        return [h for h in data["results"] if isinstance(h, dict)]
+    return None
+
+
+def hit_text(hit: dict) -> str:
+    """一条搜索结果的摘要：搜索服务给的是 snippet，11-05 以前存下的是 content（几段摘录）和 description。"""
+    return str(hit.get("snippet") or hit.get("content") or hit.get("description") or "")
+
+
 def subagent_messages(m: BaseMessage) -> list[BaseMessage]:
     """一条 task 工具结果里带着的子 agent 的整段消息（artifact 里，模型看不到；存的是 messages_to_dict）。别的消息、没带的是空的。"""
     art = m.artifact if isinstance(m, ToolMessage) and m.name == SUBAGENT_TOOL else None
@@ -101,13 +118,13 @@ def collect_sources(messages: list[BaseMessage]) -> list[Source]:
             continue
         data = parse(m)
         when = (m.artifact or {}).get("retrieved_at", "") if isinstance(m.artifact, dict) else ""
-        if m.name == "search_web" and isinstance(data, list):
-            for hit in data:
+        if m.name == "search_web" and (hits := search_hits(data)) is not None:
+            for hit in hits:
                 sid, url = hit.get("id"), (hit.get("url") or "").strip()
                 if not sid or not url or sid in by_id:
                     continue
                 by_id[sid] = Source(id=sid, url=url, title=hit.get("title") or "", retrieved_at=when, published_at=hit.get("published_at"),
-                                    excerpt=(hit.get("content") or hit.get("description") or "")[:EXCERPT_CHARS])
+                                    excerpt=hit_text(hit)[:EXCERPT_CHARS])
         elif m.name == "read_page" and isinstance(data, dict) and data.get("ok") and data.get("id"):
             content = data.get("content") or ""
             if not content.strip():  # 没有正文不算读到，不能拿空串顶掉搜索摘要

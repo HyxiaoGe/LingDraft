@@ -281,8 +281,8 @@ class ResearchRunner(BaseRunner):
         self._queue_mu = asyncio.Lock()
 
     async def _connect_tools(self) -> bool:
-        """连上 MCP 的工具（现在只有天气，见 app.tools.weather_mcp）。连不上每隔几秒再试，到 TOOLS_STARTUP_S 还不行就先不带它：
-        天气挂了不该让整个对话起不来。密钥不对、网关没放行也一样先不带，日志里报错。"""
+        """连上 MCP 的工具（搜索、读页、天气，见 research_llm.McpTools）。连不上每隔几秒再试，到 TOOLS_STARTUP_S 还有没连上的就先这样起来：
+        哪个服务挂了都不该让整个对话起不来（没连上的搜索、读页调了会说服务暂时连不上）。密钥不对、网关没放行也一样，日志里报错。"""
         deadline = time.monotonic() + TOOLS_STARTUP_S
         while True:
             try:
@@ -290,23 +290,27 @@ class ResearchRunner(BaseRunner):
                 return True
             except Exception as e:
                 if time.monotonic() + TOOLS_STARTUP_RETRY_S >= deadline:
-                    log.error("没连上 MCP 的工具（天气），先不带它起来，后台每 %d 秒再试：%s: %s", TOOLS_RETRY_S, type(e).__name__, e)
+                    log.error("MCP 的工具没连全，先这样起来，后台每 %d 秒再试：%s", TOOLS_RETRY_S, e)
                     return False
-                log.warning("没连上 MCP 的工具（天气），%d 秒后再试：%s: %s", TOOLS_STARTUP_RETRY_S, type(e).__name__, e)
+                log.warning("MCP 的工具没连全，%d 秒后再试：%s", TOOLS_STARTUP_RETRY_S, e)
             await asyncio.sleep(TOOLS_STARTUP_RETRY_S)
 
     async def _keep_connecting(self) -> None:
-        """起服务时没连上 MCP 的工具：每分钟再试，连上了换上带它的 agent。正在跑的那几轮用的还是旧的，下一轮起用新的。"""
+        """起服务时没连全 MCP 的工具：每分钟再试，每连上一个就换上新的 agent，都连上了就停。正在跑的那几轮用的还是旧的，下一轮起用新的。"""
         while True:
             await asyncio.sleep(TOOLS_RETRY_S)
+            before = [id(t) for t in self.planner.tools()]
             try:
                 await self.planner.connect_tools()
+                done = True
             except Exception as e:
-                log.warning("还是没连上 MCP 的工具（天气）：%s: %s", type(e).__name__, e)
-                continue
-            self.graph = build_graph(self.planner, self._checkpointer, self.memory)
-            log.info("连上了 MCP 的工具（天气），换上带它的 agent")
-            return
+                log.warning("MCP 的工具还是没连全：%s", e)
+                done = False
+            if [id(t) for t in self.planner.tools()] != before:
+                self.graph = build_graph(self.planner, self._checkpointer, self.memory)
+                log.info("连上了 MCP 的工具（%s），换上新的 agent", "全部" if done else "部分")
+            if done:
+                return
 
     @staticmethod
     def _cfg(thread_id: str) -> dict:

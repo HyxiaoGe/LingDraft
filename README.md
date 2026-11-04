@@ -2,7 +2,7 @@
 
 从一个想法，到一份拿得出手的作品。
 
-一个能搜、能读、回答会标来源的 AI 对话 agent，基于 LangGraph 和 DeepSeek。主 agent 和子 agent 都是 LangChain 的 `create_agent`，上面挂着自己写的 8 个中间件。运行层也是自己写的，管排队、停止、插话和断线续看。检查点、长期记忆和运行记录都存在 Postgres。
+一个能搜、能读、回答会标来源的 AI 对话 agent，基于 LangGraph 和 DeepSeek。主 agent 和子 agent 都是 LangChain 的 `create_agent`，上面挂着自己写的 9 个中间件。运行层也是自己写的，管排队、停止、插话和断线续看。检查点、长期记忆和运行记录都存在 Postgres。
 
 ![对话页：主 agent 把问题拆给三个子 agent 并行去查，再汇总回答](assets/screenshot.png)
 
@@ -13,7 +13,7 @@ flowchart TB
     UI["页面（React）"] -- "说话 · 排队 · 插话 · 停止" --> API["FastAPI"]
     API -- "SSE 事件流<br/>断线续看" --> UI
     API --> Runner["运行器<br/>排队 · 取消<br/>事件日志"]
-    Runner -- "aupdate_state + astream<br/>subgraphs=True" --> Main["主 agent · Pro<br/>create_agent<br/>+ 8 个中间件"]
+    Runner -- "aupdate_state + astream<br/>subgraphs=True" --> Main["主 agent · Pro<br/>create_agent<br/>+ 9 个中间件"]
     Main -- "task，并行派出" --> Sub["子 agent · Flash<br/>create_agent<br/>按工具限次"]
     Main --> Tools["搜索 · 读网页<br/>天气 · 画图<br/>时间 · recall"]
     Sub --> Tools
@@ -25,13 +25,13 @@ flowchart TB
 
 | 机制 | 用在哪 |
 |---|---|
-| `create_agent` + `AgentMiddleware` | 主 agent、子 agent 都由它搭；8 个自写中间件用到 `before_agent`、`abefore_model`、`awrap_model_call`、`awrap_tool_call`、`after_model`（`can_jump_to`）、`after_agent` |
+| `create_agent` + `AgentMiddleware` | 主 agent、子 agent 都由它搭；9 个自写中间件用到 `before_agent`、`abefore_model`、`awrap_model_call`、`awrap_tool_call`、`after_model`（`can_jump_to`）、`after_agent` |
 | `ExtendedModelResponse` + `Command(update=…)` | 中间件在一次模型调用里顺手改 state：写上起好的标题、换掉没通过审核的工具结果 |
 | `context_schema` / `ToolRuntime` | 图片存储、取插话这些运行时的东西从 context 传给工具和中间件，不进 state |
 | `aupdate_state(as_node=START)` + `astream(None)` | 用户的话先写进检查点再开跑，排队时服务重启也不丢 |
 | `stream_mode=["messages", "updates", "custom"]`，`subgraphs=True` | 逐字的思考和正文、存下的步骤、工具进度一路推给页面；子 agent 的流按命名空间认出是哪个子任务的 |
 | `get_stream_writer` / `TAG_NOSTREAM` | 中间件推自定义事件（在等什么、工具进度）；写短版、单条送审这些内部调用不推给页面 |
-| `langchain.mcp`（`MCPAdapter`） | 天气是 agent-tools 的 MCP 工具，挑城市、整理预报、给模型的说明都在服务里，几个产品共用：灵稿起服务时取来，工具说明后面接上自己的一段；结果的 `structuredContent` 画天气卡片，模型只看文字 |
+| `langchain.mcp`（`MCPAdapter`） | 搜索、读网页、天气都是 agent-tools 的 MCP 工具，怎么搜、怎么读、挑城市、结果的样子和失败时给模型的话都在服务里，几个产品共用：灵稿起服务时取来，工具说明后面接上自己的一段，中间件给结果带上来源 id；天气结果的 `structuredContent` 画天气卡片，模型只看文字 |
 | `ToolMessage.artifact` | 子 agent 的整段消息放在 artifact 里交回：来源、用量、子任务卡从这里读，主 agent 的模型只看报告 |
 | `ToolCallLimitMiddleware` | 子 agent 搜、读各 8 次的硬上限 |
 | `AsyncPostgresSaver`，`durability="exit"` | 检查点只在一轮的开头和结尾存 |

@@ -39,7 +39,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - `COMPACT_TRIGGER_TOKENS`、`COMPACT_TARGET_TOKENS`：上下文压缩的触发线和压到多少，默认 20 万、10 万。
   - `LINGDRAFT_DREAM=0` 关掉每天按时整理记忆；`LINGDRAFT_DREAM_HOUR` 是北京时间几点整理，默认 3 点。
 - 外部服务：
-  - `AGENT_TOOLS_URL`、`AGENT_TOOLS_API_KEY`：agent-tools 网关，管搜索、读网页、天气、生图。天气走网关的 MCP（`/weather/mcp`），起服务时连上取工具；连不上先不带天气起来，后台每分钟再试。
+  - `AGENT_TOOLS_URL`、`AGENT_TOOLS_API_KEY`：agent-tools 网关，管搜索、读网页、天气、生图。搜索、读网页、天气走网关的 MCP（`/search/mcp`、`/reader/mcp`、`/weather/mcp`），起服务时连上取工具；没连上的先这样起来（搜索、读网页是同名的占位工具，调了说服务暂时连不上；天气先不带），后台每分钟再试，连上一个换一个。
   - `IMAGE_SERVICE_URL`：image-service 自己的地址，改图时要把原图的地址交回去。
   - `FUSION_URL`：新对话页的“今日灵感”从 Fusion 取。
 
@@ -213,10 +213,12 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `state.py`。
   - `graph.py`：存储（共用的连接池、线程列表）。
   - `prompts.toml`：给模型看的文字；`prompts.py` 只负责渲染。
-- `app/research_llm.py` `ResearchPlanner` 协议：`LiveResearchPlanner`（DeepSeek 或豆包 + 真实网关，各步用哪个模型见它的构造函数）/ `FakeResearchPlanner`（脚本化的假工具模型 + MockTransport 网关）
+- `app/research_llm.py` `ResearchPlanner` 协议：`LiveResearchPlanner`（DeepSeek 或豆包 + 真实网关，各步用哪个模型见它的构造函数）/ `FakeResearchPlanner`（脚本化的假工具模型 + 进程内的假搜索、读页、天气服务 + MockTransport 的生图）
 - `app/tools/`：
-  - `gateway.py`：agent-tools 网关客户端，管搜索、读网页、生图。
-  - `research_tools.py`：agent 的工具（`search_web` / `read_page` / `generate_image` / `get_current_time`），描述在 `prompts.toml` 的 `[tools.*]`。
+  - `gateway.py`：agent-tools 网关客户端（生图），和网关出错时的几种异常。
+  - `research_tools.py`：agent 自己的工具（`generate_image` / `get_current_time`），描述在 `prompts.toml` 的 `[tools.*]`。
+  - `mcp.py`：MCP 工具共用的部分：经网关连、取工具、认出网关的 401/403（让这一轮失败）和 429（今天的上限到了）。
+  - `web_mcp.py`：搜索、读网页。`search_web`、`read_page` 是 agent-tools 的 MCP 工具（怎么搜、怎么读、结果的样子、失败时给模型的话都在 search-service、reader-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明（什么时候搜、搜够没有、来源 id），中间件给结果带上来源 id、把失败整理成页面上的中文，没连上时用同名的占位工具。
   - `images.py`：画图、存图。
   - `weather_mcp.py`：查天气。`get_weather` 是 agent-tools 的 MCP 工具（挑城市、整理预报、缓存、给模型的说明都在 weather-service 里，和 Fusion 共用），用 LangChain 的 MCP 适配器接进来；这里接上灵稿自己的一段说明，中间件把结果整理成模型看的文字，网关出问题算没查到、密钥不对让这一轮失败。
 - `app/model_guard.py` 模型服务出错的分类和熔断；`app/aio.py` 对话的事件循环
@@ -231,7 +233,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
     - `test_research_runs.py`：并行执行、运行占位、断线续读、失败后重试、停止。
     - `test_research_queue.py`：排着的话和插话。
     - `test_research_subagent.py`：子 agent。
-    - `test_compaction.py`、`test_memory.py`、`test_images.py`、`test_weather.py`。
+    - `test_compaction.py`、`test_memory.py`、`test_images.py`、`test_weather.py`、`test_web_tools.py`（搜索、读页）。
     - `test_run_records.py`：运行记录、没配库启动报错。
     - `test_api_research.py`：接口。
     - `test_research_eval.py`：评测的离线部分。
