@@ -11,7 +11,7 @@ from app.prompting import ENV
 def test_every_prompt_parses():
     texts = prompts.texts()
     assert {f"agent.{k}" for k in SYSTEM_SECTIONS} | {"tools.get_current_time.description", "title.prompt", "suggest.prompt",
-                                                         "tools.search_web.description"} <= texts.keys()
+                                                         "tools.search_web.lingdraft"} <= texts.keys()
     for src in texts.values():
         ENV.parse(src)
 

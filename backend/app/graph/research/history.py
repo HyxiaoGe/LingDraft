@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from pydantic import ValidationError
 
 from app.graph.research import prompts
-from app.graph.research.sources import SUBAGENT_TOOL, collect_sources, parse, subagent_messages
+from app.graph.research.sources import SUBAGENT_TOOL, collect_sources, parse, search_hits, subagent_messages
 from app.graph.research.state import Forecast, GeneratedImage, ToolStep, Usage, WeatherDay, WeatherHour
 
 BLOCKED = "lingdraft_blocked"  # 一轮因内容审核停下时，系统补的那条模型消息 response_metadata 里的键，值是原因（见 agent.ContentGuard）
@@ -160,22 +160,61 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
     if kind == "weather":
         return _weather_step(cid, text, data, result)
     if kind == "search":
-        if isinstance(data, list) and result.status != "error":
+        if (hits := search_hits(data)) is not None and result.status != "error":
             dropped = result.artifact.get("blocked", 0) if isinstance(result.artifact, dict) else 0
-            return ToolStep(id=cid, kind=kind, text=text, hits=len(data), source_ids=[h["id"] for h in data if h.get("id")],
+            return ToolStep(id=cid, kind=kind, text=text, hits=len(hits), source_ids=[h["id"] for h in hits if h.get("id")],
                             message=f"{dropped} 条没通过内容审核，已去掉" if dropped else "", **extra)
-        return ToolStep(id=cid, kind=kind, text=text, ok=False, message=_failure(data, result), **extra)
+        return ToolStep(id=cid, kind=kind, text=text, ok=False, message=_failure(data, result, SEARCH_FAILURES), **extra)
     if isinstance(data, dict) and data.get("ok") and (data.get("content") or "").strip():
         return ToolStep(id=cid, kind=kind, text=text, body=True, title=data.get("title") or "", source_ids=[data["id"]] if data.get("id") else [])
-    return ToolStep(id=cid, kind=kind, text=text, ok=False, message=_failure(data, result) or "没有读到正文")
+    return ToolStep(id=cid, kind=kind, text=text, ok=False, message=_failure(data, result, READ_FAILURES) or "没有读到正文")
 
 
-def _failure(data: Any, result: ToolMessage) -> str:
-    """没做成的原因（页面上显示）。内容审核去掉的结果，模型看的说明是英文的，页面上换成中文的。"""
+# 搜索、读页没做成时的错误码 → 页面上的说法。给模型的说明是服务给的英文（见 agent-tools 的 search、reader 的 MCP）；
+# unavailable 是没调成（网关、服务连不上，见 app.tools.web_mcp）
+SEARCH_FAILURES = {
+    "bad_arguments": "搜索的参数不对",
+    "quota_exhausted": "搜索今天的额度用完了",
+    "timeout": "搜索超时了",
+    "rate_limited": "搜索服务被限流了",
+    "upstream_error": "搜索服务出错了",
+    "not_configured": "搜索服务没配置好",
+    "unavailable": "搜索服务暂时连不上",
+    "tool_error": "搜索没调成",
+}
+READ_FAILURES = {
+    "invalid_url": "网址不对",
+    "unsafe_url": "这个网址不能读",
+    "page_not_found": "网页不存在",
+    "page_error": "网站返回了错误页",
+    "access_blocked": "网站拦了自动读取",
+    "empty_content": "网页上没有能读的正文",
+    "timeout": "网页没在时限内打开",
+    "rate_limited": "读网页的服务被限流了",
+    "quota_exhausted": "读网页今天的额度用完了",
+    "upstream_error": "读网页的服务出错了",
+    "unavailable": "读网页的服务暂时连不上",
+    "tool_error": "读网页没调成",
+}
+
+
+def tool_error(result: ToolMessage) -> dict | None:
+    """搜索、读页没做成时的错误（{code, retryable, status?}，在结果的 artifact 里，见 app.tools.web_mcp）。11-05 以前存下的没有。"""
+    art = result.artifact
+    err = art.get("error") if isinstance(art, dict) else None
+    return err if isinstance(err, dict) and err.get("code") else None
+
+
+def _failure(data: Any, result: ToolMessage, failures: dict[str, str]) -> str:
+    """没做成的原因（页面上显示）。给模型的说明是英文的，页面上按错误码换成中文的；内容审核去掉的结果也一样。
+    11-05 以前存下的结果没有错误码，原因是结果里的 message（中文）。"""
+    if isinstance(data, dict) and data.get("kind") == "content_blocked":
+        return BLOCKED_NOTE
+    if err := tool_error(result):
+        text = failures.get(err["code"], err["code"])
+        return f"{text}（HTTP {err['status']}）" if isinstance(err.get("status"), int) else text
     if not isinstance(data, dict):
         return text_of(result)
-    if data.get("kind") == "content_blocked":
-        return BLOCKED_NOTE
     return str(data.get("message") or data.get("kind") or "")
 
 
@@ -242,7 +281,7 @@ def _old_weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> To
             return ToolStep(id=cid, kind="weather", text=text, title=fc.location, weather=fc)
         except ValidationError:
             return ToolStep(id=cid, kind="weather", text=text, ok=False, message="天气结果的格式不对")
-    return ToolStep(id=cid, kind="weather", text=text, ok=False, message=_failure(data, result) or "没查到")
+    return ToolStep(id=cid, kind="weather", text=text, ok=False, message=_failure(data, result, {}) or "没查到")
 
 
 def image_of(m: BaseMessage) -> GeneratedImage | None:

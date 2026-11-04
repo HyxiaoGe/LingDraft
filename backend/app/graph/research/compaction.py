@@ -34,7 +34,7 @@ from pydantic import BaseModel, Field
 from app import config
 from app.graph.research import history, prompts
 from app.graph.research.agent import emit, memory_text, system_prompt, turn_start
-from app.graph.research.sources import SUBAGENT_TOOL, flatten, parse
+from app.graph.research.sources import SUBAGENT_TOOL, flatten, hit_text, parse, search_hits
 from app.graph.research.state import Compaction, ResearchState
 
 log = logging.getLogger(__name__)
@@ -102,8 +102,8 @@ def _cleared(m: BaseMessage) -> BaseMessage:
     data = parse(m)
     if m.name == RECALL_TOOL:
         note = prompts.render("compact.recall_cleared")
-    elif m.name == "search_web" and isinstance(data, list):
-        found = [{"id": h.get("id"), "title": h.get("title") or "", "url": h.get("url") or ""} for h in data if h.get("id")]
+    elif m.name == "search_web" and (hits := search_hits(data)) is not None:
+        found = [{"id": h.get("id"), "title": h.get("title") or "", "url": h.get("url") or ""} for h in hits if h.get("id")]
         note = prompts.render("compact.search_cleared", sources=json.dumps(found, ensure_ascii=False))
     elif m.name == "read_page" and isinstance(data, dict) and data.get("ok") and data.get("id"):
         note = prompts.render("compact.read_cleared", id=data["id"], title=data.get("title") or "", url=data.get("url") or "")
@@ -344,13 +344,13 @@ def recall_source(messages: list[BaseMessage], sid: str) -> str:
         data = parse(m)
         if m.name == "read_page" and isinstance(data, dict) and data.get("ok") and data.get("id") == sid and (data.get("content") or "").strip():
             page = m
-        elif m.name == "search_web" and isinstance(data, list) and hit is None:
-            hit = next((h for h in data if h.get("id") == sid), None)
+        elif m.name == "search_web" and hit is None and (hits := search_hits(data)) is not None:
+            hit = next((h for h in hits if h.get("id") == sid), None)
     if page is not None:
         return history.text_of(page)
     if hit is not None:
         return json.dumps({"id": sid, "url": hit.get("url") or "", "title": hit.get("title") or "", "published_at": hit.get("published_at"),
-                           "snippet": hit.get("content") or hit.get("description") or "", "page_read": False}, ensure_ascii=False)
+                           "snippet": hit_text(hit), "page_read": False}, ensure_ascii=False)
     raise _failed("not_found", prompts.render("tools.recall.no_source", source_id=sid))
 
 

@@ -7,14 +7,22 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal, NotRequired
 
 from langchain.agents.middleware.types import AgentState
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.tools.gateway import tidy_title
-
 INVALID_TOOL_CALL_RETRIES = 2  # 模型返回无法解析的工具调用时，让它重发的次数
+
+_SEP = r"(?:\s+[-–—]\s+|\s*[|｜_]\s*)"  # 横线两边要有空格，不然“10-10-2024”也会被当成重复
+_REPEAT = re.compile(rf"^(?P<t>.{{2,}}?){_SEP}(?P=t)(?={_SEP}|$)")
+
+
+def tidy_title(title: str) -> str:
+    """网页标题常把正文标题重复一遍（“A - A”“A | A - 站名”），只留一份。只认一字不差的重复，不猜意思。
+    搜索服务给的标题已经整理过（agent-tools search_web）；这里管 11-05 以前存下的来源和读页的标题。"""
+    return _REPEAT.sub(r"\g<t>", title.strip(), count=1)
 
 
 class Source(BaseModel):

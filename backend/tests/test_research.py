@@ -8,12 +8,13 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
-import httpx
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.messages.tool import tool_call_chunk
+from langchain_core.tools import StructuredTool
 from langgraph._internal._constants import ERROR
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -29,9 +30,9 @@ from app.graph.research.graph import make_serde, memory_checkpointer
 from app.graph.research.sources import cited, collect_sources, url_key
 from app.graph.research.state import Turn
 from app.model_guard import ModelUnavailable
-from app.research_llm import FAKE_BLOCKED, THINKING_MS, FakeResearchPlanner, FakeToolModel, LiveResearchPlanner
-from app.tools.gateway import GatewayAuthError, GatewayClient
-from app.tools.research_tools import make_research_tools
+from app.research_llm import FAKE_BLOCKED, THINKING_MS, FakeResearchPlanner, FakeToolModel, LiveResearchPlanner, fake_search_server
+from app.tools.gateway import GatewayAuthError
+from app.tools.web_mcp import WebToolsMiddleware
 
 
 class Chat:
@@ -344,24 +345,37 @@ def test_dangling_calls_get_error_results():
     assert history.step_of(ai.tool_calls[1], stopped).message == "停止了，没有做完"
 
 
-def _with_gateway(planner: FakeResearchPlanner, handler) -> FakeResearchPlanner:
-    gw = GatewayClient("http://gw", "k", scene="research", transport=httpx.MockTransport(handler))
-    planner._gateway, planner._tools = gw, make_research_tools(gw)
-    return planner
+def failing_search(fail) -> FakeResearchPlanner:
+    """取工具照常，调搜索时出错（像网关这时回了 401、连不上）：fail(query) 抛错或者给结果。
+    错误经 MCP 客户端包好几层、网关各种状态怎么算，见 test_web_tools。"""
+    p = FakeResearchPlanner()
+    aio.run(p.connect_tools())
+
+    async def search_web(query: str, count: int = 5) -> str:
+        return await fail(query)
+
+    p._mcp.web[0].tool = StructuredTool.from_function(coroutine=search_web, name="search_web", description="Search the web.")
+    return p
+
+
+async def _auth_fails(query: str) -> str:
+    raise GatewayAuthError("调 /search/mcp 失败：HTTP 401", kind="http_401")
 
 
 def test_search_outage_goes_to_the_agent():
-    """搜索服务出错变成给 agent 的工具结果：这一步显示失败，这一轮照常结束。"""
-    p = _with_gateway(FakeResearchPlanner(), lambda req: httpx.Response(502, text="bad gateway"))
-    v = Chat(planner=p).say("比较两款笔记软件")
+    """搜索服务连不上变成给 agent 的工具结果：这一步显示失败，这一轮照常结束。"""
+    async def down(query: str) -> str:
+        raise RuntimeError("Client failed to connect")
+
+    v = Chat(planner=failing_search(down)).say("比较两款笔记软件")
     step = next(i for i in v["turns"][0]["items"] if i["type"] == "step")
-    assert step["kind"] == "search" and not step["ok"] and "502" in step["message"]
+    assert step["kind"] == "search" and not step["ok"] and step["message"] == history.SEARCH_FAILURES["unavailable"]
     assert v["status"] == "idle" and v["turns"][0]["items"][-1]["text"] == "没查到。"
 
 
 def test_search_auth_error_fails_the_run():
     """密钥问题不交给 agent：这次运行失败、错误记在检查点里，改好配置后可以重试。"""
-    c = Chat(planner=_with_gateway(FakeResearchPlanner(), lambda req: httpx.Response(401, json={"error": "unauthorized"})))
+    c = Chat(planner=failing_search(_auth_fails))
     with pytest.raises(GatewayAuthError):
         c.say("比较两款笔记软件")
     v = c.view()
@@ -371,13 +385,13 @@ def test_search_auth_error_fails_the_run():
 def test_failed_parallel_search_shows_the_real_error():
     """同时搜两个，一个密钥出错：LangGraph 把还在等的另一个取消，也给它记一条 CancelledError。
     页面上说的是真正出错的原因（401），不是被连带取消的那条。"""
-    async def handler(req: httpx.Request) -> httpx.Response:
-        if json.loads(req.content)["query"].endswith("a"):  # 第一个还在等，第二个出错时被取消
+    async def fail(query: str) -> str:
+        if query.endswith("a"):  # 第一个还在等，第二个出错时被取消
             await asyncio.sleep(5)
-            return httpx.Response(200, json={"results": []})
-        return httpx.Response(401, json={"error": "unauthorized"})
+            return "[]"
+        return await _auth_fails(query)
 
-    c = Chat(planner=_with_gateway(FakeResearchPlanner(), handler))
+    c = Chat(planner=failing_search(fail))
     with pytest.raises(GatewayAuthError):
         c.say("一直搜：笔记软件")
     snap = c.r.graph.get_state({"configurable": {"thread_id": c.tid}})
@@ -517,11 +531,11 @@ def test_stop_right_after_a_search_keeps_it(chat):
 
 def test_stop_during_a_search_does_not_wait_for_it():
     """搜索开始以后点停止：正在等的搜索马上断开，不等它返回；这一步显示停止了，不再读页、不再回复。"""
-    async def slow(req: httpx.Request) -> httpx.Response:
+    async def slow(query: str) -> str:
         await asyncio.sleep(10)  # 慢搜索：停止要是等它，这个测试要等 10 秒
-        return _search_returns(_hits("内容一"))(req)
+        return "[]"
 
-    c = Chat(planner=_with_gateway(FakeResearchPlanner(), slow))
+    c = Chat(planner=failing_search(slow))
     t0 = time.monotonic()
     v = c.say("查一下局部修改", stop_on=lambda ev: ev["event"] == "step" and ev["data"]["step"]["pending"])
     (turn,) = v["turns"]
@@ -586,7 +600,7 @@ def test_regenerate_after_stop(chat):
 
 
 def test_regenerate_refused_when_failed_or_empty():
-    c = Chat(planner=_with_gateway(FakeResearchPlanner(), lambda req: httpx.Response(401, json={"error": "unauthorized"})))
+    c = Chat(planner=failing_search(_auth_fails))
     with pytest.raises(NothingToRegenerate):
         c.r.regenerate_input(c.tid)
     with pytest.raises(GatewayAuthError):
@@ -635,7 +649,7 @@ def test_rename_and_delete(tmp_path):
 
 
 def test_rename_refused_when_failed():
-    c = Chat(planner=_with_gateway(FakeResearchPlanner(), lambda req: httpx.Response(401, json={"error": "unauthorized"})))
+    c = Chat(planner=failing_search(_auth_fails))
     with pytest.raises(GatewayAuthError):
         c.say("比较两款笔记软件")
     with pytest.raises(NotIdle):
@@ -648,16 +662,12 @@ def test_rename_refused_when_failed():
 # ---- 模型服务：内容审核、不可用 ----
 
 
-def _search_returns(hits: list[dict]):
-    def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path == "/search/search":
-            return httpx.Response(200, json={"results": hits})
-        return httpx.Response(404, json={"detail": {"kind": "page_not_found", "message": "gone", "retryable": False}})
-    return handler
+def _search_returns(hits: list[dict]) -> FakeResearchPlanner:
+    return FakeResearchPlanner(search=lambda: fake_search_server(hits))
 
 
-def _hits(*contents: str) -> list[dict]:
-    return [{"title": f"结果 {i}", "url": f"https://example.test/{i}", "description": f"摘要 {i}", "content": c} for i, c in enumerate(contents, 1)]
+def _hits(*snippets: str) -> list[dict]:
+    return [{"title": f"结果 {i}", "url": f"https://example.test/{i}", "snippet": s} for i, s in enumerate(snippets, 1)]
 
 
 def _search_step(v: dict) -> dict:
@@ -666,7 +676,7 @@ def _search_step(v: dict) -> dict:
 
 def test_blocked_search_hit_is_dropped_and_the_turn_goes_on():
     """三条搜索结果里一条没通过审核：一条条单独送审，只去掉那一条，接着跑；去掉的写回消息，之后的请求不再带上。"""
-    p = _with_gateway(FakeResearchPlanner(), _search_returns(_hits("内容一", f"内容二{FAKE_BLOCKED}", "内容三")))
+    p = _search_returns(_hits("内容一", f"内容二{FAKE_BLOCKED}", "内容三"))
     c = Chat(planner=p)
     v = c.say("比较两款笔记软件")
     assert v["status"] == "idle" and v["turns"][0]["record"]["outcome"] == "ok"
@@ -683,7 +693,7 @@ def test_blocked_search_hit_is_dropped_and_the_turn_goes_on():
 
 def test_whole_batch_dropped_when_no_single_hit_is_blocked(monkeypatch):
     """单条都能过（合在一起才拦）：这次搜索的结果整个去掉，按搜索失败交给 agent。"""
-    p = _with_gateway(FakeResearchPlanner(), _search_returns(_hits("内容一", f"内容二{FAKE_BLOCKED}")))
+    p = _search_returns(_hits("内容一", f"内容二{FAKE_BLOCKED}"))
     async def blocked(texts):
         return [False] * len(texts)
 
@@ -933,22 +943,17 @@ def test_read_without_body_keeps_search_excerpt():
 
 def test_url_variants_get_one_id():
     """读页时网址只是写法不同（域名大小写、锚点、默认端口、编码）：还是搜到的那个来源。"""
-    from langchain.tools import ToolRuntime
-
-    def handler(req):
-        if req.url.path == "/search/search":
-            return httpx.Response(200, json={"results": [{"url": "https://Example.test/文档/a", "title": "A"},
-                                                         {"url": "https://example.test/%E6%96%87%E6%A1%A3/a#top", "title": "A 重复"}]})
-        return httpx.Response(200, json={"title": "A", "content": "正文"})
-
-    tools = {t.name: t for t in make_research_tools(GatewayClient("http://gw", "k", scene="t", transport=httpx.MockTransport(handler)))}
+    p = _search_returns([{"url": "https://Example.test/文档/a", "title": "A"}, {"url": "https://example.test/%E6%96%87%E6%A1%A3/a#top", "title": "A 重复"}])
+    aio.run(p.connect_tools())
+    tools = {t.name: t for t in p.tools()}
 
     def call(name, msgs, **args):
-        rt = ToolRuntime(state={"messages": msgs}, context=None, config={}, stream_writer=lambda _: None, tool_call_id="c", store=None)
-        return aio.run(tools[name].ainvoke({"name": name, "args": {**args, "runtime": rt}, "id": f"c{len(msgs)}", "type": "tool_call"}))
+        tc = {"name": name, "args": args, "id": f"c{len(msgs)}", "type": "tool_call"}
+        req = SimpleNamespace(tool_call=tc, state={"messages": msgs})
+        return aio.run(WebToolsMiddleware().awrap_tool_call(req, lambda r: tools[name].ainvoke(tc)))
 
     found = call("search_web", [], query="q")
-    hits = json.loads(found.content)
+    hits = json.loads(found.content)["results"]
     assert hits[0]["id"] == hits[1]["id"]
     page = call("read_page", [found], url="https://example.test:443/%e6%96%87%e6%a1%a3/a")
     assert json.loads(page.content)["id"] == hits[0]["id"]

@@ -33,10 +33,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from app import aio, config
 from app.graph.research import history, prompts
 from app.graph.research.compaction import RECALL_TOOL as RECALL
+from app.graph.research.sources import search_hits
 from app.model_guard import ContentBlocked, GuardedChatModel, Interrupted, ModelUnavailable, guard_key
+from app.tools import web_mcp, weather_mcp
 from app.tools.gateway import GatewayClient
 from app.tools.research_tools import TIME_TOOL, make_research_tools
-from app.tools.weather_mcp import WEATHER_TOOL, WeatherTool, gateway_target
+from app.tools.weather_mcp import WEATHER_TOOL, WeatherTool
+from app.tools.web_mcp import READ_TOOL, SEARCH_TOOL, WebTool
 
 PROBE_WORKERS = 4  # 单条送审同时发几个
 TITLE_TIMEOUT = 8  # 照 Fusion：起标题的超时（秒）
@@ -61,7 +64,7 @@ class ResearchPlanner(Protocol):
 
     def tools(self) -> list: ...
 
-    async def connect_tools(self) -> None: ...  # 连上 MCP 的工具（现在只有天气）；连不上照常抛出，tools() 里先没有它（见 research_runner）
+    async def connect_tools(self) -> None: ...  # 连上还没连上的 MCP 工具（见 McpTools）；有没连上的照常抛出（见 research_runner）
 
     async def title(self, text: str) -> str: ...
 
@@ -208,8 +211,30 @@ def _structured(llm, schema):
     return llm.with_structured_output(schema, method="json_schema", strict=True, include_raw=True) | parsed
 
 
+class McpTools:
+    """agent-tools 的 MCP 工具：搜索、读页、天气。target 是各自的 MCP 地址（网关的客户端，或者进程内的假服务）。
+    没连上的：搜索、读页先用同名的占位工具（调了说服务暂时连不上，见 app.tools.web_mcp），天气先不带。"""
+
+    def __init__(self, search: Any, read: Any, weather: Any) -> None:
+        self.web = [WebTool(SEARCH_TOOL, search), WebTool(READ_TOOL, read)]
+        self.weather = WeatherTool(weather)
+
+    def tools(self, own: list) -> list:
+        """顺序固定（搜索、读页、灵稿自己的、天气）：工具列表在请求的前缀里，顺序变了前缀缓存就断了。"""
+        return [*(t.current() for t in self.web), *own, *([self.weather.tool] if self.weather.tool else [])]
+
+    async def connect(self) -> None:
+        """同时连还没连上的，连上一个算一个；有没连上的抛 RuntimeError（第一个的原因在 __cause__ 里）。"""
+        todo = [t for t in (*self.web, self.weather) if t.tool is None]
+        errors = [(t.name, e) for t, e in zip(todo, await asyncio.gather(*(t.connect() for t in todo), return_exceptions=True), strict=True)
+                  if isinstance(e, BaseException)]
+        if errors:
+            raise RuntimeError(f"没连上 {'、'.join(n for n, _ in errors)}：{type(errors[0][1]).__name__}: {errors[0][1]}") from errors[0][1]
+
+
 class LiveResearchPlanner:
-    def __init__(self, gateway: GatewayClient | None = None) -> None:
+    def __init__(self, gateway: GatewayClient | None = None, scene: str = "research") -> None:
+        """scene 是调 agent-tools 时记账的场景（网关按它分开记）：评测用 research_eval。"""
         provider, model = config.RESEARCH_PROVIDER, config.RESEARCH_MODEL
         self._agent = make_chat_model(provider, model, thinking=config.RESEARCH_THINKING, effort=config.RESEARCH_EFFORT,
                                       callbacks=[ThinkingTimer()])
@@ -229,9 +254,12 @@ class LiveResearchPlanner:
         # 每天整理一次记忆：默认和主 agent 同一个模型、开思考，要判断一件事是长期的还是一次性的（见 config.DREAM_MODEL）
         self._dreamer = make_chat_model(provider, config.DREAM_MODEL or model, thinking=config.DREAM_THINKING, effort=config.DREAM_EFFORT,
                                         timeout=300)
-        self._gateway = gateway or GatewayClient(config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY, scene="research")
+        url, key = config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY
+        self._gateway = gateway or GatewayClient(url, key, scene=scene)
         self._tools = make_research_tools(self._gateway)
-        self._weather = WeatherTool(lambda: gateway_target(config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY))
+        self._mcp = McpTools(lambda: web_mcp.gateway_target(SEARCH_TOOL, url, key, scene=scene),
+                             lambda: web_mcp.gateway_target(READ_TOOL, url, key, scene=scene),
+                             lambda: weather_mcp.gateway_target(url, key, scene=scene))
 
     def agent_model(self) -> BaseChatModel:
         return self._agent
@@ -240,10 +268,10 @@ class LiveResearchPlanner:
         return self._sub
 
     def tools(self) -> list:
-        return [*self._tools, *([self._weather.tool] if self._weather.tool else [])]
+        return self._mcp.tools(self._tools)
 
     async def connect_tools(self) -> None:
-        await self._weather.connect()
+        await self._mcp.connect()
 
     async def title(self, text: str) -> str:
         """调用方不带这次运行的上下文来调（见 agent._TitleJob），字不进页面。"""
@@ -360,6 +388,48 @@ def fake_weather_server() -> FastMCP:
     return server
 
 
+FAKE_READ_MAX_CHARS = 8000  # 照 reader-service：正文最多给这么多字
+
+
+def fake_search_server(hits: list[dict] | None = None) -> FastMCP:
+    """进程内的假 search-service（MCP）：每次搜索给 3 条稳定的候选（测试给了 hits 就每次都给这几条）。结果的样子照 agent-tools 的 search_web。"""
+    server = FastMCP("search")
+
+    @server.tool(name=SEARCH_TOOL, description="Search the web and get candidate sources (offline fake of the search service).",
+                 output_schema=None)
+    async def search_web(query: str, count: int = 10, recency_days: int | None = None, domains: list[str] | None = None) -> ToolResult:
+        q = query.strip()
+        slug = re.sub(r"\W+", "-", q)[:24] or "q"
+        found = hits if hits is not None else [
+            {"title": f"关于“{q}”的评测 {i}", "url": f"https://example.test/{slug}/{i}", "snippet": f"摘要 {i}：围绕“{q}”的说明。",
+             "published_at": f"2026-0{i}-01"} for i in (1, 2, 3)]
+        res: dict[str, Any] = {"ok": True, "query": q, "results": found[:count]}
+        text = json.dumps(res, ensure_ascii=False, separators=(",", ":"))
+        return ToolResult(content=text, structured_content={**res, "meta": {"provider": "fake", "cached": False}})
+
+    return server
+
+
+def fake_read_server(page_repeat: int = 5) -> FastMCP:
+    """进程内的假 reader-service（MCP）：正文是一句话重复 page_repeat 遍；网址以 /3 结尾的读不到（404）。"""
+    server = FastMCP("reader")
+
+    @server.tool(name=READ_TOOL, description="Read one web page and get its text (offline fake of the reader service).", output_schema=None)
+    async def read_page(url: str, full_page: bool = False) -> ToolResult:
+        if url.endswith("/3"):
+            error = {"code": "page_not_found", "message": "The page does not exist.", "retryable": False, "status": 404}
+            return ToolResult(content="The page does not exist (the site returned HTTP 404). Use another source.",
+                              structured_content={"ok": False, "error": error})
+        body = f"正文：{url} 的内容。" * page_repeat
+        res: dict[str, Any] = {"ok": True, "url": url, "title": "正文标题", "content": body[:FAKE_READ_MAX_CHARS]}
+        if len(body) > FAKE_READ_MAX_CHARS:
+            res["truncated"] = True
+        res["content_chars"] = len(body)
+        return ToolResult(content=json.dumps(res, ensure_ascii=False), structured_content={**res, "meta": {"provider": "fake"}})
+
+    return server
+
+
 FAKE_IMAGE_FILTERED = "【违规图】"  # 画图的描述里有它，假 image-service 按内容审核没过拒绝
 FAKE_CHUNK_GAP_S = 0.0  # 假模型异步流式时片段之间隔多久；测试停止时调大，让已经吐出的片段先到页面（真模型片段之间有网络的空档）
 FAKE_IMAGE_SLOW = "慢慢画"  # 描述里有它，假 image-service 过几秒才出图（看占位、试停止：点了停止马上断开）
@@ -406,33 +476,13 @@ def _fake_image_service() -> Any:
     return handle
 
 
-def fake_gateway_client(page_repeat: int = 5) -> GatewayClient:
-    """用 MockTransport 模拟网关：每次搜索给 3 条稳定的候选，读页返回正文（第 3 条读不到；正文是一句话重复 page_repeat 遍）；
-    画图见 _fake_image_service；天气不走这里，见 fake_weather_server。"""
+def fake_gateway_client() -> GatewayClient:
+    """用 MockTransport 模拟网关的画图（见 _fake_image_service）；搜索、读页、天气走 MCP，见 fake_search_server 等。"""
     images = _fake_image_service()
 
     async def handler(req: httpx.Request) -> httpx.Response:
         if req.url.path == "/image/v1/generate" or req.url.path.startswith("/image/static/"):
             return await images(req)
-        if req.url.path == "/search/search":
-            q = json.loads(req.content).get("query", "")
-            slug = re.sub(r"\W+", "-", q)[:24] or "q"
-            hits = [
-                {
-                    "title": f"关于“{q}”的评测 {i}",
-                    "url": f"https://example.test/{slug}/{i}",
-                    "description": f"摘要 {i}：{q}",
-                    "content": f"长摘要 {i}：围绕“{q}”的说明。",
-                    "published_at": f"2026-0{i}-01T00:00:00+00:00",
-                }
-                for i in (1, 2, 3)
-            ]
-            return httpx.Response(200, json={"results": hits, "provider": "fake"})
-        if req.url.path == "/reader/read":
-            url = req.url.params.get("url", "")
-            if url.endswith("/3"):
-                return httpx.Response(404, json={"detail": {"kind": "page_not_found", "message": "gone", "retryable": False}})
-            return httpx.Response(200, json={"title": "正文标题", "content": f"正文：{url} 的内容。" * page_repeat, "provider": "direct"})
         return httpx.Response(404, json={"error": "not_found"})
 
     return GatewayClient("http://fake-gw", "fake-key", scene="research", transport=httpx.MockTransport(handler))
@@ -553,7 +603,7 @@ class FakeToolModel(BaseChatModel):
         if m := re.search(r"取回第(\d+)轮", text):
             return call(RECALL, turn=int(m.group(1)))
         first = next((m for m in messages if isinstance(m, ToolMessage) and m.name == "search_web" and m.status != "error"), None)
-        sid = re.search(r'"id": "(s[0-9a-f]{6,10})"', str(first.content)) if first else None
+        sid = re.search(r'"id":\s*"(s[0-9a-f]{6,10})"', str(first.content)) if first else None
         return call(RECALL, source_id=sid.group(1)) if sid else ("没有能取回的。", [])
 
     @staticmethod
@@ -654,19 +704,20 @@ def _hits(messages: list[BaseMessage]) -> list[dict]:
                 data = json.loads(m.content)
             except (TypeError, ValueError):
                 continue
-            if isinstance(data, list):
-                return data
+            if (hits := search_hits(data)) is not None:
+                return hits
     return []
 
 
 class FakeResearchPlanner:
-    def __init__(self, gateway: GatewayClient | None = None) -> None:
+    def __init__(self, gateway: GatewayClient | None = None, *, page_repeat: int = 5, search: Any = None, read: Any = None) -> None:
+        """search、read 是搜索、读页的 MCP 地址，默认是进程内的假服务（测试换成出错的）；读到的正文是一句话重复 page_repeat 遍。"""
         self.calls: list[tuple[str, Any]] = []
         self.fail_title = False
         self.dream_replies: list[str] = []  # 整理记忆时按顺序给这些回答；用完了照 dream 的说明
         self._gateway = gateway or fake_gateway_client()
         self._tools = make_research_tools(self._gateway)
-        self._weather = WeatherTool(fake_weather_server)
+        self._mcp = McpTools(search or fake_search_server, read or (lambda: fake_read_server(page_repeat)), fake_weather_server)
         self._model = FakeToolModel()
         self._sub_model = FakeToolModel(prefix="fake-sub")
 
@@ -677,10 +728,10 @@ class FakeResearchPlanner:
         return self._sub_model
 
     def tools(self) -> list:
-        return [*self._tools, *([self._weather.tool] if self._weather.tool else [])]
+        return self._mcp.tools(self._tools)
 
     async def connect_tools(self) -> None:
-        await self._weather.connect()
+        await self._mcp.connect()
 
     async def title(self, text: str) -> str:
         self.calls.append(("title", text))

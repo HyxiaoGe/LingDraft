@@ -1,8 +1,6 @@
-"""agent-tools 网关客户端：搜索、网页读取、生图（查天气走 MCP，见 app.tools.weather_mcp）。
+"""agent-tools 网关客户端：生图，以及网关出错时的几种异常（天气、搜索、读页走 MCP，见 app.tools.mcp）。
 
 网关统一鉴权（Bearer 产品密钥）、记账、按前缀转发：
-- POST /search/search  → search-service
-- GET  /reader/read    → reader-service
 - POST /image/v1/generate → image-service（还要在 image-service 里登记灵稿，见它的 PRODUCTS）；
   出的图在 GET /image/static/images/...，公开地址，不用密钥
 """
@@ -10,15 +8,13 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-# 正文最多给模型这么多字，避免一页就吃掉上下文
-READ_MAX_CHARS = 6000
 # image-service 整条主备链限时 135 秒（含找参考图、各模型尝试），超时自己返回 upstream_timeout；这里留出传输余量（照 Fusion）
 IMAGE_TIMEOUT = 150.0
 DOWNLOAD_TIMEOUT = 30.0
@@ -33,27 +29,6 @@ REFERENCE_SEARCH_STATUSES = {"found", "cached", "none_accepted", "search_failed"
 # ---- 网关成功响应的结构：在边界上校验，结构不对按失败处理，不让坏数据流到后面 ----
 
 
-class _Hit(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    url: str | None = None  # 个别条目没有网址就跳过；有但不是字符串算格式错
-    title: str | None = None
-    description: str | None = None
-    content: str | None = None
-    published_at: str | None = None
-
-
-class _SearchBody(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    results: list[_Hit]  # 没搜到是 []；缺了、不是列表、条目不对都算格式错
-
-
-class _ReadBody(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    title: str | None = None
-    content: str  # 读页成功一定有正文：reader-service 读不到正文时自己按 empty_content 失败返回
-    provider: str | None = None
-
-
 class _ImageBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
     image_url: str
@@ -64,59 +39,6 @@ class _ImageBody(BaseModel):
 def _brief(e: ValidationError) -> str:
     err = e.errors()[0]
     return ".".join(str(x) for x in err["loc"]) + "：" + err["msg"] if err["loc"] else err["msg"]
-
-
-_SEP = r"(?:\s+[-–—]\s+|\s*[|｜_]\s*)"  # 横线两边要有空格，不然“10-10-2024”也会被当成重复
-_REPEAT = re.compile(rf"^(?P<t>.{{2,}}?){_SEP}(?P=t)(?={_SEP}|$)")
-
-
-def tidy_title(title: str) -> str:
-    """网页标题常把正文标题重复一遍（“A - A”“A | A - 站名”），只留一份。只认一字不差的重复，不猜意思。"""
-    return _REPEAT.sub(r"\g<t>", title.strip(), count=1)
-
-
-@dataclass
-class SearchHit:
-    title: str
-    url: str
-    description: str
-    content: str
-    published_at: str | None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "title": self.title,
-            "url": self.url,
-            "description": self.description,
-            "content": self.content,
-            "published_at": self.published_at,
-        }
-
-
-@dataclass
-class ReadResult:
-    ok: bool
-    url: str
-    title: str = ""
-    content: str = ""
-    provider: str = ""
-    kind: str = ""
-    message: str = ""
-    retryable: bool = False
-    truncated: bool = False
-    extra: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        if self.ok:
-            return {
-                "ok": True,
-                "url": self.url,
-                "title": self.title,
-                "content": self.content,
-                "provider": self.provider,
-                "truncated": self.truncated,
-            }
-        return {"ok": False, "url": self.url, "kind": self.kind, "message": self.message, "retryable": self.retryable}
 
 
 class GatewayError(RuntimeError):
@@ -130,6 +52,13 @@ class GatewayError(RuntimeError):
 
 class GatewayAuthError(GatewayError):
     """密钥不对或没有权限：配置问题，再试也不会好。"""
+
+
+class GatewayLimitError(GatewayError):
+    """网关这个服务今天的调用上限到了（HTTP 429，北京时间 0 点重置）：今天再调也一样。"""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, kind="daily_limit_exceeded")
 
 
 class ImageError(GatewayError):
@@ -169,91 +98,6 @@ class GatewayClient:
 
     async def aclose(self) -> None:
         await self._client.aclose()
-
-    async def search(self, query: str, *, count: int = 5, kind: str = "web", freshness: str | None = None,
-               domains: list[str] | None = None) -> list[SearchHit]:
-        """freshness 是 pd / pw / pm / py（近一天、周、月、年）；domains 限定站点。"""
-        payload: dict[str, Any] = {"query": query, "type": kind, "count": max(1, min(count, 20))}
-        if freshness:
-            payload["freshness"] = freshness
-        if domains:
-            payload["domain_filters"] = list(domains)
-        try:
-            resp = await self._client.post("/search/search", json=payload)
-        except httpx.TimeoutException as e:
-            raise GatewayError(f"搜索超时：{e}", kind="timeout", retryable=True) from e
-        except httpx.HTTPError as e:
-            raise GatewayError(f"搜索请求失败：{e}", kind="request_error", retryable=True) from e
-        if resp.status_code in (401, 403):
-            raise GatewayAuthError(f"搜索失败：HTTP {resp.status_code} {resp.text[:200]}", kind=f"http_{resp.status_code}")
-        if resp.status_code != 200:
-            raise GatewayError(f"搜索失败：HTTP {resp.status_code} {resp.text[:200]}", kind=f"http_{resp.status_code}",
-                               retryable=resp.status_code in (429, 502, 503, 504))
-        try:
-            data = resp.json()
-        except ValueError as e:  # 多半是中间代理的错误页，可能一会儿就好
-            raise GatewayError("搜索服务返回的不是 JSON", kind="bad_response", retryable=True) from e
-        try:
-            body = _SearchBody.model_validate(data)
-        except ValidationError as e:
-            raise GatewayError(f"搜索服务返回的格式不对（{_brief(e)}）", kind="bad_response") from e
-        return [
-            SearchHit(title=tidy_title(r.title or ""), url=r.url, description=r.description or "", content=r.content or r.description or "",
-                      published_at=r.published_at)
-            for r in body.results if r.url
-        ]
-
-    async def read(self, url: str, *, full: bool = False, max_chars: int = READ_MAX_CHARS) -> ReadResult:
-        params: dict[str, Any] = {"url": url}
-        if full:
-            params["full"] = "true"
-        try:
-            resp = await self._client.get("/reader/read", params=params)
-        except httpx.TimeoutException:
-            return ReadResult(ok=False, url=url, kind="timeout", message="读取超时", retryable=True)
-        except httpx.HTTPError as e:
-            return ReadResult(ok=False, url=url, kind="request_error", message=str(e), retryable=True)
-        if resp.status_code == 200:
-            try:
-                data = resp.json()
-            except ValueError:
-                return ReadResult(ok=False, url=url, kind="bad_response", message="读取服务返回的不是 JSON", retryable=True)
-            try:
-                body = _ReadBody.model_validate(data)
-            except ValidationError as e:
-                return ReadResult(ok=False, url=url, kind="bad_response", message=f"读取服务返回的格式不对（{_brief(e)}）")
-            content = body.content
-            if not content.strip():
-                return ReadResult(ok=False, url=url, kind="bad_response", message="读取服务返回的正文是空的")
-            return ReadResult(
-                ok=True,
-                url=url,
-                title=tidy_title(body.title or ""),
-                content=content[:max_chars],
-                provider=body.provider or "",
-                truncated=len(content) > max_chars,
-            )
-        # reader-service 的失败是结构化的 detail；网关自己的失败是 {"error": ...}
-        try:
-            body = resp.json()
-        except ValueError:
-            body = {}
-        detail = body.get("detail") if isinstance(body, dict) else None
-        if isinstance(detail, dict):
-            return ReadResult(
-                ok=False,
-                url=url,
-                kind=detail.get("kind") or f"http_{resp.status_code}",
-                message=detail.get("message") or "",
-                retryable=bool(detail.get("retryable")),
-            )
-        return ReadResult(
-            ok=False,
-            url=url,
-            kind=(body.get("error") if isinstance(body, dict) else None) or f"http_{resp.status_code}",
-            message=(body.get("message") if isinstance(body, dict) else None) or resp.text[:200],
-            retryable=resp.status_code in (502, 503, 504),
-        )
 
     async def generate_image(self, payload: dict[str, Any], *, scene: str) -> ImageResult:
         """出一张图（payload 是 image-service 的 /v1/generate 参数）。scene 是 chat_image / image_edit，网关和 image-service 按它统计。"""

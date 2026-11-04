@@ -12,12 +12,12 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, messag
 from langchain_core.tools import ToolException
 from pydantic import Field
 
-from app import config
+from app import aio, config
 from app.graph.research import compaction as cp
 from app.graph.research import history
 from app.graph.research.compaction import CompactionMiddleware, compact, recall_source, recall_turn, tokens, turn_order
 from app.graph.research.state import Compaction
-from app.research_llm import FakeResearchPlanner, FakeToolModel, fake_gateway_client
+from app.research_llm import FakeResearchPlanner, FakeToolModel
 from tests.test_research import Chat
 
 REMOVED = "[Removed to save space]"
@@ -39,6 +39,7 @@ def tools_tokens() -> float:
     from app.graph.research.subagent import make_task_tool
 
     p = FakeResearchPlanner()
+    aio.run(p.connect_tools())  # 和运行器里一样，连上 MCP 的工具（搜索、读页、天气）
     return CompactionMiddleware(p, [*p.tools(), make_task_tool(p), cp.make_recall_tool()]).tools_tokens
 
 
@@ -46,7 +47,7 @@ TOOLS = tools_tokens()
 
 
 def planner(page_repeat: int = 60) -> FakeResearchPlanner:
-    p = FakeResearchPlanner(fake_gateway_client(page_repeat=page_repeat))
+    p = FakeResearchPlanner(page_repeat=page_repeat)
     p._model = Recording()
     return p
 

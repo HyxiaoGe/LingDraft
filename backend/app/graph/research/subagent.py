@@ -118,6 +118,8 @@ class ToolBudget(ToolCallLimitMiddleware):
 
 
 def build_subagent(planner):
+    from app.tools.web_mcp import WebToolsMiddleware  # 用到 prompts，和 agent.build_agent 一样放这里
+
     return create_agent(
         model=planner.subagent_model(),
         tools=[t for t in planner.tools() if t.name in SUBAGENT_TOOLS],
@@ -127,6 +129,7 @@ def build_subagent(planner):
             SubagentPrompt(),
             ContentGuard(planner),
             ToolProgressMiddleware(),
+            WebToolsMiddleware(),  # 在 ToolProgressMiddleware 里面：过程记录看到的是带来源 id 的结果
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
             *(ToolBudget(t, n) for t, n in TOOL_BUDGET.items()),
             InterruptedRetryMiddleware(),  # 最里面：只重发调模型这一下
