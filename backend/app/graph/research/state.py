@@ -85,7 +85,7 @@ class Place(BaseModel):
     category: str = Field(default="", description="地图的分类，比如“餐饮服务;咖啡厅;咖啡厅”")
     distance_m: int | None = Field(default=None, description="离搜索的那个地方多远；在某地附近搜时才有")
     rating: float | None = None
-    cost: float | None = Field(default=None, description="参考消费（元）；高德的不一定是人均")
+    cost: float | None = Field(default=None, description="人均消费（元），高德标的，只有餐饮、酒店、景点、影院会给")
     open_hours: str = ""
     photo_url: str = ""
     map_url: str = Field(default="", description="在地图上看这个地方的链接；只有高德的有")

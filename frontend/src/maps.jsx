@@ -1,5 +1,5 @@
 // 地点卡、路线卡：place_search、route_compare 查到的（agent-tools 的 maps-service，先高德后腾讯，见 backend/app/tools/maps_mcp.py）。
-// 地点卡一行一个地方：有图放图，名字能点开高德地图（腾讯的没有链接），下面是评分、参考消费、距离、地址、营业时间。
+// 地点卡一行一个地方：有图放图，名字能点开高德地图（腾讯的没有链接），下面是评分、人均、距离、地址、营业时间。
 // 路线卡一行一种出行方式：用时最显眼，后面是距离、费用；公交列出每一段坐什么、从哪站到哪站，另外几种走法收着。
 // 卡片上署地图服务商和查的时间，模型的正文里不用再引用
 import { useState } from "react";
@@ -78,7 +78,7 @@ function PlaceRow({ p }) {
   const kind = p.category.split(";").filter(Boolean).at(-1);
   const facts = [
     p.rating != null && <span key="r" className="rate">★ {p.rating}</span>,
-    p.cost != null && <span key="c" title="地图上的参考消费，不一定是人均">参考消费 {yuan(p.cost)}</span>,
+    p.cost != null && <span key="c">人均 {yuan(p.cost)}</span>,
     p.distance_m != null && <span key="d">{dist(p.distance_m)}</span>,
     kind && <span key="k">{kind}</span>,
   ].filter(Boolean);
