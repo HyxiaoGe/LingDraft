@@ -90,7 +90,7 @@ class _Streamed:
         meta: dict[str, Any] = {history.STOPPED: True}
         if (ms := self.clock.ms()) is not None:
             meta[THINKING_MS] = ms
-        return AIMessage(id=self.mid, content=self.text, additional_kwargs={"reasoning_content": self.thinking} if self.thinking else {},
+        return AIMessage(id=self.mid, content=self.text, additional_kwargs={history.REASONING: self.thinking} if self.thinking else {},
                          response_metadata=meta)
 
 
@@ -111,8 +111,8 @@ class StreamBuffer:
         if cur is None or cur.mid != mid:
             cur = self._cur[task] = _Streamed(mid)
         thought = cur.clock.see(chunk)
-        thinking = chunk.additional_kwargs.get("reasoning_content") or ""
-        text = chunk.content if isinstance(chunk.content, str) else ""
+        thinking = history.thinking_of(chunk)
+        text = history.text_of(chunk)
         cur.thinking += thinking
         cur.text += text
         if thought:  # 思考到这里为止：用时记在思考那一段上发给页面，排在正文前面
@@ -173,7 +173,7 @@ def _items_of(m: AIMessage, results: dict[str, ToolMessage]) -> list[dict]:
     if reason := history.blocked_reason(m):
         return [{"type": "blocked", "id": m.id, "reason": reason}]
     items: list[dict] = []
-    if thinking := m.additional_kwargs.get("reasoning_content"):
+    if thinking := history.thinking_of(m):
         items.append({"type": "thinking", "id": m.id, "text": thinking, "ms": m.response_metadata.get(THINKING_MS)})
     if text := history.text_of(m).strip():
         items.append({"type": "text", "id": m.id, "text": text})

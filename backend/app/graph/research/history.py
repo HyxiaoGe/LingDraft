@@ -70,6 +70,19 @@ def text_of(m: BaseMessage) -> str:
     return "".join(b.get("text", "") for b in m.content if isinstance(b, dict) and b.get("type") == "text")
 
 
+# 模型类把思考放进 additional_kwargs 的键（见 research_llm.make_chat_model）。reasoning_content 是给人看的思考：DeepSeek 给原文，
+# 豆包 2.x 给摘要；encrypted_content 是豆包加密的思考原文，只用来原样传回。读思考用 thinking_of，这两个键只在收发、压缩去掉思考时用。
+REASONING = "reasoning_content"
+ENCRYPTED = "encrypted_content"
+THINKING_KEYS = (REASONING, ENCRYPTED)
+
+
+def thinking_of(m: BaseMessage) -> str:
+    """消息里的思考，按 LangChain 的标准 content blocks 读：DeepSeek、豆包放在 additional_kwargs 里，Claude 这类放在 content 里，读法一样。
+    模型类要把提供方标成没有专门解析的名字（见 ChatArk）：标成 openai 的话，content_blocks 按 OpenAI 的格式读，不看 additional_kwargs。"""
+    return "".join(b.get("reasoning") or "" for b in m.content_blocks if b.get("type") == "reasoning")
+
+
 def is_guide(m: BaseMessage) -> bool:
     """用户插进正在跑的这一轮的话：算这一轮里的一条，不开新的一轮。"""
     return isinstance(m, HumanMessage) and bool(m.additional_kwargs.get(GUIDE))
@@ -104,7 +117,7 @@ def blocked_reason(m: BaseMessage) -> str | None:
 
 def streamed_something(m: AIMessage) -> bool:
     """点停止时流出来的半截消息里有东西：有正文，或者只想了还没写。主 agent、子 agent 的都按这个决定存不存。"""
-    return bool(text_of(m).strip() or m.additional_kwargs.get("reasoning_content"))
+    return bool(text_of(m).strip() or thinking_of(m))
 
 
 def is_stopped_thought(m: BaseMessage) -> bool:
