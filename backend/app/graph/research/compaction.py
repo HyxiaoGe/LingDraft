@@ -34,13 +34,13 @@ from pydantic import BaseModel, Field
 from app import config
 from app.graph.research import history, prompts
 from app.graph.research.agent import emit, memory_text, system_prompt, turn_start
-from app.graph.research.sources import SUBAGENT_TOOL, flatten, hit_text, parse, search_hits
+from app.graph.research.sources import DOCS_TOOL, SUBAGENT_TOOL, doc_snippets, flatten, hit_text, parse, search_hits
 from app.graph.research.state import Compaction, ResearchState
 
 log = logging.getLogger(__name__)
 
 RECALL_TOOL = "recall"
-CLEARED_TOOLS = ("search_web", "read_page", RECALL_TOOL)  # 第一层换成说明的工具结果
+CLEARED_TOOLS = ("search_web", "read_page", DOCS_TOOL, RECALL_TOOL)  # 第一层换成说明的工具结果
 PER_MESSAGE = 4  # 每条消息另算的 token（角色、分隔）
 SUMMARY_GUESS = 600  # 还没写出来时，一份短版按这么多 token 估
 LONG_USER_CHARS = 20000  # 换成短版的那几轮里，用户消息超过这么多字的也压
@@ -94,7 +94,7 @@ def turn_order(messages: list[BaseMessage]) -> dict[str, int]:
 
 
 def _cleared(m: BaseMessage) -> BaseMessage:
-    """第一层：搜索、读页、取回的结果换成一行说明；模型消息不带思考。没做成的结果本来就短，留着。"""
+    """第一层：搜索、读页、查文档、取回的结果换成一行说明；模型消息不带思考。没做成的结果本来就短，留着。"""
     if isinstance(m, AIMessage) and "reasoning_content" in m.additional_kwargs:
         return m.model_copy(update={"additional_kwargs": {k: v for k, v in m.additional_kwargs.items() if k != "reasoning_content"}})
     if not isinstance(m, ToolMessage) or m.name not in CLEARED_TOOLS or m.status == "error":
@@ -107,6 +107,11 @@ def _cleared(m: BaseMessage) -> BaseMessage:
         note = prompts.render("compact.search_cleared", sources=json.dumps(found, ensure_ascii=False))
     elif m.name == "read_page" and isinstance(data, dict) and data.get("ok") and data.get("id"):
         note = prompts.render("compact.read_cleared", id=data["id"], title=data.get("title") or "", url=data.get("url") or "")
+    elif m.name == DOCS_TOOL and (snippets := doc_snippets(m)):
+        pages: dict[str, dict] = {}  # 同一页的几段只列一次，标题用第一段的
+        for s in snippets:
+            pages.setdefault(s["id"], {"id": s["id"], "title": s.get("title") or "", "url": s["url"]})
+        note = prompts.render("compact.docs_cleared", sources=json.dumps(list(pages.values()), ensure_ascii=False))
     else:
         return m
     return m.model_copy(update={"content": note})
@@ -335,19 +340,24 @@ def _failed(kind: str, message: str) -> ToolException:
 
 
 def recall_source(messages: list[BaseMessage], sid: str) -> str:
-    """一个来源当初拿到的样子：读过的是读页的结果（最后读的那次），没读过的是搜索结果里的那一条。子 agent 查到的也算。
-    被内容审核停下的那几轮里的不算：发给模型就又会被拦。"""
-    page, hit = None, None
+    """一个来源当初拿到的样子：读过的是读页的结果（最后读的那次）；没读过、查文档查到过的是那几段文档（第一次查到的）；
+    都没有的是搜索结果里的那一条。子 agent 查到的也算。被内容审核停下的那几轮里的不算：发给模型就又会被拦。"""
+    page, docs, hit = None, None, None
     for m in flatten(history.without_blocked_turns(messages)):
         if not isinstance(m, ToolMessage) or m.status == "error":
             continue
         data = parse(m)
         if m.name == "read_page" and isinstance(data, dict) and data.get("ok") and data.get("id") == sid and (data.get("content") or "").strip():
             page = m
+        elif m.name == DOCS_TOOL and docs is None:
+            docs = [s for s in doc_snippets(m) if s["id"] == sid] or None
         elif m.name == "search_web" and hit is None and (hits := search_hits(data)) is not None:
             hit = next((h for h in hits if h.get("id") == sid), None)
     if page is not None:
         return history.text_of(page)
+    if docs is not None:
+        return json.dumps({"id": sid, "url": docs[0]["url"], "documentation": [{"title": s.get("title") or "", "content": s.get("content") or ""}
+                                                                            for s in docs]}, ensure_ascii=False)
     if hit is not None:
         return json.dumps({"id": sid, "url": hit.get("url") or "", "title": hit.get("title") or "", "published_at": hit.get("published_at"),
                            "snippet": hit_text(hit), "page_read": False}, ensure_ascii=False)

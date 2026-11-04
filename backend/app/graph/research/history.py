@@ -12,7 +12,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMe
 from pydantic import ValidationError
 
 from app.graph.research import prompts
-from app.graph.research.sources import SUBAGENT_TOOL, collect_sources, parse, search_hits, subagent_messages
+from app.graph.research.sources import DOCS_TOOL, LIBRARY_TOOL, SUBAGENT_TOOL, collect_sources, doc_snippets, parse, search_hits, subagent_messages
 from app.graph.research.state import (
     Forecast,
     GeneratedImage,
@@ -41,7 +41,7 @@ FLIGHT_TOOL, TRAIN_TOOL = "search_flights", "search_trains"  # flyai 的两个�
 ITINERARY_TOOL = "present_itinerary"  # 灵稿自己的排行程（见 app.tools.flyai_mcp）
 TRAVEL_KINDS = {FLIGHT_TOOL: "flight", TRAIN_TOOL: "train"}
 STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", PLACE_TOOL: "place", ROUTE_TOOL: "route",
-              **TRAVEL_KINDS, ITINERARY_TOOL: "itinerary", IMAGE_TOOL: "image", SUBAGENT_TOOL: "task"}
+              **TRAVEL_KINDS, ITINERARY_TOOL: "itinerary", IMAGE_TOOL: "image", SUBAGENT_TOOL: "task", LIBRARY_TOOL: "library", DOCS_TOOL: "docs"}
 BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
 # 没画成的原因在页面上的说法（照 Fusion 的图片卡片），没列的都说“图片生成失败”
 IMAGE_FAILURES = {
@@ -177,6 +177,10 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         text, extra = f"{_text(args.get('origin'))} → {_text(args.get('destination'))}", {"limits": travel_limits(args)}
     elif kind == "itinerary":
         text, extra = _text(args.get("title")), {}
+    elif kind == "library":
+        text, extra = _text(args.get("libraryName")), {}
+    elif kind == "docs":
+        text, extra = _text(args.get("query")), {"limits": [_text(args.get("libraryId"))] if args.get("libraryId") else []}
     else:
         text, extra = str(args.get("url" if kind == "read" else "location", "")), {}
     if result is None:
@@ -193,6 +197,8 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         return _travel_step(kind, cid, text, extra, result)
     if kind == "itinerary":
         return _itinerary_step(cid, text, result)
+    if kind in ("library", "docs"):
+        return _docs_step(kind, cid, text, extra, result)
     data = parse(result)
     if kind == "weather":
         return _weather_step(cid, text, data, result)
@@ -233,6 +239,28 @@ READ_FAILURES = {
     "unavailable": "读网页的服务暂时连不上",
     "tool_error": "读网页没调成",
 }
+
+
+# 找库、查文档没做成时的错误码 → 页面上的说法（见 app.tools.docs_mcp）。tool_error 是 Context7 回了错，多半是找不到这个库、这个库的文档，
+# 给模型的是 Context7 的原话
+DOCS_FAILURES = {
+    "tool_error": "Context7 没给出结果",
+    "rate_limited": "Context7 限流了，这个月的额度可能用完了",
+    "quota_exhausted": "查文档今天的次数用完了",
+    "unavailable": "查文档的服务暂时连不上",
+    "content_blocked": BLOCKED_NOTE,
+}
+
+
+def _docs_step(kind: str, cid: str, text: str, extra: dict, result: ToolMessage) -> ToolStep:
+    """找库：找到几个候选库；查文档：几段文档、它们的来源。"""
+    if result.status == "error":
+        return ToolStep(id=cid, kind=kind, text=text, ok=False, message=_failure(None, result, DOCS_FAILURES), **extra)
+    if kind == "library":
+        libraries = result.artifact.get("libraries") if isinstance(result.artifact, dict) else None
+        return ToolStep(id=cid, kind=kind, text=text, hits=len(libraries or []), **extra)
+    snippets = doc_snippets(result)
+    return ToolStep(id=cid, kind=kind, text=text, hits=len(snippets), source_ids=list(dict.fromkeys(s["id"] for s in snippets)), **extra)
 
 
 def tool_error(result: ToolMessage) -> dict | None:
@@ -591,6 +619,8 @@ def usage_of(messages: list[BaseMessage]) -> Usage:
             u.maps += 1
         elif isinstance(m, ToolMessage) and m.name in TRAVEL_KINDS:
             u.travel += 1
+        elif isinstance(m, ToolMessage) and m.name in (LIBRARY_TOOL, DOCS_TOOL):
+            u.docs += 1
         elif image_of(m):
             u.images += 1
         elif subagent_messages(m):

@@ -222,6 +222,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `weather_mcp.py`：查天气。`get_weather` 是 agent-tools 的 MCP 工具（挑城市、整理预报、缓存、给模型的说明都在 weather-service 里，和 Fusion 共用），用 LangChain 的 MCP 适配器接进来；这里接上灵稿自己的一段说明，中间件把结果整理成模型看的文字，网关出问题算没查到、密钥不对让这一轮失败。
   - `maps_mcp.py`：查地点、比路线。`place_search`、`route_compare` 是 agent-tools 的 MCP 工具（先高德后腾讯、地名怎么定、重名怎么问、给模型的说明都在 maps-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明（卡片署了服务商不用重复、拿不到用户位置要问），中间件把整份结果留给地点卡、路线卡，网关今天的上限到了算额度用完，没连上时用同名的占位工具。
   - `flyai_mcp.py`：查航班、火车，排行程。`search_flights`、`search_trains` 是 agent-tools flyai 的 MCP 工具（日期定不了先问、只要高铁、飞猪认不出的地名、结果的样子都在服务里，和 Fusion 共用）；这里接上灵稿自己的一段说明（卡片上都列了、别贴预订链接、接站换乘用查到的站名和城市），中间件把整份结果留给航班卡、火车卡，每轮最多查 4 次；比路线的起终点是查到的车站时，城市没填对就不交给地图、告诉模型该填哪个。`present_itinerary` 是灵稿自己的：模型按这段对话查到的班次编号排方案，核对编号和先后后画成行程卡，一个回答最多一张。
+  - `docs_mcp.py`：查文档。`resolve-library-id`（按库名找库）、`query-docs`（查这个库的文档）是 Context7 的 MCP 工具，经 agent-tools 的 context7 服务（注入密钥、只放这两个工具、限流时标出来）；这里接上灵稿自己的一段说明（什么时候用、引用来源 id），中间件给每段文档的出处带上来源 id，带来源的那几段记在 artifact 里给来源列表和压缩后取回。Context7 免费版每月 1000 次（每月初重置，和 Fusion 共用），网关给灵稿设了每天 30 次；限流、上限到了、连不上都告诉模型改用搜索和读官方文档。连上了才带（和天气一样）。
 - `app/model_guard.py` 模型服务出错的分类和熔断；`app/aio.py` 对话的事件循环
 - `app/evals/` + `evals/` 回放评测：用真实模型跑 `evals/research/cases.yaml`，按轨迹和裁判模型打分，用法和写用例的约定见 `evals/README.md`
 - `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）。

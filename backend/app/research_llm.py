@@ -22,6 +22,7 @@ from uuid import UUID, uuid4
 
 import httpx
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.tools import ToolResult
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
@@ -34,9 +35,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from app import aio, config
 from app.graph.research import history, prompts
 from app.graph.research.compaction import RECALL_TOOL as RECALL
-from app.graph.research.sources import search_hits
+from app.graph.research.sources import DOCS_TOOL, doc_snippets, search_hits
 from app.model_guard import ContentBlocked, GuardedChatModel, Interrupted, ModelUnavailable, guard_key
-from app.tools import flyai_mcp, image_mcp, maps_mcp, web_mcp, weather_mcp
+from app.tools import docs_mcp, flyai_mcp, image_mcp, maps_mcp, web_mcp, weather_mcp
+from app.tools.docs_mcp import LIBRARY_TOOL, docs_tools
 from app.tools.flyai_mcp import FLIGHT_TOOL, ITINERARY_TOOL, TRAIN_TOOL, TravelTool
 from app.tools.gateway import GatewayClient
 from app.tools.image_mcp import ImageTool
@@ -218,26 +220,28 @@ def _structured(llm, schema):
 
 
 class McpTools:
-    """agent-tools 的 MCP 工具：搜索、读页、画图、地图（查地点、比路线）、航班火车、天气。target 是各自的 MCP 地址（网关的客户端，或者进程内的假服务）；
-    地图的两个工具在同一个服务里，共用一个地址；航班、火车也是。
+    """agent-tools 的 MCP 工具：搜索、读页、画图、地图（查地点、比路线）、航班火车、天气、查文档（Context7）。target 是各自的 MCP 地址
+    （网关的客户端，或者进程内的假服务）；地图的两个工具在同一个服务里，共用一个地址；航班、火车也是；找库、查文档也是。
     没连上的：搜索、读页、画图、地图、航班火车先用同名的占位工具（调了说服务暂时连不上，见 app.tools.web_mcp、image_mcp、maps_mcp、flyai_mcp），
-    天气先不带。"""
+    天气、查文档先不带。"""
 
-    def __init__(self, search: Any, read: Any, weather: Any, image: Any, maps: Any, flyai: Any) -> None:
+    def __init__(self, search: Any, read: Any, weather: Any, image: Any, maps: Any, flyai: Any, docs: Any) -> None:
         self.web = [WebTool(SEARCH_TOOL, search), WebTool(READ_TOOL, read)]
         self.image = ImageTool(image)
         self.maps = [MapsTool(PLACE_TOOL, maps), MapsTool(ROUTE_TOOL, maps)]
         self.travel = [TravelTool(FLIGHT_TOOL, flyai), TravelTool(TRAIN_TOOL, flyai)]
         self.weather = WeatherTool(weather)
+        self.docs = docs_tools(docs)
 
     def tools(self, own: list) -> list:
-        """顺序固定（搜索、读页、画图、地图、航班火车、灵稿自己的、天气）：工具列表在请求的前缀里，顺序变了前缀缓存就断了。"""
+        """顺序固定（搜索、读页、画图、地图、航班火车、灵稿自己的、天气、找库、查文档）：工具列表在请求的前缀里，顺序变了前缀缓存就断了。"""
         return [*(t.current() for t in self.web), self.image.current(), *(t.current() for t in self.maps),
-                *(t.current() for t in self.travel), *own, *([self.weather.tool] if self.weather.tool else [])]
+                *(t.current() for t in self.travel), *own, *([self.weather.tool] if self.weather.tool else []),
+                *(t.tool for t in self.docs if t.tool)]
 
     async def connect(self) -> None:
         """同时连还没连上的，连上一个算一个；有没连上的抛 RuntimeError（第一个的原因在 __cause__ 里）。"""
-        todo = [t for t in (*self.web, self.image, *self.maps, *self.travel, self.weather) if t.tool is None]
+        todo = [t for t in (*self.web, self.image, *self.maps, *self.travel, self.weather, *self.docs) if t.tool is None]
         errors = [(t.name, e) for t, e in zip(todo, await asyncio.gather(*(t.connect() for t in todo), return_exceptions=True), strict=True)
                   if isinstance(e, BaseException)]
         if errors:
@@ -274,7 +278,8 @@ class LiveResearchPlanner:
                              lambda: weather_mcp.gateway_target(url, key, scene=scene),
                              lambda: image_mcp.gateway_target(url, key, scene=scene),
                              lambda: maps_mcp.gateway_target(url, key, scene=scene),
-                             lambda: flyai_mcp.gateway_target(url, key, scene=scene))
+                             lambda: flyai_mcp.gateway_target(url, key, scene=scene),
+                             lambda: docs_mcp.gateway_target(url, key, scene=scene))
 
     def agent_model(self) -> BaseChatModel:
         return self._agent
@@ -548,6 +553,60 @@ def fake_flyai_server() -> FastMCP:
 FAKE_READ_MAX_CHARS = 8000  # 照 reader-service：正文最多给这么多字
 
 
+FAKE_LIBRARY_ID = "/websites/langchain_oss_python"
+# 照 2026-11-04 真实调的样子（两段同一页、一段另一页）
+FAKE_DOCS = """### Trim messages using @before_model middleware
+
+Source: https://docs.langchain.com/oss/python/langchain/short-term-memory
+
+Keep only the last few messages to fit the context window.
+
+```python
+@before_model
+def trim_messages(state: AgentState, runtime: Runtime) -> dict[str, Any] | None:
+    return None
+```
+
+--------------------------------
+
+### Create decorator-based middleware with @before_model and @wrap_model_call
+
+Source: https://docs.langchain.com/oss/python/langchain/middleware/custom
+
+Decorators like @before_model inspect or update state before model calls.
+
+--------------------------------
+
+### Create middleware > Decorator-based middleware
+
+Source: https://docs.langchain.com/oss/python/langchain/middleware/custom
+
+Quick and simple for single-hook middleware."""
+
+
+def fake_docs_server() -> FastMCP:
+    """进程内的假 Context7（agent-tools 的 context7 服务转的官方 MCP）：工具名、参数、结果的样子照真的，库只有 LangChain；
+    找不到库、找不到文档照真的回 isError 和一句话。"""
+    server = FastMCP("context7")
+
+    @server.tool(name=LIBRARY_TOOL, description="Resolves a package/product name to a Context7-compatible library ID and returns matching libraries.")
+    def resolve(query: str, libraryName: str) -> str:  # noqa: N803 参数名照 Context7
+        if "langchain" not in libraryName.lower():
+            raise ToolError(f'No libraries found for "{libraryName}". Try a different search term.')
+        return ("Available Libraries:\n\n- Title: LangChain OSS Python\n"
+                f"- Context7-compatible library ID: {FAKE_LIBRARY_ID}\n- Code Snippets: 12246\n- Source Reputation: High\n----------\n"
+                "- Title: LangChain v1\n- Context7-compatible library ID: /websites/langchain_oss_python_releases_langchain-v1\n"
+                "- Code Snippets: 28\n- Source Reputation: High")
+
+    @server.tool(name=DOCS_TOOL, description="Retrieves and queries up-to-date documentation and code examples from Context7 for any programming library or framework.")
+    def query(libraryId: str, query: str, language: str | None = None) -> str:  # noqa: N803
+        if libraryId != FAKE_LIBRARY_ID:
+            raise ToolError(f'Library "{libraryId}" not found. Please check the library ID or your access permissions.')
+        return FAKE_DOCS
+
+    return server
+
+
 def fake_search_server(hits: list[dict] | None = None) -> FastMCP:
     """进程内的假 search-service（MCP）：每次搜索给 3 条稳定的候选（测试给了 hits 就每次都给这几条）。结果的样子照 agent-tools 的 search_web。"""
     server = FastMCP("search")
@@ -769,6 +828,8 @@ class FakeToolModel(BaseChatModel):
             return "直接回答：这个问题不用查。", []
         if "天气" in text and WEATHER_TOOL in self.bound and WEATHER_TOOL not in names:
             return call(WEATHER_TOOL, location=text.split("天气")[0].strip()[:8] or "广州")
+        if "文档" in text and LIBRARY_TOOL in self.bound:
+            return self._docs(text, turn, call)
         if ("附近" in text or "路线" in text) and PLACE_TOOL in self.bound:
             return self._maps(text, turn, call)
         if any(k in text for k in ("航班", "高铁", "行程", "接站")) and FLIGHT_TOOL in self.bound:
@@ -791,6 +852,22 @@ class FakeToolModel(BaseChatModel):
         if "不回复" in text:
             return "", []
         return f"结论：可以用但不稳定 [{hits[0]['id']}]，详情见第二条 [{hits[1]['id']}]。" if hits else "没查到。", []
+
+    @staticmethod
+    def _docs(text: str, turn: list[BaseMessage], call) -> tuple[str, list[dict]]:
+        """“X 的文档”：先找库（库名是话里第一个英文词），再查文档，引用查到的第一段；没做成就照说。"""
+        done = {m.name: m for m in turn if isinstance(m, ToolMessage) and m.name in (LIBRARY_TOOL, DOCS_TOOL)}
+        lib, docs = done.get(LIBRARY_TOOL), done.get(DOCS_TOOL)
+        if lib is None:
+            name = m.group(0) if (m := re.search(r"[A-Za-z][\w.\-]*", text)) else text[:10]
+            return call(LIBRARY_TOOL, libraryName=name, query=text[:40])
+        if lib.status == "error":
+            return "没找到这个库。", []
+        if docs is None:
+            return call(DOCS_TOOL, libraryId=(lib.artifact or {}).get("libraries", [FAKE_LIBRARY_ID])[0], query=text[:40])
+        if docs.status == "error" or not (snippets := doc_snippets(docs)):
+            return "文档没查成。", []
+        return f"用 @before_model 在调模型前改消息 [{snippets[0]['id']}]。", []
 
     @staticmethod
     def _maps(text: str, turn: list[BaseMessage], call) -> tuple[str, list[dict]]:
@@ -970,7 +1047,7 @@ class FakeResearchPlanner:
         self.gateway = gateway or self.images.gateway_client()
         self._tools = make_research_tools()
         self._mcp = McpTools(search or fake_search_server, read or (lambda: fake_read_server(page_repeat)), fake_weather_server,
-                             self.images.server, fake_maps_server, fake_flyai_server)
+                             self.images.server, fake_maps_server, fake_flyai_server, fake_docs_server)
         self._model = FakeToolModel()
         self._sub_model = FakeToolModel(prefix="fake-sub")
 

@@ -81,13 +81,16 @@ function floatStyle(rect, width, height) {
 }
 const layer = (node) => createPortal(node, document.querySelector(".ws") || document.body);
 
+// 来源卡上那段开头是从哪来的：读到的正文、查文档（Context7）查到的文档、搜索摘要
+const EXCERPT_BADGES = { body: "读到正文", docs: "文档摘录", summary: "只读到搜索摘要" };
+
 function SourcePop({ boxRef, rect, s, n, onEnter, onLeave, onClose }) {
   return layer(
     <div ref={boxRef} className="ws-pop" style={floatStyle(rect, 340, 220)} role="dialog" aria-label={`来源 ${n}`}
       onMouseEnter={onEnter} onMouseLeave={onLeave} onFocus={onEnter} onBlur={onLeave} onKeyDown={(e) => e.key === "Escape" && onClose()}>
       <div className="ws-pop-top">
         <span className="lb">{n}</span>
-        <span className={"ws-badge " + (s.excerpt_kind === "body" ? "body" : "summary")}>{s.excerpt_kind === "body" ? "读到正文" : "只读到搜索摘要"}</span>
+        <span className={"ws-badge " + (s.excerpt_kind === "summary" ? "summary" : "body")}>{EXCERPT_BADGES[s.excerpt_kind] || EXCERPT_BADGES.summary}</span>
       </div>
       <div className="ws-pop-title">{sourceName(s)}</div>
       <div className="ws-pop-meta"><Favicon url={s.url} />{domain(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""}</div>

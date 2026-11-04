@@ -140,6 +140,16 @@ def test_material_keeps_what_the_agent_saw_per_url():
     assert text_for(m["evidence"], "https://nowhere.test") == "（没有记录到材料）"
 
 
+def test_documentation_snippets_are_evidence_for_their_page():
+    """查文档查到的每段按它的出处记成那个网址的材料，裁判按它核对引用。"""
+    docs = ToolMessage(content="### T\n\nSource: https://docs.test/a\nSource id: s1\n\nBody.", name="query-docs", tool_call_id="c1",
+                       artifact={"snippets": [{"id": "s1", "url": "https://docs.test/a", "title": "Hooks", "content": "Use before_model."},
+                                              {"id": "s1", "url": "https://docs.test/a", "title": "More", "content": "Return None."}]})
+    m = material([AIMessage(content="", tool_calls=[{"name": "query-docs", "args": {"libraryId": "/x/y", "query": "q"}, "id": "c1"}]), docs])
+    assert text_for(m["evidence"], "https://docs.test/a") == "Hooks\nUse before_model.\n\nMore\nReturn None."
+    assert m["searches"] == [] and m["reads"] == []
+
+
 def test_subagent_searches_count_as_searched():
     """主 agent 只派了子任务：子 agent 的搜索、读页也算这一轮的材料。"""
     r = _run([{"say": "子任务查一下向量库", "expect": {"searched": True, "min_reads": 1}}])

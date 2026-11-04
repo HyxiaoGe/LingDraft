@@ -18,6 +18,7 @@ from app.research_llm import (
     FakeImageService,
     FakeResearchPlanner,
     McpTools,
+    fake_docs_server,
     fake_flyai_server,
     fake_maps_server,
     fake_read_server,
@@ -207,13 +208,13 @@ class _Flaky:
 
 def test_connect_keeps_what_connected_and_reports_what_did_not():
     tools = McpTools(_Flaky(fake_search_server, 1), fake_read_server, fake_weather_server, FakeImageService().server, fake_maps_server,
-                     fake_flyai_server)
+                     fake_flyai_server, fake_docs_server)
     maps = ["place_search", "route_compare", "search_flights", "search_trains"]
-    assert [t.name for t in tools.tools([])] == [SEARCH_TOOL, READ_TOOL, "generate_image", *maps]  # 还没连：搜索、读页、画图、地图、航班火车是占位，天气先不带
+    assert [t.name for t in tools.tools([])] == [SEARCH_TOOL, READ_TOOL, "generate_image", *maps]  # 还没连：搜索、读页、画图、地图、航班火车是占位，天气、查文档先不带
     with pytest.raises(RuntimeError, match="没连上 search_web"):
         aio.run(tools.connect())
     names = [t.name for t in tools.tools([])]
-    assert names == [SEARCH_TOOL, READ_TOOL, "generate_image", *maps, "get_weather"] and tools.web[0].tool is None and tools.web[1].tool is not None
+    assert names == [SEARCH_TOOL, READ_TOOL, "generate_image", *maps, "get_weather", "resolve-library-id", "query-docs"] and tools.web[0].tool is None and tools.web[1].tool is not None
     assert all(t.tool is not None for t in (*tools.maps, *tools.travel))
     assert tools.image.tool is not None
     aio.run(tools.connect())  # 再连只连没连上的
