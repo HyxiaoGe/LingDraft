@@ -3,7 +3,7 @@
 黑五海报单场景的 LangGraph 实现：`intake → confirm_facts(中断) → 风格 → plan_layout → render → check → review(中断) → revise / manual_edit / change_fact / export`。
 设计见 `../docs/黑五海报PoC技术方案.md`。
 
-对话场景（模块和接口路径沿用 research）：一条线程就是一段对话。用户每说一句，同一个 `create_agent` 接着上下文往下做：搜索、读网页、查天气、查地点、比路线、画图、取当前时间，也可以用 `task` 把一件查资料的事交给子 agent（它在自己的上下文里搜、读，交回一份报告），最后给一段带来源角标的回复。之前的报告、提问卡都已经拿掉。模型默认 DeepSeek：主 agent 用 V4 Pro、开思考；子 agent 用 Flash；起标题用 Flash、不开思考，和第一次调模型同时跑，不让回答等它；推荐问题在这一轮答完后起，不开思考。对话太长时，发给模型的那份会压一压；关于用户的长期记忆每天整理一次，放进系统提示词（见下面的“上下文压缩和长期记忆”）。交互约定见 `../docs/调研交互约定.md`。
+对话场景（模块和接口路径沿用 research）：一条线程就是一段对话。用户每说一句，同一个 `create_agent` 接着上下文往下做：搜索、读网页、查天气、查地点、比路线、查航班火车、排行程、画图、取当前时间，也可以用 `task` 把一件查资料的事交给子 agent（它在自己的上下文里搜、读，交回一份报告），最后给一段带来源角标的回复。之前的报告、提问卡都已经拿掉。模型默认 DeepSeek：主 agent 用 V4 Pro、开思考；子 agent 用 Flash；起标题用 Flash、不开思考，和第一次调模型同时跑，不让回答等它；推荐问题在这一轮答完后起，不开思考。对话太长时，发给模型的那份会压一压；关于用户的长期记忆每天整理一次，放进系统提示词（见下面的“上下文压缩和长期记忆”）。交互约定见 `../docs/调研交互约定.md`。
 
 ## 运行
 
@@ -39,7 +39,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - `COMPACT_TRIGGER_TOKENS`、`COMPACT_TARGET_TOKENS`：上下文压缩的触发线和压到多少，默认 20 万、10 万。
   - `LINGDRAFT_DREAM=0` 关掉每天按时整理记忆；`LINGDRAFT_DREAM_HOUR` 是北京时间几点整理，默认 3 点。
 - 外部服务：
-  - `AGENT_TOOLS_URL`、`AGENT_TOOLS_API_KEY`：agent-tools 网关，管搜索、读网页、天气、地图、生图。都走网关的 MCP（`/search/mcp`、`/reader/mcp`、`/weather/mcp`、`/maps/mcp`、`/image/v2/mcp`），起服务时连上取工具；没连上的先这样起来（搜索、读网页、画图、地图是同名的占位工具，调了说服务暂时连不上；天气先不带），后台每分钟再试，连上一个换一个。画的图存在 image-service 里，按编号经网关取、删（`/image/v1/images/{id}`）。
+  - `AGENT_TOOLS_URL`、`AGENT_TOOLS_API_KEY`：agent-tools 网关，管搜索、读网页、天气、地图、航班火车、生图。都走网关的 MCP（`/search/mcp`、`/reader/mcp`、`/weather/mcp`、`/maps/mcp`、`/flyai/mcp`、`/image/v2/mcp`），起服务时连上取工具；没连上的先这样起来（搜索、读网页、画图、地图、航班火车是同名的占位工具，调了说服务暂时连不上；天气先不带），后台每分钟再试，连上一个换一个。画的图存在 image-service 里，按编号经网关取、删（`/image/v1/images/{id}`）。
   - `FUSION_URL`：新对话页的“今日灵感”从 Fusion 取。
 
 海报的接口：`POST /api/threads`（multipart：request，image 可选）和 `POST /api/threads/{id}/resume`（`{"payload": ...}`）都返回 SSE：`thread` / `started` / `progress` / `node` / `interrupt` / `error` 事件，`state` 事件是完整状态，最后以 `end` 收尾；每个事件带 `id`（“执行-序号”），安静 15 秒发一行注释保活；`GET /api/threads/{id}/state`；`GET /api/threads/{id}/files/{name}`；`GET /api/threads/{id}/export` 打包 zip。
@@ -212,7 +212,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `state.py`。
   - `graph.py`：存储（共用的连接池、线程列表）。
   - `prompts.toml`：给模型看的文字；`prompts.py` 只负责渲染。
-- `app/research_llm.py` `ResearchPlanner` 协议：`LiveResearchPlanner`（DeepSeek 或豆包 + 真实网关，各步用哪个模型见它的构造函数）/ `FakeResearchPlanner`（脚本化的假工具模型 + 进程内的假搜索、读页、天气、地图、生图服务，假生图服务也管按编号取图、删图）
+- `app/research_llm.py` `ResearchPlanner` 协议：`LiveResearchPlanner`（DeepSeek 或豆包 + 真实网关，各步用哪个模型见它的构造函数）/ `FakeResearchPlanner`（脚本化的假工具模型 + 进程内的假搜索、读页、天气、地图、航班火车、生图服务，假生图服务也管按编号取图、删图）
 - `app/tools/`：
   - `gateway.py`：agent-tools 网关客户端（按编号取图、删图），和网关出错时的几种异常。
   - `research_tools.py`：agent 自己的工具（`get_current_time`），描述在 `prompts.toml` 的 `[tools.*]`。
@@ -221,11 +221,12 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `image_mcp.py`：画图、改图。`generate_image` 是 agent-tools 的 MCP 工具（出图、存图、改图找原图、比例、给模型的说明都在 image-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明，中间件管每轮最多画 3 张、改图只认这段对话里的图，把结果整理成图片卡片要的东西，没连上时用同名的占位工具。
   - `weather_mcp.py`：查天气。`get_weather` 是 agent-tools 的 MCP 工具（挑城市、整理预报、缓存、给模型的说明都在 weather-service 里，和 Fusion 共用），用 LangChain 的 MCP 适配器接进来；这里接上灵稿自己的一段说明，中间件把结果整理成模型看的文字，网关出问题算没查到、密钥不对让这一轮失败。
   - `maps_mcp.py`：查地点、比路线。`place_search`、`route_compare` 是 agent-tools 的 MCP 工具（先高德后腾讯、地名怎么定、重名怎么问、给模型的说明都在 maps-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明（卡片署了服务商不用重复、拿不到用户位置要问），中间件把整份结果留给地点卡、路线卡，网关今天的上限到了算额度用完，没连上时用同名的占位工具。
+  - `flyai_mcp.py`：查航班、火车，排行程。`search_flights`、`search_trains` 是 agent-tools flyai 的 MCP 工具（日期定不了先问、只要高铁、飞猪认不出的地名、结果的样子都在服务里，和 Fusion 共用）；这里接上灵稿自己的一段说明（卡片上都列了、别贴预订链接、接站换乘用查到的站名和城市），中间件把整份结果留给航班卡、火车卡，每轮最多查 4 次；比路线的起终点是查到的车站时，城市没填对就不交给地图、告诉模型该填哪个。`present_itinerary` 是灵稿自己的：模型按这段对话查到的班次编号排方案，核对编号和先后后画成行程卡，一个回答最多一张。
 - `app/model_guard.py` 模型服务出错的分类和熔断；`app/aio.py` 对话的事件循环
 - `app/evals/` + `evals/` 回放评测：用真实模型跑 `evals/research/cases.yaml`，按轨迹和裁判模型打分，用法和写用例的约定见 `evals/README.md`
 - `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）。
   - 海报（`#poster`）：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出。
-  - 对话页：`src/workspace.jsx` 左边是对话列表（改名、导出、删除）和记忆页入口，右边是对话。`timeline.jsx` 里每一轮先是过程（思考、搜索、读页、子任务按先后，跑的时候展开，跑完收起），然后是天气卡片、地点卡、路线卡、画的图，再是带来源角标的正文和这条回答用到的来源，最后一轮下面是推荐问题；回答时又说的话贴在输入框上沿。
+  - 对话页：`src/workspace.jsx` 左边是对话列表（改名、导出、删除）和记忆页入口，右边是对话。`timeline.jsx` 里每一轮先是过程（思考、搜索、读页、子任务按先后，跑的时候展开，跑完收起），然后是天气卡片、地点卡、路线卡、航班卡、火车卡、行程卡、画的图，再是带来源角标的正文和这条回答用到的来源，最后一轮下面是推荐问题；回答时又说的话贴在输入框上沿。
 - `tests/`：
   - 海报：T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等。
   - 对话（都只用假模型）：

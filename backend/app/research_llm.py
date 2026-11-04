@@ -36,7 +36,8 @@ from app.graph.research import history, prompts
 from app.graph.research.compaction import RECALL_TOOL as RECALL
 from app.graph.research.sources import search_hits
 from app.model_guard import ContentBlocked, GuardedChatModel, Interrupted, ModelUnavailable, guard_key
-from app.tools import image_mcp, maps_mcp, web_mcp, weather_mcp
+from app.tools import flyai_mcp, image_mcp, maps_mcp, web_mcp, weather_mcp
+from app.tools.flyai_mcp import FLIGHT_TOOL, ITINERARY_TOOL, TRAIN_TOOL, TravelTool
 from app.tools.gateway import GatewayClient
 from app.tools.image_mcp import ImageTool
 from app.tools.maps_mcp import PLACE_TOOL, ROUTE_TOOL, MapsTool
@@ -217,24 +218,26 @@ def _structured(llm, schema):
 
 
 class McpTools:
-    """agent-tools 的 MCP 工具：搜索、读页、画图、地图（查地点、比路线）、天气。target 是各自的 MCP 地址（网关的客户端，或者进程内的假服务）；
-    地图的两个工具在同一个服务里，共用一个地址。
-    没连上的：搜索、读页、画图、地图先用同名的占位工具（调了说服务暂时连不上，见 app.tools.web_mcp、image_mcp、maps_mcp），天气先不带。"""
+    """agent-tools 的 MCP 工具：搜索、读页、画图、地图（查地点、比路线）、航班火车、天气。target 是各自的 MCP 地址（网关的客户端，或者进程内的假服务）；
+    地图的两个工具在同一个服务里，共用一个地址；航班、火车也是。
+    没连上的：搜索、读页、画图、地图、航班火车先用同名的占位工具（调了说服务暂时连不上，见 app.tools.web_mcp、image_mcp、maps_mcp、flyai_mcp），
+    天气先不带。"""
 
-    def __init__(self, search: Any, read: Any, weather: Any, image: Any, maps: Any) -> None:
+    def __init__(self, search: Any, read: Any, weather: Any, image: Any, maps: Any, flyai: Any) -> None:
         self.web = [WebTool(SEARCH_TOOL, search), WebTool(READ_TOOL, read)]
         self.image = ImageTool(image)
         self.maps = [MapsTool(PLACE_TOOL, maps), MapsTool(ROUTE_TOOL, maps)]
+        self.travel = [TravelTool(FLIGHT_TOOL, flyai), TravelTool(TRAIN_TOOL, flyai)]
         self.weather = WeatherTool(weather)
 
     def tools(self, own: list) -> list:
-        """顺序固定（搜索、读页、画图、地图、灵稿自己的、天气）：工具列表在请求的前缀里，顺序变了前缀缓存就断了。"""
-        return [*(t.current() for t in self.web), self.image.current(), *(t.current() for t in self.maps), *own,
-                *([self.weather.tool] if self.weather.tool else [])]
+        """顺序固定（搜索、读页、画图、地图、航班火车、灵稿自己的、天气）：工具列表在请求的前缀里，顺序变了前缀缓存就断了。"""
+        return [*(t.current() for t in self.web), self.image.current(), *(t.current() for t in self.maps),
+                *(t.current() for t in self.travel), *own, *([self.weather.tool] if self.weather.tool else [])]
 
     async def connect(self) -> None:
         """同时连还没连上的，连上一个算一个；有没连上的抛 RuntimeError（第一个的原因在 __cause__ 里）。"""
-        todo = [t for t in (*self.web, self.image, *self.maps, self.weather) if t.tool is None]
+        todo = [t for t in (*self.web, self.image, *self.maps, *self.travel, self.weather) if t.tool is None]
         errors = [(t.name, e) for t, e in zip(todo, await asyncio.gather(*(t.connect() for t in todo), return_exceptions=True), strict=True)
                   if isinstance(e, BaseException)]
         if errors:
@@ -270,7 +273,8 @@ class LiveResearchPlanner:
                              lambda: web_mcp.gateway_target(READ_TOOL, url, key, scene=scene),
                              lambda: weather_mcp.gateway_target(url, key, scene=scene),
                              lambda: image_mcp.gateway_target(url, key, scene=scene),
-                             lambda: maps_mcp.gateway_target(url, key, scene=scene))
+                             lambda: maps_mcp.gateway_target(url, key, scene=scene),
+                             lambda: flyai_mcp.gateway_target(url, key, scene=scene))
 
     def agent_model(self) -> BaseChatModel:
         return self._agent
@@ -478,6 +482,69 @@ def fake_maps_server() -> FastMCP:
     return server
 
 
+FAKE_UNKNOWN_PLACE = "火星"  # 假 flyai 认不出的地名
+FAKE_NO_SERVICE = "无班次"  # 假 flyai 查不到班次的目的地
+
+
+def _fake_option_id(kind: str, number: str, day: str) -> str:
+    return "opt_" + hashlib.sha256(f"{kind}|{number}|{day}".encode()).hexdigest()[:20]
+
+
+def _fake_service(kind: str, origin: str, destination: str, day: str, number: str, carrier: str, dep: str, arr: str, minutes: int,
+                  travel_class: str, price: float) -> dict:
+    station = (lambda city: f"{city}机场") if kind == "flight" else (lambda city: f"{city}南站")
+    return {"option_id": _fake_option_id(kind, number, day), "number": number, ("airline" if kind == "flight" else "train_type"): carrier,
+            "departure": {"city": origin, "station": station(origin), **({"terminal": "T2"} if kind == "flight" else {}), "time": f"{day}T{dep}"},
+            "arrival": {"city": destination, "station": station(destination), "time": f"{day}T{arr}", "day_offset": 0},
+            "duration_minutes": minutes, "travel_class": travel_class, "price_yuan": price,
+            "booking_url": f"https://router.feizhu.com/fake/{number}"}
+
+
+def _fake_travel(kind: str, origin: str, destination: str, departure_date: str, query: dict) -> ToolResult:
+    o, d = origin.strip(), destination.strip()
+    if FAKE_UNKNOWN_PLACE in (o, d):
+        which = "origin" if o == FAKE_UNKNOWN_PLACE else "destination"
+        error = {"code": f"{which}_not_recognized", "message": f"{which} not recognized", "retryable": False}
+        return ToolResult(content=f"No result was fetched: the travel service did not recognize the {which}.",
+                          structured_content={"ok": False, "error": error})
+    if d == FAKE_NO_SERVICE:
+        return ToolResult(content="This query returned no direct services.",
+                          structured_content={"ok": False, "error": {"code": "no_services", "message": "no services", "retryable": False}})
+    if kind == "flight":
+        services = [_fake_service(kind, o, d, departure_date, "MU5101", "东航", "08:00", "10:15", 135, "经济舱", 1060),
+                    _fake_service(kind, o, d, departure_date, "CA1501", "国航", "09:30", "11:40", 130, "经济舱", 990)]
+    else:
+        services = [_fake_service(kind, o, d, departure_date, "G1", "高铁", "07:00", "11:29", 269, "二等座", 662),
+                    _fake_service(kind, o, d, departure_date, "G3", "高铁", "08:00", "12:32", 272, "二等座", 662)]
+    res = {"ok": True, "observed_at": "2026-11-04T10:00:00+08:00", "query": {"origin": o, "destination": d, "departure_date": departure_date, **query},
+           "services": services, "limitations": []}
+    hidden = {"ok", "booking_url"}  # 照 flyai：模型看不到的字段
+    shown = {k: v for k, v in res.items() if k not in hidden} | {"services": [{k: v for k, v in s.items() if k not in hidden} for s in services]}
+    return ToolResult(content=json.dumps(shown, ensure_ascii=False), structured_content=res)
+
+
+def fake_flyai_server() -> FastMCP:
+    """进程内的假 flyai（MCP）：航班、火车各给两个固定的班次，站名是“城市机场”“城市南站”；FAKE_UNKNOWN_PLACE 认不出，
+    目的地是 FAKE_NO_SERVICE 时没有班次。结果的样子照 agent-tools 的 services/flyai/README.md。"""
+    server = FastMCP("flyai")
+
+    @server.tool(name=FLIGHT_TOOL, description="Search one-way direct flights (offline fake of the travel service).", output_schema=None)
+    async def search_flights(origin: str, destination: str, departure_date: str, cabin_class: str | None = None,
+                             departure_after_hour: int | None = None, departure_before_hour: int | None = None,
+                             arrival_before_hour: int | None = None, max_price_yuan: float | None = None, sort_by: str | None = None,
+                             limit: int | None = None) -> ToolResult:
+        return _fake_travel("flight", origin, destination, departure_date, {"cabin_class": cabin_class} if cabin_class else {})
+
+    @server.tool(name=TRAIN_TOOL, description="Search one-way direct trains (offline fake of the travel service).", output_schema=None)
+    async def search_trains(origin: str, destination: str, departure_date: str, train_category: Literal["high_speed", "all"],
+                            seat_class: str | None = None, departure_after_hour: int | None = None, departure_before_hour: int | None = None,
+                            arrival_before_hour: int | None = None, max_price_yuan: float | None = None, sort_by: str | None = None,
+                            limit: int | None = None) -> ToolResult:
+        return _fake_travel("train", origin, destination, departure_date, {"train_category": train_category})
+
+    return server
+
+
 FAKE_READ_MAX_CHARS = 8000  # 照 reader-service：正文最多给这么多字
 
 
@@ -648,6 +715,8 @@ class FakeToolModel(BaseChatModel):
     - “天气”：先查天气，地名是“天气”前面那段（没有就是广州），再照常搜、读。
     - “附近”：查地点，在“附近”前面那个地名附近查（没有就是外滩），查完直接回复，不搜；
       “路线”：比虹桥火车站到外滩的驾车和公交，起点改成“从……到”里的地名，算完直接回复，不搜。
+    - “航班”：查北京到上海明天的航班；“高铁”：查北京到上海明天的高铁；“行程”：去程查航班、回程查高铁，查完用 present_itinerary
+      排成一个方案；“接站”：查完高铁，从查到的第一趟的到达站比路线到外滩。地名在“从……到……”里给就用那两个。都不搜。
     - “画”：画一张图（描述就是用户的话，“横”的是 16:9），画完直接回复，不搜；“改图”：改这段对话里最近画的那张；
       “再画”“再生成”：用上一次的参数再画一张（regenerate）。
     - “子任务”：派一个子 agent（task），拿到报告后回复，引用报告里的来源；“分头”：一次派两个，并行。“派N个”：一次派 N 个。
@@ -702,6 +771,8 @@ class FakeToolModel(BaseChatModel):
             return call(WEATHER_TOOL, location=text.split("天气")[0].strip()[:8] or "广州")
         if ("附近" in text or "路线" in text) and PLACE_TOOL in self.bound:
             return self._maps(text, turn, call)
+        if any(k in text for k in ("航班", "高铁", "行程", "接站")) and FLIGHT_TOOL in self.bound:
+            return self._travel(text, turn, call)
         if any(k in text for k in ("画", "改图", "再生成")) and "generate_image" in self.bound:
             return self._draw(text, messages, turn, call)
         if any(k in text for k in ("子任务", "分头", "派")) and "task" in self.bound:
@@ -731,6 +802,36 @@ class FakeToolModel(BaseChatModel):
                         modes=["driving", "transit"])
         near = text.split("附近")[0].strip()[-6:] or "外滩"
         return call(PLACE_TOOL, query="咖啡", anchor_source="named", near=near, city="上海", limit=2)
+
+    @staticmethod
+    def _travel(text: str, turn: list[BaseMessage], call) -> tuple[str, list[dict]]:
+        done = {m.name: m for m in turn if isinstance(m, ToolMessage)}
+        found = [s for m in done.values() if m.name in (FLIGHT_TOOL, TRAIN_TOOL) and m.status != "error"
+                 for s in ((m.artifact or {}).get("structured_content") or {}).get("services", [])]
+        m = re.search(r"从(\S+?)到(\S+?)(?:的|$|，|。|\s)", text)
+        origin, destination = (m.group(1), m.group(2)) if m else ("北京", "上海")
+        day = (date.today() + timedelta(days=1)).isoformat()
+        back = (date.today() + timedelta(days=3)).isoformat()
+        if "行程" in text:
+            if FLIGHT_TOOL not in done:
+                return call(FLIGHT_TOOL, origin=origin, destination=destination, departure_date=day)
+            if TRAIN_TOOL not in done:
+                return call(TRAIN_TOOL, origin=destination, destination=origin, departure_date=back, train_category="high_speed")
+            if ITINERARY_TOOL not in done and len(found) >= 3:
+                out = next(s for s in found if s["departure"]["city"] == origin)
+                ret = next(s for s in found if s["departure"]["city"] == destination)
+                return call(ITINERARY_TOOL, title=f"{origin}{destination}往返", plans=[
+                    {"title": "去飞回铁", "reason": "去程赶时间坐飞机，回程坐高铁。", "option_ids": [out["option_id"], ret["option_id"]]}])
+            return ("排好了，看行程卡。" if ITINERARY_TOOL in done and done[ITINERARY_TOOL].status != "error" else "没排成。"), []
+        tool = FLIGHT_TOOL if "航班" in text else TRAIN_TOOL
+        if tool not in done:
+            extra = {} if tool == FLIGHT_TOOL else {"train_category": "high_speed"}
+            return call(tool, origin=origin, destination=destination, departure_date=day, **extra)
+        if "接站" in text and found and ROUTE_TOOL not in done:
+            arrival = found[0]["arrival"]
+            return call(ROUTE_TOOL, origin=arrival["station"], origin_city=arrival["city"], destination="外滩", origin_source="named",
+                        destination_source="named", modes=["transit"])
+        return ("没查成。" if done[tool].status == "error" else "查好了，看卡片。"), []
 
     @staticmethod
     def _draw(text: str, messages: list[BaseMessage], turn: list[BaseMessage], call) -> tuple[str, list[dict]]:
@@ -869,7 +970,7 @@ class FakeResearchPlanner:
         self.gateway = gateway or self.images.gateway_client()
         self._tools = make_research_tools()
         self._mcp = McpTools(search or fake_search_server, read or (lambda: fake_read_server(page_repeat)), fake_weather_server,
-                             self.images.server, fake_maps_server)
+                             self.images.server, fake_maps_server, fake_flyai_server)
         self._model = FakeToolModel()
         self._sub_model = FakeToolModel(prefix="fake-sub")
 

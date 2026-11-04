@@ -26,6 +26,10 @@ export const IconFog = (p) => svg(<><path d={CLOUD_TOP} /><path d="M16 17H7M17 2
 // 地点、路线
 export const IconPin = (p) => svg(<><path d="M12 21s-6.5-5.7-6.5-11a6.5 6.5 0 0 1 13 0c0 5.3-6.5 11-6.5 11z" /><circle cx="12" cy="10" r="2.3" /></>, p);
 export const IconRoute = (p) => svg(<><circle cx="6" cy="19" r="2" /><circle cx="18" cy="5" r="2" /><path d="M8 19h8.5a3.5 3.5 0 0 0 0-7h-9a3.5 3.5 0 0 1 0-7H16" /></>, p);
+// 航班、火车、行程
+export const IconPlane = (p) => svg(<path d="M10.5 21l1.5-6.5L5 14l-1.5 2H2l1-4-1-4h1.5L5 10l7-.5L10.5 3H13l4.5 6.5H21a1.5 1.5 0 0 1 0 3h-3.5L13 21z" />, p);
+export const IconTrain = (p) => svg(<><rect x="5" y="3" width="14" height="14" rx="3" /><path d="M5 11h14M9 21l1.5-4M15 21l-1.5-4M9 14h.01M15 14h.01" /></>, p);
+export const IconTicket = (p) => svg(<><path d="M4 6h16v4a2 2 0 0 0 0 4v4H4v-4a2 2 0 0 0 0-4z" /><path d="M14 6v2M14 11v2M14 16v2" /></>, p);
 export const IconChevron = (p) => svg(<path d="M6 9l6 6 6-6" />, p);
 export const IconArrowUp = (p) => svg(<path d="M12 19V5M5 12l7-7 7 7" />, { stroke: 2.4, ...p });
 export const IconArrowDown = (p) => svg(<path d="M12 5v14M5 12l7 7 7-7" />, p);

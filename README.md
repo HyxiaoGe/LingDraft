@@ -15,7 +15,7 @@ flowchart TB
     API --> Runner["运行器<br/>排队 · 取消<br/>事件日志"]
     Runner -- "aupdate_state + astream<br/>subgraphs=True" --> Main["主 agent · Pro<br/>create_agent<br/>+ 9 个中间件"]
     Main -- "task，并行派出" --> Sub["子 agent · Flash<br/>create_agent<br/>按工具限次"]
-    Main --> Tools["搜索 · 读网页<br/>天气 · 地图 · 画图<br/>时间 · recall"]
+    Main --> Tools["搜索 · 读网页<br/>天气 · 地图 · 航班火车 · 画图<br/>排行程 · 时间 · recall"]
     Sub --> Tools
     Runner --- PG[("Postgres<br/>检查点 · Store<br/>运行记录")]
     Dream["每天整理<br/>长期记忆"] --> PG
@@ -31,7 +31,7 @@ flowchart TB
 | `aupdate_state(as_node=START)` + `astream(None)` | 用户的话先写进检查点再开跑，排队时服务重启也不丢 |
 | `stream_mode=["messages", "updates", "custom"]`，`subgraphs=True` | 逐字的思考和正文、存下的步骤、工具进度一路推给页面；子 agent 的流按命名空间认出是哪个子任务的 |
 | `get_stream_writer` / `TAG_NOSTREAM` | 中间件推自定义事件（在等什么、工具进度）；写短版、单条送审这些内部调用不推给页面 |
-| `langchain.mcp`（`MCPAdapter`） | 搜索、读网页、天气、地图、画图都是 agent-tools 的 MCP 工具，怎么搜、怎么读、挑城市、定地名、出图存图、结果的样子和失败时给模型的话都在服务里，几个产品共用：灵稿起服务时取来，工具说明后面接上自己的一段，中间件给结果带上来源 id、管每轮画几张；天气、地图、画图结果的 `structuredContent` 画卡片，模型只看文字（图只给编号，页面经灵稿后端按编号取） |
+| `langchain.mcp`（`MCPAdapter`） | 搜索、读网页、天气、地图、航班火车、画图都是 agent-tools 的 MCP 工具，怎么搜、怎么读、挑城市、定地名、查班次、出图存图、结果的样子和失败时给模型的话都在服务里，几个产品共用：灵稿起服务时取来，工具说明后面接上自己的一段，中间件给结果带上来源 id、管每轮画几张查几次、比路线时核对车站的城市；天气、地图、航班火车、画图结果的 `structuredContent` 画卡片，模型只看文字（图只给编号，页面经灵稿后端按编号取）；排行程是灵稿自己的工具，模型按查到的班次编号排，核对过才画行程卡 |
 | `ToolMessage.artifact` | 子 agent 的整段消息放在 artifact 里交回：来源、用量、子任务卡从这里读，主 agent 的模型只看报告 |
 | `ToolCallLimitMiddleware` | 子 agent 搜、读各 8 次的硬上限 |
 | `AsyncPostgresSaver`，`durability="exit"` | 检查点只在一轮的开头和结尾存 |
@@ -78,14 +78,14 @@ flowchart TB
 │   │   ├── api/               FastAPI 接口；运行器（排队、停止、插话、事件日志）；运行记录
 │   │   ├── graph/research/    对话 agent：create_agent 和中间件、子 agent、上下文压缩、长期记忆、提示词
 │   │   ├── graph/poster/      海报场景：手写的 StateGraph
-│   │   ├── tools/             搜索、读网页、天气、地图、画图
+│   │   ├── tools/             搜索、读网页、天气、地图、航班火车和排行程、画图
 │   │   ├── evals/             回放评测：多轮驱动、裁判、引用核对
 │   │   ├── research_llm.py    每一步用哪个模型；测试用的假模型
 │   │   ├── model_guard.py     模型服务出错的分类和熔断
 │   │   └── aio.py             对话 agent 跑在一个固定的后台事件循环里
 │   ├── evals/research/        评测用例
 │   └── tests/                 300 多个测试，只用假模型；CI 在内存和 Postgres 上各跑一遍
-├── frontend/src/              对话页：对话列表、过程时间线、来源角标、天气卡片、地点和路线卡片、画的图、记忆页
+├── frontend/src/              对话页：对话列表、过程时间线、来源角标、天气卡片、地点和路线卡片、航班火车卡和行程卡、画的图、记忆页
 ├── Dockerfile                 先构建前端再装后端，一个容器同时出接口和页面
 └── docker-compose.yml
 ```
