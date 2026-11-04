@@ -14,7 +14,15 @@ from langchain_core.messages import ToolMessage
 from app import aio
 from app.api import research_runner
 from app.graph.research import history, prompts
-from app.research_llm import FakeImageService, FakeResearchPlanner, McpTools, fake_read_server, fake_search_server, fake_weather_server
+from app.research_llm import (
+    FakeImageService,
+    FakeResearchPlanner,
+    McpTools,
+    fake_maps_server,
+    fake_read_server,
+    fake_search_server,
+    fake_weather_server,
+)
 from app.tools.gateway import GatewayAuthError
 from app.tools.web_mcp import READ_TOOL, SEARCH_TOOL, WebTool, WebToolsMiddleware, gateway_target, placeholder
 from tests.test_research import Chat
@@ -197,12 +205,14 @@ class _Flaky:
 
 
 def test_connect_keeps_what_connected_and_reports_what_did_not():
-    tools = McpTools(_Flaky(fake_search_server, 1), fake_read_server, fake_weather_server, FakeImageService().server)
-    assert [t.name for t in tools.tools([])] == [SEARCH_TOOL, READ_TOOL, "generate_image"]  # 还没连：搜索、读页、画图是占位，天气先不带
+    tools = McpTools(_Flaky(fake_search_server, 1), fake_read_server, fake_weather_server, FakeImageService().server, fake_maps_server)
+    maps = ["place_search", "route_compare"]
+    assert [t.name for t in tools.tools([])] == [SEARCH_TOOL, READ_TOOL, "generate_image", *maps]  # 还没连：搜索、读页、画图、地图是占位，天气先不带
     with pytest.raises(RuntimeError, match="没连上 search_web"):
         aio.run(tools.connect())
     names = [t.name for t in tools.tools([])]
-    assert names == [SEARCH_TOOL, READ_TOOL, "generate_image", "get_weather"] and tools.web[0].tool is None and tools.web[1].tool is not None
+    assert names == [SEARCH_TOOL, READ_TOOL, "generate_image", *maps, "get_weather"] and tools.web[0].tool is None and tools.web[1].tool is not None
+    assert all(t.tool is not None for t in tools.maps)
     assert tools.image.tool is not None
     aio.run(tools.connect())  # 再连只连没连上的
     assert all(t.tool is not None for t in tools.web)

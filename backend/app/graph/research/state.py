@@ -74,6 +74,93 @@ class Forecast(BaseModel):
     hourly: list[WeatherHour] = Field(default_factory=list, description="接下来 24 小时（问了 7 天内的某天时是那天的）；取不到、问得更远时是空的")
 
 
+class Place(BaseModel):
+    """地点卡上的一个地方。由 maps-service 的 place_search 结果换来（见 history.places_of），没有坐标。"""
+
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    address: str = ""
+    district: str = ""
+    city: str = ""
+    category: str = Field(default="", description="地图的分类，比如“餐饮服务;咖啡厅;咖啡厅”")
+    distance_m: int | None = Field(default=None, description="离搜索的那个地方多远；在某地附近搜时才有")
+    rating: float | None = None
+    cost: float | None = Field(default=None, description="参考消费（元）；高德的不一定是人均")
+    open_hours: str = ""
+    photo_url: str = ""
+    map_url: str = Field(default="", description="在地图上看这个地方的链接；只有高德的有")
+    provider: str = Field(description="amap / tmap")
+
+
+class PlaceList(BaseModel):
+    """一次查地点的结果，页面画成地点卡。"""
+
+    model_config = ConfigDict(extra="forbid")
+    query: str
+    near: str = Field(default="", description="在哪附近搜的：服务定下的地名")
+    city: str = ""
+    places: list[Place]
+    limitations: list[str] = Field(default_factory=list, description="服务标的限制，比如 first_term_only（腾讯只搜了第一个词）")
+    fetched_at: str = ""
+
+
+class RouteLeg(BaseModel):
+    """公交方案里的一段：步行，或者坐一段地铁、公交。"""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: str = Field(description="walking / subway / bus / other")
+    line_name: str = ""
+    departure_stop: str = ""
+    arrival_stop: str = ""
+    via_stop_count: int | None = None
+    entrance: str = ""
+    exit: str = ""
+    distance_m: int | None = None
+    duration_s: int | None = None
+
+
+class TransitPlan(BaseModel):
+    """公交的另一种走法。"""
+
+    model_config = ConfigDict(extra="forbid")
+    duration_s: int | None = None
+    fare_yuan: float | None = None
+    transit_type: str = ""
+    transfers: int | None = None
+    walking_distance_m: int | None = None
+    legs: list[RouteLeg] = Field(default_factory=list)
+
+
+class Route(BaseModel):
+    """一种出行方式算出来的路线。公交没有总距离。"""
+
+    model_config = ConfigDict(extra="forbid")
+    mode: str = Field(description="driving / transit / walking / bicycling")
+    distance_m: int | None = None
+    duration_s: int | None = None
+    summary: str = Field(default="", description="地图给的一句话，比如“速度最快”")
+    toll_yuan: float | None = None
+    fare_yuan: float | None = None
+    transit_type: str = ""
+    transfers: int | None = None
+    walking_distance_m: int | None = None
+    legs: list[RouteLeg] = Field(default_factory=list)
+    alternatives: list[TransitPlan] = Field(default_factory=list)
+    provider: str = ""
+
+
+class RoutePlan(BaseModel):
+    """一次比路线的结果，页面画成路线卡。由 maps-service 的 route_compare 结果换来（见 history.routes_of）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    origin: str
+    destination: str
+    routes: list[Route]
+    unavailable_modes: list[str] = Field(default_factory=list, description="没算出来的出行方式")
+    departure_time: str = Field(default="", description="用户说的出发时间，只是原话：路线没按那个时刻算")
+    fetched_at: str = ""
+
+
 class GeneratedImage(BaseModel):
     """生成的一张图。存在 image-service 里、归灵稿，页面按编号经灵稿后端取（见 app.tools.image_mcp、api.main）。
     2026-11-04 以前的图是灵稿自己存的文件（有 file），那些文件不搬了（Sean 定），页面上说这张图已经不在了。"""
@@ -100,9 +187,9 @@ class ToolStep(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     id: str = Field(description="工具调用 id；页面据此把实时进度和存下来的记录对上")
-    kind: Literal["search", "read", "weather", "image", "task"]
-    text: str = Field(description="搜索词 / 网址 / 地名 / 画图的描述 / 子任务的标题")
-    limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制")
+    kind: Literal["search", "read", "weather", "place", "route", "image", "task"]
+    text: str = Field(description="搜索词 / 网址 / 地名 / 查地点的关键词 / 路线的起终点 / 画图的描述 / 子任务的标题")
+    limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制；查地点在哪查；比路线比哪几种方式")
     ok: bool = True
     hits: int = 0  # 搜索返回的条数
     body: bool = False  # 读页读到了正文
@@ -111,6 +198,8 @@ class ToolStep(BaseModel):
     message: str = Field(default="", description="失败的原因")
     pending: bool = Field(default=False, description="已经发起、还没有结果")
     weather: Forecast | None = Field(default=None, description="查到的天气，页面画成天气卡片")
+    places: PlaceList | None = Field(default=None, description="查到的地点，页面画成地点卡")
+    routes: RoutePlan | None = Field(default=None, description="算出的路线，页面画成路线卡")
     image: GeneratedImage | None = Field(default=None, description="画好的图，页面画成图片卡片")
     aspect_ratio: str = Field(default="", description="画图时要的比例：还没出图时页面按它占位；改图没给比例时是空的")
     edit: bool = Field(default=False, description="画图是在改之前的一张图")
@@ -134,6 +223,7 @@ class Usage(BaseModel):
     searches: int = 0
     reads: int = 0
     weather: int = 0  # 查天气的次数
+    maps: int = 0  # 查地点、比路线的次数
     images: int = 0  # 画成的图（画新图和改图都算）
     subagents: int = 0  # 派出去的子 agent（真跑了的）
 

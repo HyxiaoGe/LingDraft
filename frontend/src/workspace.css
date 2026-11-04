@@ -291,6 +291,50 @@ button.ws-proc-head:hover { color: var(--ink); }
   .ws-image-frame.busy::before { display: none; }
 }
 .ws-hourly text.none { fill: var(--faint); }
+
+/* 地点卡、路线卡：标题一行（查什么、在哪，或者起点 → 终点；右边署地图服务商和时间），下面一行一个地方或者一种出行方式 */
+.ws-map { gap: 8px; }
+.ws-map-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ws-map-head > svg { flex: none; color: var(--accent); }
+.ws-map-head .what { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-map-head .where, .ws-map-head .to { flex: none; font-size: 12.5px; color: var(--muted); }
+.ws-map-head .by { margin-left: auto; flex: none; padding-left: 8px; font-size: 12px; color: var(--muted); }
+.ws-map-note { margin: 0; font-size: 12px; color: var(--muted); }
+.ws-places { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ws-place { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.ws-place:first-child { border-top: 0; padding-top: 2px; }
+.ws-place:last-child { padding-bottom: 0; }
+.ws-place img { flex: none; width: 56px; height: 56px; object-fit: cover; border-radius: var(--r-sm); background: var(--side); }
+.ws-place .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ws-place .name { font-weight: 600; font-size: 14px; }
+.ws-place .name a { color: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 3px; }
+.ws-place .name a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.ws-place .name a svg { flex: none; color: var(--muted); }
+.ws-place .facts { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12.5px; color: var(--ink2); }
+.ws-place .facts .rate { color: #c27a12; font-weight: 600; }
+.ws-place .addr { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-routes { display: flex; flex-direction: column; }
+.ws-route { padding: 10px 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.ws-route:first-child { border-top: 0; padding-top: 2px; }
+.ws-route:last-child { padding-bottom: 0; }
+.ws-route-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+.ws-route-main .mode { flex: none; width: 2.6em; font-size: 13px; color: var(--ink2); }
+.ws-route-main .dur { font-size: 15px; font-weight: 600; }
+.ws-route-main .tag { font-size: 11.5px; padding: 0 6px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+.ws-route-main .facts { font-size: 12.5px; color: var(--muted); }
+.ws-legs { list-style: none; margin: 0 0 0 calc(2.6em + 10px); padding: 0 0 0 12px; border-left: 2px solid var(--line2);
+  display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--ink2); }
+.ws-legs li { display: flex; gap: 8px; min-width: 0; }
+.ws-legs li.walk { color: var(--muted); }
+.ws-legs .line { flex: none; font-weight: 600; color: var(--ink); }
+.ws-legs .what { min-width: 0; }
+.ws-route-more { align-self: flex-start; margin-left: calc(2.6em + 10px); display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0;
+  background: none; font-size: 12px; color: var(--muted); }
+.ws-route-more:hover { color: var(--ink); }
+.ws-route-more .chev { transition: transform .15s; }
+.ws-route-more .chev.up { transform: rotate(180deg); }
+.ws-route-alt { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px dashed var(--line); margin-left: calc(2.6em + 10px); }
+.ws-route-alt .ws-legs { margin-left: 0; }
 .ws-card-title { font-weight: 600; font-size: 14px; display: flex; gap: 8px; align-items: flex-start; }
 .ws-card-title svg { flex: none; margin-top: 3px; color: var(--accent); }
 .ws-card.warn .ws-card-title svg { color: var(--warn); }

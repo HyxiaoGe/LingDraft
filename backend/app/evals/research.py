@@ -28,6 +28,7 @@ from app.graph.research import history
 from app.graph.research.graph import memory_checkpointer
 from app.graph.research.sources import SOURCE_ID, SUBAGENT_TOOL, cited, flatten, hit_text, parse, search_hits, url_key
 from app.prompting import PromptFile
+from app.tools.maps_mcp import PLACE_TOOL, ROUTE_TOOL
 from app.tools.research_tools import TIME_TOOL
 from app.tools.weather_mcp import WEATHER_TOOL
 
@@ -36,7 +37,7 @@ CASES_FILE = BACKEND / "evals" / "research" / "cases.yaml"
 RESULTS_DIR = BACKEND / "data" / "evals"
 PROMPTS = PromptFile(Path(__file__).with_name("prompts.toml"))
 # 去外面查东西的工具：主 agent 调了其中任一个就算这一轮查过（取当前时间、recall 不算）
-LOOKUP_TOOLS = {"search_web", "read_page", WEATHER_TOOL, SUBAGENT_TOOL}
+LOOKUP_TOOLS = {"search_web", "read_page", WEATHER_TOOL, PLACE_TOOL, ROUTE_TOOL, SUBAGENT_TOOL}
 EVIDENCE_CHARS = 10000  # 每个来源给裁判看的材料上限（读页本身截到 8000 字，再加上搜索摘要）
 
 
