@@ -351,7 +351,7 @@ def _old_weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> To
 
 # ---- 地图（maps-service 的 place_search、route_compare，见 app.tools.maps_mcp）----
 
-MODE_NAMES = {"driving": "驾车", "transit": "公交", "walking": "步行", "bicycling": "骑行"}
+MODE_NAMES = {"driving": "驾车", "transit": "公共交通", "walking": "步行", "bicycling": "骑行"}
 CURRENT_LOCATION = "current_location"
 # maps-service 的错误码（见 agent-tools 的 services/maps/README.md）→ 页面上的说法；给模型的说明是服务给的英文。
 # unavailable、quota_exhausted 也可能是灵稿自己回的（服务没连上、网关今天的上限到了，见 maps_mcp）
