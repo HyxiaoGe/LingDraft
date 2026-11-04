@@ -42,7 +42,7 @@ class Chat:
     def __init__(self, tmp_path: Path | None = None, planner: FakeResearchPlanner | None = None, saver=None, tid: str = "t1") -> None:
         self.planner = planner or FakeResearchPlanner()
         self.saver = saver or memory_checkpointer()
-        self.r = ResearchRunner(planner=self.planner, checkpointer=self.saver, data_dir=tmp_path / "data" if tmp_path else None)
+        self.r = ResearchRunner(planner=self.planner, checkpointer=self.saver)
         self.r.runs = LocalRunRegistry()
         self.tid = tid
         self.events: list[dict] = []

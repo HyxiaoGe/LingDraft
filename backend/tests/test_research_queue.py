@@ -19,7 +19,7 @@ from tests.research_helpers import events, hold_model, last, new, say, state, wa
 
 @pytest.fixture
 def rr(tmp_path):
-    return ResearchRunner(fake=True, data_dir=tmp_path / "data")
+    return ResearchRunner(fake=True)
 
 
 @pytest.fixture
@@ -158,7 +158,7 @@ def test_failed_turn_keeps_the_queued_message(tmp_path):
 
     p = FakeResearchPlanner()
     p._model = Failing()
-    rr = ResearchRunner(planner=p, data_dir=tmp_path / "data")
+    rr = ResearchRunner(planner=p)
     http = _client(rr)
     tid = new(http, "直接答：先说一句")["thread_id"]
     armed["on"] = True
@@ -210,10 +210,10 @@ def test_queued_message_is_put_back_when_it_cannot_be_sent(client, rr, monkeypat
 
 
 def test_queued_message_survives_restart(tmp_path):
-    one = ResearchRunner(fake=True, data_dir=tmp_path / "data")
+    one = ResearchRunner(fake=True)
     tid = new(_client(one), "直接答：先说一句")["thread_id"]
     aio.run(one.run_store.put_pending(tid, QUEUE, "重启前排着的"))
-    two = ResearchRunner(fake=True, data_dir=tmp_path / "data")
+    two = ResearchRunner(fake=True)
     assert two.state_view(tid)["queued_message"]["text"] == "重启前排着的"
 
 
@@ -315,7 +315,7 @@ def test_failed_turn_keeps_the_guided_message_for_retry(tmp_path):
 
     p = FakeResearchPlanner()
     p._model = Failing()
-    rr = ResearchRunner(planner=p, data_dir=tmp_path / "data")
+    rr = ResearchRunner(planner=p)
     http = _client(rr)
     tid = new(http, "直接答：先说一句")["thread_id"]
     armed["on"] = True

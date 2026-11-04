@@ -16,7 +16,6 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, RemoveMessage, ToolMessage
@@ -38,7 +37,6 @@ from app.graph.research.memory import MemoryBook, next_at
 from app.graph.research.sources import collect_sources, subagent_messages
 from app.graph.research.state import Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
-from app.tools.images import ImageStore
 
 
 class NothingToRetry(Exception):
@@ -245,12 +243,11 @@ class ResearchRunner(BaseRunner):
 
     api_prefix = "/api/research/threads"
 
-    def __init__(self, fake: bool | None = None, data_dir: Path | None = None, workers: int | None = None,
+    def __init__(self, fake: bool | None = None, workers: int | None = None,
                  planner: ResearchPlanner | None = None, checkpointer: BaseCheckpointSaver | None = None,
                  run_store: RunStore | None = None, store: BaseStore | None = None):
         fake = config.USE_FAKE_PLANNER if fake is None else fake
         self.planner = planner or (FakeResearchPlanner() if fake else LiveResearchPlanner())
-        data = Path(data_dir or config.DATA_DIR)
         if checkpointer is None:  # 检查点、长期记忆、运行记录都存在配置的 Postgres 里（见 open_storage）；没配库、连不上抛 RuntimeError
             checkpointer, db_store, db_runs = aio.run(open_storage(config.DATABASE_URL))
             store, run_store = store or db_store, run_store or db_runs
@@ -262,7 +259,7 @@ class ResearchRunner(BaseRunner):
             self._tools_retry = asyncio.run_coroutine_threadsafe(self._keep_connecting(), aio.loop())
         self.graph = build_graph(self.planner, checkpointer, self.memory)
         self.run_store = run_store or MemoryRunStore()
-        self.images = ImageStore(data / "images")  # 画好的图，按对话分目录
+        self.images = self.planner.gateway  # 画好的图存在 image-service 里，按编号取、删（见 app.tools.gateway）
         self.workers = workers or config.RESEARCH_WORKERS
         self._slots = asyncio.BoundedSemaphore(self.workers)  # 同时跑的执行
         self._inflight = 0  # 交出去、还没结束的执行（排队的也算）：据此告诉页面这次要不要排队
@@ -354,6 +351,17 @@ class ResearchRunner(BaseRunner):
 
     def state_view(self, thread_id: str) -> dict:
         return aio.run(self._astate_view(thread_id))
+
+    def image(self, thread_id: str, image_id: str) -> tuple[bytes, str] | None:
+        """页面来取的图：(内容, MIME 类型)。只取这段对话里画的、还在 image-service 里的，经网关取（见 app.tools.gateway）；
+        别的编号、服务里已经没有的是 None。网关、服务出问题照常抛出。"""
+        return aio.run(self._aimage(thread_id, image_id))
+
+    async def _aimage(self, thread_id: str, image_id: str) -> tuple[bytes, str] | None:
+        snap = await self.graph.aget_state(self._cfg(thread_id))
+        if image_id not in {img.id for img in history.stored_images((snap.values or {}).get("messages", []))}:
+            return None
+        return await self.images.image(image_id)
 
     def summary_view(self, thread_id: str) -> dict | None:
         return aio.run(self._asummary_view(thread_id))
@@ -536,7 +544,7 @@ class ResearchRunner(BaseRunner):
         子 agent（task 工具里跑的另一个 agent）的流要开 subgraphs 才有，按命名空间认出是哪个 task 调用派的：
         它的片段、进度、阶段带上 task（调用 id），页面放进那张子任务卡；它的节点做完不发 node。它的片段 langgraph_node 也是 model，只按节点名分不开。
         做完的 step 带着工具结果（result，不发给页面），记进 done：点停止时它那一步可能还没提交，收尾时补上（见 _write_stop）。"""
-        ctx = ChatContext(images=self.images, take_guide=lambda: self._take_guide(thread_id), title=self._titles.get(thread_id))
+        ctx = ChatContext(take_guide=lambda: self._take_guide(thread_id), title=self._titles.get(thread_id))
         async for ns, mode, chunk in self.graph.astream(inp, self._cfg(thread_id), context=ctx, stream_mode=["messages", "updates", "custom"],
                                                         subgraphs=True, durability=DURABILITY):
             task = tasks.get(ns[0]) if ns else None
@@ -726,8 +734,7 @@ class ResearchRunner(BaseRunner):
         edited = [_said(text, id=human.id)] if text is not None else []
         await self.graph.aupdate_state(cfg, {"messages": edited + [RemoveMessage(id=m.id) for m in msgs[start + 1:]], "turns": turns},
                                        as_node=START)
-        gone = [img.file for m in msgs[start + 1:] if (img := history.image_of(m))]
-        await asyncio.to_thread(self.images.remove, thread_id, gone)  # 这一轮原来画的图不要了
+        await self.images.delete_images([img.id for img in history.stored_images(msgs[start + 1:])])  # 这一轮原来画的图不要了
 
     # ---- 改名、删除 ----
 
@@ -752,14 +759,17 @@ class ResearchRunner(BaseRunner):
 
     async def _adelete(self, thread_id: str) -> None:
         """删掉整段对话（这个线程的所有检查点、运行记录、画的图和整理记忆的记录），找不回来；记下的记忆不删。
-        运行记录先删：删不掉就整个报错，对话还在，可以再删一次；反过来对话先没了，剩下的记录就再也删不到了。"""
+        运行记录先删：删不掉就整个报错，对话还在，可以再删一次；反过来对话先没了，剩下的记录就再也删不到了。
+        图在对话删掉以后再删（编号先记下）：删图没成功只记日志，留下的图没人指着，只占服务的磁盘。"""
         async with self._ahold(thread_id):
+            snap = await self.graph.aget_state(self._cfg(thread_id))
+            images = [img.id for img in history.stored_images((snap.values or {}).get("messages", []))]
             await self._adrop_suggestions(thread_id)
             self._titles.pop(thread_id, None)
             await self.run_store.delete_thread(thread_id)
             await self.memory.aforget_thread(thread_id)  # 只删整理过哪几轮的记录；从这段对话记下的记忆不动（记的是人）
             await self.graph.checkpointer.adelete_thread(thread_id)
-            await asyncio.to_thread(self.images.drop, thread_id)
+            await self.images.delete_images(images)
 
     # ---- 推荐问题：这一轮结束之后再起 ----
 

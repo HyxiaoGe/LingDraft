@@ -30,6 +30,7 @@ IMAGE_FAILURES = {
     "run_image_limit_reached": "这一轮画的图已经到上限",
 }
 IMAGE_FAILED = "图片生成失败"
+IMAGE_GONE = "这张图已经不在了"  # 2026-11-04 以前灵稿自己存的图，没搬到 image-service（见 state.GeneratedImage）
 # 子任务没做成的原因在页面上的说法（task 工具结果 artifact 的 failure，见 app.graph.research.subagent）
 TASK_FAILURES = {
     "limit": "这一轮派的子任务已经到上限，没有派",
@@ -285,7 +286,7 @@ def _old_weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> To
 
 
 def image_of(m: BaseMessage) -> GeneratedImage | None:
-    """一条生图结果里画好的图；没画成是 None。模型看的只是一句话，图的信息在 artifact 里（见 research_tools.generate_image）。"""
+    """一条生图结果里画好的图；没画成是 None。图的信息在 artifact 里（见 image_mcp.ImageMiddleware）。"""
     art = m.artifact if isinstance(m, ToolMessage) and m.name == IMAGE_TOOL else None
     if not isinstance(art, dict) or not art.get("image"):
         return None
@@ -295,9 +296,16 @@ def image_of(m: BaseMessage) -> GeneratedImage | None:
         return None
 
 
+def stored_images(messages: list[BaseMessage]) -> list[GeneratedImage]:
+    """这些消息里画好、还在 image-service 里的图（删对话、重新回答时删掉它们；改图只认它们）。"""
+    return [img for m in messages if (img := image_of(m)) and img.stored]
+
+
 def _image_step(cid: str, text: str, extra: dict, result: ToolMessage) -> ToolStep:
     if img := image_of(result):
-        return ToolStep(id=cid, kind="image", text=text, image=img, **{**extra, "aspect_ratio": img.aspect_ratio})
+        # 以前的图：画成了，只是不在了。卡片上说一声（有 message 的图片卡片页面按说明画），过程里照样是画成了
+        gone = {} if img.stored else {"message": IMAGE_GONE}
+        return ToolStep(id=cid, kind="image", text=text, image=img, **{**extra, "aspect_ratio": img.aspect_ratio}, **gone)
     code = result.artifact.get("error_code") if isinstance(result.artifact, dict) else None  # 参数没通过校验的没有 artifact
     return ToolStep(id=cid, kind="image", text=text, ok=False, message=IMAGE_FAILURES.get(code, IMAGE_FAILED), **extra)
 

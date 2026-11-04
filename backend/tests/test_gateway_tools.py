@@ -1,4 +1,4 @@
-"""网关客户端（生图在 test_images）和灵稿自己的工具；搜索、读页、天气是 MCP 工具，见 test_web_tools、test_weather。"""
+"""网关客户端（按编号取图、删图）和灵稿自己的工具；搜索、读页、天气、画图是 MCP 工具，见 test_web_tools、test_weather、test_images。"""
 
 from __future__ import annotations
 
@@ -6,13 +6,46 @@ import httpx
 import pytest
 
 from app.graph.research.state import Source, tidy_title
-from app.tools.gateway import GatewayClient, GatewayError
+from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError
 from app.tools.research_tools import make_research_tools
+from tests.research_helpers import blocking
+
+IMAGE_ID = "3f0e8a4c-0000-4000-8000-000000000000"
 
 
 def test_own_tools():
-    client = GatewayClient("http://gw", "k1", scene="research", transport=httpx.MockTransport(lambda req: httpx.Response(404)))
-    assert [t.name for t in make_research_tools(client)] == ["generate_image", "get_current_time"]
+    assert [t.name for t in make_research_tools()] == ["get_current_time"]
+
+
+def test_image_fetch_and_delete():
+    """按编号取图、删图（经网关 /image/v1/images/{id}）：服务里没有是 None；类型不对、太大、网关出错抛 GatewayError；删不掉只记日志。"""
+    seen: list[tuple[str, str, str]] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        name = req.url.path.rsplit("/", 1)[-1]
+        seen.append((req.method, req.url.path, req.headers["authorization"]))
+        if req.method == "DELETE":
+            return httpx.Response(204 if name == IMAGE_ID else 502)
+        return {
+            IMAGE_ID: httpx.Response(200, content=b"img", headers={"content-type": "image/webp"}),
+            "gone": httpx.Response(404, json={"error": "image_not_found"}),
+            "page": httpx.Response(200, content=b"<html>", headers={"content-type": "text/html"}),
+            "big": httpx.Response(200, content=b"x" * (20 * 1024 * 1024 + 1), headers={"content-type": "image/png"}),
+            "auth": httpx.Response(401),
+        }[name]
+
+    client = blocking(GatewayClient("http://gw", "k1", scene="research", transport=httpx.MockTransport(handler)))
+    assert client.image(IMAGE_ID) == (b"img", "image/webp")
+    assert seen[0] == ("GET", f"/image/v1/images/{IMAGE_ID}", "Bearer k1")
+    assert client.image("gone") is None
+    for name, kind in (("page", "http_200"), ("big", "image_too_large")):
+        with pytest.raises(GatewayError) as e:
+            client.image(name)
+        assert e.value.kind == kind
+    with pytest.raises(GatewayAuthError):
+        client.image("auth")
+    client.delete_images([IMAGE_ID, "broken"])  # 删不掉的不抛
+    assert [s[:2] for s in seen[-2:]] == [("DELETE", f"/image/v1/images/{IMAGE_ID}"), ("DELETE", "/image/v1/images/broken")]
 
 
 def test_missing_key():

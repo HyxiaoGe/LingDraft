@@ -1,65 +1,48 @@
-"""画图：经网关调 image-service、存图、改图、每轮上限、失败的说法、停止、删对话和重新生成时清图、取图接口。只用假模型和假网关。"""
+"""画图：agent-tools 的 MCP 工具 generate_image（app.tools.image_mcp）。改图只认这段对话的图、每轮上限、失败的说法、
+经网关调（401/429/连不上）、停止、删对话和重新回答时删图、取图接口、以前的图。
+服务用进程内的假 image-service（research_llm.FakeImageService）；经 HTTP 的用 ASGI 模拟网关。只用假模型。"""
 
 from __future__ import annotations
 
-import asyncio
-import json
 import threading
 import time
+import uuid
+from types import SimpleNamespace
 
 import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from app import config
+from app import aio
 from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
 from app.graph.research import history, prompts
-from app.research_llm import FAKE_IMAGE_FILTERED, FakeResearchPlanner, FakeToolModel, _fake_image_service
-from app.tools import images
-from app.tools.gateway import GatewayAuthError, GatewayClient, ImageError
-from app.tools.research_tools import make_research_tools
-from tests.research_helpers import blocking, new
+from app.research_llm import FAKE_IMAGE_FILTERED, FakeImageService, FakeResearchPlanner, FakeToolModel
+from app.tools import image_mcp
+from app.tools.gateway import GatewayAuthError
+from app.tools.image_mcp import ImageMiddleware, ImageTool, attempts_before, gateway_target, placeholder
+from tests.research_helpers import new
 from tests.test_research import Chat, _answered, _kinds
 
-
-class Recorded:
-    """假 image-service，记下生图请求（参数和场景）。block 在出图前停住，模拟生图很慢。"""
-
-    def __init__(self, block: threading.Event | None = None) -> None:
-        self.generate: list[tuple[dict, str]] = []
-        self.block = block
-        self._images = _fake_image_service()
-
-    async def __call__(self, req: httpx.Request) -> httpx.Response:
-        if req.url.path == "/image/v1/generate":
-            self.generate.append((json.loads(req.content), req.headers["x-caller-scene"]))
-            if self.block is not None:
-                await asyncio.to_thread(self.block.wait, 10)  # 在线程里等，不卡对话的事件循环（点了停止，这里跟着取消）
-            return await self._images(req)
-        if req.url.path.startswith("/image/static/"):
-            return await self._images(req)
-        return httpx.Response(404)
+SHOWN = prompts.render("tools.generate_image.shown")
 
 
-def _planner(handler, model: FakeToolModel | None = None) -> FakeResearchPlanner:
+def _planner(model: FakeToolModel | None = None) -> FakeResearchPlanner:
     p = FakeResearchPlanner()
-    client = GatewayClient("http://gw", "k", scene="research", transport=httpx.MockTransport(handler))
-    p._gateway, p._tools = client, make_research_tools(client)
     if model is not None:
         p._model = model
     return p
 
 
 @pytest.fixture
-def gw() -> Recorded:
-    return Recorded()
+def chat() -> Chat:
+    return Chat(planner=_planner())
 
 
-@pytest.fixture
-def chat(tmp_path, gw) -> Chat:
-    return Chat(tmp_path, planner=_planner(gw))
+def _svc(c: Chat) -> FakeImageService:
+    return c.planner.images
 
 
 def _image_steps(turn: dict) -> list[dict]:
@@ -68,11 +51,6 @@ def _image_steps(turn: dict) -> list[dict]:
 
 def _results(chat: Chat) -> list[ToolMessage]:
     return [m for m in chat.values()["messages"] if isinstance(m, ToolMessage) and m.name == "generate_image"]
-
-
-def _files(tmp_path, tid: str = "t1") -> list[str]:
-    d = tmp_path / "data" / "images" / tid
-    return sorted(p.name for p in d.iterdir()) if d.exists() else []
 
 
 class Calls(FakeToolModel):
@@ -90,80 +68,66 @@ class Calls(FakeToolModel):
 # ---- 画新图 ----
 
 
-def test_draw_saves_the_image_and_tells_the_model_only_its_id(chat, gw, tmp_path):
+def test_draw_keeps_only_the_id_and_the_card_details(chat):
     v = chat.say("画一只猫")
     (turn,) = v["turns"]
     assert _kinds(turn) == ["thinking", "step:image", "thinking", "text"] and turn["items"][-1]["text"] == "画好了，看看要不要调整。"
     (step,) = _image_steps(turn)
     img = step["image"]
-    assert step["ok"] and step["text"] == "画一只猫" and step["aspect_ratio"] == "1:1" and not step["edit"]
+    assert step["ok"] and step["text"] == "画一只猫" and step["aspect_ratio"] == "1:1" and not step["edit"] and not step["message"]
     assert (img["width"], img["height"], img["mime_type"], img["model"]) == (512, 512, "image/png", "doubao-seedream-5-0-flash")
-    assert img["file"] == f"{img['id']}.png" and img["edited_from"] is None and _files(tmp_path) == [img["file"]]
-    assert gw.generate == [({"prompt": "画一只猫", "aspect_ratio": "1:1", "grounding": True}, "chat_image")]
-    # 模型只拿到一句话和编号：不给图片地址，也不把参数之外的东西交回给它
+    assert uuid.UUID(img["id"]) and img["file"] is None and img["edited_from"] is None and img["prompt"] == "画一只猫"
+    assert img["id"] in _svc(chat).made and _svc(chat).calls == [{"prompt": "画一只猫"}]
+    # 模型看的是服务的那段英文（有编号、没有地址），后面接一句卡片上已经标了模型
     (result,) = _results(chat)
-    assert result.content == prompts.render("tools.generate_image.success", image_id=img["id"], reference_subject=None,
-                                            reference_search_status="skipped", edited=False)
-    assert f"Image id: {img['id']}." in result.content and "static" not in result.content and "http" not in result.content
+    assert result.content.startswith(f"The image was generated. Image id: {img['id']}.") and result.content.endswith(SHOWN)
+    assert "http" not in result.content and result.artifact == {"attempted": True, "image": img, "reference_search_status": None}
     assert turn["record"]["usage"]["images"] == 1 and turn["record"]["usage"]["searches"] == 0
 
 
-def test_draw_passes_ratio_quality_style_and_regenerate(tmp_path, gw):
-    model = Calls(calls=[{"name": "generate_image", "args": {"prompt": " 海报 ", "aspect_ratio": "9:16", "quality": "high", "style": " 水彩 ",
-                                                             "regenerate": True, "reference_subject": "  "}}])
-    v = Chat(tmp_path, planner=_planner(gw, model)).say("做张海报")
-    (step,) = _image_steps(v["turns"][0])
-    assert gw.generate == [({"prompt": "海报", "aspect_ratio": "9:16", "grounding": True, "no_cache": True, "quality": "high", "style": "水彩"},
-                            "chat_image")]
-    assert (step["image"]["width"], step["image"]["height"], step["image"]["model"]) == (288, 512, "doubao-seedream-5-0-pro")
-
-
-def test_reference_photo_not_found_is_told_to_the_model(tmp_path):
-    service = _fake_image_service()
-
-    async def handler(req: httpx.Request) -> httpx.Response:
-        res = await service(req)
-        if req.url.path == "/image/v1/generate":
-            return httpx.Response(200, json={**res.json(), "reference_search": {"status": "none_accepted"}})
-        return res
-
-    c = Chat(tmp_path, planner=_planner(handler, Calls(calls=[{"name": "generate_image", "args": {"prompt": "手机", "reference_subject": "某型号手机"}}])))
-    c.say("画这台手机")
-    (result,) = _results(c)
-    assert "No usable reference photo of 某型号手机 was found" in result.content
-    assert result.artifact["reference_search_status"] == "none_accepted"
+def test_arguments_go_to_the_service_as_the_model_gave_them():
+    model = Calls(calls=[{"name": "generate_image", "args": {"prompt": "海报", "aspect_ratio": "9:16", "quality": "high", "style": "水彩",
+                                                             "regenerate": True, "reference_subject": "某型号手机"}}])
+    c = Chat(planner=_planner(model))
+    _svc(c).reference_status = "none_accepted"
+    (step,) = _image_steps(c.say("做张海报")["turns"][0])
+    assert _svc(c).calls == [{"prompt": "海报", "aspect_ratio": "9:16", "quality": "high", "style": "水彩", "regenerate": True,
+                              "reference_subject": "某型号手机"}]
+    assert (step["image"]["width"], step["image"]["height"], step["image"]["model"], step["aspect_ratio"]) == (288, 512, "doubao-seedream-5-0-pro", "9:16")
+    assert _results(c)[0].artifact["reference_search_status"] == "none_accepted"
 
 
 # ---- 改图 ----
 
 
-def test_edit_hands_back_the_original_and_keeps_its_shape(chat, gw, tmp_path):
+def test_edit_sends_the_id_and_the_service_keeps_the_shape(chat):
     first = _image_steps(chat.say("画一只横的猫")["turns"][0])[0]["image"]
     assert (first["width"], first["height"], first["aspect_ratio"]) == (512, 288, "16:9")
     v = chat.say("改图：背景换成海边")
     (step,) = _image_steps(v["turns"][1])
     img = step["image"]
     assert step["ok"] and step["edit"] and img["edited_from"] == first["id"] and img["id"] != first["id"]
-    assert step["aspect_ratio"] == "16:9"  # 没给比例：用最接近原图的
-    payload, scene = gw.generate[1]
-    assert scene == "image_edit" and payload["prompt"] == "改图：背景换成海边" and payload["aspect_ratio"] == "16:9"
-    assert payload["reference_images"] == [config.IMAGE_SERVICE_URL + "/static/images/fake1.png"] and "source_image_id" not in payload
-    assert _results(chat)[1].content == prompts.render("tools.generate_image.success", image_id=img["id"], reference_subject=None,
-                                                       reference_search_status="skipped", edited=True)
-    assert _files(tmp_path) == sorted([first["file"], img["file"]])
+    assert step["aspect_ratio"] == "16:9" and (img["width"], img["height"]) == (512, 288)  # 没给比例：服务按原图的形状画，卡片按实际形状占位
+    assert _svc(chat).calls[1] == {"prompt": "改图：背景换成海边", "source_image_id": first["id"]}
+    assert _results(chat)[1].content.startswith("The image was edited.")
 
 
-def test_edit_of_an_unknown_image_is_not_sent(tmp_path, gw):
-    """编号不是这段对话里画的图：不去画、不算次数，模型被告知这张图改不了。编号是编的、格式都不对也一样。"""
-    model = Calls(calls=[{"name": "generate_image", "args": {"prompt": "改背景", "source_image_id": sid}} for sid in ("0123456789ab", "fake1")])
-    c = Chat(tmp_path, planner=_planner(gw, model))
+def test_edit_of_an_image_not_in_this_conversation_is_not_sent():
+    """编号不是这段对话里画的、还在的图：编的、别的对话的（服务里有）、以前灵稿自己存的，都不交给服务，不算次数，照找不到原图说。"""
+    other = Chat(planner=_planner(), tid="other")
+    other.say("画一只猫")
+    elsewhere = _image_steps(other.view()["turns"][0])[0]["image"]["id"]
+    ids = [str(uuid.uuid4()), "img_55d0d6a946b5e", elsewhere, "0123456789ab"]
+    model = Calls(calls=[{"name": "generate_image", "args": {"prompt": "改背景", "source_image_id": sid}} for sid in ids])
+    c = Chat(planner=_planner(model))
+    _svc(c).made[elsewhere] = other.planner.images.made[elsewhere]  # 同一个服务里有这张，但不是这段对话的
     v = c.say("把那张图改一下")
     steps = _image_steps(v["turns"][0])
-    assert [s["message"] for s in steps] == ["这张图片无法直接编辑"] * 2 and all(s["edit"] and not s["ok"] for s in steps)
-    assert gw.generate == []
-    assert all(r.status == "error" and r.artifact == {"attempted": False, "error_code": "source_image_unavailable"} for r in _results(c))
-    assert _results(c)[0].content == prompts.render("tools.generate_image.failed", error_code="source_image_unavailable", retryable=False,
-                                                    fallback_from=None)
+    assert [s["message"] for s in steps] == ["这张图片无法直接编辑"] * 4 and all(s["edit"] and not s["ok"] for s in steps)
+    assert _svc(c).calls == []
+    for r in _results(c):
+        assert r.status == "error" and r.artifact == {"attempted": False, "error_code": "source_image_unavailable"}
+        assert r.content == prompts.render("tools.generate_image.source_image_unavailable")
 
 
 def test_attempts_before_counts_this_turn_only():
@@ -175,111 +139,156 @@ def test_attempts_before_counts_this_turn_only():
 
     msgs = [HumanMessage("一"), calls("a"), res("a", True), HumanMessage("二"), calls("b", "c"), res("b", True), res("c", False),
             calls("d", "e", "f")]
-    assert images.attempts_before(msgs, "d") == 1  # 上一轮的不算，没去画的 c 不算
-    assert images.attempts_before(msgs, "f") == 3  # 同一条消息里排在前面、还没结果的算去画了
+    assert attempts_before(msgs, "d") == 1  # 上一轮的不算，没去画的 c 不算
+    assert attempts_before(msgs, "f") == 3  # 同一条消息里排在前面、还没结果的算去画了
 
 
 # ---- 上限、失败 ----
 
 
-def test_at_most_three_images_a_turn(tmp_path, gw):
+def test_at_most_three_images_a_turn():
     model = Calls(calls=[{"name": "generate_image", "args": {"prompt": f"图{k}"}} for k in range(4)])
-    c = Chat(tmp_path, planner=_planner(gw, model))
+    c = Chat(planner=_planner(model))
     v = c.say("画四张")
     steps = _image_steps(v["turns"][0])
     assert [s["ok"] for s in steps] == [True, True, True, False] and steps[3]["message"] == "这一轮画的图已经到上限"
-    assert sorted(p["prompt"] for p, _ in gw.generate) == ["图0", "图1", "图2"]
-    assert v["turns"][0]["record"]["usage"]["images"] == 3 and len(_files(tmp_path)) == 3
+    assert sorted(a["prompt"] for a in _svc(c).calls) == ["图0", "图1", "图2"]
+    assert _results(c)[3].content == prompts.render("tools.generate_image.run_image_limit_reached", max_per_turn=3)
+    assert v["turns"][0]["record"]["usage"]["images"] == 3
     v = c.say("再来四张")  # 下一轮重新算
-    assert [s["ok"] for s in _image_steps(v["turns"][1])] == [True, True, True, False] and len(gw.generate) == 6
+    assert [s["ok"] for s in _image_steps(v["turns"][1])] == [True, True, True, False] and len(_svc(c).calls) == 6
 
 
-def test_content_filtered_is_said_plainly_and_counts(tmp_path, gw):
+def test_content_filtered_keeps_the_service_text_and_counts():
     model = Calls(calls=[{"name": "generate_image", "args": {"prompt": f"{FAKE_IMAGE_FILTERED}{k}"}} for k in range(3)]
                   + [{"name": "generate_image", "args": {"prompt": "正常的图"}}])
-    c = Chat(tmp_path, planner=_planner(gw, model))
+    c = Chat(planner=_planner(model))
     v = c.say("画")
     steps = _image_steps(v["turns"][0])
     assert [s["message"] for s in steps] == ["图片内容未通过模型审核"] * 3 + ["这一轮画的图已经到上限"]  # 被拒的也算画过（可能已经花了钱）
     first = _results(c)[0]
     assert first.status == "error" and first.artifact == {"attempted": True, "error_code": "content_filtered"}
-    assert first.content == prompts.render("tools.generate_image.failed", error_code="content_filtered", retryable=False, fallback_from=None)
-    assert "content safety filter" in first.content and _files(tmp_path) == [] and v["turns"][0]["record"]["usage"]["images"] == 0
+    assert first.content.startswith("The image model refused this request") and v["turns"][0]["record"]["usage"]["images"] == 0
 
 
-def test_bad_arguments_go_back_to_the_model(tmp_path, gw):
-    model = Calls(calls=[{"name": "generate_image", "args": {"prompt": "猫", "aspect_ratio": "7:3"}},
-                         {"name": "generate_image", "args": {"prompt": "   "}}])
-    c = Chat(tmp_path, planner=_planner(gw, model))
-    v = c.say("画")
-    assert [s["message"] for s in _image_steps(v["turns"][0])] == ["图片生成失败"] * 2 and gw.generate == []
-    bad, blank = _results(c)
-    assert bad.status == "error" and "aspect_ratio" in bad.content and blank.artifact == {"attempted": False, "error_code": "invalid_arguments"}
+def test_bad_arguments_go_back_to_the_model():
+    """比例不在服务的可选值里：服务的参数校验不过（MCP 的 isError），没去画、不算次数，服务的说明照给模型。"""
+    model = Calls(calls=[{"name": "generate_image", "args": {"prompt": "猫", "aspect_ratio": "7:3"}}])
+    c = Chat(planner=_planner(model))
+    (step,) = _image_steps(c.say("画")["turns"][0])
+    (bad,) = _results(c)
+    assert step["message"] == "图片生成失败" and _svc(c).calls == []
+    assert bad.status == "error" and "aspect_ratio" in bad.content and bad.artifact == {"attempted": False, "error_code": "invalid_arguments"}
 
 
-def test_failures_of_the_image_service(tmp_path):
-    """image-service 的失败码照原样交给模型（照 Fusion 的说法），主模型被拒、备用模型也没成时带上 fallback_from；取不到图也算画过。"""
-    cases = [
-        (httpx.Response(504, json={"error": "upstream_timeout", "message": "t", "retryable": True}), "upstream_timeout", True, None, "生成超时"),
-        (httpx.Response(422, json={"error": "content_filtered", "retryable": False, "fallback_from": {"code": "content_filtered"}}),
-         "content_filtered", False, "content_filtered", "图片内容未通过模型审核"),
-        (httpx.Response(502, json={"error": "upstream_error", "retryable": True, "fallback_from": {"code": "content_filtered"}}),
-         "upstream_error", True, "content_filtered", "图片生成失败"),
-        (httpx.Response(502, text="<html>bad gateway</html>"), "invalid_response", True, None, "图片生成失败"),
-        (httpx.Response(200, json={"image_url": "https://evil.test/x.png"}), "invalid_response", False, None, "图片生成失败"),
-        (httpx.Response(200, json={"image_url": "/static/images/missing.png", "model": "m"}), "image_download_failed", True, None, "图片生成失败"),
-    ]
-    for k, (resp, code, retryable, fallback, label) in enumerate(cases):
-        def handler(req: httpx.Request, resp=resp) -> httpx.Response:
-            return resp if req.url.path == "/image/v1/generate" else httpx.Response(404)
-
-        c = Chat(tmp_path, planner=_planner(handler), tid=f"f{k}")
-        (step,) = _image_steps(c.say("画一只猫")["turns"][0])
-        (result,) = _results(c)
-        assert (step["ok"], step["message"]) == (False, label), code
-        assert result.artifact == {"attempted": True, "error_code": code}, code
-        assert result.content == prompts.render("tools.generate_image.failed", error_code=code, retryable=retryable, fallback_from=fallback)
+@pytest.mark.parametrize(("code", "label", "attempted"), [
+    ("upstream_timeout", "生成超时", True),
+    ("upstream_error", "图片生成失败", True),
+    ("source_image_unavailable", "这张图片无法直接编辑", False),  # 这段对话里的图，服务里却没有了（比如删过）
+    ("invalid_params", "图片生成失败", False),
+])
+def test_service_failures(code, label, attempted):
+    c = Chat(planner=_planner())
+    _svc(c).fail = {"code": code, "message": "x", "retryable": code == "upstream_timeout"}
+    (step,) = _image_steps(c.say("画一只猫")["turns"][0])
+    (result,) = _results(c)
+    assert (step["ok"], step["message"]) == (False, label)
+    assert result.artifact == {"attempted": attempted, "error_code": code} and result.content == f"Image generation failed (error code: {code})."
 
 
-def test_unauthorized_fails_the_run(tmp_path):
-    """网关没放行生图、image-service 没登记灵稿：配置问题，这次运行失败，不当成没画成交给模型。"""
-    with pytest.raises(GatewayAuthError):
-        Chat(tmp_path, planner=_planner(lambda req: httpx.Response(403, json={"error": "x"}))).say("画一只猫")
+def test_unexpected_result_counts_as_drawn():
+    tool = ImageTool(FakeImageService().server)
+    aio.run(tool.connect())
+
+    async def handler(_):
+        return ToolMessage(content="ok", tool_call_id="c1", name="generate_image",
+                           artifact={"structured_content": {"ok": True, "image": {"id": "x"}}})
+
+    out = aio.run(ImageMiddleware().awrap_tool_call(SimpleNamespace(tool_call=_call(), state={"messages": []}), handler))
+    assert out.status == "error" and out.artifact == {"attempted": True, "error_code": "invalid_response"}
 
 
-def test_image_file_checks_type_and_size():
-    def handler(req: httpx.Request) -> httpx.Response:
-        name = req.url.path.rsplit("/", 1)[-1]
-        if name == "big.png":
-            return httpx.Response(200, content=b"x" * (10 * 1024 * 1024 + 1), headers={"content-type": "image/png"})
-        if name == "page.png":
-            return httpx.Response(200, content=b"<html>", headers={"content-type": "text/html"})
-        return httpx.Response(200, content=b"img", headers={"content-type": "image/webp; q=1"})
-
-    client = blocking(GatewayClient("http://gw", "k", scene="research", transport=httpx.MockTransport(handler)))
-    assert client.image_file("/static/images/ok.webp") == (b"img", "image/webp")
-    for path, kind in (("/static/images/big.png", "image_too_large"), ("/static/images/page.png", "image_download_failed"),
-                       ("/static/../secret.png", "invalid_response")):
-        with pytest.raises(ImageError) as e:
-            client.image_file(path)
-        assert e.value.kind == kind
+# ---- 没连上、经网关调（HTTP） ----
 
 
-def test_closest_aspect_ratio():
-    assert images.closest_aspect_ratio(512, 288) == "16:9"
-    assert images.closest_aspect_ratio(1000, 1010) == "1:1"
-    assert images.closest_aspect_ratio(600, 2000) == "9:16"
-    assert images.closest_aspect_ratio(3000, 1000) == "21:9"
-    assert images.closest_aspect_ratio(0, 10) == "1:1"
+def _call(cid: str = "c1", **args) -> dict:
+    return {"name": "generate_image", "args": {"prompt": "猫", **args}, "id": cid, "type": "tool_call"}
+
+
+async def _through(tool, call: dict, messages=()) -> ToolMessage:
+    req = SimpleNamespace(tool_call=call, state={"messages": list(messages)})
+    return await ImageMiddleware().awrap_tool_call(req, lambda r: tool.ainvoke(call))
+
+
+def test_connect_takes_the_service_tool_and_adds_the_lingdraft_note():
+    tool = ImageTool(FakeImageService().server)
+    assert tool.current().description.endswith(prompts.render("tools.generate_image.lingdraft"))  # 没连上：占位
+    aio.run(tool.connect())
+    real = tool.current()
+    assert real is tool.tool and real.description.startswith("Generate a new image")
+    assert {"prompt", "aspect_ratio", "source_image_id", "regenerate"} <= set(real.args_schema["properties"])
+
+
+def test_placeholder_until_connected_tells_the_model_the_service_is_down():
+    out = aio.run(_through(placeholder(), _call(aspect_ratio="16:9")))
+    assert out.status == "error" and out.content == prompts.render("tools.generate_image.unavailable")
+    assert out.artifact == {"attempted": False, "error_code": "unavailable"}  # 没发出去，不算次数
+
+
+class _Gateway:
+    """模拟网关：/image/v2/mcp 转给假 image-service 的 MCP，记下请求头；status 设了就直接回这个状态。"""
+
+    def __init__(self) -> None:
+        self.service = FakeImageService()
+        self.app = self.service.server().http_app(path="/image/v2/mcp", stateless_http=True)
+        self.status: int | None = None
+        self.headers: list[dict] = []
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            self.headers.append({k.decode(): v.decode() for k, v in scope["headers"]})
+            if self.status:
+                await send({"type": "http.response.start", "status": self.status, "headers": [(b"content-type", b"application/json")]})
+                await send({"type": "http.response.body", "body": b'{"error":"x"}'})
+                return
+        await self.app(scope, receive, send)
+
+
+def test_calls_go_through_the_gateway():
+    gw = _Gateway()
+
+    async def go():
+        async with gw.app.lifespan(gw.app):
+            tool = ImageTool(lambda: gateway_target("http://gw/", "k1", scene="research_eval", transport=httpx2.ASGITransport(app=gw)))
+            await tool.connect()
+            out = {"ok": await _through(tool.tool, _call())}
+            for status in (429, 502):
+                gw.status = status
+                out[status] = await _through(tool.tool, _call())
+            gw.status = 401
+            with pytest.raises(GatewayAuthError) as e:
+                await _through(tool.tool, _call())
+            out["auth"] = e.value
+            return out
+
+    out = aio.run(go())
+    assert out["ok"].status == "success" and out["ok"].artifact["image"]["id"] in gw.service.made
+    assert gw.headers[0]["authorization"] == "Bearer k1" and gw.headers[0]["x-caller-scene"] == "research_eval"
+    assert out[429].content == prompts.render("tools.generate_image.quota_exhausted")
+    assert out[429].artifact == {"attempted": False, "error_code": "quota_exhausted"}  # 网关拦下的没去画
+    assert out[502].content == prompts.render("tools.generate_image.unavailable")
+    assert out[502].artifact == {"attempted": True, "error_code": "unavailable"}  # 发出去了没拿到结果：服务那边可能已经画了
+    assert out["auth"].kind == "http_401"  # 密钥不对、网关没放行：让这次运行失败
+    assert image_mcp.CALL_TIMEOUT > 135  # 比 image-service 整条主备链的限时长
 
 
 # ---- 停止 ----
 
 
-def test_stop_while_drawing_does_not_wait_for_the_image(tmp_path):
+def test_stop_while_drawing_does_not_wait_for_the_image():
     gate = threading.Event()
-    gw = Recorded(block=gate)
-    c = Chat(tmp_path, planner=_planner(gw))
+    c = Chat(planner=_planner())
+    _svc(c).block = gate
     t0 = time.monotonic()
     try:
         v = c.say("画一只猫", stop_on=lambda ev: ev["event"] == "step" and ev["data"]["step"]["kind"] == "image")
@@ -290,56 +299,87 @@ def test_stop_while_drawing_does_not_wait_for_the_image(tmp_path):
     (step,) = _image_steps(turn)
     assert elapsed < 3 and turn["record"]["outcome"] == "stopped" and v["status"] == "idle"
     assert not step["ok"] and step["message"] == "已停止生成" and step["aspect_ratio"] == ""
-    assert _answered(c.values()["messages"]) and _files(tmp_path) == []
-    time.sleep(0.3)  # 停止后那张图出来了也不存
-    assert _files(tmp_path) == []
+    assert _answered(c.values()["messages"]) and _results(c)[0].artifact.get("image") is None
     assert c.say("直接答：好")["turns"][-1]["record"]["outcome"] == "ok"
 
 
-# ---- 重新生成、删对话 ----
+# ---- 重新回答、删对话 ----
 
 
-def test_regenerate_and_delete_remove_the_images(chat, gw, tmp_path):
+def test_regenerate_and_delete_remove_the_images_from_the_service(chat):
     chat.say("画一只猫")
-    old = _files(tmp_path)
+    old = _image_steps(chat.view()["turns"][0])[0]["image"]["id"]
     v = chat.regenerate()
-    (step,) = _image_steps(v["turns"][0])
-    assert len(old) == 1 and _files(tmp_path) == [step["image"]["file"]] and old != _files(tmp_path)
+    new_id = _image_steps(v["turns"][0])[0]["image"]["id"]
+    assert _svc(chat).deleted == [old] and new_id != old and set(_svc(chat).made) == {new_id}
     chat.r.delete(chat.tid)
-    assert not (tmp_path / "data" / "images" / "t1").exists()
+    assert _svc(chat).deleted == [old, new_id] and _svc(chat).made == {}
 
 
-def test_regenerate_button_redraws_the_same_description(chat, gw):
+def test_regenerate_button_redraws_the_same_description(chat):
     """卡片上的“重新生成”发的是一句话（用同样的描述再生成一张），模型照上次的参数再画、带上 regenerate。"""
     chat.say("画一只猫")
     v = chat.say("用同样的描述再生成一张")
     (step,) = _image_steps(v["turns"][1])
-    assert step["ok"] and gw.generate[1] == ({"prompt": "画一只猫", "aspect_ratio": "1:1", "grounding": True, "no_cache": True}, "chat_image")
+    assert step["ok"] and _svc(chat).calls[1] == {"prompt": "画一只猫", "regenerate": True}
+
+
+# ---- 以前的图 ----
+
+
+OLD_IMAGE = {"id": "0123456789ab", "file": "0123456789ab.png", "mime_type": "image/png", "width": 512, "height": 288, "prompt": "猫",
+             "aspect_ratio": "16:9", "model": "doubao-seedream-5-0-flash", "edited_from": None}
+
+
+def test_old_images_say_they_are_gone():
+    """2026-11-04 以前灵稿自己存的图不搬（Sean 定）：卡片说这张图已经不在了，过程里照样是画成了；删对话不去服务里删。"""
+    call = {"name": "generate_image", "args": {"prompt": "猫"}, "id": "c1"}
+    old = ToolMessage(content="", tool_call_id="c1", name="generate_image", artifact={"attempted": True, "image": OLD_IMAGE,
+                                                                                       "source_url": "http://image-service/static/images/a.png"})
+    step = history.step_of(call, old)
+    assert step.ok and step.image is not None and step.message == history.IMAGE_GONE and step.aspect_ratio == "16:9"
+    assert history.stored_images([old]) == [] and history.usage_of([old]).images == 1
+
+
+def test_image_of_ignores_other_tools_and_broken_records():
+    assert history.image_of(ToolMessage(content="", tool_call_id="a", name="read_page", artifact={"image": OLD_IMAGE})) is None
+    assert history.image_of(ToolMessage(content="", tool_call_id="a", name="generate_image", artifact={"image": {"id": "x"}})) is None
+    assert history.image_of(ToolMessage(content="", tool_call_id="a", name="generate_image", artifact=None)) is None
 
 
 # ---- 取图接口 ----
 
 
-def test_image_route(tmp_path):
-    api_main.set_research_runner(ResearchRunner(fake=True, data_dir=tmp_path / "data"))
+def test_image_route():
+    rr = ResearchRunner(fake=True)
+    api_main.set_research_runner(rr)
     client = TestClient(api_main.app)
     v = new(client, "画一只猫")
-    img = _image(v)
-    r = client.get(f"/api/research/threads/{v['thread_id']}/images/{img['file']}")
+    tid = v["thread_id"]
+    img = next(i["image"] for t in v["turns"] for i in t["items"] if i["type"] == "step" and i.get("image"))
+    r = client.get(f"/api/research/threads/{tid}/images/{img['id']}")
     assert r.status_code == 200 and r.headers["content-type"] == "image/png" and r.content.startswith(b"\x89PNG")
     assert r.headers["x-content-type-options"] == "nosniff" and "immutable" in r.headers["cache-control"]
-    for path in (f"other/images/{img['file']}", f"{v['thread_id']}/images/0123456789ab.png", f"{v['thread_id']}/images/..%2Fx.png",
-                 f"{v['thread_id']}/images/{img['id']}.svg"):
+    service = rr.planner.images
+    other = service.made.setdefault(str(uuid.uuid4()), service.made[img["id"]])  # 服务里有，但不是这段对话的
+    assert other
+    for path in (f"other/images/{img['id']}", f"{tid}/images/{str(uuid.uuid4())}", f"{tid}/images/{next(k for k in service.made if k != img['id'])}",
+                 f"{tid}/images/..%2Fx", f"bad%20id/images/{img['id']}"):
         assert client.get(f"/api/research/threads/{path}").status_code == 404, path
-    assert client.delete(f"/api/research/threads/{v['thread_id']}").status_code == 200
-    assert client.get(f"/api/research/threads/{v['thread_id']}/images/{img['file']}").status_code == 404
+    assert client.delete(f"/api/research/threads/{tid}").status_code == 200
+    assert img["id"] in service.deleted and client.get(f"/api/research/threads/{tid}/images/{img['id']}").status_code == 404
 
 
-def _image(view: dict) -> dict:
-    return next(i["image"] for t in view["turns"] for i in t["items"] if i["type"] == "step" and i.get("image"))
+def test_image_route_when_the_service_is_down(monkeypatch):
+    rr = ResearchRunner(fake=True)
+    api_main.set_research_runner(rr)
+    client = TestClient(api_main.app)
+    v = new(client, "画一只猫")
+    img = next(i["image"] for t in v["turns"] for i in t["items"] if i["type"] == "step" and i.get("image"))
 
+    async def down(req):
+        return httpx.Response(502)
 
-def test_image_of_ignores_other_tools_and_broken_records():
-    assert history.image_of(ToolMessage(content="", tool_call_id="a", name="read_page", artifact={"image": {"id": "x"}})) is None
-    assert history.image_of(ToolMessage(content="", tool_call_id="a", name="generate_image", artifact={"image": {"id": "x"}})) is None
-    assert history.image_of(ToolMessage(content="", tool_call_id="a", name="generate_image", artifact=None)) is None
+    monkeypatch.setattr(rr.planner.images, "handle", down)
+    rr.images = rr.planner.images.gateway_client()  # 新的客户端用换掉的处理
+    assert client.get(f"/api/research/threads/{v['thread_id']}/images/{img['id']}").status_code == 502

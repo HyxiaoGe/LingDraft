@@ -42,7 +42,6 @@ from app.graph.research.memory import MemoryBook
 from app.graph.research.sources import SEPARATORS, SUBAGENT_TOOL, collect_sources, parse, search_hits
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Source, Turn
 from app.model_guard import ContentBlocked, Interrupted
-from app.tools.images import ImageStore
 
 TITLE_CHARS = 30  # 照 Fusion：标题超过这么长截掉；起标题失败时用用户原话的这么长
 TITLE_WAIT = 10  # 第一次调模型结束时标题还没起好，最多再等这么久（秒），再等不到用原话
@@ -65,9 +64,8 @@ async def _no_guide() -> HumanMessage | None:
 
 @dataclass(frozen=True)
 class ChatContext:
-    """一次运行的上下文（create_agent 的 context，不进检查点），工具从 runtime.context 拿。"""
+    """一次运行的上下文（create_agent 的 context，不进检查点），中间件从 runtime.context 拿。"""
 
-    images: ImageStore  # 画好的图存在哪儿
     take_guide: Callable[[], Awaitable[HumanMessage | None]] = _no_guide  # 取走用户插进这一轮的话（取一次就没了）；没有是 None
     # 上一次运行已经起好、页面上已经显示了，却没写进 state 的标题（那次第一次调模型出错了，出错的线程写不了 state）：这次直接用，不再起一个不一样的
     title: str | None = None
@@ -484,6 +482,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     # subagent、compaction 用到本模块的东西，放在这里导入（weather_mcp、web_mcp 用到 prompts，一起放这里）
     from app.graph.research.compaction import CompactionMiddleware, make_recall_tool
     from app.graph.research.subagent import make_task_tool
+    from app.tools.image_mcp import ImageMiddleware
     from app.tools.weather_mcp import WeatherMiddleware
     from app.tools.web_mcp import WebToolsMiddleware
 
@@ -501,6 +500,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
             ToolProgressMiddleware(),
             WeatherMiddleware(),  # 在 ToolProgressMiddleware 里面：过程记录看到的是整理好的天气结果
             WebToolsMiddleware(),  # 同上：搜索、读页的结果带上来源 id
+            ImageMiddleware(),  # 同上：画图每轮的上限、改图只认这段对话的图、卡片要的东西
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
             ModelCallCapMiddleware(),  # 在压缩里面：末尾加的说明不经过压缩
             InterruptedRetryMiddleware(),  # 最里面：只重发调模型这一下

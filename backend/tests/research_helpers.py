@@ -31,7 +31,7 @@ def flaky_runner(tmp_path, fail) -> ResearchRunner:
 
     p = FakeResearchPlanner()
     p._model = Flaky()
-    return ResearchRunner(planner=p, data_dir=tmp_path / "data")
+    return ResearchRunner(planner=p)
 
 
 def gated_runner(tmp_path, when) -> tuple[ResearchRunner, threading.Event]:
@@ -46,7 +46,7 @@ def gated_runner(tmp_path, when) -> tuple[ResearchRunner, threading.Event]:
 
     p = FakeResearchPlanner()
     p._model = Gated()
-    return ResearchRunner(planner=p, data_dir=tmp_path / "data"), gate
+    return ResearchRunner(planner=p), gate
 
 
 def after_tool(name: str):

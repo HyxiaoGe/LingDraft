@@ -1,4 +1,4 @@
-// 画的图：generate_image 的结果（image-service，见 app/tools/images.py），照 Fusion 的图片卡片（GeneratedImages.tsx）：
+// 画的图：generate_image 的结果（图存在 image-service 里，后端按编号取，见 app/tools/image_mcp.py），照 Fusion 的图片卡片（GeneratedImages.tsx）：
 // 生成中按要的比例占好位置，出图后原位淡入；卡片下写明哪个模型画的，可以看描述、下载、再画一张，点图看大图。
 // 占位没照搬 Fusion 的点阵：灰底上一道斜光扫过，中间写正在生成和用了几秒（2026-10-31 Sean 定）
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -32,7 +32,8 @@ export function imagesOf(items) {
   return calls.filter((s, k) => s.image || s.pending || k === calls.length - 1);
 }
 
-export const imageUrl = (tid, img) => `/api/research/threads/${encodeURIComponent(tid)}/images/${img.file}`;
+export const imageUrl = (tid, img) => `/api/research/threads/${encodeURIComponent(tid)}/images/${encodeURIComponent(img.id)}`;
+const EXTENSIONS = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
 
 function ratioOf(text) {
   const m = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(text || "");
@@ -64,7 +65,8 @@ export function ImageCards({ steps, tid, running, onRegenerate }) {
   if (!steps.length) return null;
   return (
     <div className="ws-images">
-      {steps.map((s) => (s.image
+      {/* 画成了却带着说明的：以前的图已经不在了（见 history.IMAGE_GONE），照没画成的样子说一声 */}
+      {steps.map((s) => (s.image && !s.message
         ? <ImageCard key={s.id} img={s.image} src={imageUrl(tid, s.image)} onOpen={(back) => setViewing({ img: s.image, back })} onRegenerate={onRegenerate} />
         : <PendingCard key={s.id} s={s} running={running} />))}
       {viewing && <Viewer img={viewing.img} src={imageUrl(tid, viewing.img)} onClose={() => { viewing.back?.focus(); setViewing(null); }} />}
@@ -124,7 +126,7 @@ function ImageCard({ img, src, onOpen, onRegenerate }) {
         <div className="row">
           <span className="by">{model ? `本次生图由 ${model} 提供` : ""}</span>
           <button className="ws-image-act text" aria-expanded={promptOpen} onClick={() => setPromptOpen(!promptOpen)}>{promptOpen ? "收起描述" : "查看描述"}</button>
-          <a className="ws-image-act" href={src} download={`lingdraft-image-${img.id.slice(0, 8)}.${img.file.split(".").pop()}`} aria-label="下载" title="下载">
+          <a className="ws-image-act" href={src} download={`lingdraft-image-${img.id.slice(0, 8)}.${EXTENSIONS[img.mime_type] || "png"}`} aria-label="下载" title="下载">
             <IconDownload size={14} />
           </a>
           {onRegenerate && (
