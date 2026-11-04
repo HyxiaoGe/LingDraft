@@ -23,7 +23,7 @@ from app.research_llm import FAKE_IMAGE_FILTERED, FakeImageService, FakeResearch
 from app.tools import image_mcp
 from app.tools.gateway import GatewayAuthError
 from app.tools.image_mcp import ImageMiddleware, ImageTool, attempts_before, gateway_target, placeholder
-from tests.research_helpers import new
+from tests.research_helpers import after_tool, events, gated_runner, new, say, state, wait_until
 from tests.test_research import Chat, _answered, _kinds
 
 SHOWN = prompts.render("tools.generate_image.shown")
@@ -361,13 +361,33 @@ def test_image_route():
     assert r.status_code == 200 and r.headers["content-type"] == "image/png" and r.content.startswith(b"\x89PNG")
     assert r.headers["x-content-type-options"] == "nosniff" and "immutable" in r.headers["cache-control"]
     service = rr.planner.images
-    other = service.made.setdefault(str(uuid.uuid4()), service.made[img["id"]])  # 服务里有，但不是这段对话的
-    assert other
-    for path in (f"other/images/{img['id']}", f"{tid}/images/{str(uuid.uuid4())}", f"{tid}/images/{next(k for k in service.made if k != img['id'])}",
-                 f"{tid}/images/..%2Fx", f"bad%20id/images/{img['id']}"):
+    # 服务里没有的、以前灵稿自己存的（编号不是 uuid）、编号格式不对、线程 id 格式不对
+    for path in (f"{tid}/images/{uuid.uuid4()}", f"{tid}/images/0123456789ab", f"{tid}/images/..%2Fx", f"bad%20id/images/{img['id']}"):
         assert client.get(f"/api/research/threads/{path}").status_code == 404, path
     assert client.delete(f"/api/research/threads/{tid}").status_code == 200
     assert img["id"] in service.deleted and client.get(f"/api/research/threads/{tid}/images/{img['id']}").status_code == 404
+
+
+def test_image_shows_while_the_turn_is_still_running():
+    """图画好、页面马上来取，这时模型还在写回复，检查点里还没有这张图（运行结束才写）：照样取得到。
+    2026-11-04 上线后 dev 上踩到：页面取图回 404，显示图片加载失败。"""
+    rr, gate = gated_runner(None, after_tool("generate_image"))  # 停在画完图、写回复之前
+    api_main.set_research_runner(rr)
+    client = TestClient(api_main.app)
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    done: dict = {}
+    t = threading.Thread(target=lambda: done.setdefault("resp", say(client, tid, "画一只猫")))
+    t.start()
+    try:
+        assert wait_until(lambda: rr.planner.images.made and state(client, tid)["status"] == "running")
+        (iid,) = rr.planner.images.made
+        assert not any(history.image_of(m) for m in rr.graph.get_state(rr._cfg(tid)).values["messages"])  # 检查点里还没有
+        r = client.get(f"/api/research/threads/{tid}/images/{iid}")
+        assert r.status_code == 200 and r.content.startswith(b"\x89PNG")
+    finally:
+        gate.set()
+        t.join(30)
+    events(done["resp"])
 
 
 def test_image_route_when_the_service_is_down(monkeypatch):

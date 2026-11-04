@@ -67,7 +67,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 - 查看：
   - `GET /{id}/state`：当前状态。
   - `GET /{id}/events?after=<事件 id>`：断线、刷新后接上事件流。
-  - `GET /{id}/images/{image_id}`：对话里画的图，后端经网关从 image-service 取来转给页面；不是这段对话的图、服务里已经没有的返回 404，网关、服务出问题返回 502。
+  - `GET /{id}/images/{image_id}`：对话里画的图，后端经网关从 image-service 取来转给页面。这一轮还在跑、图刚画好时页面就来取，那时检查点里还没有它，所以不查图是不是这段对话的（服务只给灵稿的图，编号是随机的 uuid）。编号格式不对、服务里已经没有的返回 404，网关、服务出问题返回 502。
   - `GET /{id}/runs` 和 `GET /api/research/runs`：运行记录，见下面的“运行记录”。
   - `GET /api/memory`：长期记忆，只能看。
 
