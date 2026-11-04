@@ -4,6 +4,7 @@
 同一个网址在整条线程里永远是同一个 id：并行的几次搜索各自算，也对得上。
 搜索结果有两种样子（search_hits 两种都认）：11-05 起是搜索服务的结果（{"ok": true, "query", "results": [...]}，每条带 id、
 title、url、snippet、published_at），之前存下的是一串条目（每条带 id、title、url、description、content、published_at）。
+查文档（Context7 的 query-docs）的每段文档按它的出处算一个来源，带来源的那几段记在结果的 artifact 里（见 doc_snippets、app.tools.docs_mcp）。
 子 agent 的搜索、读页结果在 task 工具结果的 artifact 里（见 subagent_messages），也算这条线程的来源。
 """
 
@@ -21,6 +22,8 @@ from langchain_core.messages import BaseMessage, ToolMessage, messages_from_dict
 from app.graph.research.state import Source
 
 SUBAGENT_TOOL = "task"  # 主 agent 派子 agent 的工具（见 app.graph.research.subagent）
+LIBRARY_TOOL = "resolve-library-id"  # 查文档前先按库名找库（Context7，见 app.tools.docs_mcp）
+DOCS_TOOL = "query-docs"  # 查文档（Context7，见 app.tools.docs_mcp）
 EXCERPT_CHARS = 400  # 来源卡上显示的原文开头；模型自己看的是完整的工具结果
 SEPARATORS = (",", ":")  # 搜索、读页的结果给模型的 JSON 不带空格（照搜索、读页服务给的，省 token）
 SOURCE_ID = re.compile(r"\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\]")  # 正文里的引用：[s3fa9c1]
@@ -89,6 +92,12 @@ def hit_text(hit: dict) -> str:
     return str(hit.get("snippet") or hit.get("content") or hit.get("description") or "")
 
 
+def doc_snippets(m: BaseMessage) -> list[dict]:
+    """一条查文档结果里带来源的那几段（artifact 里，每段有 id、url、title、content，见 app.tools.docs_mcp）。别的消息、没有的是空的。"""
+    art = m.artifact if isinstance(m, ToolMessage) and m.name == DOCS_TOOL and isinstance(m.artifact, dict) else {}
+    return [s for s in art.get("snippets") or [] if isinstance(s, dict) and s.get("id") and s.get("url")]
+
+
 def subagent_messages(m: BaseMessage) -> list[BaseMessage]:
     """一条 task 工具结果里带着的子 agent 的整段消息（artifact 里，模型看不到；存的是 messages_to_dict）。别的消息、没带的是空的。"""
     art = m.artifact if isinstance(m, ToolMessage) and m.name == SUBAGENT_TOOL else None
@@ -111,7 +120,8 @@ def flatten(messages: list[BaseMessage]) -> list[BaseMessage]:
 
 
 def collect_sources(messages: list[BaseMessage]) -> list[Source]:
-    """按第一次出现的先后列出所有来源，子 agent 查到的也算。读到正文的来源用正文开头替换搜索摘要。"""
+    """按第一次出现的先后列出所有来源，子 agent 查到的也算。读到正文的来源用正文开头替换搜索摘要。
+    查文档查到的用第一段文档替换搜索摘要（同一页的几段只取第一段），读到正文的不换。"""
     by_id: dict[str, Source] = {}
     for m in flatten(messages):
         if not isinstance(m, ToolMessage) or m.status == "error":
@@ -125,6 +135,14 @@ def collect_sources(messages: list[BaseMessage]) -> list[Source]:
                     continue
                 by_id[sid] = Source(id=sid, url=url, title=hit.get("title") or "", retrieved_at=when, published_at=hit.get("published_at"),
                                     excerpt=hit_text(hit)[:EXCERPT_CHARS])
+        elif m.name == DOCS_TOOL:
+            for s in doc_snippets(m):
+                old = by_id.get(s["id"])
+                if old is not None and old.excerpt_kind != "summary":
+                    continue
+                excerpt = {"excerpt": str(s.get("content") or "")[:EXCERPT_CHARS], "excerpt_kind": "docs"}
+                by_id[s["id"]] = (Source(id=s["id"], url=s["url"], title=s.get("title") or "", retrieved_at=when, **excerpt) if old is None
+                                  else old.model_copy(update={**excerpt, "title": old.title or s.get("title") or ""}))
         elif m.name == "read_page" and isinstance(data, dict) and data.get("ok") and data.get("id"):
             content = data.get("content") or ""
             if not content.strip():  # 没有正文不算读到，不能拿空串顶掉搜索摘要
@@ -136,7 +154,7 @@ def collect_sources(messages: list[BaseMessage]) -> list[Source]:
 
 
 def known_ids(messages: list[BaseMessage]) -> dict[str, str]:
-    """之前的工具结果里出现过的 {url_key: id}，给新的搜索、读页结果编 id 用。"""
+    """之前的工具结果里出现过的 {url_key: id}，给新的搜索、读页、查文档结果编 id 用。"""
     return {url_key(s.url): s.id for s in collect_sources(messages)}
 
 

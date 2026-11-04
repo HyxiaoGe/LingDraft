@@ -67,7 +67,7 @@ def test_planner_has_weather_only_after_connecting():
     p = FakeResearchPlanner()
     assert WEATHER_TOOL not in [t.name for t in p.tools()]
     aio.run(p.connect_tools())
-    assert [t.name for t in p.tools()][-1] == WEATHER_TOOL
+    assert [t.name for t in p.tools()][-3:] == [WEATHER_TOOL, "resolve-library-id", "query-docs"]  # 查文档也是连上才带，排在天气后面
 
 
 # ---- 经网关调（HTTP） ----

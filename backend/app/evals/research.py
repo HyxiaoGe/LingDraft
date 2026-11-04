@@ -26,8 +26,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.graph.research import history
 from app.graph.research.graph import memory_checkpointer
-from app.graph.research.sources import SOURCE_ID, SUBAGENT_TOOL, cited, flatten, hit_text, parse, search_hits, url_key
+from app.graph.research.sources import DOCS_TOOL, SOURCE_ID, SUBAGENT_TOOL, cited, doc_snippets, flatten, hit_text, parse, search_hits, url_key
 from app.prompting import PromptFile
+from app.tools.docs_mcp import DOCS_TOOLS
 from app.tools.flyai_mcp import FLIGHT_TOOL, TRAIN_TOOL
 from app.tools.maps_mcp import PLACE_TOOL, ROUTE_TOOL
 from app.tools.research_tools import TIME_TOOL
@@ -38,7 +39,7 @@ CASES_FILE = BACKEND / "evals" / "research" / "cases.yaml"
 RESULTS_DIR = BACKEND / "data" / "evals"
 PROMPTS = PromptFile(Path(__file__).with_name("prompts.toml"))
 # 去外面查东西的工具：主 agent 调了其中任一个就算这一轮查过（取当前时间、recall 不算）
-LOOKUP_TOOLS = {"search_web", "read_page", WEATHER_TOOL, PLACE_TOOL, ROUTE_TOOL, FLIGHT_TOOL, TRAIN_TOOL, SUBAGENT_TOOL}
+LOOKUP_TOOLS = {"search_web", "read_page", WEATHER_TOOL, PLACE_TOOL, ROUTE_TOOL, FLIGHT_TOOL, TRAIN_TOOL, SUBAGENT_TOOL, *DOCS_TOOLS}
 EVIDENCE_CHARS = 10000  # 每个来源给裁判看的材料上限（读页本身截到 8000 字，再加上搜索摘要）
 
 
@@ -88,7 +89,7 @@ def _code(m: ToolMessage, data: Any) -> str | None:
 
 def material(messages: list[BaseMessage]) -> dict:
     """从对话消息里取出 agent 看到的材料，子 agent 查到的也算：搜了什么（成功的、没成的）、读了什么，
-    每个网址看到的文字（搜索摘要、读到的正文），裁判按它核对引用。"""
+    每个网址看到的文字（搜索摘要、读到的正文、查文档查到的那几段），裁判按它核对引用。"""
     flat = flatten(messages)
     args = {tc["id"]: tc.get("args") or {} for m in flat if isinstance(m, AIMessage) for tc in m.tool_calls}
     out: dict[str, Any] = {"searches": [], "failed_searches": [], "reads": [], "evidence": {}}
@@ -98,6 +99,10 @@ def material(messages: list[BaseMessage]) -> dict:
             seen.append(text)
 
     for m in flat:
+        if isinstance(m, ToolMessage) and m.name == DOCS_TOOL and not history.not_run(m):
+            for s in doc_snippets(m):
+                keep(s["url"], f"{s.get('title') or ''}\n{s.get('content') or ''}".strip())
+            continue
         if not isinstance(m, ToolMessage) or m.name not in ("search_web", "read_page") or history.not_run(m):
             continue
         a, data = args.get(m.tool_call_id, {}), parse(m)

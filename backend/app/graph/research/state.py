@@ -34,8 +34,8 @@ class Source(BaseModel):
     title: str = ""
     retrieved_at: str = ""
     published_at: str | None = None
-    excerpt: str = Field(default="", description="原文开头；读不到正文时是搜索摘要")
-    excerpt_kind: Literal["body", "summary"] = "summary"
+    excerpt: str = Field(default="", description="原文开头；没读正文、查文档查到过的是第一段文档；都没有的是搜索摘要")
+    excerpt_kind: Literal["body", "summary", "docs"] = "summary"
 
     @field_validator("title")
     @classmethod
@@ -247,11 +247,12 @@ class ToolStep(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     id: str = Field(description="工具调用 id；页面据此把实时进度和存下来的记录对上")
-    kind: Literal["search", "read", "weather", "place", "route", "flight", "train", "itinerary", "image", "task"]
-    text: str = Field(description="搜索词 / 网址 / 地名 / 查地点的关键词 / 路线、航班、火车的起终点 / 行程方案的标题 / 画图的描述 / 子任务的标题")
-    limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制；查地点在哪查；比路线比哪几种方式；航班、火车的日期和条件")
+    kind: Literal["search", "read", "weather", "place", "route", "flight", "train", "itinerary", "image", "task", "library", "docs"]
+    text: str = Field(description="搜索词 / 网址 / 地名 / 查地点的关键词 / 路线、航班、火车的起终点 / 行程方案的标题 / 画图的描述 / 子任务的标题"
+                                  " / 找的库名 / 查文档的问题")
+    limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制；查地点在哪查；比路线比哪几种方式；航班、火车的日期和条件；查的是哪个库")
     ok: bool = True
-    hits: int = 0  # 搜索返回的条数
+    hits: int = 0  # 搜索返回的条数；找到的候选库、查到的文档段数
     body: bool = False  # 读页读到了正文
     title: str = ""  # 读到的页面标题；查天气时是和风的地名
     source_ids: list[str] = Field(default_factory=list, description="这一步得到的来源")
@@ -287,6 +288,7 @@ class Usage(BaseModel):
     weather: int = 0  # 查天气的次数
     maps: int = 0  # 查地点、比路线的次数
     travel: int = 0  # 查航班、火车的次数
+    docs: int = 0  # 找库、查文档的次数（Context7 按这两个工具的调用算额度）
     images: int = 0  # 画成的图（画新图和改图都算）
     subagents: int = 0  # 派出去的子 agent（真跑了的）
 

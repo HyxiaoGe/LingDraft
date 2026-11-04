@@ -39,7 +39,7 @@ from langgraph.types import Command
 
 from app.graph.research import history, prompts
 from app.graph.research.memory import MemoryBook
-from app.graph.research.sources import SEPARATORS, SUBAGENT_TOOL, collect_sources, parse, search_hits
+from app.graph.research.sources import DOCS_TOOL, SEPARATORS, SUBAGENT_TOOL, collect_sources, parse, search_hits
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Source, Turn
 from app.model_guard import ContentBlocked, Interrupted
 
@@ -212,10 +212,13 @@ def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list
     return out
 
 
+EXCERPT_FROM = {"body": "page", "docs": "documentation", "summary": "search"}  # 来源卡上那段开头是从哪来的（给模型看的说法）
+
+
 def found_sources_brief(found: list[Source]) -> str:
     """没交回报告的子 agent（用户点了停止、出错了）已经查到的来源，给主 agent 看的：只有来源卡上的内容（标题、网址、开头一段），读过的整页正文不给。"""
     return json.dumps([{"id": s.id, "title": s.title, "url": s.url, **({"published_at": s.published_at} if s.published_at else {}),
-                        "excerpt_from": "page" if s.excerpt_kind == "body" else "search", "excerpt": s.excerpt} for s in found],
+                        "excerpt_from": EXCERPT_FROM[s.excerpt_kind], "excerpt": s.excerpt} for s in found],
                       ensure_ascii=False)
 
 
@@ -340,12 +343,16 @@ class InvalidToolCallRetryMiddleware(AgentMiddleware[_RetryState]):
         return {"messages": errors, "jump_to": "model", "invalid_retries": n + 1}
 
 
-MATERIAL_TOOLS = ("search_web", "read_page")
+MATERIAL_TOOLS = ("search_web", "read_page", DOCS_TOOL)
 
 
 def _withdrawn(m: ToolMessage) -> ToolMessage:
-    """整条结果去掉：搜索按搜索失败的样子（status=error），读页按读页失败的样子（ok=false），同一个 id 覆盖原来的。"""
+    """整条结果去掉：搜索按搜索失败的样子（status=error），读页按读页失败的样子（ok=false），同一个 id 覆盖原来的。
+    查文档按没做成的样子（status=error），带来源的那几段也去掉（页面上的来源从那里取，见 sources.doc_snippets）。"""
     note = prompts.render("agent.material_blocked")
+    if m.name == DOCS_TOOL:
+        art = {k: v for k, v in (m.artifact if isinstance(m.artifact, dict) else {}).items() if k != "snippets"}
+        return m.model_copy(update={"content": note, "status": "error", "artifact": {**art, "error": {"code": "content_blocked"}}})
     if m.name == "search_web":
         body = {"ok": False, "kind": "content_blocked", "message": note, "retryable": False}
         return m.model_copy(update={"content": json.dumps(body, ensure_ascii=False), "status": "error"})
@@ -479,9 +486,10 @@ async def memory_text(memory: MemoryBook | None) -> str:
 
 
 def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook | None = None):
-    # subagent、compaction 用到本模块的东西，放在这里导入（weather_mcp、web_mcp、maps_mcp、flyai_mcp 用到 prompts，一起放这里）
+    # subagent、compaction 用到本模块的东西，放在这里导入（weather_mcp、web_mcp、maps_mcp、flyai_mcp、docs_mcp 用到 prompts，一起放这里）
     from app.graph.research.compaction import CompactionMiddleware, make_recall_tool
     from app.graph.research.subagent import make_task_tool
+    from app.tools.docs_mcp import DocsMiddleware
     from app.tools.flyai_mcp import TravelMiddleware, itinerary_tool
     from app.tools.image_mcp import ImageMiddleware
     from app.tools.maps_mcp import MapsMiddleware
@@ -505,6 +513,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
             TravelMiddleware(),  # 同上：航班火车的结果、每轮的次数、排行程；在 MapsMiddleware 外面：车站城市不对的比路线不交给地图
             MapsMiddleware(),  # 同上：查地点、比路线的结果（地点卡、路线卡要的在 artifact 里）
             WebToolsMiddleware(),  # 同上：搜索、读页的结果带上来源 id
+            DocsMiddleware(),  # 同上：查文档的每段带上来源 id（带来源的那几段在 artifact 里）
             ImageMiddleware(),  # 同上：画图每轮的上限、改图只认这段对话的图、卡片要的东西
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
             ModelCallCapMiddleware(),  # 在压缩里面：末尾加的说明不经过压缩

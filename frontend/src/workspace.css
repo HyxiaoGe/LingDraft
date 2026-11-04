@@ -182,7 +182,7 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-reply { font-size: 15px; line-height: 1.8; color: var(--ink); overflow-wrap: anywhere; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
-.md p, .md ul, .md ol, .md blockquote, .md .md-table { margin: 0 0 10px; }
+.md p, .md ul, .md ol, .md blockquote, .md .md-table, .md pre { margin: 0 0 10px; }
 .md h3, .md h4, .md h5, .md h6 { font-weight: 600; margin: 16px 0 6px; line-height: 1.5; }
 .md h3 { font-size: 16px; }
 .md h4, .md h5, .md h6 { font-size: 14.5px; }
@@ -193,6 +193,8 @@ button.ws-proc-head:hover { color: var(--ink); }
 .md-nobr { white-space: nowrap; }
 .md blockquote { border-left: 3px solid var(--line2); padding: 0 0 0 12px; color: var(--ink2); }
 .md code { font: 12.5px/1.5 ui-monospace, Menlo, monospace; background: var(--hover); border-radius: 4px; padding: 1px 5px; }
+.md pre { background: var(--side); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; overflow-x: auto; }
+.md pre code { background: none; border-radius: 0; padding: 0; white-space: pre; line-height: 1.6; }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
 .md .md-table { overflow-x: auto; }
 .md table { border-collapse: collapse; font-size: 13px; line-height: 1.6; min-width: 100%; }
