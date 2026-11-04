@@ -7,7 +7,8 @@ import { IconChevron, IconExternal, IconPin, IconRoute } from "./icons.jsx";
 import { stamp } from "./research.js";
 
 const PROVIDERS = { amap: "高德地图", tmap: "腾讯地图" };
-export const MODES = { driving: "驾车", transit: "公交", walking: "步行", bicycling: "骑行" };
+// transit 是公共交通：地铁、公交都算，不只是公交车
+export const MODES = { driving: "驾车", transit: "公共交通", walking: "步行", bicycling: "骑行" };
 const LEG_KINDS = { walking: "步行", subway: "地铁", bus: "公交", other: "乘车" };
 
 // 这一轮的地点卡、路线卡，按出现的先后；同样的查了几次，位置按第一次、内容用最后一次。查到 0 个地方的不画卡片（过程里写了没找到）

@@ -206,7 +206,7 @@ def test_route_step_turns_the_result_into_a_route_card():
     tool = _connected(ROUTE_TOOL).tool
     call = _route(modes=["driving", "transit", "bicycling"], requested_departure_time="明早八点")
     pending = history.step_of(call, None)
-    assert (pending.kind, pending.text, pending.limits) == ("route", "虹桥火车站 → 外滩", ["驾车", "公交", "骑行"])
+    assert (pending.kind, pending.text, pending.limits) == ("route", "虹桥火车站 → 外滩", ["驾车", "公共交通", "骑行"])
     plan = history.step_of(call, _ask(tool, call)).routes
     assert (plan.origin, plan.destination, plan.departure_time, plan.unavailable_modes) == ("虹桥火车站", "外滩", "明早八点", ["bicycling"])
     driving, transit = plan.routes
