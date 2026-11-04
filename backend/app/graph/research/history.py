@@ -16,6 +16,7 @@ from app.graph.research.sources import SUBAGENT_TOOL, collect_sources, parse, se
 from app.graph.research.state import (
     Forecast,
     GeneratedImage,
+    Itinerary,
     Place,
     PlaceList,
     Route,
@@ -23,6 +24,9 @@ from app.graph.research.state import (
     RoutePlan,
     ToolStep,
     TransitPlan,
+    TravelList,
+    TravelService,
+    TravelStop,
     Usage,
     WeatherDay,
     WeatherHour,
@@ -33,8 +37,11 @@ STOPPED = "lingdraft_stopped"  # 用户点了停止时，已经流出来的那�
 GUIDE = "lingdraft_guide"  # 用户插进正在跑的这一轮的话：这条用户消息 additional_kwargs 里的键（见 agent.TurnMiddleware.abefore_model）
 IMAGE_TOOL = "generate_image"
 PLACE_TOOL, ROUTE_TOOL = "place_search", "route_compare"  # 地图的两个工具（见 app.tools.maps_mcp）
+FLIGHT_TOOL, TRAIN_TOOL = "search_flights", "search_trains"  # flyai 的两个工具（见 app.tools.flyai_mcp）
+ITINERARY_TOOL = "present_itinerary"  # 灵稿自己的排行程（见 app.tools.flyai_mcp）
+TRAVEL_KINDS = {FLIGHT_TOOL: "flight", TRAIN_TOOL: "train"}
 STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", PLACE_TOOL: "place", ROUTE_TOOL: "route",
-              IMAGE_TOOL: "image", SUBAGENT_TOOL: "task"}
+              **TRAVEL_KINDS, ITINERARY_TOOL: "itinerary", IMAGE_TOOL: "image", SUBAGENT_TOOL: "task"}
 BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
 # 没画成的原因在页面上的说法（照 Fusion 的图片卡片），没列的都说“图片生成失败”
 IMAGE_FAILURES = {
@@ -166,6 +173,10 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         text, extra = str(args.get("query", "")), {"limits": place_limits(args)}
     elif kind == "route":
         text, extra = f"{_endpoint(args.get('origin'))} → {_endpoint(args.get('destination'))}", {"limits": route_limits(args)}
+    elif kind in ("flight", "train"):
+        text, extra = f"{_text(args.get('origin'))} → {_text(args.get('destination'))}", {"limits": travel_limits(args)}
+    elif kind == "itinerary":
+        text, extra = _text(args.get("title")), {}
     else:
         text, extra = str(args.get("url" if kind == "read" else "location", "")), {}
     if result is None:
@@ -178,6 +189,10 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         return _task_step(cid, text, extra, result)
     if kind in ("place", "route"):
         return _maps_step(kind, cid, text, extra, result)
+    if kind in ("flight", "train"):
+        return _travel_step(kind, cid, text, extra, result)
+    if kind == "itinerary":
+        return _itinerary_step(cid, text, result)
     data = parse(result)
     if kind == "weather":
         return _weather_step(cid, text, data, result)
@@ -323,6 +338,7 @@ MAPS_FAILURES = {
     "unavailable": "地图服务暂时查不到",
     "timeout": "地图查询超时了",
     "tool_error": "地图没调成",
+    "station_city": "车站所在的城市没填对，没去查",  # 灵稿自己核对的（见 flyai_mcp.check_route_stations），模型会改了再查
 }
 MAPS_FAILED = "地图服务暂时查不到"
 
@@ -416,6 +432,104 @@ def _maps_step(kind: str, cid: str, text: str, extra: dict, result: ToolMessage)
     return ToolStep(id=cid, kind=kind, text=text, ok=False, message=message, **extra)
 
 
+# ---- 航班、火车（flyai 的 search_flights、search_trains）和排好的行程（present_itinerary），见 app.tools.flyai_mcp ----
+
+CABIN_NAMES = {"economy": "经济舱", "premium_economy": "超级经济舱", "business": "公务舱", "first": "头等舱"}
+SEAT_NAMES = {"second_class": "二等座", "first_class": "一等座", "business_class": "商务座", "premium_class": "特等座", "hard_seat": "硬座",
+              "soft_seat": "软座", "hard_sleeper": "硬卧", "soft_sleeper": "软卧", "no_seat": "无座"}
+# flyai 的错误码（见 agent-tools 的 services/flyai/README.md）→ 页面上的说法；给模型的说明是服务给的英文。
+# unavailable、quota_exhausted、turn_limit 是灵稿自己回的（服务没连上、网关今天的上限到了、这一轮查的次数到了）
+TRAVEL_FAILURES = {
+    "invalid_arguments": "查询的条件不对",
+    "origin_not_recognized": "飞猪认不出出发地",
+    "destination_not_recognized": "飞猪认不出目的地",
+    "no_services": "没查到符合条件的直达班次",
+    "provider_no_result": "飞猪没查到直达班次",
+    "busy": "查询的人多，没排上",
+    "timeout": "查询超时了",
+    "unavailable": "航班火车暂时查不到",
+    "quota_exhausted": "航班火车今天的额度用完了",
+    "turn_limit": "这一轮查的次数到上限了",
+    "tool_error": "查询的条件不对",
+}
+TRAVEL_FAILED = "航班火车暂时查不到"
+ITINERARY_FAILED = "行程方案没排成"
+
+
+def _date_text(value: Any) -> str:
+    try:
+        d = date.fromisoformat(_text(value))
+    except ValueError:
+        return _text(value)
+    return f"{d.month} 月 {d.day} 日"
+
+
+def travel_limits(args: dict) -> list[str]:
+    """查航班、火车的日期和条件，过程里写在起终点后面。"""
+    out = [_date_text(args.get("departure_date"))] if args.get("departure_date") else []
+    if args.get("train_category") == "high_speed":
+        out.append("只要高铁动车")
+    if cls := CABIN_NAMES.get(str(args.get("cabin_class"))) or SEAT_NAMES.get(str(args.get("seat_class"))):
+        out.append(cls)
+    after, before, arrive = args.get("departure_after_hour"), args.get("departure_before_hour"), args.get("arrival_before_hour")
+    if after is not None and before is not None:
+        out.append(f"{after} 点到 {before} 点出发")
+    elif after is not None:
+        out.append(f"{after} 点后出发")
+    elif before is not None:
+        out.append(f"{before} 点前出发")
+    if arrive is not None:
+        out.append(f"{arrive} 点前到")
+    if args.get("max_price_yuan") is not None:
+        out.append(f"{args['max_price_yuan']} 元以内")
+    return out
+
+
+def _stop(raw: dict) -> TravelStop:
+    return TravelStop(city=raw["city"], station=raw["station"], terminal=_text(raw.get("terminal")), time=raw["time"])
+
+
+def service_of(s: dict) -> TravelService:
+    """flyai 结果里的一个班次换成卡片要的样子。字段不对抛 ValidationError、KeyError、TypeError。"""
+    return TravelService(option_id=s["option_id"], number=s["number"], carrier=_text(s.get("airline") or s.get("train_type")),
+                         departure=_stop(s["departure"]), arrival=_stop(s["arrival"]), day_offset=s["arrival"].get("day_offset") or 0,
+                         duration_minutes=s["duration_minutes"], travel_class=_text(s.get("travel_class")), price_yuan=s.get("price_yuan"),
+                         booking_url=_text(s.get("booking_url")))
+
+
+def travel_of(kind: str, data: dict) -> TravelList:
+    """search_flights、search_trains 的整份结果（MCP 的 structuredContent）换成航班卡、火车卡要的样子。字段不对抛 ValidationError、KeyError、TypeError。"""
+    q = data.get("query") if isinstance(data.get("query"), dict) else {}
+    return TravelList(kind=kind, origin=_text(q.get("origin")), destination=_text(q.get("destination")), date=_text(q.get("departure_date")),
+                      services=[service_of(s) for s in data["services"]], limitations=[str(x) for x in data.get("limitations") or []],
+                      observed_at=_text(data.get("observed_at")))
+
+
+def _travel_step(kind: str, cid: str, text: str, extra: dict, result: ToolMessage) -> ToolStep:
+    """整份结果在 artifact 的 structured_content 里（见 flyai_mcp.TravelMiddleware）。"""
+    art = result.artifact if isinstance(result.artifact, dict) else {}
+    sc = art.get("structured_content")
+    if isinstance(sc, dict) and sc.get("ok") is True and result.status != "error":
+        try:
+            return ToolStep(id=cid, kind=kind, text=text, travel=travel_of(kind, sc), **extra)
+        except (ValidationError, KeyError, TypeError):
+            return ToolStep(id=cid, kind=kind, text=text, ok=False, message="查到的结果格式不对", **extra)
+    err = sc.get("error") if isinstance(sc, dict) else None
+    code = err.get("code") if isinstance(err, dict) else None
+    return ToolStep(id=cid, kind=kind, text=text, ok=False, message=TRAVEL_FAILURES.get(code, TRAVEL_FAILED), **extra)
+
+
+def _itinerary_step(cid: str, text: str, result: ToolMessage) -> ToolStep:
+    """排好的在 artifact 的 itinerary 里；没排成（编号不对、排过了）的模型会改了再排，过程里照实写没排成。"""
+    art = result.artifact if isinstance(result.artifact, dict) else {}
+    if result.status != "error" and art.get("itinerary"):
+        try:
+            return ToolStep(id=cid, kind="itinerary", text=text, itinerary=Itinerary.model_validate(art["itinerary"]))
+        except ValidationError:
+            pass
+    return ToolStep(id=cid, kind="itinerary", text=text, ok=False, message=ITINERARY_FAILED)
+
+
 def image_of(m: BaseMessage) -> GeneratedImage | None:
     """一条生图结果里画好的图；没画成是 None。图的信息在 artifact 里（见 image_mcp.ImageMiddleware）。"""
     art = m.artifact if isinstance(m, ToolMessage) and m.name == IMAGE_TOOL else None
@@ -465,7 +579,7 @@ def usage_of(messages: list[BaseMessage]) -> Usage:
             u.output_tokens += meta.get("output_tokens") or 0
             u.cached_tokens += (meta.get("input_token_details") or {}).get("cache_read") or 0
             u.reasoning_tokens += (meta.get("output_token_details") or {}).get("reasoning") or 0
-        elif isinstance(m, ToolMessage) and not_run(m):  # 没真执行的不算
+        elif isinstance(m, ToolMessage) and (not_run(m) or _refused(m)):  # 没真执行的不算
             continue
         elif isinstance(m, ToolMessage) and m.name == "search_web":
             u.searches += 1
@@ -475,11 +589,20 @@ def usage_of(messages: list[BaseMessage]) -> Usage:
             u.weather += 1
         elif isinstance(m, ToolMessage) and m.name in (PLACE_TOOL, ROUTE_TOOL):
             u.maps += 1
+        elif isinstance(m, ToolMessage) and m.name in TRAVEL_KINDS:
+            u.travel += 1
         elif image_of(m):
             u.images += 1
         elif subagent_messages(m):
             u.subagents += 1
     return u
+
+
+def _refused(m: ToolMessage) -> bool:
+    """灵稿自己没交给服务的：比路线时车站城市没填对、这一轮查航班火车的次数到了（见 flyai_mcp）。"""
+    sc = m.artifact.get("structured_content") if isinstance(m.artifact, dict) else None
+    err = sc.get("error") if isinstance(sc, dict) else None
+    return isinstance(err, dict) and err.get("code") in ("station_city", "turn_limit")
 
 
 def subagent_usage(messages: list[BaseMessage]) -> Usage:

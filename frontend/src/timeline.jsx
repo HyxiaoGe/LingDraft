@@ -5,9 +5,10 @@
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
-import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconInsert, IconLoop, IconPage, IconPin, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconUndo, IconWarn, Spinner } from "./icons.jsx";
+import { IconArrowDown, IconArrowUp, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconInsert, IconLoop, IconPage, IconPin, IconPlane, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconUndo, IconWarn, Spinner } from "./icons.jsx";
 import { ImageCards, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
+import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
 import { Markdown } from "./markdown.jsx";
 import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Mark } from "./sources.jsx";
@@ -246,6 +247,8 @@ function Turn({ t, st, live, running, suggesting, stopping, last, now, act }) {
         {(running || rec) && <Process items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} />}
         {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
         {mapsOf(items).map((card) => <MapCard key={card.key} card={card} />)}
+        {travelOf(items).map((card) => <TravelCard key={card.key} card={card} />)}
+        {itinerariesOf(items).map((card) => <ItineraryCard key={card.key} card={card} />)}
         <ImageCards steps={imagesOf(items)} tid={st?.thread_id} running={running} onRegenerate={last && idle ? act.say : null} />
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
         {running && <LiveLine live={live} items={items} stopping={stopping} />}
@@ -572,7 +575,8 @@ function Thinking({ it, running, thinking }) {
 
 // 还没有结果的一步（pending）：这一轮在跑就是还在做；没在跑了（这一轮出错停在这一步）就是没做完，和子任务卡一样说
 function ToolRow({ s, running }) {
-  const Icon = { read: IconPage, weather: IconCloudSun, place: IconPin, route: IconRoute, image: IconImage }[s.kind] || IconSearch;
+  const Icon = { read: IconPage, weather: IconCloudSun, place: IconPin, route: IconRoute, flight: IconPlane, train: IconTrain, itinerary: IconTicket,
+    image: IconImage }[s.kind] || IconSearch;
   const busy = running && s.pending;
   let main, sub;
   let bad = !s.ok;
@@ -591,6 +595,13 @@ function ToolRow({ s, running }) {
     main = <>查路线「{s.text}」{s.limits.map((l) => <span key={l} className="lim">{l}</span>)}</>;
     const got = s.routes?.routes.map((r) => MODES[r.mode] || r.mode).join("、");
     sub = s.pending ? "计算中…" : s.routes ? (got ? `算出${got}` : "没算出来") : `没查成：${s.message || "出错了"}`;
+  } else if (s.kind === "flight" || s.kind === "train") {
+    main = <>{s.kind === "flight" ? "查航班" : "查火车"}「{s.text}」{s.limits.map((l) => <span key={l} className="lim">{l}</span>)}</>;
+    const n = s.travel?.services.length;
+    sub = s.pending ? "查询中…" : s.travel ? (n ? `${n} 个班次` : "没查到班次") : `没查成：${s.message || "出错了"}`;
+  } else if (s.kind === "itinerary") {
+    main = <>排行程「{s.text}」</>;
+    sub = s.pending ? "排列中…" : s.itinerary ? `${s.itinerary.plans.length} 个方案` : "没排成";
   } else if (s.kind === "image") {
     main = <>{s.edit ? "改图" : "画图"}「{s.text}」</>;
     sub = s.pending ? "生成中…" : s.image ? "已生成" : `没画成：${s.message || "出错了"}`;
@@ -637,6 +648,9 @@ const TIPS = {
   weather: TIPS_ANY,
   place: [...TIPS_ANY, "正在地图上一家家找", "地图翻到这一片了"],
   route: [...TIPS_ANY, "正在比哪条路快", "地图在算路线了"],
+  flight: [...TIPS_ANY, "正在一趟趟比航班", "机票价格正在赶来"],
+  train: [...TIPS_ANY, "正在翻列车时刻表", "车次一趟趟比着呢"],
+  itinerary: TIPS_ANY,
   image: [...TIPS_ANY, "正在一笔一笔地画", "画师正在构图", "颜料快调好了", "好图值得多等几秒"],
   task: [...TIPS_ANY, "几个帮手正分头查着呢", "分头行动中，等它们交回报告", "帮手们还在翻资料"],
 };
@@ -650,7 +664,7 @@ function LiveLine({ live, items, stopping }) {
   const pending = items.filter((i) => i.type === "step" && i.pending); // 并行的几步里先做完的排在后面也算还在等
   const streaming = lastItem?.live && (lastItem.type === "text" || (lastItem.type === "thinking" && lastItem.ms == null));
   const stage = stopping ? "正在停止…" : live?.stage || (pending.length || streaming ? null : PHASES[live?.phase] || "正在准备…");
-  const waitingFor = ["image", "task", "read", "search", "weather", "place", "route"].find((k) => pending.some((i) => i.kind === k)) || "model";
+  const waitingFor = ["image", "task", "read", "search", "weather", "place", "route", "flight", "train", "itinerary"].find((k) => pending.some((i) => i.kind === k)) || "model";
   // 子任务卡里有进展也算：子 agent 在搜、在写，主 agent 这边一直没动静
   const sub = pending.filter((i) => i.kind === "task").map((i) => `${i.items?.length ?? 0}.${i.items?.at(-1)?.text?.length ?? 0}.${i.phase}`).join(",");
   const tip = useTip(`${items.length}:${lastItem?.text?.length ?? 0}:${pending.length}:${live?.phase}:${stage}:${sub}`, stopping ? null : TIPS[waitingFor]);

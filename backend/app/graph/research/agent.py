@@ -479,16 +479,18 @@ async def memory_text(memory: MemoryBook | None) -> str:
 
 
 def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook | None = None):
-    # subagent、compaction 用到本模块的东西，放在这里导入（weather_mcp、web_mcp、maps_mcp 用到 prompts，一起放这里）
+    # subagent、compaction 用到本模块的东西，放在这里导入（weather_mcp、web_mcp、maps_mcp、flyai_mcp 用到 prompts，一起放这里）
     from app.graph.research.compaction import CompactionMiddleware, make_recall_tool
     from app.graph.research.subagent import make_task_tool
+    from app.tools.flyai_mcp import TravelMiddleware, itinerary_tool
     from app.tools.image_mcp import ImageMiddleware
     from app.tools.maps_mcp import MapsMiddleware
     from app.tools.weather_mcp import WeatherMiddleware
     from app.tools.web_mcp import WebToolsMiddleware
 
-    # recall 一直都在（工具列表变了前缀缓存整个断），只有压缩换成说明的内容才用得上；页面上不显示这一步
-    tools = [*planner.tools(), make_task_tool(planner), make_recall_tool()]
+    # recall 一直都在（工具列表变了前缀缓存整个断），只有压缩换成说明的内容才用得上；页面上不显示这一步。
+    # 排行程（present_itinerary）也一直在，查过航班火车才用得上
+    tools = [*planner.tools(), make_task_tool(planner), make_recall_tool(), itinerary_tool()]
     return create_agent(
         model=planner.agent_model(),
         tools=tools,
@@ -500,6 +502,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
             CompactionMiddleware(planner, tools, memory),  # 在 ContentGuard 里面：被内容审核停下的那几轮先去掉再压；用户插的话放进对话以后再估
             ToolProgressMiddleware(),
             WeatherMiddleware(),  # 在 ToolProgressMiddleware 里面：过程记录看到的是整理好的天气结果
+            TravelMiddleware(),  # 同上：航班火车的结果、每轮的次数、排行程；在 MapsMiddleware 外面：车站城市不对的比路线不交给地图
             MapsMiddleware(),  # 同上：查地点、比路线的结果（地点卡、路线卡要的在 artifact 里）
             WebToolsMiddleware(),  # 同上：搜索、读页的结果带上来源 id
             ImageMiddleware(),  # 同上：画图每轮的上限、改图只认这段对话的图、卡片要的东西

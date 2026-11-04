@@ -328,6 +328,33 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-legs li.walk { color: var(--muted); }
 .ws-legs .line { flex: none; font-weight: 600; color: var(--ink); }
 .ws-legs .what { min-width: 0; }
+
+/* 航班卡、火车卡、行程卡：标题一行照地图卡；一行一个班次，出发 — 用时、班次 — 到达，最右是价格、舱位座席、预订 */
+.ws-svcs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ws-svc { display: grid; grid-template-columns: minmax(0, 9em) minmax(5em, 1fr) minmax(0, 9em) 6.5em; align-items: center; gap: 0 12px;
+  padding: 10px 0; border-top: 1px solid var(--line); }
+.ws-svc:first-child { border-top: 0; padding-top: 2px; }
+.ws-svc:last-child { padding-bottom: 0; }
+.ws-svc .end { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.ws-svc .end.arr { text-align: right; }
+.ws-svc .t { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ws-svc .t sup { margin-left: 2px; font-size: 11px; font-weight: 600; color: var(--warn); }
+.ws-svc .st { font-size: 12.5px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-svc .mid { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; font-size: 12px; color: var(--muted); }
+.ws-svc .mid .line { align-self: stretch; height: 1px; background: var(--line2); }
+.ws-svc .mid .no { color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.ws-svc .fare { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; font-size: 12px; color: var(--muted); }
+.ws-svc .fare b { font-size: 15px; color: #c2410c; font-variant-numeric: tabular-nums; }
+.ws-svc .fare a { display: inline-flex; align-items: center; gap: 2px; color: var(--accent); text-decoration: none; }
+.ws-svc .fare a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.ws-plan { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.ws-map-head + .ws-plan { border-top: 0; padding-top: 0; }
+.ws-plan-head { display: flex; align-items: baseline; gap: 8px; }
+.ws-plan-head .sum { margin-left: auto; font-size: 13px; font-weight: 600; color: #c2410c; }
+.ws-plan-why { margin: 0; font-size: 13px; color: var(--ink2); line-height: 1.6; }
+.ws-leg { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px 8px; border-radius: var(--r-sm); background: var(--side); }
+.ws-leg-day { font-size: 12px; color: var(--muted); }
+.ws-leg .ws-svc { padding: 0; }
 .ws-route-more { align-self: flex-start; margin-left: calc(2.6em + 10px); display: inline-flex; align-items: center; gap: 3px; padding: 0; border: 0;
   background: none; font-size: 12px; color: var(--muted); }
 .ws-route-more:hover { color: var(--ink); }

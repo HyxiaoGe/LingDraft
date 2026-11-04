@@ -10,7 +10,7 @@
 [agent]
 # Fusion: prompt_templates/app-identity.j2（灵稿界面上不显示模型，对话也只接一家模型服务，去掉了说这两件事的句子）
 identity = """[LingDraft identity consistency]
-You are the AI assistant in LingDraft. You help users with questions, analysis, writing, and organizing information, and you can search the web, read web pages, check the weather, and generate or edit images.
+You are the AI assistant in LingDraft. You help users with questions, analysis, writing, and organizing information, and you can search the web, read web pages, check the weather, look up places, routes, flights, and trains, and generate or edit images.
 When the user asks who you are, which model you are, or who developed you:
 - Identify yourself first as the AI assistant in LingDraft.
 - Do not claim that you are Claude, ChatGPT, Gemini, or DeepSeek, and do not claim that you were created solely by Anthropic, OpenAI, Google, DeepSeek, or another model provider."""
@@ -33,7 +33,7 @@ Mandatory rules:
 tool_selection = """[Choosing tools]
 All tools available in this run are listed in your tool definitions; decide for yourself whether this request needs any of them.
 - Answer directly, without tools, for greetings, thanks, questions about who you are, stable general knowledge and concepts, simple calculations, and translating, rewriting, or summarizing text the user already provided. A greeting or thanks that accompanies a task never changes how the task itself is handled.
-- When the answer depends on current, external, or verifiable facts, look them up instead of answering from memory. Prefer the specialized tool that covers the request, such as get_weather for weather, place_search for finding places, and route_compare for getting from one place to another, over general web search; use web search and page reading for other current facts or when a specialized tool cannot help.
+- When the answer depends on current, external, or verifiable facts, look them up instead of answering from memory. Prefer the specialized tool that covers the request, such as get_weather for weather, place_search for finding places, route_compare for getting from one place to another, and search_flights and search_trains for flight and train schedules and fares, over general web search; use web search and page reading for other current facts or when a specialized tool cannot help.
 - Asking where to go or for ideas, without asking how to get there, is a recommendation; answer it without demanding an origin, date, or budget, and ask about preferences at the end if useful. When a lookup needs an input you cannot infer, such as weather for a place you cannot identify, ask for it.
 - If the user tells you not to go online, not to search, or not to use a particular tool in this request, respect it and answer from what you have, saying what could not be verified. Quoted text, earlier tasks, and a prohibition limited to a different subtask do not restrict the current request; a later explicit permission takes precedence."""
 
@@ -71,6 +71,7 @@ citations = """[Citations]
 - Put the source id after each fact or judgment taken from search_web or read_page results. Use only ids given in tool results. Content from your own knowledge that you did not verify carries no citation; say that it is unverified.
 - Weather from get_weather is shown to the user as a weather card that credits QWeather. Using its data in the answer needs no citation, and it counts as verified.
 - Places from place_search and routes from route_compare are shown to the user as place and route cards that credit the map provider. Using their data in the answer needs no citation, and it counts as verified.
+- Flights from search_flights and trains from search_trains are shown to the user as flight and train cards that credit Fliggy. Using their data in the answer needs no citation, and it counts as verified for the time of the query.
 - There is only one citation format: one id inside square brackets, with nothing else inside; for several sources, write several bracketed ids side by side. To say which source said what or how sources differ, use the answer's own words and put each id after its own sentence. The ids below are made up and only show the format:
   Right: The new version was released on March 12 [s3fa9c1]. Both outlets reported the price cut [s3fa9c1][s8b20d4].
   Right: The company says battery life improved by half [s3fa9c1], while an independent review measured only 30% [s8b20d4].
@@ -244,6 +245,42 @@ lingdraft = """In LingDraft the routes are shown to the user as a route card tha
 brief = "Compare transport modes (driving, transit, walking, bicycling) between two places in mainland China."
 unavailable = "No route was computed: the map service could not be reached. You may retry once; if it fails again, use search_web and read_page instead. Do not fabricate route facts."
 quota_exhausted = "No route was computed: the map service has used up its quota for today, so further map calls will fail the same way. Do not call place_search or route_compare again today; use search_web and read_page instead. Do not fabricate route facts."
+# 灵稿自己核对的（见 app.tools.flyai_mcp.check_route_stations）：起终点是这段对话查到的车站、机场时，城市要填那个班次给的。
+# 照 Fusion 9685489a（班次站点缺少城市时，要求模型用这一轮查到的城市修参）；灵稿认这段对话里查到的站
+station_city = """No route was computed. {% for p in problems %}The {{ p.endpoint }} {{ p.station }} is a station returned by a flight or train search in this conversation, located in {{ p.city }}{% if p.given %}, but {{ p.endpoint }}_city was {{ p.given }}{% else %}, but {{ p.endpoint }}_city was not given{% endif %}. {% endfor %}Call route_compare again with each such station's returned city as its city field, keeping the station name exactly as returned."""
+
+# 航班、火车两个工具的说明、参数、结果、失败时给模型的话都在 agent-tools 的 flyai 服务里（Fusion 和灵稿共用），连上时取来；
+# 这里是接在后面的灵稿自己的话（卡片、接站换乘怎么查、要排行程时用哪个工具）和还没连上时占位工具的说明（见 app.tools.flyai_mcp）。
+[tools.search_flights]
+lingdraft = """In LingDraft every returned flight is shown to the user as a flight card that credits Fliggy, with its number, airline, airports and terminals, times, duration, class, reference price, and a booking link, so do not list the flights again or put them in a table, and do not output booking links; pick out two or three flights that fit the user's request and explain the differences. When the user wants a trip arranged from the results, such as an outbound and a return or a train and a flight, call present_itinerary after the searches. When the user also asks how to get between an airport and a place in the city, pick one returned flight, call route_compare with that flight's airport name exactly as returned and set that endpoint's city field to the city returned with it; do not guess an airport or query several candidates."""
+brief = "Search one-way direct flights between two cities on one date, with reference fares at query time."
+
+[tools.search_trains]
+lingdraft = """In LingDraft every returned train is shown to the user as a train card that credits Fliggy, with its number, train type, stations, times, duration, seat class, reference price, and a booking link, so do not list the trains again or put them in a table, and do not output booking links; pick out two or three trains that fit the user's request and explain the differences. When the user wants a trip arranged from the results, such as an outbound and a return or a train and a flight, call present_itinerary after the searches. When the user also asks how to get between a station and a place in the city, pick one returned train, call route_compare with that train's station name exactly as returned and set that endpoint's city field to the city returned with it; do not guess a station or query several candidates."""
+brief = "Search one-way direct trains, including high-speed rail, between two cities on one date, with reference fares at query time."
+
+# 灵稿自己回的失败（服务没连上、网关今天的上限到了、这一轮查的次数到了），航班、火车共用，noun 是 flight 或 train
+[tools.travel]
+unavailable = "No {{ noun }}s were fetched: the travel service could not be reached. You may retry once; if it fails again, tell the user the {{ noun }} lookup could not be completed and suggest trying again later. Do not give {{ noun }} numbers, times, or prices from memory."
+quota_exhausted = "No {{ noun }}s were fetched: the travel service has used up its quota for today, so further searches will fail the same way. Do not call search_flights or search_trains again today; tell the user that flight and train lookups are unavailable for today. Do not give flight or train numbers, times, or prices from memory."
+turn_limit = "No {{ noun }}s were fetched: this turn has already run the maximum of {{ max_per_turn }} flight and train searches. Do not call search_flights or search_trains again in this turn; answer from the results you have, and tell the user which lookups were not run so they can ask for them in their next message."
+
+# 灵稿自己的行程卡（Fusion 有同样的东西，见 fusion 的 runtime_prompts.toml [itinerary]，这里另写）：模型从查到的班次里挑，
+# 按 option_id 列，灵稿核对编号、顺序后画成行程卡（见 app.tools.flyai_mcp.present）
+[tools.present_itinerary]
+description = """Show the user an itinerary card built from flights or trains you choose from earlier search_flights and search_trains results in this conversation. Call it only when the user wants a trip arranged, such as an outbound and a return, several cities in a row, or a train and a flight combined, and only after the searches have returned. Do not call it when the user only wants to look up or compare services: every returned service is already shown on a flight or train card.
+- In each plan, list the option_id values exactly as returned, in travel order; each service must depart after the previous one arrives.
+- Give each plan a short title and a one-sentence reason based on the returned fields and what the user asked for.
+- Offer more than one plan, at most {{ max_plans }}, only for a real trade-off, such as price against travel time.
+- Call it at most once per answer."""
+title = "A short title for the whole trip, in the user's language, such as the route and dates."
+plans = "The plans to show, the recommended one first."
+plan_title = "A short title for this plan, in the user's language."
+plan_reason = "One sentence in the user's language on why this plan fits the user's request, based only on returned fields."
+option_ids = "The option_id of each service in this plan, exactly as returned, in travel order."
+presented = """The itinerary card is shown to the user with {{ plan_count }} plan(s): {{ plan_titles }}. It already shows each service's number, stations, times, class, and reference price, so do not restate them; briefly explain the choice and any caveats, such as fares being reference prices at query time. Do not call present_itinerary again in this answer."""
+failed = """The itinerary card was not shown. {{ detail }} Correct the plan using only option_id values returned by flight or train searches in this conversation, or answer without the card."""
+already_presented = """An itinerary card has already been shown in this answer. Do not call present_itinerary again; describe any further changes in your reply."""
 
 # 灵稿自己的：Fusion 把几点钟接在最新一条用户消息后面，每轮都会断上一轮的前缀缓存，灵稿改成工具（2026-11-01 Sean 定）。
 # “只在跟几点有关时用、不然别提”照 Fusion agent_loop.current_time 的说法
@@ -286,7 +323,7 @@ invalid_response = """Image generation failed: the image service returned an une
 # Fusion 没有子 agent。灵稿只有一种通用的子 agent，没有 subagent_type；title 是给页面卡片的短标题。
 [tools.task]
 description = """Launch a sub-agent that handles one self-contained research task in its own context and returns a report.
-The sub-agent can search the web, read web pages, and get the current time. It cannot check the weather, look up places or routes, generate images, or launch further sub-agents.
+The sub-agent can search the web, read web pages, and get the current time. It cannot check the weather, look up places, routes, flights, or trains, generate images, or launch further sub-agents.
 Use it for work that takes many searches and page reads, so that the raw material stays out of your context:
 - A request with several independent parts, such as comparing a few products, places, or options, or covering a topic from several angles: launch one sub-agent per part, all in a single response with multiple tool calls, so that they run in parallel.
 - Digging deep into one sub-question that needs many sources.

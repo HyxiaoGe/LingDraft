@@ -161,6 +161,66 @@ class RoutePlan(BaseModel):
     fetched_at: str = ""
 
 
+class TravelStop(BaseModel):
+    """班次的出发或到达：城市、站（机场）、航站楼，时刻是当地时间 YYYY-MM-DDTHH:MM（国际航班不换算时区）。"""
+
+    model_config = ConfigDict(extra="forbid")
+    city: str
+    station: str
+    terminal: str = ""
+    time: str
+
+
+class TravelService(BaseModel):
+    """一个直达班次。由 flyai 的 search_flights、search_trains 结果换来（见 history.travel_of），价格是查询时的参考价。"""
+
+    model_config = ConfigDict(extra="forbid")
+    option_id: str = Field(description="服务给的班次编号；行程卡靠它从这一轮的结果里找班次")
+    number: str = Field(description="航班号 / 车次")
+    carrier: str = Field(default="", description="航司简称，或者车型（高铁、普快）")
+    departure: TravelStop
+    arrival: TravelStop
+    day_offset: int = Field(default=0, description="比出发那天晚几天到；1 是次日到达")
+    duration_minutes: int
+    travel_class: str = Field(default="", description="价格对应的舱位 / 座席")
+    price_yuan: float | None = None
+    booking_url: str = Field(default="", description="飞猪的预订页")
+
+
+class TravelList(BaseModel):
+    """一次查航班或火车的结果，页面画成航班卡、火车卡。"""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["flight", "train"]
+    origin: str = Field(description="查的起点（用户说的）")
+    destination: str
+    date: str = Field(description="出发日期 YYYY-MM-DD")
+    services: list[TravelService]
+    limitations: list[str] = Field(default_factory=list, description="服务标的限制，比如 high_speed_not_covered（那一页没有高铁）")
+    observed_at: str = Field(default="", description="服务查询的时刻（北京时间）")
+
+
+class ItineraryLeg(TravelService):
+    """行程里的一段：这一轮查到的某个班次。"""
+
+    kind: Literal["flight", "train"]
+
+
+class ItineraryPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str
+    reason: str
+    legs: list[ItineraryLeg]
+
+
+class Itinerary(BaseModel):
+    """模型从这一轮查到的班次里排的行程方案（present_itinerary），页面画成行程卡。"""
+
+    model_config = ConfigDict(extra="forbid")
+    title: str
+    plans: list[ItineraryPlan]
+
+
 class GeneratedImage(BaseModel):
     """生成的一张图。存在 image-service 里、归灵稿，页面按编号经灵稿后端取（见 app.tools.image_mcp、api.main）。
     2026-11-04 以前的图是灵稿自己存的文件（有 file），那些文件不搬了（Sean 定），页面上说这张图已经不在了。"""
@@ -187,9 +247,9 @@ class ToolStep(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     id: str = Field(description="工具调用 id；页面据此把实时进度和存下来的记录对上")
-    kind: Literal["search", "read", "weather", "place", "route", "image", "task"]
-    text: str = Field(description="搜索词 / 网址 / 地名 / 查地点的关键词 / 路线的起终点 / 画图的描述 / 子任务的标题")
-    limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制；查地点在哪查；比路线比哪几种方式")
+    kind: Literal["search", "read", "weather", "place", "route", "flight", "train", "itinerary", "image", "task"]
+    text: str = Field(description="搜索词 / 网址 / 地名 / 查地点的关键词 / 路线、航班、火车的起终点 / 行程方案的标题 / 画图的描述 / 子任务的标题")
+    limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制；查地点在哪查；比路线比哪几种方式；航班、火车的日期和条件")
     ok: bool = True
     hits: int = 0  # 搜索返回的条数
     body: bool = False  # 读页读到了正文
@@ -200,6 +260,8 @@ class ToolStep(BaseModel):
     weather: Forecast | None = Field(default=None, description="查到的天气，页面画成天气卡片")
     places: PlaceList | None = Field(default=None, description="查到的地点，页面画成地点卡")
     routes: RoutePlan | None = Field(default=None, description="算出的路线，页面画成路线卡")
+    travel: TravelList | None = Field(default=None, description="查到的航班、火车，页面画成航班卡、火车卡")
+    itinerary: Itinerary | None = Field(default=None, description="排好的行程方案，页面画成行程卡")
     image: GeneratedImage | None = Field(default=None, description="画好的图，页面画成图片卡片")
     aspect_ratio: str = Field(default="", description="画图时要的比例：还没出图时页面按它占位；改图没给比例时是空的")
     edit: bool = Field(default=False, description="画图是在改之前的一张图")
@@ -224,6 +286,7 @@ class Usage(BaseModel):
     reads: int = 0
     weather: int = 0  # 查天气的次数
     maps: int = 0  # 查地点、比路线的次数
+    travel: int = 0  # 查航班、火车的次数
     images: int = 0  # 画成的图（画新图和改图都算）
     subagents: int = 0  # 派出去的子 agent（真跑了的）
 
