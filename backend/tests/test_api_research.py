@@ -106,6 +106,91 @@ def test_deepseek_passes_back_all_reasoning(deepseek):
     assert [m.get("reasoning_content") for m in payload["messages"]] == [None, "旧思考", None, "旧结论", None, "新思考", None]
 
 
+def _ark(monkeypatch, handler):
+    import openai
+
+    from app import config
+    from app.research_llm import make_chat_model
+
+    monkeypatch.setattr(config, "ARK_API_KEY", "k")
+    monkeypatch.setattr(config, "ARK_BASE_URL", "http://ark.test/api/v3")
+    llm = make_chat_model("ark", "doubao", thinking=True)
+    transport = httpx.MockTransport(handler)  # 换成假的 http 客户端，不发真请求
+    llm.root_client = openai.OpenAI(api_key="k", base_url=config.ARK_BASE_URL, http_client=httpx.Client(transport=transport))
+    llm.root_async_client = openai.AsyncOpenAI(api_key="k", base_url=config.ARK_BASE_URL, http_client=httpx.AsyncClient(transport=transport))
+    llm.client, llm.async_client = llm.root_client.chat.completions, llm.root_async_client.chat.completions
+    return llm
+
+
+def _ark_reply(stream: bool) -> httpx.Response:
+    """豆包 2.x 思考时的返回：reasoning_content 是思考摘要，encrypted_content 是加密的思考原文。"""
+    if not stream:
+        msg = {"role": "assistant", "content": "明天上海小雨。", "reasoning_content": "先查预报。", "encrypted_content": "djF+密文"}
+        return httpx.Response(200, json={"id": "x", "object": "chat.completion", "created": 0, "model": "doubao",
+                                         "choices": [{"index": 0, "message": msg, "finish_reason": "stop"}],
+                                         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}})
+
+    def sse(delta: dict, finish: str | None = None) -> str:
+        body = {"id": "x", "object": "chat.completion.chunk", "created": 0, "model": "doubao",
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}
+        return f"data: {json.dumps(body, ensure_ascii=False)}\n\n"
+
+    body = (sse({"role": "assistant", "content": "", "reasoning_content": "先查"}) + sse({"reasoning_content": "预报。"})
+            + sse({"encrypted_content": "djF+密文"}) + sse({"content": "明天上海小雨。"}) + sse({}, "stop") + "data: [DONE]\n\n")
+    return httpx.Response(200, content=body.encode(), headers={"content-type": "text/event-stream"})
+
+
+def test_ark_keeps_thinking_summary_and_encrypted_original(monkeypatch):
+    """ChatOpenAI 不取豆包的思考：补上以后整条、流式都留着摘要和加密原文，content_blocks 读得到摘要（标成 openai 就读不到）。"""
+    from langchain_core.messages import AIMessageChunk
+
+    from app.graph.research import history
+    from app.research_llm import ARK_PROVIDER
+
+    llm = _ark(monkeypatch, lambda req: _ark_reply(json.loads(req.content).get("stream", False)))
+    whole = llm.invoke("上海明天下雨吗")
+    parts: list[AIMessageChunk] = list(llm.stream("上海明天下雨吗"))
+    streamed = parts[0]
+    for c in parts[1:]:
+        streamed += c
+    for m in (whole, streamed):
+        assert m.additional_kwargs["reasoning_content"] == "先查预报。" and m.additional_kwargs["encrypted_content"] == "djF+密文"
+        assert m.response_metadata["model_provider"] == ARK_PROVIDER
+        assert history.thinking_of(m) == "先查预报。" and history.text_of(m) == "明天上海小雨。"
+    assert [history.thinking_of(c) for c in parts if history.thinking_of(c)] == ["先查", "预报。"]  # 页面逐段显示
+
+
+def test_ark_passes_back_thinking(monkeypatch):
+    """摘要和加密原文都原样传回：带工具的多轮对话不传加密原文推理效果会下降；之前几轮的也传，下一轮发出去的开头不变。"""
+    llm = _ark(monkeypatch, lambda req: httpx.Response(500))
+    call = [{"name": "search_web", "args": {"query": "q"}, "id": "c1", "type": "tool_call"}]
+    msgs = [HumanMessage("第一轮"), AIMessage(content="答", additional_kwargs={"reasoning_content": "旧摘要", "encrypted_content": "旧密文"}),
+            HumanMessage("第二轮"), AIMessage(content="", tool_calls=call, additional_kwargs={"reasoning_content": "新摘要", "encrypted_content": "新密文"}),
+            ToolMessage(content="[]", tool_call_id="c1"), AIMessage(content="停下时的半截", additional_kwargs={"reasoning_content": "只有摘要"})]
+    sent = llm._get_request_payload(msgs)["messages"]
+    assert [(m.get("reasoning_content"), m.get("encrypted_content")) for m in sent] == [
+        (None, None), ("旧摘要", "旧密文"), (None, None), ("新摘要", "新密文"), (None, None), ("只有摘要", None)]
+
+
+def test_thinking_is_read_the_same_way_whoever_wrote_it():
+    """读思考、正文按 content blocks：DeepSeek、豆包放在 additional_kwargs 里，Claude 这类放在 content 里。"""
+    from langchain_core.messages import AIMessageChunk
+
+    from app.api.research_runner import StreamBuffer
+    from app.graph.research import history
+
+    side = AIMessage(content="答", additional_kwargs={"reasoning_content": "想"}, response_metadata={"model_provider": "deepseek"})
+    inline = AIMessage(content=[{"type": "thinking", "thinking": "想", "signature": "s"}, {"type": "text", "text": "答"}],
+                       response_metadata={"model_provider": "anthropic"})
+    for m in (side, inline):
+        assert (history.thinking_of(m), history.text_of(m)) == ("想", "答")
+    buf = StreamBuffer()
+    buf.add(AIMessageChunk(content=[{"type": "thinking", "thinking": "想", "index": 0}], id="m1", response_metadata={"model_provider": "anthropic"}))
+    buf.add(AIMessageChunk(content=[{"type": "text", "text": "答", "index": 1}], id="m1", response_metadata={"model_provider": "anthropic"}))
+    p = buf.partial()
+    assert (p.additional_kwargs["reasoning_content"], p.content) == ("想", "答")
+
+
 def test_reply_without_structured_output_raises():
     """模型直接回一段文字、没调结构化输出的工具：要报错交给调用方，不能返回 None。"""
     from langchain_deepseek import ChatDeepSeek

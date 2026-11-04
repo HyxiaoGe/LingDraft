@@ -100,9 +100,9 @@ class ThinkingClock:
     def see(self, msg: AIMessageChunk) -> bool:
         """记下一个片段。返回 True：思考到这个片段为止（它是思考之后第一个正文或工具调用片段）。"""
         t = time.monotonic()
-        if msg.additional_kwargs.get("reasoning_content"):
+        if history.thinking_of(msg):
             self._start = self._start or t
-        elif self._start is not None and self._end is None and (msg.content or msg.tool_call_chunks):
+        elif self._start is not None and self._end is None and (history.text_of(msg) or msg.tool_call_chunks):
             self._end = t
             return True
         return False
@@ -150,6 +150,25 @@ class ThinkingTimer(BaseCallbackHandler):
 
 # ---- 聊天模型工厂 ----
 
+ARK_PROVIDER = "volcengine"  # 豆包消息的 response_metadata["model_provider"]（见 make_chat_model 里的 ChatArk）
+
+
+def _take_thinking(msg: BaseMessage, said: dict) -> None:
+    """接口回来的思考字段（整条的 message 或流式的 delta）放进 additional_kwargs，提供方标成豆包的。"""
+    msg.response_metadata = {**msg.response_metadata, "model_provider": ARK_PROVIDER}
+    for k in history.THINKING_KEYS:
+        if said.get(k) is not None:
+            msg.additional_kwargs[k] = said[k]
+
+
+def _pass_back(msgs: list[BaseMessage], payload: dict, keys: Sequence[str]) -> None:
+    """模型消息 additional_kwargs 里的这几样原样放回发出去的那条 assistant 消息。条数对不上（转换时合并或拆开了消息）就不动。"""
+    if len(msgs) != len(payload.get("messages", [])):
+        return
+    for m, d in zip(msgs, payload["messages"]):
+        if isinstance(m, AIMessage):
+            d.update({k: m.additional_kwargs[k] for k in keys if m.additional_kwargs.get(k) is not None})
+
 
 def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: str = "high", timeout: int = 180,
                     callbacks: list | None = None, max_tokens: int | None = None, guard: str | None = None) -> BaseChatModel:
@@ -159,13 +178,43 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
     DeepSeek 思考模式下：带工具的请求要把 reasoning_content 原样传回（langchain-openai / langchain-deepseek 都不做，这里补）。
     同一轮里的不传接口报 400；之前几轮的照它现在的文档也传，会拼进上下文，只传这一轮的话，下一轮上一轮的消息变了，前缀缓存从那里断
     （2026-11-01 Sean 定）。不接受强制 tool_choice（with_structured_output 会设），这里去掉；temperature 无效。
+
+    豆包走 ChatOpenAI，它只认 OpenAI 官方的字段，豆包的思考不取，这里补（见 ChatArk）。
     """
     if provider == "ark":
         from langchain_openai import ChatOpenAI
 
         class ChatArk(GuardedChatModel, ChatOpenAI):
+            """豆包（火山方舟的 OpenAI 兼容接口）。2.x 的模型思考时回两样，都放进 additional_kwargs：reasoning_content 是思考摘要，
+            页面上显示的就是它；encrypted_content 是加密的思考原文。提供方标成 volcengine，不用 ChatOpenAI 标的 openai：
+            标成 openai 的话 content_blocks 按 OpenAI 的格式读，读不到 additional_kwargs 里的思考（见 history.thinking_of）。
+            发出去时两样都原样传回：方舟文档说带工具的多轮对话不传加密原文推理效果会下降，改过的报 Invalid signature，不传不报错；
+            之前几轮的也传，和 DeepSeek 一样，下一轮发出去的开头不变。"""
+
             def _guard_key(self) -> str:
                 return guard_key(GuardedChatModel._guard_key(self), guard)
+
+            def _create_chat_result(self, response, generation_info=None):
+                result = super()._create_chat_result(response, generation_info)
+                if isinstance(response, dict):
+                    said = (response.get("choices") or [{}])[0].get("message") or {}
+                else:  # openai 的对象：多出来的字段当属性取（整个 model_dump 的话，结构化输出的 parsed 字段会报序列化警告）
+                    msg = getattr((getattr(response, "choices", None) or [None])[0], "message", None)
+                    said = {k: getattr(msg, k, None) for k in history.THINKING_KEYS}
+                for g in result.generations[:1]:
+                    _take_thinking(g.message, said)
+                return result
+
+            def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
+                gen = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
+                if gen and (choices := chunk.get("choices")):
+                    _take_thinking(gen.message, choices[0].get("delta") or {})
+                return gen
+
+            def _get_request_payload(self, input_, *, stop=None, **kwargs):
+                payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+                _pass_back(self._convert_input(input_).to_messages(), payload, history.THINKING_KEYS)
+                return payload
 
         if not config.ARK_API_KEY:
             raise RuntimeError("未设置 ARK_API_KEY")
@@ -189,11 +238,7 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
             payload = super()._get_request_payload(input_, stop=stop, **kwargs)
             if thinking and payload.get("tool_choice") not in (None, "auto", "none"):
                 payload.pop("tool_choice")
-            msgs = self._convert_input(input_).to_messages()
-            if len(msgs) == len(payload.get("messages", [])):
-                for m, d in zip(msgs, payload["messages"]):
-                    if isinstance(m, AIMessage) and m.additional_kwargs.get("reasoning_content") is not None:
-                        d["reasoning_content"] = m.additional_kwargs["reasoning_content"]
+            _pass_back(self._convert_input(input_).to_messages(), payload, (history.REASONING,))
             return payload
 
     kw: dict[str, Any] = {"reasoning_effort": effort} if thinking else {"temperature": 0}

@@ -32,6 +32,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 - 对话的模型：
   - `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`（默认 `deepseek-v4-pro`）、`DEEPSEEK_FLASH_MODEL`。
   - 主 agent：`RESEARCH_PROVIDER`（deepseek / ark）、`RESEARCH_MODEL`、`RESEARCH_THINKING`、`RESEARCH_EFFORT`。
+    思考统一按 LangChain 的 content blocks 读（`history.thinking_of`），哪家模型都一样。DeepSeek 的思考原样传回（同一轮不传报 400）；豆包 2.x 给的是思考摘要（页面显示它）和加密的思考原文，两样都原样传回（不传加密原文推理效果会下降）。
   - 子 agent：`SUBAGENT_MODEL`（默认 Flash，豆包时是 lite）、`SUBAGENT_THINKING`、`SUBAGENT_EFFORT`。`SUBAGENT_SEARCH_BUDGET`、`SUBAGENT_READ_BUDGET` 是一个子 agent 最多搜几次、读几页，默认都是 8。
   - 整理记忆：`DREAM_MODEL`（默认和主 agent 一样）、`DREAM_THINKING`、`DREAM_EFFORT`。
 - 对话的其他：

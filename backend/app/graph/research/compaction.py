@@ -66,7 +66,7 @@ def tokens(text: str) -> float:
 def message_tokens(m: BaseMessage) -> float:
     parts = [history.text_of(m)]
     if isinstance(m, AIMessage):
-        parts.append(str(m.additional_kwargs.get("reasoning_content") or ""))
+        parts.append(history.thinking_of(m))
         parts += [json.dumps(tc.get("args") or {}, ensure_ascii=False) + tc["name"] for tc in m.tool_calls]
     return tokens("".join(parts)) + PER_MESSAGE
 
@@ -94,9 +94,9 @@ def turn_order(messages: list[BaseMessage]) -> dict[str, int]:
 
 
 def _cleared(m: BaseMessage) -> BaseMessage:
-    """第一层：搜索、读页、查文档、取回的结果换成一行说明；模型消息不带思考。没做成的结果本来就短，留着。"""
-    if isinstance(m, AIMessage) and "reasoning_content" in m.additional_kwargs:
-        return m.model_copy(update={"additional_kwargs": {k: v for k, v in m.additional_kwargs.items() if k != "reasoning_content"}})
+    """第一层：搜索、读页、查文档、取回的结果换成一行说明；模型消息不带思考（豆包的加密原文也去掉）。没做成的结果本来就短，留着。"""
+    if isinstance(m, AIMessage) and any(k in m.additional_kwargs for k in history.THINKING_KEYS):
+        return m.model_copy(update={"additional_kwargs": {k: v for k, v in m.additional_kwargs.items() if k not in history.THINKING_KEYS}})
     if not isinstance(m, ToolMessage) or m.name not in CLEARED_TOOLS or m.status == "error":
         return m
     data = parse(m)

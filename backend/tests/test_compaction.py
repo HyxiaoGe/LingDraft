@@ -108,7 +108,7 @@ def _read(cid: str, sid: str) -> ToolMessage:
 
 
 def _ai(mid: str, text: str = "", calls: list[tuple[str, str]] = ()) -> AIMessage:
-    return AIMessage(content=text, id=mid, additional_kwargs={"reasoning_content": "想一想" * 20},
+    return AIMessage(content=text, id=mid, additional_kwargs={"reasoning_content": "想一想" * 20, "encrypted_content": "密文"},
                      tool_calls=[{"name": n, "args": {"q": c}, "id": c} for n, c in calls])
 
 
@@ -147,7 +147,7 @@ def test_layer_one_clears_material_and_reasoning_but_keeps_the_rest():
     assert read.startswith(REMOVED) and "s000001" in read and "页面s000001" in read and "正文" not in read
     assert by_id["r-c2"].content == msgs[3].content  # 天气留着
     assert by_id["r-c4"].content == "子任务的报告 [s000003]"  # 子任务的报告留着
-    assert all("reasoning_content" not in by_id[i].additional_kwargs for i in ("a1", "a2", "a3", "a4", "a5"))
+    assert all(k not in by_id[i].additional_kwargs for i in ("a1", "a2", "a3", "a4", "a5") for k in ("reasoning_content", "encrypted_content"))
     assert by_id["a1"].tool_calls == msgs[1].tool_calls  # 工具调用本身留着
     # 这一轮原样
     assert by_id["a6"] is msgs[13] and by_id["r-c5"] is msgs[14]
