@@ -188,7 +188,7 @@ def test_place_step_turns_the_result_into_a_place_card():
     assert done.ok and card.query == "咖啡" and card.near == "外滩" and card.city == "上海" and len(card.places) == 2
     first = card.places[0]
     assert (first.name, first.district, first.distance_m, first.rating, first.cost, first.provider) == ("咖啡1号店", "黄浦区", 100, 4.4, 35, "amap")
-    assert first.map_url.startswith("https://uri.amap.com/") and card.fetched_at and card.limitations == ["reference_cost_not_per_person"]
+    assert first.map_url.startswith("https://uri.amap.com/") and card.fetched_at and card.limitations == []
     # 在城市里按文字搜：标城市，没有距离
     city = history.step_of(_place(anchor_source="none", near=None), _ask(tool, _place(anchor_source="none", near=None)))
     assert city.limits == ["上海"] and city.places.near == "" and city.places.places[0].distance_m is None

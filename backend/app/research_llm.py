@@ -438,7 +438,7 @@ def fake_maps_server() -> FastMCP:
                    "map_url": f"https://uri.amap.com/marker?poiid=FAKE{k}&src=lingdraft", "provider": "amap",
                    **({"distance_m": 100 * k} if anchor_source == "named" else {})} for k in (1, 2)][:limit]
         res: dict[str, Any] = {"ok": True, "status": "success", "query": query, "result_count": len(places), "places": places,
-                               "limitations": ["reference_cost_not_per_person"], "providers": ["amap"]}
+                               "limitations": [], "providers": ["amap"]}
         if city:
             res["city"] = city
         if anchor_source == "named" and near:
