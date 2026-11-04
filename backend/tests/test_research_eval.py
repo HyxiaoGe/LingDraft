@@ -293,6 +293,7 @@ def test_rejudge_scores_saved_replies_with_the_current_case():
     again = rejudge_case(json.loads(json.dumps(r)), stricter, judge, run=1)  # 像从结果文件里读回来的
     assert not again["passed"] and _failed(again) == [(1, "searched"), (1, "sources_supported")]
     assert again["usage"] == r["usage"] and again["rejudged_from"] == 1
+    assert "重新打分（第 1 遍的回答）" in summary_line(again) and "调用" not in summary_line(again)
     assert judge.rubrics[0][3] == r["turns"][0]["today"] and len(judge.sources) == 2
     assert "对不上" in rejudge_case(r, _case([{"say": "别的话"}]), FakeJudge(), run=1)["error"]
     old = {**r, "turns": [{k: v for k, v in t.items() if k != "cited_sources"} for t in r["turns"]]}
