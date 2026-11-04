@@ -355,8 +355,10 @@ def summary_line(r: dict) -> str:
     u = r["usage"]
     failed = [f"第{i}轮 {c['name']}（{c['detail'][:60]}）" for i, t in enumerate(r["turns"], 1) for c in t["checks"] if not c["passed"]]
     tape = f"  录像对上 {r['tape']['hits']}、真调 {r['tape']['live']}" if r.get("tape") else ""
-    return (f"{r['id']:<16} {'通过' if r['passed'] else '失败'}  {r['duration_s']:>4.0f}s  {len(r['turns'])} 轮  "
-            f"调用 {u['model_calls']}  输入 {u['input_tokens'] / 1000:.0f}k（缓存 {u['cached_tokens'] / 1000:.0f}k）  输出 {u['output_tokens'] / 1000:.0f}k{tape}"
+    # 重新打分的 agent 没重跑，结果里的用量是原来那遍的，不打出来，免得看成又花了一遍
+    used = (f"调用 {u['model_calls']}  输入 {u['input_tokens'] / 1000:.0f}k（缓存 {u['cached_tokens'] / 1000:.0f}k）  输出 {u['output_tokens'] / 1000:.0f}k"
+            if "rejudged_from" not in r else f"重新打分（第 {r['rejudged_from']} 遍的回答）")
+    return (f"{r['id']:<16} {'通过' if r['passed'] else '失败'}  {r['duration_s']:>4.0f}s  {len(r['turns'])} 轮  {used}{tape}"
             + (f"  ✗ {'；'.join(failed)}" if failed else ""))
 
 
