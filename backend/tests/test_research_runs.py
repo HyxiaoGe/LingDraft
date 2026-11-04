@@ -22,7 +22,7 @@ from tests.research_helpers import SIMPLE, after_tool, events, flaky_runner, gat
 
 @pytest.fixture
 def rr(tmp_path):
-    return ResearchRunner(fake=True, data_dir=tmp_path / "data")
+    return ResearchRunner(fake=True)
 
 
 @pytest.fixture
@@ -99,7 +99,7 @@ def test_event_log_wait_wakes_on_append():
 
 
 def test_research_threads_run_in_parallel(tmp_path):
-    two = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=2)
+    two = ResearchRunner(fake=True, workers=2)
     tids = ("par00001", "par00002")
 
     async def go():
@@ -118,7 +118,7 @@ def test_research_threads_run_in_parallel(tmp_path):
 
 
 def test_failed_submit_gives_back_slots(tmp_path):
-    one = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=1)
+    one = ResearchRunner(fake=True, workers=1)
 
     def down(work):
         work.close()
@@ -178,7 +178,7 @@ def test_disconnect_does_not_release_or_cancel_the_run(rr):
 
 
 def test_queued_new_thread_is_visible_at_once(tmp_path):
-    rr = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=1)
+    rr = ResearchRunner(fake=True, workers=1)
 
     async def go():
         gate = hold_model(rr.planner)
@@ -254,7 +254,7 @@ def test_refresh_mid_run_replays_progress_so_far(tmp_path):
 
 def test_follow_after_restart_sends_current_state(rr, tmp_path):
     run_async(_drain(rr.start("evt00003", SIMPLE)))
-    fresh = ResearchRunner(fake=True, data_dir=tmp_path / "data")
+    fresh = ResearchRunner(fake=True)
     fresh.events, fresh.runs = LocalEventLog(), LocalRunRegistry()  # 重启后进程里什么都没有，只剩检查点
     got = run_async(_drain(fresh.follow("evt00003", "abcdef12-9")))
     assert [e for _, e, _ in got] == ["state", "end"] and got[0][2]["status"] == "idle"
@@ -346,7 +346,7 @@ def test_retry_does_not_redo_searches(tmp_path):
 
 
 def test_accepted_thread_survives_restart_before_running(tmp_path):
-    one = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=1)
+    one = ResearchRunner(fake=True, workers=1)
     one._spawn = lambda work: work.close()  # 收下了但一直没轮到，进程就停了
 
     async def go():
@@ -356,7 +356,7 @@ def test_accepted_thread_survives_restart_before_running(tmp_path):
 
     run_async(go())
     assert one.state_view("acc00001")["status"] == "running"  # 有空位，收下就算在跑（没真跑起来进程就停了）
-    fresh = ResearchRunner(fake=True, data_dir=tmp_path / "data")
+    fresh = ResearchRunner(fake=True)
     fresh.events, fresh.runs = LocalEventLog(), LocalRunRegistry()
     v = fresh.state_view("acc00001")
     assert v["exists"] and v["status"] == "failed" and v["error"] == "上次运行没跑完就停了" and v["turns"][0]["user"] == SIMPLE
@@ -502,7 +502,7 @@ def test_stop_before_the_model_answers(client, rr):
 
 
 def test_stop_queued_thread(tmp_path):
-    one = ResearchRunner(fake=True, data_dir=tmp_path / "data", workers=1)
+    one = ResearchRunner(fake=True, workers=1)
 
     async def go():
         gate = hold_model(one.planner)

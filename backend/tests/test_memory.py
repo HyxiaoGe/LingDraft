@@ -204,7 +204,7 @@ def test_schedule_catches_up_after_a_missed_night_but_not_on_the_first_start():
 
 def test_memory_page_over_http(tmp_path):
     """记忆页的接口：全部记忆、上次整理、下次整理的时间。存起来的 Store（见 conftest 的 _storage）。"""
-    r = ResearchRunner(fake=True, data_dir=tmp_path / "data")
+    r = ResearchRunner(fake=True)
     api_main.set_research_runner(r)
     client = TestClient(api_main.app)
     body = client.get("/api/memory").json()
@@ -215,5 +215,5 @@ def test_memory_page_over_http(tmp_path):
     body = client.get("/api/memory").json()
     assert [m["text"] for m in body["memories"]] == ["己"] and set(body["memories"][0]) == {"id", "text", "created_at", "updated_at"}
     assert body["last_dream"]["threads"] == 1
-    reopened = ResearchRunner(fake=True, data_dir=tmp_path / "data")  # 存在库里，重启还在
+    reopened = ResearchRunner(fake=True)  # 存在库里，重启还在
     assert _texts(reopened) == ["己"]

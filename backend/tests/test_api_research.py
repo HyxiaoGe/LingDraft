@@ -19,7 +19,7 @@ from tests.research_helpers import events, last, say
 
 @pytest.fixture
 def client(tmp_path):
-    api_main.set_research_runner(ResearchRunner(fake=True, data_dir=tmp_path / "data"))
+    api_main.set_research_runner(ResearchRunner(fake=True))
     return TestClient(api_main.app)
 
 
@@ -76,7 +76,7 @@ def test_list_threads_with_status(client):
 
 def test_thread_ids_without_reading_checkpoints(tmp_path):
     assert aio.run(thread_ids(memory_checkpointer())) == []
-    rr = ResearchRunner(fake=True, data_dir=tmp_path / "data")  # 存储见 conftest 的 _storage：设了测试库时是 Postgres
+    rr = ResearchRunner(fake=True)  # 存储见 conftest 的 _storage：设了测试库时是 Postgres
     assert aio.run(thread_ids(rr.graph.checkpointer)) == []
     rr.accept("t1", "直接答：你好")
     rr.run_turn("t1")

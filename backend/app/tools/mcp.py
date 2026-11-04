@@ -1,4 +1,4 @@
-"""agent-tools 的 MCP 工具（天气、搜索、读页）共用的部分：经网关连、取工具、认出网关的错误、结果变成文字。
+"""agent-tools 的 MCP 工具（天气、搜索、读页、生图）共用的部分：经网关连、取工具、认出网关的错误、结果变成文字。
 
 工具本身（说明、参数、结果、错误码）都在 agent-tools 的服务里，Fusion 和灵稿共用；这里只接进来，
 说明后面接上灵稿自己的一段（prompts.toml 的 tools.<工具>.lingdraft）。
@@ -28,12 +28,12 @@ with warnings.catch_warnings():  # langchain.mcp 还是 beta，导入时警告�
     warnings.simplefilter("ignore", LangChainBetaWarning)
     from langchain.mcp import MCPAdapter
 
-# 一次调用最多等这么久：服务自己限时（天气 20 秒、搜索 25 秒、读页 12 秒），网关转发限 30 秒
+# 一次调用最多等这么久：服务自己限时（天气 20 秒、搜索 25 秒、读页 12 秒），网关转发限 30 秒。生图另外给（见 image_mcp）
 CALL_TIMEOUT = 40.0
 
 
 def gateway_target(base_url: str, api_key: str, path: str, *, scene: str = "research",
-                   transport: httpx2.AsyncBaseTransport | None = None) -> Client:
+                   transport: httpx2.AsyncBaseTransport | None = None, timeout: float = CALL_TIMEOUT) -> Client:
     """经网关连一个服务的 MCP（path 如 /weather/mcp）。transport 给测试用（httpx2 是 MCP 库用的 httpx 分支）。"""
 
     async def check(response: httpx2.Response) -> None:
@@ -50,7 +50,7 @@ def gateway_target(base_url: str, api_key: str, path: str, *, scene: str = "rese
 
     url = base_url.rstrip("/") + path
     headers = {"Authorization": f"Bearer {api_key}", "X-Caller-Scene": scene}
-    return Client(StreamableHttpTransport(url, headers=headers, httpx_client_factory=factory), timeout=CALL_TIMEOUT)
+    return Client(StreamableHttpTransport(url, headers=headers, httpx_client_factory=factory), timeout=timeout)
 
 
 class McpTool:

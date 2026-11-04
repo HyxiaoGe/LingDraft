@@ -11,12 +11,13 @@ import asyncio
 import hashlib
 import io
 import json
+import math
 import re
 import threading
 import time
 from collections.abc import AsyncIterator, Iterator, Sequence
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import UUID, uuid4
 
 import httpx
@@ -35,8 +36,9 @@ from app.graph.research import history, prompts
 from app.graph.research.compaction import RECALL_TOOL as RECALL
 from app.graph.research.sources import search_hits
 from app.model_guard import ContentBlocked, GuardedChatModel, Interrupted, ModelUnavailable, guard_key
-from app.tools import web_mcp, weather_mcp
+from app.tools import image_mcp, web_mcp, weather_mcp
 from app.tools.gateway import GatewayClient
+from app.tools.image_mcp import ImageTool
 from app.tools.research_tools import TIME_TOOL, make_research_tools
 from app.tools.weather_mcp import WEATHER_TOOL, WeatherTool
 from app.tools.web_mcp import READ_TOOL, SEARCH_TOOL, WebTool
@@ -58,6 +60,8 @@ class Suggestions(BaseModel):
 
 
 class ResearchPlanner(Protocol):
+    gateway: GatewayClient  # 按编号取图、删图（画的图存在 image-service 里，见 app.tools.gateway）
+
     def agent_model(self) -> BaseChatModel: ...
 
     def subagent_model(self) -> BaseChatModel: ...
@@ -212,20 +216,21 @@ def _structured(llm, schema):
 
 
 class McpTools:
-    """agent-tools 的 MCP 工具：搜索、读页、天气。target 是各自的 MCP 地址（网关的客户端，或者进程内的假服务）。
-    没连上的：搜索、读页先用同名的占位工具（调了说服务暂时连不上，见 app.tools.web_mcp），天气先不带。"""
+    """agent-tools 的 MCP 工具：搜索、读页、画图、天气。target 是各自的 MCP 地址（网关的客户端，或者进程内的假服务）。
+    没连上的：搜索、读页、画图先用同名的占位工具（调了说服务暂时连不上，见 app.tools.web_mcp、image_mcp），天气先不带。"""
 
-    def __init__(self, search: Any, read: Any, weather: Any) -> None:
+    def __init__(self, search: Any, read: Any, weather: Any, image: Any) -> None:
         self.web = [WebTool(SEARCH_TOOL, search), WebTool(READ_TOOL, read)]
+        self.image = ImageTool(image)
         self.weather = WeatherTool(weather)
 
     def tools(self, own: list) -> list:
-        """顺序固定（搜索、读页、灵稿自己的、天气）：工具列表在请求的前缀里，顺序变了前缀缓存就断了。"""
-        return [*(t.current() for t in self.web), *own, *([self.weather.tool] if self.weather.tool else [])]
+        """顺序固定（搜索、读页、画图、灵稿自己的、天气）：工具列表在请求的前缀里，顺序变了前缀缓存就断了。"""
+        return [*(t.current() for t in self.web), self.image.current(), *own, *([self.weather.tool] if self.weather.tool else [])]
 
     async def connect(self) -> None:
         """同时连还没连上的，连上一个算一个；有没连上的抛 RuntimeError（第一个的原因在 __cause__ 里）。"""
-        todo = [t for t in (*self.web, self.weather) if t.tool is None]
+        todo = [t for t in (*self.web, self.image, self.weather) if t.tool is None]
         errors = [(t.name, e) for t, e in zip(todo, await asyncio.gather(*(t.connect() for t in todo), return_exceptions=True), strict=True)
                   if isinstance(e, BaseException)]
         if errors:
@@ -255,11 +260,12 @@ class LiveResearchPlanner:
         self._dreamer = make_chat_model(provider, config.DREAM_MODEL or model, thinking=config.DREAM_THINKING, effort=config.DREAM_EFFORT,
                                         timeout=300)
         url, key = config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY
-        self._gateway = gateway or GatewayClient(url, key, scene=scene)
-        self._tools = make_research_tools(self._gateway)
+        self.gateway = gateway or GatewayClient(url, key, scene=scene)  # 按编号取图、删图（图存在 image-service 里）
+        self._tools = make_research_tools()
         self._mcp = McpTools(lambda: web_mcp.gateway_target(SEARCH_TOOL, url, key, scene=scene),
                              lambda: web_mcp.gateway_target(READ_TOOL, url, key, scene=scene),
-                             lambda: weather_mcp.gateway_target(url, key, scene=scene))
+                             lambda: weather_mcp.gateway_target(url, key, scene=scene),
+                             lambda: image_mcp.gateway_target(url, key, scene=scene))
 
     def agent_model(self) -> BaseChatModel:
         return self._agent
@@ -449,46 +455,91 @@ def _fake_png(prompt: str, ratio: str, edit: bool) -> bytes:
     return out.getvalue()
 
 
-def _fake_image_service() -> Any:
-    """假 image-service：POST /image/v1/generate 出图，图在 GET /image/static/images/<id>.png。"""
-    made: dict[str, bytes] = {}
+FAKE_RATIOS = ("1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "1:4", "4:1", "1:8", "8:1")
+FakeRatio = Literal[FAKE_RATIOS]  # 照 image-service：比例不在可选值里，参数校验不过（MCP 的 isError）
 
-    async def handle(req: httpx.Request) -> httpx.Response:
-        if req.method == "GET":
-            data = made.get(req.url.path.removeprefix("/image"))
-            return httpx.Response(200, content=data, headers={"content-type": "image/png"}) if data else httpx.Response(404)
-        body = json.loads(req.content)
-        prompt = body["prompt"]
+
+def _closest(width: int, height: int) -> str:
+    target = math.log(width / height)
+    return min(FAKE_RATIOS, key=lambda r: abs(math.log(int(r.split(":")[0]) / int(r.split(":")[1])) - target))
+
+
+class FakeImageService:
+    """进程内的假 image-service：MCP 的 generate_image（照 /v2/mcp：图存在服务里，结果里只有编号）出图、存在这里，
+    取图、删图走假网关（GET / DELETE /image/v1/images/{id}，见 gateway_client）。离线模式、测试、评测用。
+    calls 记下每次画图的参数；描述里有 FAKE_IMAGE_FILTERED 按内容审核没过拒绝，有 FAKE_IMAGE_SLOW 过几秒才出图。
+    测试可以设 fail（下一次起都按这个错误回）、block（出图前等它）、reference_status（找参考图的结果）。"""
+
+    def __init__(self) -> None:
+        self.made: dict[str, tuple[bytes, int, int]] = {}
+        self.calls: list[dict] = []
+        self.deleted: list[str] = []
+        self.fail: dict | None = None
+        self.block: threading.Event | None = None
+        self.reference_status = "found"
+
+    def server(self) -> FastMCP:
+        server = FastMCP("image-service")
+
+        @server.tool(name="generate_image", output_schema=None,
+                     description="Generate a new image, or edit an image generated earlier (offline fake of image-service).")
+        async def generate_image(prompt: str, aspect_ratio: FakeRatio | None = None, style: str | None = None, regenerate: bool = False,
+                                 reference_subject: str | None = None, quality: Literal["standard", "high"] | None = None,
+                                 source_image_id: str | None = None) -> ToolResult:
+            args = {"prompt": prompt, "aspect_ratio": aspect_ratio, "style": style, "regenerate": regenerate,
+                    "reference_subject": reference_subject, "quality": quality, "source_image_id": source_image_id}
+            self.calls.append({k: v for k, v in args.items() if v not in (None, False)})
+            return await self._generate(prompt, aspect_ratio, quality, reference_subject, (source_image_id or "").strip() or None)
+
+        return server
+
+    async def _generate(self, prompt: str, ratio: str | None, quality: str | None, subject: str | None, source: str | None) -> ToolResult:
+        def failure(code: str, text: str) -> ToolResult:
+            return ToolResult(content=text, structured_content={"ok": False, "error": {"code": code, "message": code, "retryable": False}})
+
+        if source is not None and source not in self.made:
+            return failure("source_image_unavailable", "The image to edit could not be found among the editable images of this conversation.")
+        if self.fail is not None:
+            return ToolResult(content=f"Image generation failed (error code: {self.fail['code']}).", structured_content={"ok": False, "error": self.fail})
         if FAKE_IMAGE_FILTERED in prompt:
-            return httpx.Response(422, json={"error": "content_filtered", "message": "blocked", "retryable": False,
-                                             "model": "doubao-seedream-5-0-flash"})
+            return failure("content_filtered", "The image model refused this request under its content safety filter. Do not retry on your own.")
+        if self.block is not None:
+            await asyncio.to_thread(self.block.wait, 10)  # 在线程里等，不卡对话的事件循环（点了停止，这里跟着取消）
         if FAKE_IMAGE_SLOW in prompt:
             await asyncio.sleep(FAKE_IMAGE_SLOW_S)
-        iid = f"fake{len(made) + 1}"
-        path = f"/static/images/{iid}.png"
-        made[path] = _fake_png(prompt, body.get("aspect_ratio") or "1:1", bool(body.get("reference_images")))
-        model = "doubao-seedream-5-0-pro" if body.get("quality") == "high" else "doubao-seedream-5-0-flash"
-        return httpx.Response(200, json={"id": iid, "image_url": path, "model": model, "requested_model": model, "fallback_used": False,
-                                         "grounding_used": False, "cached": False, "created_at": "2026-10-31T00:00:00Z",
-                                         "reference_images_used": len(body.get("reference_images") or []),
-                                         "reference_search": {"status": "skipped"}})
+        if ratio is None:
+            ratio = _closest(*self.made[source][1:]) if source else "1:1"
+        data = _fake_png(prompt, ratio, source is not None)
+        with Image.open(io.BytesIO(data)) as im:
+            width, height = im.size
+        iid = str(uuid4())
+        self.made[iid] = (data, width, height)
+        model = "doubao-seedream-5-0-pro" if quality == "high" else "doubao-seedream-5-0-flash"
+        image = {"id": iid, "mime_type": "image/png", "width": width, "height": height, "bytes": len(data), "model": model,
+                 "edited_from": source, "created_at": "2026-11-04T00:00:00+00:00"}
+        text = (f"The image was {'edited' if source else 'generated'}. Image id: {iid}. Use it only as source_image_id if the user later asks "
+                "to change this image; never show it to the user. Do not output an image link, a markdown image, or the image id.")
+        return ToolResult(content=text, structured_content={
+            "ok": True, "image": image, "requested_model": model, "fallback_used": False, "grounding_used": False, "cached": False,
+            "reference_search": {"status": self.reference_status} if subject else None})
 
-    return handle
+    async def handle(self, req: httpx.Request) -> httpx.Response:
+        """假网关：取图、删图。"""
+        iid = req.url.path.removeprefix("/image/v1/images/")
+        if iid == req.url.path:
+            return httpx.Response(404, json={"error": "not_found"})
+        if req.method == "DELETE":
+            self.deleted.append(iid)
+            self.made.pop(iid, None)
+            return httpx.Response(204)
+        got = self.made.get(iid)
+        return httpx.Response(200, content=got[0], headers={"content-type": "image/png"}) if got else httpx.Response(404)
+
+    def gateway_client(self) -> GatewayClient:
+        return GatewayClient("http://fake-gw", "fake-key", scene="research", transport=httpx.MockTransport(self.handle))
 
 
-def fake_gateway_client() -> GatewayClient:
-    """用 MockTransport 模拟网关的画图（见 _fake_image_service）；搜索、读页、天气走 MCP，见 fake_search_server 等。"""
-    images = _fake_image_service()
-
-    async def handler(req: httpx.Request) -> httpx.Response:
-        if req.url.path == "/image/v1/generate" or req.url.path.startswith("/image/static/"):
-            return await images(req)
-        return httpx.Response(404, json={"error": "not_found"})
-
-    return GatewayClient("http://fake-gw", "fake-key", scene="research", transport=httpx.MockTransport(handler))
-
-
-_FAKE_IMAGE_ID = re.compile(r"Image id: ([0-9a-f]{12})")  # 生图结果里给模型的编号（prompts.toml 的 tools.generate_image.success）
+_FAKE_IMAGE_ID = re.compile(r"Image id: ([0-9a-f-]{36})")  # 生图结果里给模型的编号（image-service 的结果里写的）
 FAKE_USAGE = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120,
               "input_token_details": {"cache_read": 60}, "output_token_details": {"reasoning": 5}}
 _BAD_ARGS = '{"query": "a" x}'  # 解析不了的参数
@@ -715,9 +766,11 @@ class FakeResearchPlanner:
         self.calls: list[tuple[str, Any]] = []
         self.fail_title = False
         self.dream_replies: list[str] = []  # 整理记忆时按顺序给这些回答；用完了照 dream 的说明
-        self._gateway = gateway or fake_gateway_client()
-        self._tools = make_research_tools(self._gateway)
-        self._mcp = McpTools(search or fake_search_server, read or (lambda: fake_read_server(page_repeat)), fake_weather_server)
+        self.images = FakeImageService()
+        self.gateway = gateway or self.images.gateway_client()
+        self._tools = make_research_tools()
+        self._mcp = McpTools(search or fake_search_server, read or (lambda: fake_read_server(page_repeat)), fake_weather_server,
+                             self.images.server)
         self._model = FakeToolModel()
         self._sub_model = FakeToolModel(prefix="fake-sub")
 

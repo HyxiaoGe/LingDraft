@@ -25,7 +25,7 @@ def _client(runner: ResearchRunner) -> TestClient:
 
 @pytest.fixture
 def rr(tmp_path):
-    return ResearchRunner(fake=True, data_dir=tmp_path / "data")
+    return ResearchRunner(fake=True)
 
 
 @pytest.fixture
@@ -188,11 +188,11 @@ def test_stopped_run_is_recorded(client, rr):
 
 def test_records_survive_restart_and_unfinished_ones_become_lost(tmp_path):
     """进程重启：运行记录还在；上次没跑完的，服务启动时记成 lost。再建一个运行器像重启（存储见 conftest 的 _storage）。"""
-    one = ResearchRunner(fake=True, data_dir=tmp_path / "data")
+    one = ResearchRunner(fake=True)
     st = new(_client(one), SIMPLE)
     aio.run(one.run_store.create("cut", st["thread_id"], "say", None, None))  # 像是重启前正在跑的一次
     aio.run(one.run_store.started("cut"))
-    two = ResearchRunner(fake=True, data_dir=tmp_path / "data")
+    two = ResearchRunner(fake=True)
     two.recover()
     runs = {r["id"]: r["status"] for r in two.thread_runs(st["thread_id"])}
     assert runs.pop("cut") == LOST and list(runs.values()) == ["success"]
@@ -219,7 +219,7 @@ def test_record_write_failure_does_not_break_the_run(tmp_path, caplog):
 
         started = finish = create
 
-    rr = ResearchRunner(fake=True, data_dir=tmp_path / "data", run_store=Broken())
+    rr = ResearchRunner(fake=True, run_store=Broken())
     with caplog.at_level(logging.WARNING, logger="app.api.runner"):
         st = new(_client(rr), SIMPLE)
     assert st["status"] == "idle" and st["turns"][0]["record"]["outcome"] == "ok"
@@ -234,7 +234,7 @@ def test_in_memory_checkpointer_means_in_memory_records(tmp_path, monkeypatch):
     from app.graph.research.graph import memory_checkpointer
 
     monkeypatch.setattr(research_runner, "open_storage", None)  # 一调就报错
-    rr = ResearchRunner(fake=True, data_dir=tmp_path / "data", checkpointer=memory_checkpointer())
+    rr = ResearchRunner(fake=True, checkpointer=memory_checkpointer())
     assert isinstance(rr.run_store, MemoryRunStore) and isinstance(rr.memory.store, InMemoryStore)
 
 

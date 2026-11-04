@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import threading
 import uuid
 import zipfile
@@ -22,6 +23,9 @@ from app.api.research_runner import AlreadyPending, NothingToRegenerate, Nothing
 from app.api.run_store import STATUSES
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 from app.graph.research.memory import DreamSchedule
+from app.tools.gateway import GatewayError
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -387,13 +391,20 @@ def research_state(thread_id: str):
     return _view(research(), thread_id)
 
 
-@app.get("/api/research/threads/{thread_id}/images/{name}")
-def research_image(thread_id: str, name: str):
-    """对话里画的图。文件名是图片编号，内容不会变，浏览器可以一直缓存；对话删了图也跟着删。"""
-    path = research().images.path(thread_id, name)
-    if path is None:
+@app.get("/api/research/threads/{thread_id}/images/{image_id}")
+def research_image(thread_id: str, image_id: str):
+    """对话里画的图：图存在 image-service 里，后端按编号经网关取来转给页面（不暴露服务地址）。
+    内容不会变，浏览器可以一直缓存；对话删了图也跟着删。网关、服务出问题回 502，页面显示加载失败、可以重试。"""
+    try:
+        got = research().image(thread_id, image_id) if valid_thread_id(thread_id) else None
+    except GatewayError as e:
+        logger.warning("取图失败：%s", e)
+        raise HTTPException(502, "图片暂时取不到") from None
+    if got is None:
         raise HTTPException(404, "没有这张图")
-    return FileResponse(path, headers={"Cache-Control": "private, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"})
+    data, mime = got
+    return Response(data, media_type=mime,
+                    headers={"Cache-Control": "private, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"})
 
 
 @app.get("/api/inspirations")

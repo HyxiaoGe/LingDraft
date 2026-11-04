@@ -39,8 +39,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - `COMPACT_TRIGGER_TOKENS`、`COMPACT_TARGET_TOKENS`：上下文压缩的触发线和压到多少，默认 20 万、10 万。
   - `LINGDRAFT_DREAM=0` 关掉每天按时整理记忆；`LINGDRAFT_DREAM_HOUR` 是北京时间几点整理，默认 3 点。
 - 外部服务：
-  - `AGENT_TOOLS_URL`、`AGENT_TOOLS_API_KEY`：agent-tools 网关，管搜索、读网页、天气、生图。搜索、读网页、天气走网关的 MCP（`/search/mcp`、`/reader/mcp`、`/weather/mcp`），起服务时连上取工具；没连上的先这样起来（搜索、读网页是同名的占位工具，调了说服务暂时连不上；天气先不带），后台每分钟再试，连上一个换一个。
-  - `IMAGE_SERVICE_URL`：image-service 自己的地址，改图时要把原图的地址交回去。
+  - `AGENT_TOOLS_URL`、`AGENT_TOOLS_API_KEY`：agent-tools 网关，管搜索、读网页、天气、生图。都走网关的 MCP（`/search/mcp`、`/reader/mcp`、`/weather/mcp`、`/image/v2/mcp`），起服务时连上取工具；没连上的先这样起来（搜索、读网页、画图是同名的占位工具，调了说服务暂时连不上；天气先不带），后台每分钟再试，连上一个换一个。画的图存在 image-service 里，按编号经网关取、删（`/image/v1/images/{id}`）。
   - `FUSION_URL`：新对话页的“今日灵感”从 Fusion 取。
 
 海报的接口：`POST /api/threads`（multipart：request，image 可选）和 `POST /api/threads/{id}/resume`（`{"payload": ...}`）都返回 SSE：`thread` / `started` / `progress` / `node` / `interrupt` / `error` 事件，`state` 事件是完整状态，最后以 `end` 收尾；每个事件带 `id`（“执行-序号”），安静 15 秒发一行注释保活；`GET /api/threads/{id}/state`；`GET /api/threads/{id}/files/{name}`；`GET /api/threads/{id}/export` 打包 zip。
@@ -68,7 +67,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 - 查看：
   - `GET /{id}/state`：当前状态。
   - `GET /{id}/events?after=<事件 id>`：断线、刷新后接上事件流。
-  - `GET /{id}/images/{name}`：对话里画的图。
+  - `GET /{id}/images/{image_id}`：对话里画的图，后端经网关从 image-service 取来转给页面；不是这段对话的图、服务里已经没有的返回 404，网关、服务出问题返回 502。
   - `GET /{id}/runs` 和 `GET /api/research/runs`：运行记录，见下面的“运行记录”。
   - `GET /api/memory`：长期记忆，只能看。
 
@@ -174,7 +173,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 
 测试不碰这个库，默认存在内存里（同一个测试里再建一个运行器，就像服务重启）。设了 `LINGDRAFT_TEST_DATABASE_URL`，整套测试就放到那个 Postgres 库上跑，每个测试前都清空这个库，别指向有用的库。CI 两种都跑。
 
-对话里画的图存在数据目录的 `images/<thread_id>/` 下，删对话时一起删。
+对话里画的图存在 image-service 里、归灵稿（只有灵稿的密钥取得到、删得掉），消息里只记编号、大小这些。删对话、重新回答时按编号删掉不要的图，删不掉只记日志。2026-11-04 以前灵稿自己存在数据目录里的图没有搬过去，那些对话里的图显示“这张图已经不在了”。
 
 运行记录（`app/api/run_store.py`，跟 LangGraph Agent Server 的 run 学的）：
 
@@ -213,13 +212,13 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `state.py`。
   - `graph.py`：存储（共用的连接池、线程列表）。
   - `prompts.toml`：给模型看的文字；`prompts.py` 只负责渲染。
-- `app/research_llm.py` `ResearchPlanner` 协议：`LiveResearchPlanner`（DeepSeek 或豆包 + 真实网关，各步用哪个模型见它的构造函数）/ `FakeResearchPlanner`（脚本化的假工具模型 + 进程内的假搜索、读页、天气服务 + MockTransport 的生图）
+- `app/research_llm.py` `ResearchPlanner` 协议：`LiveResearchPlanner`（DeepSeek 或豆包 + 真实网关，各步用哪个模型见它的构造函数）/ `FakeResearchPlanner`（脚本化的假工具模型 + 进程内的假搜索、读页、天气、生图服务，假生图服务也管按编号取图、删图）
 - `app/tools/`：
-  - `gateway.py`：agent-tools 网关客户端（生图），和网关出错时的几种异常。
-  - `research_tools.py`：agent 自己的工具（`generate_image` / `get_current_time`），描述在 `prompts.toml` 的 `[tools.*]`。
+  - `gateway.py`：agent-tools 网关客户端（按编号取图、删图），和网关出错时的几种异常。
+  - `research_tools.py`：agent 自己的工具（`get_current_time`），描述在 `prompts.toml` 的 `[tools.*]`。
   - `mcp.py`：MCP 工具共用的部分：经网关连、取工具、认出网关的 401/403（让这一轮失败）和 429（今天的上限到了）。
   - `web_mcp.py`：搜索、读网页。`search_web`、`read_page` 是 agent-tools 的 MCP 工具（怎么搜、怎么读、结果的样子、失败时给模型的话都在 search-service、reader-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明（什么时候搜、搜够没有、来源 id），中间件给结果带上来源 id、把失败整理成页面上的中文，没连上时用同名的占位工具。
-  - `images.py`：画图、存图。
+  - `image_mcp.py`：画图、改图。`generate_image` 是 agent-tools 的 MCP 工具（出图、存图、改图找原图、比例、给模型的说明都在 image-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明，中间件管每轮最多画 3 张、改图只认这段对话里的图，把结果整理成图片卡片要的东西，没连上时用同名的占位工具。
   - `weather_mcp.py`：查天气。`get_weather` 是 agent-tools 的 MCP 工具（挑城市、整理预报、缓存、给模型的说明都在 weather-service 里，和 Fusion 共用），用 LangChain 的 MCP 适配器接进来；这里接上灵稿自己的一段说明，中间件把结果整理成模型看的文字，网关出问题算没查到、密钥不对让这一轮失败。
 - `app/model_guard.py` 模型服务出错的分类和熔断；`app/aio.py` 对话的事件循环
 - `app/evals/` + `evals/` 回放评测：用真实模型跑 `evals/research/cases.yaml`，按轨迹和裁判模型打分，用法和写用例的约定见 `evals/README.md`

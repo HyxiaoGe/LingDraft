@@ -2,7 +2,7 @@
 
 消息列表就是对话记录：用户的话、模型的思考和正文、工具调用和结果都按发生的先后存在里面。
 旁边只放线程标题和每一轮的记录。来源从搜索、读页的工具结果里取，不另外存。
-生成的图是文件，存在数据目录里（见 app.tools.images），消息里只记它的编号和文件名。
+生成的图存在 image-service 里、归灵稿（见 app.tools.image_mcp），消息里只记它的编号、大小这些。
 """
 
 from __future__ import annotations
@@ -75,11 +75,12 @@ class Forecast(BaseModel):
 
 
 class GeneratedImage(BaseModel):
-    """生成的一张图（image-service）。文件在这个对话的图片目录里（见 app.tools.images.ImageStore），页面按文件名取。"""
+    """生成的一张图。存在 image-service 里、归灵稿，页面按编号经灵稿后端取（见 app.tools.image_mcp、api.main）。
+    2026-11-04 以前的图是灵稿自己存的文件（有 file），那些文件不搬了（Sean 定），页面上说这张图已经不在了。"""
 
     model_config = ConfigDict(extra="forbid")
-    id: str = Field(description="图片编号：模型改这张图时用它（source_image_id）")
-    file: str = Field(description="文件名，<编号>.<扩展名>")
+    id: str = Field(description="图片编号（image-service 的）：模型改这张图时用它（source_image_id）")
+    file: str | None = Field(default=None, description="以前灵稿自己存的图的文件名；现在的图没有")
     mime_type: str
     width: int
     height: int
@@ -87,6 +88,11 @@ class GeneratedImage(BaseModel):
     aspect_ratio: str
     model: str | None = Field(default=None, description="实际出图的模型")
     edited_from: str | None = Field(default=None, description="改的是哪张图（编号）")
+
+    @property
+    def stored(self) -> bool:
+        """还在 image-service 里（不是以前灵稿自己存、已经不在了的那种）。"""
+        return self.file is None
 
 
 class ToolStep(BaseModel):
