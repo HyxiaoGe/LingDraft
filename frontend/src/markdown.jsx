@@ -1,7 +1,7 @@
-// 正文的小 Markdown：段落、标题、列表、引用块、表格、粗体、行内代码、链接，再加上引用角标 [s3fa9c1]。
+// 正文的小 Markdown：段落、标题、列表、引用块、表格、代码块、粗体、行内代码、链接，再加上引用角标 [s3fa9c1]。
 // 只认这些常见写法，不认识的照原样显示；全部按文字渲染，不插入 HTML。
 import React from "react";
-import { isRule } from "./research.js";
+import { FENCE, closesFence, isRule } from "./research.js";
 
 const INLINE = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\])/g;
 const CITE_TAIL = /\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\]|[，。；：、！？）」』”’,.;:!?)]+/y; // 角标后面紧跟的角标和标点
@@ -52,6 +52,15 @@ export function Markdown({ text, cite }) {
     const line = lines[i];
     const start = i;
     if (!line.trim()) { i++; continue; }
+    const f = line.match(FENCE);
+    if (f) { // 代码块：里面的字原样显示，不认 Markdown 和角标。逐字出现时还没写到收尾的围栏，先显示到最后
+      const body = [];
+      const indent = new RegExp(`^ {0,${f[1].length}}`); // 列表项里缩进写的代码块：去掉围栏那么多的缩进
+      for (i++; i < lines.length && !closesFence(lines[i], f[2]); i++) body.push(lines[i].replace(indent, ""));
+      i++;
+      blocks.push(<pre key={`c${start}`}><code>{body.join("\n")}</code></pre>);
+      continue;
+    }
     const h = line.match(/^(#{1,4})\s+(.*)$/);
     if (h) {
       const Tag = `h${Math.min(h[1].length + 2, 6)}`; // 正文里的标题比页面标题小
@@ -88,6 +97,7 @@ export function Markdown({ text, cite }) {
       const items = [];
       let loose = false; // 项之间空了行：项和项之间也留出空隙
       for (; i < lines.length; i++) {
+        if (FENCE.test(lines[i])) break; // 项下面缩进写的代码块单独显示，不并进项的文字
         const m = lines[i].match(ITEM);
         if (m) items.push({ indent: m[1].length, text: m[3] });
         else if (lines[i].trim() && items.length && /^\s+/.test(lines[i])) items.at(-1).text += " " + lines[i].trim(); // 续行
@@ -104,7 +114,7 @@ export function Markdown({ text, cite }) {
       continue;
     }
     const para = [];
-    for (; i < lines.length && lines[i].trim() && !/^(#{1,4}\s|>|\s*([-*+]|\d+[.)])\s)/.test(lines[i]) && !(lines[i].trim().startsWith("|") && isRule(lines[i + 1] || "")); i++) {
+    for (; i < lines.length && lines[i].trim() && !/^(#{1,4}\s|>|\s*([-*+]|\d+[.)])\s)/.test(lines[i]) && !FENCE.test(lines[i]) && !(lines[i].trim().startsWith("|") && isRule(lines[i + 1] || "")); i++) {
       para.push(lines[i]);
     }
     if (!para.length) { para.push(lines[i]); i++; }

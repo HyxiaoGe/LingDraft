@@ -58,6 +58,23 @@ export const cutPartialCite = (text) => text.replace(/\[(s[0-9a-f]{0,9})?$/, "")
 
 // 表格表头下面的分隔行：| --- | :---: |
 export const isRule = (line) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line);
+// 代码块的围栏行：``` 或 ~~~（三个起），后面可以跟语言名；反引号围栏的语言名里不能有反引号
+export const FENCE = /^(\s*)(`{3,}|~{3,})([^`]*)$/;
+// 收尾的围栏：和开头同一种符号、不比开头短，后面没有别的字
+export const closesFence = (line, open) => {
+  const m = line.match(FENCE);
+  return !!m && m[2][0] === open[0] && m[2].length >= open.length && !m[3].trim();
+};
+
+// 这几行走完时还在代码块里（开了围栏还没收）
+function fenceOpen(lines) {
+  let open = null;
+  for (const l of lines) {
+    if (open) { if (closesFence(l, open)) open = null; }
+    else open = l.match(FENCE)?.[2] || null;
+  }
+  return !!open;
+}
 const TABLE_LINE = /^\s*\|/;
 
 // 逐字出现时不该一个字一个字放的，显示到的位置 n 直接跳过去：
@@ -102,10 +119,12 @@ function tableLinesAbove(text, b) {
 
 // 正在逐字出现的文字，最后一行可能停在半截的 Markdown 上：没配对的 ** 和 ` 先补上（刚出来的半个先去掉），
 // 写到一半的链接先只显示文字，只有 # 或列表符号的行先不显示。表头一出来就按表格显示：分隔行还没写完时先补一行，
-// 不然先露出一行竖线、等分隔行写完再突然变成表格。字出来时不先露出符号、等配上了再突然变样式
+// 不然先露出一行竖线、等分隔行写完再突然变成表格。字出来时不先露出符号、等配上了再突然变样式。
+// 代码块里的、围栏那一行原样显示（代码里的 ` 和 ** 不是 Markdown）；只写了一两个 ` 的行先不显示（可能是围栏写到一半）
 export function tidyTyping(text) {
   const lines = cutPartialCite(text).split("\n");
   const end = lines.length - (lines.length > 1 && !lines.at(-1).trim() ? 1 : 0); // 刚换行、新的一行还没字
+  if (end > 0 && (fenceOpen(lines.slice(0, end - 1)) || FENCE.test(lines[end - 1]))) return lines.join("\n");
   let j = end;
   while (j > 0 && TABLE_LINE.test(lines[j - 1])) j--;
   if (end - j === 1) lines.splice(j + 1, 0, "| --- |");
@@ -113,7 +132,7 @@ export function tidyTyping(text) {
   const t = lines.join("\n");
   const k = t.lastIndexOf("\n") + 1;
   let line = t.slice(k);
-  if (/^\s*(#{1,4}|\d+[.)]?|[-*+])$/.test(line)) return t.slice(0, k);
+  if (/^\s*(#{1,4}|\d+[.)]?|[-*+]|`{1,2}|~{1,2})$/.test(line)) return t.slice(0, k);
   line = line.replace(/\[(?!s[0-9a-f]{6}(?:[0-9a-f]{4})?\])([^\]\n]*)(?:\](?:\([^)\s]*)?)?$/, "$1").replace(/([^*\s])\*$/, "$1");
   if ((line.split("**").length - 1) % 2) line = line.endsWith("**") ? line.slice(0, -2) : `${line}**`;
   if ((line.split("`").length - 1) % 2) line = line.endsWith("`") ? line.slice(0, -1) : `${line}\``;
