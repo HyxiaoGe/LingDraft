@@ -37,6 +37,7 @@ from app.graph.research.memory import MemoryBook, next_at
 from app.graph.research.sources import collect_sources, subagent_messages
 from app.graph.research.state import Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
+from app.tools.gateway import IMAGE_ID
 
 
 class NothingToRetry(Exception):
@@ -352,16 +353,13 @@ class ResearchRunner(BaseRunner):
     def state_view(self, thread_id: str) -> dict:
         return aio.run(self._astate_view(thread_id))
 
-    def image(self, thread_id: str, image_id: str) -> tuple[bytes, str] | None:
-        """页面来取的图：(内容, MIME 类型)。只取这段对话里画的、还在 image-service 里的，经网关取（见 app.tools.gateway）；
-        别的编号、服务里已经没有的是 None。网关、服务出问题照常抛出。"""
-        return aio.run(self._aimage(thread_id, image_id))
-
-    async def _aimage(self, thread_id: str, image_id: str) -> tuple[bytes, str] | None:
-        snap = await self.graph.aget_state(self._cfg(thread_id))
-        if image_id not in {img.id for img in history.stored_images((snap.values or {}).get("messages", []))}:
+    def image(self, image_id: str) -> tuple[bytes, str] | None:
+        """页面来取的图：(内容, MIME 类型)，经网关从 image-service 取（见 app.tools.gateway）。
+        不查是不是这段对话的：图画好、页面就去取，这一轮还没跑完，检查点里还没有它（运行结束才写，见 DURABILITY）；
+        服务只给灵稿的图，编号是随机的 uuid。编号格式不对（比如以前灵稿自己存的图）、服务里已经没有的是 None。网关、服务出问题照常抛出。"""
+        if not IMAGE_ID.fullmatch(image_id):
             return None
-        return await self.images.image(image_id)
+        return aio.run(self.images.image(image_id))
 
     def summary_view(self, thread_id: str) -> dict | None:
         return aio.run(self._asummary_view(thread_id))

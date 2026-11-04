@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 TIMEOUT = 30.0
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 IMAGE_MIME_TYPES = {"image/png", "image/jpeg", "image/webp"}
+IMAGE_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")  # image-service 的图片编号（uuid4）
 
 
 class GatewayError(RuntimeError):

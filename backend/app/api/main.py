@@ -394,9 +394,10 @@ def research_state(thread_id: str):
 @app.get("/api/research/threads/{thread_id}/images/{image_id}")
 def research_image(thread_id: str, image_id: str):
     """对话里画的图：图存在 image-service 里，后端按编号经网关取来转给页面（不暴露服务地址）。
+    这一轮还在跑时页面就来取了，所以不查图是不是这段对话的（见 ResearchRunner.image）。
     内容不会变，浏览器可以一直缓存；对话删了图也跟着删。网关、服务出问题回 502，页面显示加载失败、可以重试。"""
     try:
-        got = research().image(thread_id, image_id) if valid_thread_id(thread_id) else None
+        got = research().image(image_id) if valid_thread_id(thread_id) else None
     except GatewayError as e:
         logger.warning("取图失败：%s", e)
         raise HTTPException(502, "图片暂时取不到") from None
