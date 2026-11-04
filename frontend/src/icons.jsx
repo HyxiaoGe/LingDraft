@@ -23,6 +23,9 @@ export const IconRain = (p) => svg(<><path d={CLOUD_TOP} /><path d="M16 14v6M8 1
 export const IconSnow = (p) => svg(<><path d={CLOUD_TOP} /><path d="M8 15h.01M8 19h.01M12 17h.01M12 21h.01M16 15h.01M16 19h.01" /></>, p);
 export const IconThunder = (p) => svg(<><path d="M6 16.3A7 7 0 1 1 15.7 8h1.8a4.5 4.5 0 0 1 .5 8.97" /><path d="M13 12l-3 5h4l-3 5" /></>, p);
 export const IconFog = (p) => svg(<><path d={CLOUD_TOP} /><path d="M16 17H7M17 21H9" /></>, p);
+// 地点、路线
+export const IconPin = (p) => svg(<><path d="M12 21s-6.5-5.7-6.5-11a6.5 6.5 0 0 1 13 0c0 5.3-6.5 11-6.5 11z" /><circle cx="12" cy="10" r="2.3" /></>, p);
+export const IconRoute = (p) => svg(<><circle cx="6" cy="19" r="2" /><circle cx="18" cy="5" r="2" /><path d="M8 19h8.5a3.5 3.5 0 0 0 0-7h-9a3.5 3.5 0 0 1 0-7H16" /></>, p);
 export const IconChevron = (p) => svg(<path d="M6 9l6 6 6-6" />, p);
 export const IconArrowUp = (p) => svg(<path d="M12 19V5M5 12l7-7 7 7" />, { stroke: 2.4, ...p });
 export const IconArrowDown = (p) => svg(<path d="M12 5v14M5 12l7 7 7-7" />, p);

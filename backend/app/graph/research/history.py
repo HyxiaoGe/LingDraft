@@ -13,13 +13,28 @@ from pydantic import ValidationError
 
 from app.graph.research import prompts
 from app.graph.research.sources import SUBAGENT_TOOL, collect_sources, parse, search_hits, subagent_messages
-from app.graph.research.state import Forecast, GeneratedImage, ToolStep, Usage, WeatherDay, WeatherHour
+from app.graph.research.state import (
+    Forecast,
+    GeneratedImage,
+    Place,
+    PlaceList,
+    Route,
+    RouteLeg,
+    RoutePlan,
+    ToolStep,
+    TransitPlan,
+    Usage,
+    WeatherDay,
+    WeatherHour,
+)
 
 BLOCKED = "lingdraft_blocked"  # 一轮因内容审核停下时，系统补的那条模型消息 response_metadata 里的键，值是原因（见 agent.ContentGuard）
 STOPPED = "lingdraft_stopped"  # 用户点了停止时，已经流出来的那部分正文存成的模型消息 response_metadata 里的键
 GUIDE = "lingdraft_guide"  # 用户插进正在跑的这一轮的话：这条用户消息 additional_kwargs 里的键（见 agent.TurnMiddleware.abefore_model）
 IMAGE_TOOL = "generate_image"
-STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", IMAGE_TOOL: "image", SUBAGENT_TOOL: "task"}
+PLACE_TOOL, ROUTE_TOOL = "place_search", "route_compare"  # 地图的两个工具（见 app.tools.maps_mcp）
+STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", PLACE_TOOL: "place", ROUTE_TOOL: "route",
+              IMAGE_TOOL: "image", SUBAGENT_TOOL: "task"}
 BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
 # 没画成的原因在页面上的说法（照 Fusion 的图片卡片），没列的都说“图片生成失败”
 IMAGE_FAILURES = {
@@ -147,6 +162,10 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         extra = {"aspect_ratio": str(args.get("aspect_ratio") or ""), "edit": bool(args.get("source_image_id"))}
     elif kind == "task":
         text, extra = str(args.get("title", "")), {"prompt": str(args.get("prompt", ""))}
+    elif kind == "place":
+        text, extra = str(args.get("query", "")), {"limits": place_limits(args)}
+    elif kind == "route":
+        text, extra = f"{_endpoint(args.get('origin'))} → {_endpoint(args.get('destination'))}", {"limits": route_limits(args)}
     else:
         text, extra = str(args.get("url" if kind == "read" else "location", "")), {}
     if result is None:
@@ -157,6 +176,8 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         return _image_step(cid, text, extra, result)
     if kind == "task":
         return _task_step(cid, text, extra, result)
+    if kind in ("place", "route"):
+        return _maps_step(kind, cid, text, extra, result)
     data = parse(result)
     if kind == "weather":
         return _weather_step(cid, text, data, result)
@@ -285,6 +306,116 @@ def _old_weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> To
     return ToolStep(id=cid, kind="weather", text=text, ok=False, message=_failure(data, result, {}) or "没查到")
 
 
+# ---- 地图（maps-service 的 place_search、route_compare，见 app.tools.maps_mcp）----
+
+MODE_NAMES = {"driving": "驾车", "transit": "公交", "walking": "步行", "bicycling": "骑行"}
+CURRENT_LOCATION = "current_location"
+# maps-service 的错误码（见 agent-tools 的 services/maps/README.md）→ 页面上的说法；给模型的说明是服务给的英文。
+# unavailable、quota_exhausted 也可能是灵稿自己回的（服务没连上、网关今天的上限到了，见 maps_mcp）
+MAPS_FAILURES = {
+    "ambiguous_location": "对得上好几个地方",
+    "place_not_found": "地图里没找到这个地方",
+    "place_id_unresolved": "地点编号查不到",
+    "location_unavailable": "拿不到当前位置",
+    "no_route": "算不出路线",
+    "invalid_arguments": "查询的参数不对",
+    "quota_exhausted": "地图今天的额度用完了",
+    "unavailable": "地图服务暂时查不到",
+    "timeout": "地图查询超时了",
+    "tool_error": "地图没调成",
+}
+MAPS_FAILED = "地图服务暂时查不到"
+
+
+def _endpoint(value: Any) -> str:
+    text = str(value or "").strip()
+    return "当前位置" if text == CURRENT_LOCATION else text
+
+
+def place_limits(args: dict) -> list[str]:
+    """查地点时在哪查：某地附近、当前位置附近，或者哪个城市。"""
+    if args.get("anchor_source") == CURRENT_LOCATION:
+        return ["当前位置附近"]
+    if args.get("anchor_source") == "named" and args.get("near"):
+        return [f"{args['near']}附近"]
+    return [str(args["city"])] if args.get("city") else []
+
+
+def route_limits(args: dict) -> list[str]:
+    modes = args.get("modes") if isinstance(args.get("modes"), list) else []
+    return [MODE_NAMES.get(str(m), str(m)) for m in modes]
+
+
+def _text(value: Any) -> str:
+    return str(value).strip() if value not in (None, "") else ""
+
+
+def places_of(data: dict, fetched_at: str = "") -> PlaceList:
+    """place_search 的整份结果（MCP 的 structuredContent）换成地点卡要的样子。字段不对抛 ValidationError、KeyError、TypeError。"""
+    anchor = data.get("anchor") if isinstance(data.get("anchor"), dict) else {}
+    near = CURRENT_LOCATION if anchor.get("source") == CURRENT_LOCATION else _text(anchor.get("label"))
+    places = [Place(name=p["name"], address=_text(p.get("address")), district=_text(p.get("district")), city=_text(p.get("city")),
+                    category=_text(p.get("category")), distance_m=p.get("distance_m"), rating=p.get("rating"),
+                    cost=p.get("reference_cost_yuan"), open_hours=_text(p.get("open_hours")), photo_url=_text(p.get("photo_url")),
+                    map_url=_text(p.get("map_url")), provider=_text(p.get("provider")))
+              for p in data["places"]]
+    return PlaceList(query=_text(data.get("query")), near=_endpoint(near), city=_text(data.get("city")), places=places,
+                     limitations=[str(x) for x in data.get("limitations") or []], fetched_at=fetched_at)
+
+
+def _legs(raw: Any) -> list[RouteLeg]:
+    return [RouteLeg(kind=_text(g.get("kind")) or "other", line_name=_text(g.get("line_name")), departure_stop=_text(g.get("departure_stop")),
+                     arrival_stop=_text(g.get("arrival_stop")), via_stop_count=g.get("via_stop_count"), entrance=_text(g.get("entrance")),
+                     exit=_text(g.get("exit")), distance_m=g.get("distance_m"), duration_s=g.get("duration_s"))
+            for g in raw or []]
+
+
+def routes_of(data: dict, fetched_at: str = "") -> RoutePlan:
+    """route_compare 的整份结果换成路线卡要的样子。字段不对抛 ValidationError、KeyError、TypeError。"""
+    def label(end: Any) -> str:
+        end = end if isinstance(end, dict) else {}
+        return "当前位置" if end.get("source") == CURRENT_LOCATION else _text(end.get("label"))
+
+    routes = [Route(mode=r["mode"], distance_m=r.get("distance_m"), duration_s=r.get("duration_s"), summary=_text(r.get("summary")),
+                    toll_yuan=r.get("toll_yuan"), fare_yuan=r.get("fare_yuan"), transit_type=_text(r.get("transit_type")),
+                    transfers=r.get("transfers"), walking_distance_m=r.get("walking_distance_m"), legs=_legs(r.get("legs")),
+                    alternatives=[TransitPlan(duration_s=a.get("duration_s"), fare_yuan=a.get("fare_yuan"), transit_type=_text(a.get("transit_type")),
+                                              transfers=a.get("transfers"), walking_distance_m=a.get("walking_distance_m"), legs=_legs(a.get("legs")))
+                                  for a in r.get("alternatives") or []],
+                    provider=_text(r.get("provider")))
+              for r in data["routes"]]
+    return RoutePlan(origin=label(data.get("origin")), destination=label(data.get("destination")), routes=routes,
+                     unavailable_modes=[str(m) for m in data.get("unavailable_modes") or []],
+                     departure_time=_text(data.get("requested_departure_time")), fetched_at=fetched_at)
+
+
+def _candidate_names(err: dict) -> list[str]:
+    """重名时的候选，页面上写“城市区县”，不写坐标。"""
+    names = []
+    for c in err.get("candidates") or []:
+        if isinstance(c, dict) and (name := "".join(_text(c.get(k)) for k in ("city", "district"))):
+            names.append(name)
+    return list(dict.fromkeys(names))
+
+
+def _maps_step(kind: str, cid: str, text: str, extra: dict, result: ToolMessage) -> ToolStep:
+    """整份结果在 artifact 的 structured_content 里，查的时间在 retrieved_at（见 maps_mcp.MapsMiddleware）。"""
+    art = result.artifact if isinstance(result.artifact, dict) else {}
+    sc = art.get("structured_content")
+    if isinstance(sc, dict) and sc.get("ok") is True and result.status != "error":
+        try:
+            card = places_of(sc, _text(art.get("retrieved_at"))) if kind == "place" else routes_of(sc, _text(art.get("retrieved_at")))
+        except (ValidationError, KeyError, TypeError):
+            return ToolStep(id=cid, kind=kind, text=text, ok=False, message="地图结果的格式不对", **extra)
+        return ToolStep(id=cid, kind=kind, text=text, **{"places" if kind == "place" else "routes": card}, **extra)
+    err = sc.get("error") if isinstance(sc, dict) else None
+    err = err if isinstance(err, dict) else {}
+    message = MAPS_FAILURES.get(err.get("code"), MAPS_FAILED)
+    if err.get("code") == "ambiguous_location" and (names := _candidate_names(err)):
+        message += "：" + "、".join(names)
+    return ToolStep(id=cid, kind=kind, text=text, ok=False, message=message, **extra)
+
+
 def image_of(m: BaseMessage) -> GeneratedImage | None:
     """一条生图结果里画好的图；没画成是 None。图的信息在 artifact 里（见 image_mcp.ImageMiddleware）。"""
     art = m.artifact if isinstance(m, ToolMessage) and m.name == IMAGE_TOOL else None
@@ -342,6 +473,8 @@ def usage_of(messages: list[BaseMessage]) -> Usage:
             u.reads += 1
         elif isinstance(m, ToolMessage) and m.name == "get_weather":
             u.weather += 1
+        elif isinstance(m, ToolMessage) and m.name in (PLACE_TOOL, ROUTE_TOOL):
+            u.maps += 1
         elif image_of(m):
             u.images += 1
         elif subagent_messages(m):

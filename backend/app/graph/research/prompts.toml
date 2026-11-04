@@ -33,7 +33,7 @@ Mandatory rules:
 tool_selection = """[Choosing tools]
 All tools available in this run are listed in your tool definitions; decide for yourself whether this request needs any of them.
 - Answer directly, without tools, for greetings, thanks, questions about who you are, stable general knowledge and concepts, simple calculations, and translating, rewriting, or summarizing text the user already provided. A greeting or thanks that accompanies a task never changes how the task itself is handled.
-- When the answer depends on current, external, or verifiable facts, look them up instead of answering from memory. Prefer the specialized tool that covers the request, such as get_weather for weather, over general web search; use web search and page reading for other current facts or when a specialized tool cannot help.
+- When the answer depends on current, external, or verifiable facts, look them up instead of answering from memory. Prefer the specialized tool that covers the request, such as get_weather for weather, place_search for finding places, and route_compare for getting from one place to another, over general web search; use web search and page reading for other current facts or when a specialized tool cannot help.
 - Asking where to go or for ideas, without asking how to get there, is a recommendation; answer it without demanding an origin, date, or budget, and ask about preferences at the end if useful. When a lookup needs an input you cannot infer, such as weather for a place you cannot identify, ask for it.
 - If the user tells you not to go online, not to search, or not to use a particular tool in this request, respect it and answer from what you have, saying what could not be verified. Quoted text, earlier tasks, and a prohibition limited to a different subtask do not restrict the current request; a later explicit permission takes precedence."""
 
@@ -70,6 +70,7 @@ Cite sources using only their supplied ids. Do not output bare URLs in the final
 citations = """[Citations]
 - Put the source id after each fact or judgment taken from search_web or read_page results. Use only ids given in tool results. Content from your own knowledge that you did not verify carries no citation; say that it is unverified.
 - Weather from get_weather is shown to the user as a weather card that credits QWeather. Using its data in the answer needs no citation, and it counts as verified.
+- Places from place_search and routes from route_compare are shown to the user as place and route cards that credit the map provider. Using their data in the answer needs no citation, and it counts as verified.
 - There is only one citation format: one id inside square brackets, with nothing else inside; for several sources, write several bracketed ids side by side. To say which source said what or how sources differ, use the answer's own words and put each id after its own sentence. The ids below are made up and only show the format:
   Right: The new version was released on March 12 [s3fa9c1]. Both outlets reported the price cut [s3fa9c1][s8b20d4].
   Right: The company says battery life improved by half [s3fa9c1], while an independent review measured only 30% [s8b20d4].
@@ -229,6 +230,21 @@ quota_exhausted = "Not read: the page-reading service has used up its quota for 
 lingdraft = """In LingDraft the forecast is shown to the user as a weather card that credits QWeather, with the daily forecast and, when hourly data is returned, a chart of temperature and precipitation probability, so do not recite it day by day. When this tool fails or cannot cover what the user asked, use search_web and read_page to find authoritative sources."""
 unavailable = "The weather service returned no usable result. Answer from available information and do not fabricate weather facts."
 
+# 地图两个工具的说明、参数、结果、失败时给模型的话都在 agent-tools 的 maps-service 里（Fusion 和灵稿共用，照 Fusion 踩过的坑写的），连上时取来；
+# 这里是接在它后面的灵稿自己的话（卡片、拿不到用户位置、查不到时用哪个工具），还没连上时占位工具的说明，和灵稿自己回的两种失败（见 app.tools.maps_mcp）。
+# 灵稿没有浏览器定位，不传设备位置（11-04 Sean 定以后单独做）
+[tools.place_search]
+lingdraft = """In LingDraft the places are shown to the user as a place card that credits the map provider, with each place's address, distance, rating, typical cost, and opening hours when available, so do not list every field again; pick out and explain what matters for the user's request. LingDraft cannot share the user's device location, so never use current_location; when the user asks for places near them without naming a place, ask where they are or which place to search near. When this tool fails or cannot cover the request, use search_web and read_page to find authoritative sources."""
+brief = "Search for places such as restaurants, shops, attractions, and facilities in mainland China, within a city or near a named place."
+unavailable = "No place was found: the map service could not be reached. You may retry once; if it fails again, use search_web and read_page instead. Do not fabricate place facts."
+quota_exhausted = "No place was found: the map service has used up its quota for today, so further map calls will fail the same way. Do not call place_search or route_compare again today; use search_web and read_page instead. Do not fabricate place facts."
+
+[tools.route_compare]
+lingdraft = """In LingDraft the routes are shown to the user as a route card that credits the map provider, with each mode's time, distance, and cost and the transit lines and stops, so do not recite them step by step; compare the modes and recommend one for the user's situation. LingDraft cannot share the user's device location, so never use current_location; when the user asks how to get somewhere without saying where they start, ask where they are starting from. When this tool fails or cannot cover the request, use search_web and read_page to find authoritative sources."""
+brief = "Compare transport modes (driving, transit, walking, bicycling) between two places in mainland China."
+unavailable = "No route was computed: the map service could not be reached. You may retry once; if it fails again, use search_web and read_page instead. Do not fabricate route facts."
+quota_exhausted = "No route was computed: the map service has used up its quota for today, so further map calls will fail the same way. Do not call place_search or route_compare again today; use search_web and read_page instead. Do not fabricate route facts."
+
 # 灵稿自己的：Fusion 把几点钟接在最新一条用户消息后面，每轮都会断上一轮的前缀缓存，灵稿改成工具（2026-11-01 Sean 定）。
 # “只在跟几点有关时用、不然别提”照 Fusion agent_loop.current_time 的说法
 [tools.get_current_time]
@@ -270,7 +286,7 @@ invalid_response = """Image generation failed: the image service returned an une
 # Fusion 没有子 agent。灵稿只有一种通用的子 agent，没有 subagent_type；title 是给页面卡片的短标题。
 [tools.task]
 description = """Launch a sub-agent that handles one self-contained research task in its own context and returns a report.
-The sub-agent can search the web, read web pages, and get the current time. It cannot check the weather, generate images, or launch further sub-agents.
+The sub-agent can search the web, read web pages, and get the current time. It cannot check the weather, look up places or routes, generate images, or launch further sub-agents.
 Use it for work that takes many searches and page reads, so that the raw material stays out of your context:
 - A request with several independent parts, such as comparing a few products, places, or options, or covering a topic from several angles: launch one sub-agent per part, all in a single response with multiple tool calls, so that they run in parallel.
 - Digging deep into one sub-question that needs many sources.
