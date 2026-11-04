@@ -16,6 +16,24 @@ uv run python -m app.evals.research --case cost --repeat 3 --no-sources
 改了 `app/graph/research/prompts.toml` 或对话链路的代码，先挑相关的用例跑一遍再合并；
 Pro 贵，每次跑之前想清楚这次要回答什么问题，答到就停，不追求全过。只跑一遍时结果有波动，拿不准的用例加 `--repeat`。
 
+## 录像回放、重新打分、汇总
+
+```bash
+uv run python -m app.evals.research --record                       # 真跑，把工具结果录下来（每个用例一份，整份换掉）
+uv run python -m app.evals.research --replay --repeat 2            # 用录像回放：工具不发请求，材料和录的时候一样
+uv run python -m app.evals.research --rejudge data/evals/<结果>.json --repeat 2   # 不跑 agent，拿旧回答重新打分
+uv run python -m app.evals.research --stats data/evals/<结果1>.json data/evals/<结果2>.json  # 每项检查过了几次
+```
+
+- **录像**（`app/evals/tape.py`）：录在 `data/evals/tapes/<用例>.json`，不进仓库（里面是搜到、读到的网页）。
+  按工具名和参数对上，对上了直接给录好的结果；没对上的（比如换了搜索词）照常真调、补录进去，每轮记下对上几次、真调几次。
+  工具说明照常从服务现取，中间件、来源编号、卡片照常走真代码。回放时这个用例的时钟挪到录的时候（`app/clock.py`），
+  系统提示词里的日期、`get_current_time`、裁判看的日期都是录的那天，“明天”的天气才对得上。录像旧了（网页、价格变了）就重新 `--record`。
+- **重新打分**：结果文件里存了每轮的来源、裁判看的材料和那一轮的日期。改了 `expect`、`judge` 标准或裁判的提示词，
+  拿旧回答按现在的用例重新检查，agent 不重跑；用例里的对话改过了的记为出错。`--repeat` 是每个回答判几遍，用来看裁判自己的波动。
+- **汇总**（`--stats`，跑的时候 `--repeat` 大于 1 也会打印）：几遍下来每个用例每轮每项检查过了几次，分成会翻的、一直不过的、一直过的。
+  会翻的检查单跑一遍不算数；一个改动要算改好了，得把一直不过的改成过，而且没让一直过的变成不过。
+
 每轮的检查：
 
 - **自动检查**：每轮都要跑完、有回复（这一轮的结果是 ok，最后一条模型消息有正文）、实时片段的消息 id 和存下来的对得上、

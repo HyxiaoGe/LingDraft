@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
+from fastmcp import FastMCP
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage, ToolMessage
 
 from app.evals.research import (
@@ -14,13 +17,18 @@ from app.evals.research import (
     RubricJudgement,
     load_cases,
     material,
+    rejudge_case,
     run_case,
+    stability,
     summary_line,
     text_for,
     transcript,
     turn_checks,
 )
+from app import aio
+from app.evals.tape import Tape
 from app.research_llm import FakeResearchPlanner
+from app.tools.research_tools import CHINA_TZ
 from tests.test_research import failing_search
 
 
@@ -37,8 +45,8 @@ class FakeJudge:
         return CitationJudgement(verdicts=[CitationVerdict(statement=reply[:10], source_ids=[s["id"]], verdict=self.verdict, reason="假裁判")
                                            for s in sources] + extra)
 
-    def rubric(self, said, rubric, reply):
-        self.rubrics.append((said, rubric, reply))
+    def rubric(self, said, rubric, reply, today):
+        self.rubrics.append((said, rubric, reply, today))
         return RubricJudgement(passed=True, reason="假裁判")
 
 
@@ -68,8 +76,9 @@ def test_multi_turn_case_passes_and_records_each_turn():
                                                            "min_reads",
                                                            "judge", "sources_supported"]
     # 裁判看的是这一轮的正文；引用按 agent 当时看到的材料核对；没有引用的那轮不核对
-    said, rubric, reply = judge.rubrics[0]
+    said, rubric, reply, today = judge.rubrics[0]
     assert said == "查一下向量库选型" and rubric == "给了推荐" and reply.startswith("结论")
+    assert today == datetime.now(CHINA_TZ).date().isoformat() == r["turns"][0]["today"]  # 没回放：就是今天
     assert len(r["turns"][0]["citations"]) == 2 and r["turns"][1]["citations"] == []
     assert len(judge.sources) == 2 and all(s["text"] != "（没有记录到材料）" for s in judge.sources)
     text = transcript([r])
@@ -107,7 +116,7 @@ def test_search_service_down_is_an_error_not_a_failure():
     async def down(query: str) -> str:
         raise RuntimeError("Client failed to connect")
 
-    r = _run([{"say": "比较两款笔记软件"}], planner=lambda: failing_search(down))
+    r = _run([{"say": "比较两款笔记软件"}], planner=lambda **_: failing_search(down))
     assert not r["passed"] and r["error"].startswith("RuntimeError: 搜索全部失败（unavailable）")
 
 
@@ -161,8 +170,141 @@ def test_subagent_searches_count_as_searched():
 def test_citation_outside_brackets_fails_cite_format():
     played = {"status": "idle", "outcome": "ok", "stream_ids_match": True, "searches": [], "reads": [],
               "reply": "定价 2 美元 [s3ae980]。[s3ae980 之外，见 sa63a73] 另有说法 [sa63a73][s1b2c3d]",
-              "view": {"sources": {"s3ae980": {}, "sa63a73": {}, "s1b2c3d": {}}}}
+              "sources": {"s3ae980": "https://a", "sa63a73": "https://b", "s1b2c3d": "https://c"}}
     checks = {c["name"]: c for c in turn_checks(CaseTurn(say="x"), played)}
     assert not checks["cite_format"]["passed"] and checks["cite_format"]["detail"] == "没按 [id] 写的引用：s3ae980、sa63a73"
     played["reply"] = "定价 2 美元 [s3ae980]，另有说法 [sa63a73][s1b2c3d]。"
     assert {c["name"]: c for c in turn_checks(CaseTurn(say="x"), played)}["cite_format"]["passed"]
+
+
+# ---- 工具录像、重新打分、汇总 ----
+
+
+def _case(turns: list[dict], cid: str = "x") -> Case:
+    return Case.model_validate({"id": cid, "source": "测试", "turns": turns})
+
+
+def _broken_search():
+    """调了就出错的搜索服务（进程内的 MCP）：回放时搜索对上了录像，就不该调到它。"""
+    srv = FastMCP("broken-search")
+
+    @srv.tool(name="search_web")
+    async def search_web(query: str, count: int = 5) -> dict:
+        raise RuntimeError("搜索服务坏了")
+
+    return srv
+
+
+def test_replay_gives_recorded_tool_results_without_calling_the_service(tmp_path):
+    """录一遍：工具都真调、录下来；回放：同样的调用给录好的，搜索服务这时坏了也不影响，回答和录的时候一样。"""
+    path = tmp_path / "x.json"
+    case = _case([{"say": "查一下向量库选型", "expect": {"searched": True, "min_reads": 1}}, {"say": "直接答：为什么"}])
+    rec = run_case(case, FakeResearchPlanner, FakeJudge(), tape=Tape(path, fresh=True))
+    assert rec["passed"], (_failed(rec), rec.get("error"))
+    assert rec["tape"]["hits"] == 0 and rec["tape"]["live"] > 0
+    assert rec["turns"][0]["tape"] == rec["tape"] and rec["turns"][1]["tape"] == {"hits": 0, "live": 0}
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert len(saved["calls"]) == rec["tape"]["live"] and {c["tool"] for c in saved["calls"]} == {"search_web", "read_page"}
+
+    again = run_case(case, lambda **kw: FakeResearchPlanner(search=_broken_search, **kw), FakeJudge(), tape=Tape(path))
+    assert again["passed"], (_failed(again), again.get("error"))
+    assert again["tape"] == {"hits": rec["tape"]["live"], "live": 0}
+    assert [t["reply"] for t in again["turns"]] == [t["reply"] for t in rec["turns"]]
+    assert again["turns"][0]["sources"] == rec["turns"][0]["sources"]
+    assert json.loads(path.read_text(encoding="utf-8")) == saved  # 全对上了，录像不动
+
+
+def test_replay_calls_live_when_not_recorded_and_adds_it(tmp_path):
+    """换了说法、搜索词不一样：没对上的照常真调，补录进去；已经录的不动。"""
+    path = tmp_path / "x.json"
+    run_case(_case([{"say": "查一下向量库选型"}]), FakeResearchPlanner, FakeJudge(), tape=Tape(path, fresh=True))
+    before = json.loads(path.read_text(encoding="utf-8"))
+    r = run_case(_case([{"say": "查一下笔记软件"}]), FakeResearchPlanner, FakeJudge(), tape=Tape(path))
+    assert r["tape"]["live"] > 0
+    after = json.loads(path.read_text(encoding="utf-8"))
+    assert after["recorded_at"] == before["recorded_at"] and after["calls"][:len(before["calls"])] == before["calls"]
+    assert len(after["calls"]) == len(before["calls"]) + r["tape"]["live"]
+
+
+def test_replay_moves_the_clock_to_when_it_was_recorded(tmp_path):
+    """回放时这个用例的时钟挪到录的时候：取当前时间、这一轮的日期、裁判看的日期都是录的那天。"""
+    path = tmp_path / "x.json"
+    path.write_text(json.dumps({"recorded_at": "2026-01-01T02:00:00+00:00", "calls": []}), encoding="utf-8")
+    made: list = []
+
+    prompts: list[str] = []
+
+    class Seen(BaseCallbackHandler):
+        def on_chat_model_start(self, serialized, messages, **kw):
+            prompts.append(messages[0][0].content)
+
+    def make(**kw):
+        made.append(FakeResearchPlanner(**kw))
+        made[-1]._model.callbacks = [Seen()]
+        return made[-1]
+
+    judge = FakeJudge()
+    r = run_case(_case([{"say": "现在几点 直接答", "judge": "说了几点"}]), make, judge, tape=Tape(path))
+    assert r["turns"][0]["today"] == "2026-01-01" and judge.rubrics[0][3] == "2026-01-01"
+    assert prompts and all("[Current date] 2026-01-01 (Thursday)" in p for p in prompts)  # 系统提示词里的日期
+    assert json.loads(made[0]._tools[0].invoke({}))["now"].startswith("2026-01-01 10:0")  # 北京时间
+    assert datetime.now(CHINA_TZ).date().isoformat() != "2026-01-01"
+
+
+def test_tape_gives_repeated_calls_in_order_and_skips_errors(tmp_path):
+    """同样的调用录了几次按顺序给，用完了一直给最后一次；出错的不录，回放时照常真调。"""
+    from langchain_core.tools import StructuredTool
+
+    answers = iter(["一", "二", RuntimeError("连不上"), "三"])
+
+    async def live(query: str):
+        a = next(answers)
+        if isinstance(a, Exception):
+            raise a
+        return [{"type": "text", "text": a}], None
+
+    def tool():
+        return StructuredTool.from_function(coroutine=live, name="search_web", description="d", response_format="content_and_artifact")
+
+    path = tmp_path / "t.json"
+    rec = Tape(path, fresh=True)
+    t = rec.wrap(tool())
+    call = {"name": "search_web", "args": {"query": "q"}, "id": "c", "type": "tool_call"}
+    assert [aio.run(t.ainvoke(call)).content[0]["text"] for _ in range(2)] == ["一", "二"]
+    try:
+        aio.run(t.ainvoke(call))
+    except Exception:  # noqa: BLE001 —— 出错照常抛给中间件
+        pass
+    assert rec.counts() == {"hits": 0, "live": 2}
+    rec.save()
+    play = Tape(path)
+    t = play.wrap(tool())
+    assert [aio.run(t.ainvoke(call)).content[0]["text"] for _ in range(3)] == ["一", "二", "二"]
+    assert play.counts() == {"hits": 3, "live": 0}
+
+
+def test_rejudge_scores_saved_replies_with_the_current_case():
+    """重新打分：agent 不重跑，按现在的 expect、judge 标准和裁判重新检查；对话改过了、旧结果文件没存材料的记为出错。"""
+    case = _case([{"say": "查一下向量库选型", "expect": {"searched": True}}])
+    r = run_case(case, FakeResearchPlanner, FakeJudge())
+    assert r["passed"]
+    stricter = _case([{"say": "查一下向量库选型", "expect": {"searched": False}, "judge": "给了推荐"}])
+    judge = FakeJudge("unsupported")
+    again = rejudge_case(json.loads(json.dumps(r)), stricter, judge, run=1)  # 像从结果文件里读回来的
+    assert not again["passed"] and _failed(again) == [(1, "searched"), (1, "sources_supported")]
+    assert again["usage"] == r["usage"] and again["rejudged_from"] == 1
+    assert judge.rubrics[0][3] == r["turns"][0]["today"] and len(judge.sources) == 2
+    assert "对不上" in rejudge_case(r, _case([{"say": "别的话"}]), FakeJudge(), run=1)["error"]
+    old = {**r, "turns": [{k: v for k, v in t.items() if k != "cited_sources"} for t in r["turns"]]}
+    assert "以前跑的" in rejudge_case(old, case, FakeJudge(), run=1)["error"]
+
+
+def test_stability_separates_flaky_from_always_failing():
+    def res(run: int, judge: bool, searched: bool = False) -> dict:
+        checks = [{"name": "finished", "passed": True}, {"name": "judge", "passed": judge}, {"name": "searched", "passed": searched}]
+        return {"id": "a", "run": run, "passed": judge and searched, "turns": [{"checks": checks}]}
+
+    text = stability([res(1, True), res(2, False), res(3, True), {"id": "b", "run": 1, "error": "x"}])
+    assert "用例通过：a 0/3" in text and "出错（不算进检查）：b 1 遍" in text
+    assert "会翻的检查 1 项：\n  a 第1轮 judge：2/3" in text and "一直不过的 1 项：\n  a 第1轮 searched：0/3" in text
+    assert text.endswith("一直过的 1 项")
