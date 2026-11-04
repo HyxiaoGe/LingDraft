@@ -60,6 +60,7 @@ class McpTool:
         self.name = name
         self._target = target
         self.tool: BaseTool | None = None
+        self.wrap: Callable[[BaseTool], BaseTool] | None = None  # 连上以后再包一层，评测录像用（见 app.evals.tape）
 
     async def connect(self) -> None:
         """取工具；连不上、没有这个工具都照常抛出，由调用方决定再试还是先不带它。"""
@@ -70,7 +71,7 @@ class McpTool:
         if found is None:
             raise RuntimeError(f"MCP 里没有 {self.name}（有 {[t.name for t in tools]}）")
         found.description = f"{found.description}\n\n{prompts.render(f'tools.{self.name}.lingdraft')}"
-        self.tool = found
+        self.tool = self.wrap(found) if self.wrap else found
 
 
 def find_error[E: BaseException](error: BaseException, kind: type[E]) -> E | None:

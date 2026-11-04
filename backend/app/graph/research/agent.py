@@ -124,7 +124,9 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
     def before_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         msgs = state["messages"]
         human = msgs[history.last_human(msgs)]
-        return {"turns": list(state.get("turns", [])) + [Turn(id=human.id, started_at=now())]}
+        # 按 planner 的时钟（评测回放时挪到录像那时，见 app.clock）；结束时间这些模型看不到的照常用系统时钟
+        started = self.planner.clock.now().isoformat(timespec="seconds")
+        return {"turns": list(state.get("turns", [])) + [Turn(id=human.id, started_at=started)]}
 
     async def abefore_model(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         """用户插进这一轮的话：这次调模型之前放进对话（排在已有的工具结果后面），页面同时收到一条 guide 把它放进过程里。

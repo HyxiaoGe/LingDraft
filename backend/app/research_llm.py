@@ -15,7 +15,7 @@ import math
 import re
 import threading
 import time
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal, Protocol
 from uuid import UUID, uuid4
@@ -28,11 +28,13 @@ from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from langchain_core.tools import BaseTool
 from langgraph.constants import TAG_NOSTREAM
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import aio, config
+from app.clock import Clock
 from app.graph.research import history, prompts
 from app.graph.research.compaction import RECALL_TOOL as RECALL
 from app.graph.research.sources import DOCS_TOOL, doc_snippets, search_hits
@@ -65,6 +67,7 @@ class Suggestions(BaseModel):
 
 class ResearchPlanner(Protocol):
     gateway: GatewayClient  # 按编号取图、删图（画的图存在 image-service 里，见 app.tools.gateway）
+    clock: Clock  # 模型看得到的当前时间（见 app.clock）
 
     def agent_model(self) -> BaseChatModel: ...
 
@@ -268,15 +271,18 @@ class McpTools:
     """agent-tools 的 MCP 工具：搜索、读页、画图、地图（查地点、比路线）、航班火车、天气、查文档（Context7）。target 是各自的 MCP 地址
     （网关的客户端，或者进程内的假服务）；地图的两个工具在同一个服务里，共用一个地址；航班、火车也是；找库、查文档也是。
     没连上的：搜索、读页、画图、地图、航班火车先用同名的占位工具（调了说服务暂时连不上，见 app.tools.web_mcp、image_mcp、maps_mcp、flyai_mcp），
-    天气、查文档先不带。"""
+    天气、查文档先不带。wrap 是连上以后给每个工具再包的一层（评测录像，见 app.evals.tape）。"""
 
-    def __init__(self, search: Any, read: Any, weather: Any, image: Any, maps: Any, flyai: Any, docs: Any) -> None:
+    def __init__(self, search: Any, read: Any, weather: Any, image: Any, maps: Any, flyai: Any, docs: Any,
+                 wrap: Callable[[BaseTool], BaseTool] | None = None) -> None:
         self.web = [WebTool(SEARCH_TOOL, search), WebTool(READ_TOOL, read)]
         self.image = ImageTool(image)
         self.maps = [MapsTool(PLACE_TOOL, maps), MapsTool(ROUTE_TOOL, maps)]
         self.travel = [TravelTool(FLIGHT_TOOL, flyai), TravelTool(TRAIN_TOOL, flyai)]
         self.weather = WeatherTool(weather)
         self.docs = docs_tools(docs)
+        for t in (*self.web, self.image, *self.maps, *self.travel, self.weather, *self.docs):
+            t.wrap = wrap
 
     def tools(self, own: list) -> list:
         """顺序固定（搜索、读页、画图、地图、航班火车、灵稿自己的、天气、找库、查文档）：工具列表在请求的前缀里，顺序变了前缀缓存就断了。"""
@@ -294,8 +300,10 @@ class McpTools:
 
 
 class LiveResearchPlanner:
-    def __init__(self, gateway: GatewayClient | None = None, scene: str = "research") -> None:
-        """scene 是调 agent-tools 时记账的场景（网关按它分开记）：评测用 research_eval。"""
+    def __init__(self, gateway: GatewayClient | None = None, scene: str = "research", *, clock: Clock | None = None,
+                 wrap_tool: Callable[[BaseTool], BaseTool] | None = None) -> None:
+        """scene 是调 agent-tools 时记账的场景（网关按它分开记）：评测用 research_eval。clock、wrap_tool 评测回放用（见 app.evals.tape）。"""
+        self.clock = clock or Clock()
         provider, model = config.RESEARCH_PROVIDER, config.RESEARCH_MODEL
         self._agent = make_chat_model(provider, model, thinking=config.RESEARCH_THINKING, effort=config.RESEARCH_EFFORT,
                                       callbacks=[ThinkingTimer()])
@@ -317,14 +325,14 @@ class LiveResearchPlanner:
                                         timeout=300)
         url, key = config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY
         self.gateway = gateway or GatewayClient(url, key, scene=scene)  # 按编号取图、删图（图存在 image-service 里）
-        self._tools = make_research_tools()
+        self._tools = make_research_tools(self.clock)
         self._mcp = McpTools(lambda: web_mcp.gateway_target(SEARCH_TOOL, url, key, scene=scene),
                              lambda: web_mcp.gateway_target(READ_TOOL, url, key, scene=scene),
                              lambda: weather_mcp.gateway_target(url, key, scene=scene),
                              lambda: image_mcp.gateway_target(url, key, scene=scene),
                              lambda: maps_mcp.gateway_target(url, key, scene=scene),
                              lambda: flyai_mcp.gateway_target(url, key, scene=scene),
-                             lambda: docs_mcp.gateway_target(url, key, scene=scene))
+                             lambda: docs_mcp.gateway_target(url, key, scene=scene), wrap=wrap_tool)
 
     def agent_model(self) -> BaseChatModel:
         return self._agent
@@ -1083,16 +1091,18 @@ def _hits(messages: list[BaseMessage]) -> list[dict]:
 
 
 class FakeResearchPlanner:
-    def __init__(self, gateway: GatewayClient | None = None, *, page_repeat: int = 5, search: Any = None, read: Any = None) -> None:
+    def __init__(self, gateway: GatewayClient | None = None, *, page_repeat: int = 5, search: Any = None, read: Any = None,
+                 clock: Clock | None = None, wrap_tool: Callable[[BaseTool], BaseTool] | None = None) -> None:
         """search、read 是搜索、读页的 MCP 地址，默认是进程内的假服务（测试换成出错的）；读到的正文是一句话重复 page_repeat 遍。"""
+        self.clock = clock or Clock()
         self.calls: list[tuple[str, Any]] = []
         self.fail_title = False
         self.dream_replies: list[str] = []  # 整理记忆时按顺序给这些回答；用完了照 dream 的说明
         self.images = FakeImageService()
         self.gateway = gateway or self.images.gateway_client()
-        self._tools = make_research_tools()
+        self._tools = make_research_tools(self.clock)
         self._mcp = McpTools(search or fake_search_server, read or (lambda: fake_read_server(page_repeat)), fake_weather_server,
-                             self.images.server, fake_maps_server, fake_flyai_server, fake_docs_server)
+                             self.images.server, fake_maps_server, fake_flyai_server, fake_docs_server, wrap=wrap_tool)
         self._model = FakeToolModel()
         self._sub_model = FakeToolModel(prefix="fake-sub")
 
