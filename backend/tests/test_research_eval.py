@@ -25,15 +25,17 @@ from tests.test_research import failing_search
 
 
 class FakeJudge:
-    def __init__(self, verdict: str = "supported") -> None:
+    def __init__(self, verdict: str = "supported", uncited: str | None = None) -> None:
         self.verdict = verdict
+        self.uncited = uncited  # 再列一句没带角标的（真裁判有时会这样）
         self.sources: list[dict] = []
         self.rubrics: list[tuple] = []
 
     def citations(self, question, reply, sources):
         self.sources = sources
+        extra = [CitationVerdict(statement="没角标的话", source_ids=[], verdict=self.uncited, reason="假裁判")] if self.uncited else []
         return CitationJudgement(verdicts=[CitationVerdict(statement=reply[:10], source_ids=[s["id"]], verdict=self.verdict, reason="假裁判")
-                                           for s in sources])
+                                           for s in sources] + extra)
 
     def rubric(self, said, rubric, reply):
         self.rubrics.append((said, rubric, reply))
@@ -89,6 +91,9 @@ def test_failed_checks_and_unsupported_citations_fail_the_case():
     r = _run([{"say": "查一下天气"}], FakeJudge("unsupported"))
     assert not r["passed"] and _failed(r) == [(1, "sources_supported")]
     assert "✗" in summary_line(r)
+    r = _run([{"say": "查一下天气"}], FakeJudge(uncited="unsupported"))  # 没带角标的句子不算引用，不核对
+    assert r["passed"], _failed(r)
+    assert r["turns"][0]["citations"] and all(c["source_ids"] for c in r["turns"][0]["citations"])
 
 
 def test_reply_is_the_last_model_message():

@@ -233,7 +233,9 @@ def judge_citations(judge: Judge, question: str, played: dict) -> list[dict]:
     if not ids:
         return []
     sources = [{"id": i, "url": srcs[i]["url"], "text": text_for(played["evidence"], srcs[i]["url"])} for i in ids if i in srcs]
-    return [v.model_dump() for v in judge.citations(question, played["reply"], sources).verdicts]
+    verdicts = judge.citations(question, played["reply"], sources).verdicts
+    # 裁判有时把没带角标的句子也列出来（source_ids 为空）判 unsupported，比如天气工具给的预报（不是来源，本来就不标）。不归这一项管
+    return [v.model_dump() for v in verdicts if v.source_ids]
 
 
 # ---- 跑一个用例 ----
