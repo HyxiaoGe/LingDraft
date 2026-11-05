@@ -107,6 +107,13 @@ model = "zhipuai:glm-5.3-flash"
 thinking = "always"
 
 [[options]]
+id = "glm-5-2"
+name = "GLM-5.2"
+description = "智谱上一代旗舰，思考能开关"
+model = "zhipuai:glm-5.2"
+# 子 agent 也用 5.2：没有同代的轻量模型，GLM-5.3 Flash 关不掉思考，用户关了思考时会报 400
+
+[[options]]
 id = "hy4"
 name = "混元 Hy4"
 description = "腾讯混元旗舰"

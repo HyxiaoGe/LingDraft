@@ -224,8 +224,9 @@ COMPAT: dict[str, Compat] = {
                         {"enable_thinking": True}, {"enable_thinking": False}),
     # 小米 MiMo：默认思考，thinking disabled 能关（enable_thinking 不认）
     "mimo": Compat("mimo", lambda: config.MIMO_BASE_URL, lambda: config.MIMO_API_KEY, "MIMO_API_KEY", {}, _OFF),
-    # 智谱 GLM-5.3 系列：一直思考，传关思考报 400（"该模型始终思考"）；reasoning_effort 认 low/high/max
-    "zhipuai": Compat("zhipuai", lambda: config.ZHIPUAI_BASE_URL, lambda: config.ZHIPUAI_API_KEY, "ZHIPUAI_API_KEY", {}, None),
+    # 智谱：默认思考。GLM-5.2 thinking disabled 能关；5.3 系列一直思考，传关思考报 400（"该模型始终思考"，选项写 always，不会传关）。
+    # reasoning_effort 5.3 认 low/high/max，5.2 也认
+    "zhipuai": Compat("zhipuai", lambda: config.ZHIPUAI_BASE_URL, lambda: config.ZHIPUAI_API_KEY, "ZHIPUAI_API_KEY", {}, _OFF),
     # 腾讯混元（TokenHub）：默认思考，thinking disabled 能关（enable_thinking 不认）
     "hunyuan": Compat("hunyuan", lambda: config.HUNYUAN_BASE_URL, lambda: config.HUNYUAN_API_KEY, "HUNYUAN_API_KEY", {}, _OFF),
     # MiniMax：不带 reasoning_split 时 M3 的思考夹在正文的 <think> 里，带了才放进 reasoning_content；开思考的值是 adaptive，
