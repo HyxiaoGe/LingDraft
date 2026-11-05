@@ -323,6 +323,9 @@ def test_ledger_writes_in_the_background_and_survives_failures(caplog):
 def test_postgres_ledger_and_report(rows):
     import psycopg
 
+    with psycopg.connect(config.DATABASE_URL, autocommit=True) as c:
+        c.execute("DROP TABLE IF EXISTS model_costs")
+    assert costs.report(config.DATABASE_URL, 1) == "还没记过账"  # 表在第一次写时才建
     Metered().invoke("问")
     ok = {**rows[0], "started_at": datetime.now(CHINA_TZ)}  # 对账按最近几天取
     lost = {**ok, "model": "deepseek-flash", "status": "stopped", "input_tokens": None, "cached_tokens": None, "output_tokens": None,
