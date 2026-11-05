@@ -39,8 +39,9 @@ class FakeJudge:
         self.sources: list[dict] = []
         self.rubrics: list[tuple] = []
 
-    def citations(self, question, reply, sources):
+    def citations(self, question, reply, sources, today):
         self.sources = sources
+        self.today = today
         extra = [CitationVerdict(statement="没角标的话", source_ids=[], verdict=self.uncited, reason="假裁判")] if self.uncited else []
         return CitationJudgement(verdicts=[CitationVerdict(statement=reply[:10], source_ids=[s["id"]], verdict=self.verdict, reason="假裁判")
                                            for s in sources] + extra)
@@ -309,3 +310,18 @@ def test_stability_separates_flaky_from_always_failing():
     assert "用例通过：a 0/3" in text and "出错（不算进检查）：b 1 遍" in text
     assert "会翻的检查 1 项：\n  a 第1轮 judge：2/3" in text and "一直不过的 1 项：\n  a 第1轮 searched：0/3" in text
     assert text.endswith("一直过的 1 项")
+
+
+def test_citation_judge_gets_the_same_dates_as_the_agent():
+    # 正文里“明天（11月6日，星期五）”是助理按日期推的：核对引用的裁判也要知道今天、明天是哪天（2026-11-05 决策点回放查出来的）
+    from datetime import date
+
+    from app.evals.research import PROMPTS
+    from app.graph.research.agent import date_anchors
+
+    text = PROMPTS.render("citations.user", question="北京明天限行尾号", reply="明天（11月6日，星期五）限行 4 和 9 [s1]。",
+                          sources=[{"id": "s1", "url": "https://example.test", "text": "星期五限行尾号为4和9"}], **date_anchors(date(2026, 11, 5)))
+    assert "今天是 2026-11-05 (Thursday)" in text and "明天是 2026-11-06 (Friday)" in text
+    judge = FakeJudge()
+    r = _run([{"say": "查一下向量库选型"}], judge)
+    assert judge.today == r["turns"][0]["today"]

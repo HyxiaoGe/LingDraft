@@ -106,12 +106,16 @@ def _day(d: date) -> str:
 def system_prompt(at: datetime, keys: Sequence[str] = AGENT_PROMPT, memory: str = "", **extra: Any) -> str:
     """照 Fusion：日期按北京时间，带星期和明天、这周末、下周末的日期，模型不用自己推星期几。keys 是按顺序拼的各段（子 agent 用另一套），
     memory 是长期记忆（MemoryBook.prompt_text，空的就没有这一段），extra 是这些段里另外要填的变量。"""
-    today = at.astimezone(CHINA_TZ).date()
-    saturday = today - timedelta(days=today.weekday()) + timedelta(days=5)
-    dates = {"current_date": _day(today), "tomorrow": _day(today + timedelta(days=1)),
-             "this_saturday": _day(saturday), "this_sunday": _day(saturday + timedelta(days=1)),
-             "next_saturday": _day(saturday + timedelta(days=7)), "next_sunday": _day(saturday + timedelta(days=8))}
+    dates = date_anchors(at.astimezone(CHINA_TZ).date())
     return "\n\n".join(prompts.render(k, **dates, memory=memory, **extra) for k in keys if k != MEMORY_SECTION or memory)
+
+
+def date_anchors(today: date) -> dict[str, str]:
+    """系统提示词里给模型的日期：今天、明天、这周末、下周末，带星期（评测核对引用的裁判也用同一份，见 app.evals.research）。"""
+    saturday = today - timedelta(days=today.weekday()) + timedelta(days=5)
+    return {"current_date": _day(today), "tomorrow": _day(today + timedelta(days=1)),
+            "this_saturday": _day(saturday), "this_sunday": _day(saturday + timedelta(days=1)),
+            "next_saturday": _day(saturday + timedelta(days=7)), "next_sunday": _day(saturday + timedelta(days=8))}
 
 
 class TurnMiddleware(AgentMiddleware[ResearchState]):
