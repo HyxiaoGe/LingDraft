@@ -109,13 +109,23 @@ export async function listInspirations() {
   return (await resp.json()).questions;
 }
 
-export async function createResearchThread(text, onEvent, signal) {
-  return sse("/api/research/threads", postJson({ text }), onEvent, signal);
+// 新对话能选的模型：[{id, name, description, thinking, model}]，Auto 在第一个。
+// thinking 是 toggle 的显示思考开关（always、never 不显示）；model 是它用的“厂商:模型”，按它给每轮记下的模型找名字
+export async function listModels() {
+  const resp = await fetch("/api/models");
+  if (!resp.ok) throw await httpError(resp);
+  return (await resp.json()).models;
+}
+
+// 开新对话。opts：model 是选的模型（listModels 里的 id，不给是 Auto；没有了返回 400），定下就不换；
+// thinking 是这句话的思考开关（不给按模型的默认）。下面几个的 opts.thinking 一样
+export async function createResearchThread(text, opts, onEvent, signal) {
+  return sse("/api/research/threads", postJson({ text, ...opts }), onEvent, signal);
 }
 
 // 接着说。运行中、上一轮没跑完时后端返回 409
-export async function sayResearch(threadId, text, onEvent, signal) {
-  return sse(`/api/research/threads/${threadId}/messages`, postJson({ text }), onEvent, signal);
+export async function sayResearch(threadId, text, opts, onEvent, signal) {
+  return sse(`/api/research/threads/${threadId}/messages`, postJson({ text, ...opts }), onEvent, signal);
 }
 
 export async function getResearchState(threadId) {
@@ -132,8 +142,8 @@ export async function stopResearchThread(threadId) {
 
 // 正在回答时又说的话：排着，这一轮答完或停下就接着发。返回排着的那句（{text, created_at, updated_at}）；
 // 这一轮刚好答完了，后端直接发出去，返回 null，页面去接事件流。已经有一句没发出去、或上一轮没跑完时返回 409
-export async function queueResearch(threadId, text) {
-  const resp = await fetch(`/api/research/threads/${threadId}/queue`, postJson({ text }));
+export async function queueResearch(threadId, text, opts) {
+  const resp = await fetch(`/api/research/threads/${threadId}/queue`, postJson({ text, ...opts }));
   if (!resp.ok) throw await httpError(resp);
   return (await resp.json()).queued;
 }
@@ -161,13 +171,13 @@ export async function unguideResearch(threadId) {
 }
 
 // 最后一轮重新回答：去掉这一轮的回答，从用户那句话重新跑。运行中、上一轮没跑完时后端返回 409
-export async function regenerateResearchThread(threadId, onEvent, signal) {
-  return sse(`/api/research/threads/${threadId}/regenerate`, { method: "POST" }, onEvent, signal);
+export async function regenerateResearchThread(threadId, opts, onEvent, signal) {
+  return sse(`/api/research/threads/${threadId}/regenerate`, postJson({ ...opts }), onEvent, signal);
 }
 
 // 改了最后那句话，按新的话重新回答。运行中、上一轮没跑完时后端返回 409
-export async function editResearchThread(threadId, text, onEvent, signal) {
-  return sse(`/api/research/threads/${threadId}/edit`, postJson({ text }), onEvent, signal);
+export async function editResearchThread(threadId, text, opts, onEvent, signal) {
+  return sse(`/api/research/threads/${threadId}/edit`, postJson({ text, ...opts }), onEvent, signal);
 }
 
 // 改标题，返回列表里的这一行。运行中、上一轮没跑完时返回 409

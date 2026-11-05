@@ -5,12 +5,12 @@
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
-import { IconArrowDown, IconArrowUp, IconBook, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconInsert, IconLoop, IconPage, IconPin, IconPlane, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconUndo, IconWarn, Spinner } from "./icons.jsx";
+import { IconArrowDown, IconArrowUp, IconBook, IconBulb, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconInsert, IconLoop, IconPage, IconPin, IconPlane, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconUndo, IconWarn, Spinner } from "./icons.jsx";
 import { ImageCards, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
 import { Markdown } from "./markdown.jsx";
-import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
+import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Mark } from "./sources.jsx";
 import { WeatherCard, forecastsOf } from "./weather.jsx";
 
@@ -21,7 +21,7 @@ const EXAMPLES = [
   "珠穆朗玛峰现在的官方高度是多少？",
 ];
 
-export function Conversation({ st, live, busy, suggesting, error, now, act, tid, putBack }) {
+export function Conversation({ st, live, busy, suggesting, error, now, act, tid, putBack, models, picker }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
   const [away, setAway] = useState(false); // 离底部远了：输入框上面出“回到底部”
@@ -80,7 +80,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid,
           setAway(!stick.current);
         }}>
         <div className="ws-flow">
-          {fresh ? <Welcome /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} />}
+          {fresh ? <Welcome /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} />}
           {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error}</span></div>}
         </div>
       </div>
@@ -88,7 +88,8 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid,
         {/* 按下去不抢光标：输入框里写着的字和光标都留着 */}
         {away && <button className="ws-jump" aria-label="回到底部" title="回到底部" onMouseDown={(e) => e.preventDefault()} onClick={toBottom}><IconArrowDown size={16} /></button>}
         <Composer thread={tid || "new"} carry={!!live} mode={mode} queueing={queueing} held={pendingKinds.length > 0} stopping={stopping} putBack={putBack} onSend={onSend} onStop={act.stop}
-          above={running && <Pending st={st} act={act} />} onTakeBack={pendingKinds.length ? () => act.withdraw(pendingKinds) : null} />
+          above={running && <Pending st={st} act={act} />} onTakeBack={pendingKinds.length ? () => act.withdraw(pendingKinds) : null}
+          tools={<ModelTools models={models} {...picker} />} />
       </div>
       {fresh && <Inspirations onPick={act.start} />}
     </section>
@@ -213,7 +214,7 @@ function Inspirations({ onPick }) {
 
 // ---------------- 一轮一轮 ----------------
 
-function Turns({ st, live, busy, suggesting, stopping, now, act }) {
+function Turns({ st, live, busy, suggesting, stopping, now, act, models }) {
   const turns = st?.turns || [];
   const running = busy || ACTIVE.has(st?.status);
   // 刚说的话还没出现在存下来的对话里：先按页面手上的显示
@@ -223,13 +224,13 @@ function Turns({ st, live, busy, suggesting, stopping, now, act }) {
     <>
       {all.map((t, i) => {
         const last = i === all.length - 1;
-        return <Turn key={t.id} t={t} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} />;
+        return <Turn key={t.id} t={t} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} models={models} />;
       })}
     </>
   );
 }
 
-function Turn({ t, st, live, running, suggesting, stopping, last, now, act }) {
+function Turn({ t, st, live, running, suggesting, stopping, last, now, act, models }) {
   const items = mergeItems(t.items, live);
   const { process, answer } = splitTurn(items);
   const texts = items.filter((i) => i.type === "text").map((i) => i.text);
@@ -258,6 +259,7 @@ function Turn({ t, st, live, running, suggesting, stopping, last, now, act }) {
         {!running && (replied || rec?.ended_at || (last && idle)) && (
           <div className={"ws-ai-foot" + (last ? "" : " quiet")}>
             <Stamp iso={rec?.ended_at} now={now} />
+            {rec?.model && <span className="ws-ai-model" title="这一轮用的模型">{modelName(models, rec.model.ref)}</span>}
             {replied && <CopyButton text={() => answerText(items, st?.sources)} />}
             {last && idle && <button className="ws-btn ghost sm" onClick={act.regenerate}><IconLoop size={13} />重新回答</button>}
           </div>
@@ -735,7 +737,7 @@ const HELD = "上面那句发出去以后才能再发，也可以撤回它一起
 // carry：新对话刚发出去、拿到了 id，thread 从 "new" 换成 id，还是同一个对话
 // putBack：放回输入框的话（撤回的、没发出去的），接在已经写着的字前面；不是正在看的对话，放进那个对话的草稿
 // onTakeBack：有没发出去的话时，光标在最前面（输入框空着也算）按 ↑ 把它们取回来。光标在最前面时 ↑ 本来什么也不做，不和挪光标抢
-function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSend, onStop, above, onTakeBack }) {
+function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSend, onStop, above, onTakeBack, tools }) {
   const [text, setText] = useState("");
   const ref = useRef(null);
   const drafts = useRef(new Map());
@@ -824,6 +826,7 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
           }} />
         <div className="ws-input-bar">
           {queueing && held && text.trim() && <span className="ws-input-hint">{HELD}</span>}
+          <div className="ws-input-tools">{tools}</div>
           {showStop
             ? <button className="ws-send stop" aria-label={stopping ? "正在停止" : "停止"} title={stopping ? "正在停止" : "停止（Esc）"} disabled={stopping} onClick={onStop}>
               {stopping ? <Spinner size={14} /> : <IconStop size={13} />}
@@ -832,6 +835,58 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
         </div>
       </div>
       <div className="ws-ai-note">内容由 AI 生成，请仔细甄别</div>
+    </div>
+  );
+}
+
+// 输入框里发送按钮左边：深度思考开关（选的模型能开关才有）和选模型。新对话随便选；对话开始后模型定下不换，
+// 点开只说明一句、列出能选的给开新对话时参考。思考开关每句话都能改，按下去不抢光标（输入框里的字和光标都留着）。
+// 菜单打开时光标在菜单里：Esc 只收起菜单，不会停掉正在跑的这一轮（见 Composer 的 Esc）
+function ModelTools({ models, current, locked, onPick, thinking, onThinking }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef(null);
+  const menu = useRef(null);
+  const close = () => {
+    setOpen(false);
+    document.activeElement?.blur();
+    focusInput();
+  };
+  useEffect(() => {
+    if (!open) return;
+    (menu.current?.querySelector('[aria-checked="true"]:not(:disabled)') || menu.current?.querySelector("button:not(:disabled)"))?.focus();
+    const down = (e) => !box.current?.contains(e.target) && setOpen(false);
+    const key = (e) => e.key === "Escape" && close();
+    addEventListener("mousedown", down);
+    addEventListener("keydown", key);
+    return () => {
+      removeEventListener("mousedown", down);
+      removeEventListener("keydown", key);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+  const opt = models?.find((m) => m.id === current);
+  if (!models?.length || !current) return null;
+  return (
+    <div className="ws-model" ref={box}>
+      {opt?.thinking === "toggle" && (
+        <button className={"ws-think-toggle" + (thinking ? " on" : "")} aria-pressed={thinking} onMouseDown={(e) => e.preventDefault()} onClick={() => onThinking(!thinking)}
+          title={thinking ? "深度思考已开：先想再答，慢一些" : "深度思考已关：直接回答，更快"}><IconBulb size={14} />深度思考</button>
+      )}
+      <button className="ws-model-btn" aria-haspopup="menu" aria-expanded={open} title={locked ? "这段对话用的模型" : "选模型"} onClick={() => (open ? close() : setOpen(true))}>
+        <span>{opt?.name || current}</span><IconChevron size={13} />
+      </button>
+      {open && (
+        <div ref={menu} className="ws-menu ws-model-menu" role="menu" aria-label="选模型">
+          {locked && <div className="ws-menu-note">对话开始后不能换模型，想换模型请开新对话</div>}
+          {models.map((m) => (
+            <button key={m.id} role="menuitemradio" aria-checked={m.id === current} disabled={locked && m.id !== current}
+              onClick={() => { if (!locked) onPick(m.id); close(); }}>
+              <span className="ws-model-item"><b>{m.name}</b>{m.description && <small>{m.description}</small>}</span>
+              {m.id === current && <IconCheck size={14} />}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

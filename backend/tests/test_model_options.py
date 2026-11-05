@@ -161,7 +161,7 @@ def test_models_endpoint_and_default_auto():
     http, rr = _client(FakeResearchPlanner(catalog=_with({"deepseek-flash": "hidden"})))
     models = http.get("/api/models").json()["models"]
     assert [m["id"] for m in models] == [AUTO, "deepseek-v4-pro", "doubao-seed-2-1-pro", "doubao-seed-2-1-lite"]
-    assert models[0] == {"id": AUTO, "name": "Auto", "description": models[0]["description"], "thinking": "toggle"}
+    assert models[0] == {"id": AUTO, "name": "Auto", "description": models[0]["description"], "thinking": "toggle", "model": PRO}
     st = _create(http, "直接答：你好")
     assert st["model"] == AUTO
     rec = _records(st)[0]
