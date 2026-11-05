@@ -64,6 +64,8 @@ name = "Grok 4.7"
 description = "xAI 旗舰；一直思考，不能关"
 model = "xai:grok-4.7"
 thinking = "always"
+# 2026-11-06 Sean 定先不上，后面再说：思考过程不返回（xAI 的设计，4.7 只给加密的思考），灵稿的思考是原样给的。接入和 key 都留着
+status = "hidden"
 
 [[options]]
 id = "qwen3-8-max"
