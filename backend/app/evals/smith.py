@@ -3,7 +3,8 @@
 - 只在评测进程里、只在跑用例的那一段开 tracing（tracing_context）：本机 8000、dev、单元测试和 CI 都不上报。
   .env 里只放 LANGSMITH_API_KEY，不放 LANGSMITH_TRACING；没配 key 或加了 --no-smith 就不传。
 - 用例的正本在仓库（cases.yaml、decisions.yaml）：每次跑之前按 id 同步成数据集，改过的更新，删掉的也删掉（数据集有版本，旧实验不受影响）。
-- 每个用例跑一遍（决策点每重跑一次）是实验里的一行，连着一条 trace：这几轮对话、起标题、推荐问题、裁判的调用都在里面。
+- 每个用例跑一遍（决策点每重跑一次）是实验里的一行，连着一条 trace：这几轮对话、推荐问题、裁判的调用都在里面。
+  起标题不在：它故意用空的上下文另起任务（graph.research.agent._TitleJob），不带这次运行的 tracing。
   评测是同步跑一轮的（research.play → run_turn → aio.run），交给事件循环时带着调用方的上下文，所以都挂在这一行下面；
   线上接口另起任务用的是空上下文（api.research_runner._spawn），评测不走那条。
 - 每项检查记一个分数：多轮的用例按轮算过了几成，没过的写在说明里；passed 是这一行整个过没过（出错的写出错原因）。
