@@ -8,7 +8,7 @@
   评测是同步跑一轮的（research.play → run_turn → aio.run），交给事件循环时带着调用方的上下文，所以都挂在这一行下面；
   线上接口另起任务用的是空上下文（api.research_runner._spawn），评测不走那条。
 - 每项检查记一个分数：多轮的用例按轮算过了几成，没过的写在说明里；passed 是这一行整个过没过（出错的写出错原因）。
-- 中间件那几层不记输入输出（configure_trace_policy）：每一层记的都是同一份请求，假模型一轮问天气从 1.5 MB 降到 0.3 MB；
+- 中间件那几层不记输入输出（和线上一样，见 app.tracing）：每一层记的都是同一份请求，假模型一轮问天气从 1.5 MB 降到 0.3 MB；
   模型调用、工具调用照常全记。
 - 显不显著还是看本地的对比（decisions --compare、research --stats）；网站上的 trace 免费版留 14 天，本地的结果文件一直在。
 """
@@ -23,15 +23,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from langchain.agents.middleware import configure_trace_policy
-from langgraph.types import TracePolicy
 from langsmith import Client, traceable, tracing_context
 from langsmith import env as ls_env
 from langsmith.utils import LangSmithConflictError, LangSmithNotFoundError
 
+from app.tracing import TRIMMED
+
 RESEARCH_DATASET = "lingdraft-research"
 DECISIONS_DATASET = "lingdraft-decisions"
 KEY_FIELD = "key"  # 样例的 metadata 里记着它是哪个用例（决策点），同步时按它对
-OMITTED = {"omitted": "中间件这一层不记输入输出：和模型调用那条记的是同一份（见 app.evals.smith）"}
 
 
 def configured() -> bool:
@@ -70,14 +70,10 @@ def sync_dataset(client: Client, name: str, description: str, examples: list[Exa
     return ds, ids
 
 
-def _omit(_: Any) -> dict:
-    return OMITTED
-
-
 @contextmanager
 def trimmed() -> Generator[None]:
     """这一段里中间件那几层只留名字和用时。设的是整个进程的默认值，出来时清掉。"""
-    configure_trace_policy(TracePolicy(process_inputs=_omit, process_outputs=_omit))
+    configure_trace_policy(TRIMMED)
     try:
         yield
     finally:

@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import config
+from app import config, tracing
 from app.api.favicon import Favicons
 from app.api.inspiration import InspirationError, Inspirations
 from app.api.research_runner import AlreadyPending, NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner
@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """服务起来时先打开对话的存储：没配库、连不上就报错，服务起不来（见 research_runner.open_storage）。
-    再开整理记忆的定时任务（见 graph.research.memory.DreamSchedule），关掉时停。"""
+    再开整理记忆的定时任务（见 graph.research.memory.DreamSchedule），关掉时停。配了 LangSmith 就传对话的过程（见 app.tracing）。"""
+    traced = tracing.start()
     research()
     schedule = None
     if config.DREAM_ENABLED:
@@ -40,6 +41,8 @@ async def lifespan(_app: FastAPI):
     yield
     if schedule:
         schedule.stop()
+    if traced:
+        tracing.stop()
 
 
 app = FastAPI(title="LingDraft PoC", lifespan=lifespan)
