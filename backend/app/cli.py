@@ -94,6 +94,9 @@ class _Printer:
 def research(args) -> None:
     from app.api.research_runner import ResearchRunner
 
+    from app import costs
+
+    costs.open_ledger()  # 命令行调的模型也记成本（见 app.costs），退出时写完
     r = ResearchRunner(fake=args.fake)
     if args.cmd == "dream":
         print(json.dumps(r.dream(), ensure_ascii=False, indent=2))

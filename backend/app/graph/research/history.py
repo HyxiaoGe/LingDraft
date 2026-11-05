@@ -11,6 +11,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from pydantic import ValidationError
 
+from app.costs import COST
 from app.graph.research import prompts
 from app.graph.research.sources import DOCS_TOOL, LIBRARY_TOOL, SUBAGENT_TOOL, collect_sources, doc_snippets, parse, search_hits, subagent_messages
 from app.graph.research.state import (
@@ -627,10 +628,12 @@ def _task_step(cid: str, text: str, extra: dict, result: ToolMessage) -> ToolSte
 def usage_of(messages: list[BaseMessage]) -> Usage:
     """一轮里 agent 的模型调用和搜索、读页、查天气次数，画成了几张图，派了几个子 agent。token 来自模型返回的用量（流式要开 stream_usage）。
     只算这些消息自己的：子 agent 的另算（见 subagent_usage）。"""
-    u = Usage()
+    u, cost = Usage(), 0.0
     for m in messages:
         if isinstance(m, AIMessage) and not blocked_reason(m) and not m.response_metadata.get(STOPPED):  # 系统补的消息不是一次完整的模型调用
             meta: dict[str, Any] = m.usage_metadata or {}  # type: ignore[assignment]
+            c = m.response_metadata.get(COST)
+            cost = cost + c if cost is not None and isinstance(c, int | float) else None
             u.model_calls += 1
             u.input_tokens += meta.get("input_tokens") or 0
             u.output_tokens += meta.get("output_tokens") or 0
@@ -654,6 +657,7 @@ def usage_of(messages: list[BaseMessage]) -> Usage:
             u.images += 1
         elif subagent_messages(m):
             u.subagents += 1
+    u.cost = cost
     return u
 
 

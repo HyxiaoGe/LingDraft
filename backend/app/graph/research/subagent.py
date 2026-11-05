@@ -39,7 +39,7 @@ from langchain_core.tools import tool
 from langgraph.errors import GraphBubbleUp
 from pydantic import BaseModel, Field
 
-from app import config
+from app import config, costs
 from app.graph.research import history, prompts
 from app.graph.research.agent import (
     CHINA_TZ,
@@ -204,10 +204,12 @@ def make_task_tool(planner):
             inp["model"] = turns[-1].subagent_model
         sub: list[BaseMessage] = []
         try:
+            # 子 agent 调的模型记账时记成子 agent 的（见 app.costs）
             async with _slot(conf["thread_id"], runtime.tool_call_id):
-                # 和 ainvoke 一样跑，边跑边记下做到哪儿了：出错时交回已经做了的
-                async for values in worker.astream(inp, context=runtime.context, stream_mode="values"):
-                    sub = values["messages"]
+                with costs.within(subagent=True):
+                    # 和 ainvoke 一样跑，边跑边记下做到哪儿了：出错时交回已经做了的
+                    async for values in worker.astream(inp, context=runtime.context, stream_mode="values"):
+                        sub = values["messages"]
         except (GatewayAuthError, GraphBubbleUp):
             raise
         except Exception as e:  # 这个子任务算没做成，别的子任务、主 agent 照常（点停止是 CancelledError，不在这里）

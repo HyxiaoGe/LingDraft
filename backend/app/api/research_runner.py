@@ -27,7 +27,7 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg_pool import PoolTimeout
 
-from app import aio, config
+from app import aio, config, costs
 from app.api.run_store import ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, Pending, PostgresRunStore, RunStore
 from app.api.runner import BaseRunner, RunConflict, _sse_text, jsonable, log
 from app.graph.research import history
@@ -167,7 +167,7 @@ def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
         elif isinstance(m, HumanMessage):
             t = by_id.get(m.id)
             cur = {"id": m.id, "user": history.text_of(m), "sent_at": m.additional_kwargs.get(SENT_AT, ""), "items": [],
-                   "record": t.model_dump(exclude={"id"}) if t else None}
+                   "record": {**t.model_dump(exclude={"id"}), "credits": costs.credits(t)} if t else None}
             out.append(cur)
         elif cur is not None and isinstance(m, AIMessage):
             cur["items"] += _items_of(m, results)
@@ -520,6 +520,7 @@ class ResearchRunner(BaseRunner):
     async def _run_turn(self, thread_id: str, inp: Any, out: Callable[[dict], None]) -> str | None:
         """跑一轮，事件交给 out。用户点了停止：排队时就点的不跑，直接收尾；跑着的马上取消（见 stop），正在等的模型、工具一起断开，
         已经流出来的正文、做完的工具结果留着（取消时照常存检查点，见 DURABILITY）。停下的返回 STOPPED（记进运行记录）。"""
+        scope = costs.Scope(thread_id=thread_id, turn_id=await self._aturn_of(thread_id))  # 这一轮调的模型记账时记上对话和轮（见 app.costs）
         if self._stop_requested(thread_id):
             await self._write_stop(thread_id)
             out({"event": "node", "data": {"node": TURN_END}})
@@ -529,6 +530,7 @@ class ResearchRunner(BaseRunner):
         done: dict[str | None, list[ToolMessage]] = {}  # 页面已经收到做完了的工具结果：主 agent 的在 None 下，子 agent 的在派它的 task 调用 id 下
         mark, ctx = object(), contextvars.copy_context()
         ctx.run(_TURN.set, mark)
+        ctx.run(costs.SCOPE.set, scope)
         # 查过要不要停到登记好这一轮，中间不让出事件循环：停止（_cancel 也在这个循环里）要么上面已经看到，要么取消得到
         turn = asyncio.get_running_loop().create_task(self._stream_graph(thread_id, inp, out, buf, tasks, done), context=ctx)
         self._running[thread_id] = turn
@@ -825,7 +827,8 @@ class ResearchRunner(BaseRunner):
         turn_id, question, reply = job
         out({"event": "phase", "data": {"phase": "suggest"}})  # 页面在回答下面先说一声正在起
         try:
-            items = (await self.planner.suggest(question, reply))[:3]
+            with costs.within(costs.Scope(thread_id=thread_id, turn_id=turn_id)):
+                items = (await self.planner.suggest(question, reply))[:3]
         except Exception:  # noqa: BLE001  推荐问题失败就不给
             items = []
         async with self._suggest_mu:

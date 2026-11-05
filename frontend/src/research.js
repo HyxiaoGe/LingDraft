@@ -29,6 +29,12 @@ export function modelName(models, ref) {
   return models?.slice(1).find((m) => m.model === ref)?.name || ref.split(":").pop();
 }
 
+// 这一轮用了多少 credits（后端按各模型的单价算好的，1 credit = ¥0.001 成本）：10 以上取整，以下留一位小数
+export function creditsText(n) {
+  if (n == null) return null;
+  return `${n >= 10 ? Math.round(n) : n >= 0.1 ? n.toFixed(1) : "<0.1"} credits`;
+}
+
 export function stamp(iso, now = Date.now()) {
   if (!iso) return null;
   const d = new Date(iso);
