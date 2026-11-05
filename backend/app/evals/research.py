@@ -281,17 +281,22 @@ def _diff(after: dict[str, int], before: dict[str, int]) -> dict[str, int]:
 
 def run_case(case: Case, make_planner: Callable[..., Any], judge: Judge, run: int = 1, check_sources: bool = True,
              tape: Tape | None = None) -> dict:
-    """make_planner(clock=, wrap_tool=) 造这个用例的 planner。tape 给了就录像或回放（见 app.evals.tape），时钟跟着它挪。"""
+    """make_planner(clock=, wrap_tool=) 造这个用例的 planner。tape 给了就录像或回放（见 app.evals.tape），时钟跟着它挪；
+    重新录的时候每一步都存检查点，跑完把每次调模型之前的那个存下来，给决策点回放用（见 app.evals.decisions）。"""
     from app.api.research_runner import ResearchRunner
+    from app.evals.decisions import save_snapshots, snapshot_path
 
     started = time.time()
     result: dict[str, Any] = {"id": case.id, "run": run, "turns": []}
     clock = Clock()
+    runner = None
+    tid = f"eval-{case.id}-{run}"
     try:
         if tape:
             tape.start(clock)
         runner = ResearchRunner(planner=make_planner(clock=clock, wrap_tool=tape.wrap if tape else None), checkpointer=memory_checkpointer())
-        tid = f"eval-{case.id}-{run}"
+        if tape and tape.fresh:
+            runner.durability = "sync"
         for turn in case.turns:
             before = tape.counts() if tape else {}
             today = clock.now(CHINA_TZ).date().isoformat()
@@ -315,6 +320,11 @@ def run_case(case: Case, make_planner: Callable[..., Any], judge: Judge, run: in
         if tape:
             result["tape"] = tape.counts()
             tape.save()  # 出错了也存：已经真调过的不用再花一遍钱
+            if tape.fresh and runner is not None:
+                try:
+                    save_snapshots(snapshot_path(tape.path), runner.graph, runner._cfg(tid), tape.recorded_at)
+                except Exception as e:  # noqa: BLE001 —— 存不下来也不打断别的用例，记成这个用例出错
+                    result.update({"passed": False, "error": result.get("error") or f"存检查点出错：{type(e).__name__}: {e}"})
     result["duration_s"] = round(time.time() - started, 1)
     return result
 
