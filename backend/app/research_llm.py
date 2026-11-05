@@ -348,11 +348,12 @@ class LiveResearchPlanner:
 
     async def title(self, text: str) -> str:
         """调用方不带这次运行的上下文来调（见 agent._TitleJob），字不进页面。"""
-        out = await self._titler.ainvoke([("user", prompts.render("title.prompt", content=text))])
+        out = await self._titler.ainvoke([("user", prompts.render("title.prompt", content=text))], config={"run_name": "title"})
         return str(out.content).strip()
 
     async def suggest(self, question: str, reply: str) -> list[str]:
-        res = await _structured(self._fast, Suggestions).ainvoke([("user", prompts.render("suggest.prompt", question=question, reply=reply))])
+        res = await _structured(self._fast, Suggestions).ainvoke([("user", prompts.render("suggest.prompt", question=question, reply=reply))],
+                                                          config={"run_name": "suggest"})
         return [q.strip() for q in res.questions if q.strip()]
 
     async def blocked(self, texts: Sequence[str]) -> list[bool]:
@@ -373,12 +374,12 @@ class LiveResearchPlanner:
 
     async def summarize(self, prompt: str) -> str:
         """在 agent 调模型之前那一步里调（点了停止跟着这次运行一起取消），片段标 nostream，不进这次运行的消息流。"""
-        out = await self._summarizer.ainvoke([("user", prompt)], config={"tags": [TAG_NOSTREAM]})
+        out = await self._summarizer.ainvoke([("user", prompt)], config={"tags": [TAG_NOSTREAM], "run_name": "summarize"})
         return str(out.content).strip()
 
     def dream(self, prompt: str) -> str:
         """按 JSON 输出（response_format json_object）：开着思考也能用，不像结构化输出要强制调工具。"""
-        out = self._dreamer.bind(response_format={"type": "json_object"}).invoke([("user", prompt)])
+        out = self._dreamer.bind(response_format={"type": "json_object"}).invoke([("user", prompt)], config={"run_name": "dream"})
         return str(out.content)
 
 

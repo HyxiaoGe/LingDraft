@@ -13,6 +13,7 @@ from langchain.agents.middleware import _trace_policy
 from langsmith import Client
 from langsmith.utils import LangSmithNotFoundError
 
+from app import tracing
 from app.evals import decisions, research, smith
 from app.evals.research import Case, run_case
 from app.evals.tape import Tape
@@ -129,7 +130,7 @@ def test_a_case_is_one_trace_in_the_experiment_with_middleware_trimmed():
     assert names.count("research") == 2  # 两轮
     # 中间件那几层只留名字：输入输出都是那句说明；模型调用、工具调用照常全记
     mw = [x for x in runs if "Middleware." in x["name"]]
-    assert mw and all(x["inputs"] == smith.OMITTED and x.get("outputs", smith.OMITTED) == smith.OMITTED for x in mw)
+    assert mw and all(x["inputs"] == tracing.OMITTED and x.get("outputs", tracing.OMITTED) == tracing.OMITTED for x in mw)
     llm = [x for x in runs if x["run_type"] == "llm"]
     assert llm and all("LingDraft" in json.dumps(x["inputs"], ensure_ascii=False) for x in llm)
     tools = [x for x in runs if x["run_type"] == "tool"]
