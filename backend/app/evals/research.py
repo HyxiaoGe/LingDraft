@@ -32,6 +32,7 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.clock import Clock
+from app import costs
 from app.evals import smith
 from app.evals.tape import Tape
 from app.graph.research import history
@@ -520,6 +521,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("录一遍就够了：先 --record，再 --replay --repeat N")
     if args.replay and (missing := [c.id for c in cases if not (TAPES_DIR / f"{c.id}.json").exists()]):
         ap.error(f"这些用例还没有录像，先 --record：{missing}")
+    costs.open_ledger()  # 评测花的钱记进本机的库（配了的话），对账时和 dev 的加起来（见 app.costs）
     judge = LiveJudge()
 
     # 要跑的每一行：(用例, 跑它)。重新打分是原来那份结果里的每个回答各判 repeat 遍

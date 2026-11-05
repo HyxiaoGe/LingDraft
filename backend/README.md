@@ -34,6 +34,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - 对话第一句话时定下选项，之后不能换（Auto 例外，由系统在里面换）。每一轮开始时定下这一轮主 agent、子 agent 用的模型，记进这一轮的记录（`model_catalog.Catalog.plan`，以后查权限、余额也在这里）；之前几轮是别的模型答的，发过去时不带那几轮的思考。
   - 内部用途（`[roles]`）：起标题、推荐问题、单条送审、写短版、整理记忆、评测的裁判各用哪个，不跟着选项走。
   - 接新的一家：OpenAI 兼容接口的在 `research_llm.COMPAT` 里加一行（怎么开关思考，先实测），别的在 `research_llm.PROVIDERS` 里加一个建模型的函数：思考怎么开关、思考怎么传回去各家不一样。思考统一按 LangChain 的 content blocks 读（`history.thinking_of`），哪家模型都一样。DeepSeek 的思考原样传回（同一轮不传报 400）；豆包 2.x 给的是思考摘要（页面显示它）和加密的思考原文，两样都原样传回（不传加密原文推理效果会下降）。别的几家思考都在 `reasoning_content` 里（MiniMax 要带 `reasoning_split`，不然 M3 的思考夹在正文的 `<think>` 里），也原样传回；GLM-5.3、MiniMax M3.1 Flash、Grok 关不掉思考（选项写 `always`），Grok 的思考多半不返回（所以它的选项先 `hidden`，页面上不出现）。
+  - 价格（`[prices]`、`[peak]`）：各模型命中缓存、没命中、输出的单价（元 / 百万 token，国内站按量付费），手动照各家官网维护。DeepSeek 分峰谷（工作日 9–12、14–18 点是高峰，周末和法定节假日全天空闲，节假日表每年补一次），混元 Hy4 有限时优惠（写着到期时间），MiniMax M3 按输入长度分档。用户能选的、内部用途用的模型都要有价格，没有的启动就报错。成本怎么记见下面的“存储”。
   - `SUBAGENT_SEARCH_BUDGET`、`SUBAGENT_READ_BUDGET` 是一个子 agent 最多搜几次、读几页，默认都是 8。
 - 对话的其他：
   - `LINGDRAFT_RESEARCH_WORKERS`：同时跑几段对话，默认 4，多出来的排队。
@@ -185,6 +186,14 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 - 和检查点存在一处，是 Postgres 的 `runs` 表。服务启动时，上次还在排队、在跑的记成 lost。删掉对话时一起删。
 - 查看：`GET /api/research/threads/{id}/runs` 看一段对话的，`GET /api/research/runs?status=error&limit=50` 看所有对话里最近的。接口不给堆栈；堆栈在库里，出错时也打进日志（Loki 能搜到）。
 - 写记录失败只打日志，不影响执行。
+
+成本（`app/costs.py`）：1 credit = ¥0.001 的 API 成本，v1 只记账、不扣费（扣费要先有登录）。
+
+- 每次调模型一行，记在 `model_costs` 表：调用开始的时间、厂商和模型、用途（主 agent、子 agent、起标题、推荐问题、压缩、整理记忆、评测的裁判……）、哪段对话哪一轮、三种 token 数、按调用开始那一刻的单价算出来的钱和用的单价。不算给用户的调用也记，对账才对得上；删对话时不删。
+- 钱数也写进那条模型消息，每轮的用量里加起来（`usage.cost`、`subagent_usage.cost`），页面在模型名后面显示这一轮的 credits（主 agent 加子 agent）。
+- 流到一半停了、断了的调用厂商照样收钱，接口却不给用量：记一行“不知道”，钱数是空的，先不估算。还没流出东西就失败的不记。
+- 后台一个线程用自己的连接写库，写不上只打日志。服务、命令行、评测起来时开（配了库才开），单元测试不开。
+- 对账：`uv run python -m app.costs --days 7`，按北京时间的天、厂商、模型汇总，和各家后台的账单比。本机跑评测记在本机的库里（`lingdraft_local`），对账时和 dev 的加起来。
 
 海报的检查点还在 SQLite 里（`data/checkpoints.sqlite`），每个 thread 的 `v{n}.png / v{n}.html` 和导出的 `final.png / final.html / brief.json` 在 `output/<thread_id>/`。进程重启后 `resume` 可直接续跑。
 

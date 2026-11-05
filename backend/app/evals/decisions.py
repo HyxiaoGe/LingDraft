@@ -33,6 +33,7 @@ import yaml
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import BaseModel, ConfigDict, Field
 
+from app import costs
 from app.evals import smith
 from app.graph.research import history
 from app.graph.research.agent import CHINA_TZ, LOOP_ENTRY, ChatContext, turn_start
@@ -354,6 +355,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error(f"没有这些决策点：{sorted(set(args.decision) - {d.id for d in decisions})}")
     if missing := sorted({d.case for d in decisions if not (TAPES_DIR / f"{d.case}.snapshots.json").exists()}):
         ap.error(f"这些用例还没有存检查点的录像，先 research --record --case …：{missing}")
+    costs.open_ledger()  # 评测花的钱记进本机的库（配了的话），见 app.costs
 
     def snaps_for(d: Decision) -> list[dict]:
         return json.loads((TAPES_DIR / f"{d.case}.snapshots.json").read_text(encoding="utf-8"))["snapshots"]

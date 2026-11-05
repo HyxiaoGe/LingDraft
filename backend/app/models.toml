@@ -156,3 +156,76 @@ summarize = { model = "deepseek:deepseek-flash" }
 dream = { model = "deepseek:deepseek-v4-pro", thinking = true, effort = "high" }
 # 评测的裁判：换被测的模型时裁判不变，分数才比得了（见 app.evals.research）
 judge = { model = "deepseek:deepseek-v4-pro" }
+
+# ---- 价格：成本记账用（见 app/costs.py），每次调模型按调用开始那一刻的价算好记下 ----
+# 2026-11-06 照各家官网填的（来源见 docs/credits/价格表-2026-11-06.md），国内站按量付费，元 / 百万 token。各家调价了改这里（Sean 和 Claude 手动维护），
+# 改了只影响之后的调用，记下的不重算。用户能选的、内部用途用的模型都要有价格（没有的启动就报错）；只在藏起来、停了的选项里的可以没有，记成本时记成“不知道”。
+# cached 是输入里命中缓存的，input 是没命中的（Kimi、MiniMax、千问建缓存都按输入价收，也算这里），output 是输出（含思考）。
+# off_peak：闲时价，什么时候是高峰见下面的 [peak]（现在只有 DeepSeek 分峰谷）。
+# promo：限时优惠，until 之前按它（写上时区）；过期了照常价算，记账时打一条警告，删掉就行。
+# tiers：按这次调用的输入 token 数分档，超过 above_input 的按那一档（现在只有 MiniMax M3）。分档和峰谷、优惠没有一起出现过，写在一起直接报错，遇到了再定怎么叠。
+# 不进表的：新用户的赠送额度（账号一次性的，对账时厂商账单会少一截）；智谱以后要收的缓存存储费（按小时收，分不到每次调用上，对账时看）。
+
+[peak]
+# DeepSeek 的高峰：北京时间周一到周五 9–12 点、14–18 点，法定节假日除外；其余时间（周末、节假日全天）按 off_peak。
+# 官网没说按请求开始还是结束的时间算，这里按开始的
+hours = [[9, 12], [14, 18]]
+# 法定节假日放假的日子（国务院每年的放假安排，连休里调休凑出来的几天也算；调休上班的周六日不管，规则只认周一到周五）。
+# 从 2026-11-06 开始记账，今年剩下的日子没有节假日；2027 年的安排一般年底公布，公布了加进来、把 holidays_through 往后挪，过了这天记账时打警告
+holidays = []
+holidays_through = 2026-12-31
+
+[prices."deepseek:deepseek-v4-pro"]
+regular = { cached = 0.30, input = 9.0, output = 27.0 }
+off_peak = { cached = 0.15, input = 4.5, output = 13.5 }
+
+[prices."deepseek:deepseek-flash"]
+regular = { cached = 0.04, input = 2.0, output = 8.0 }
+off_peak = { cached = 0.02, input = 1.0, output = 4.0 }
+
+[prices."ark:doubao-seed-2-1-pro-260915"]
+regular = { cached = 1.20, input = 6.00, output = 30.00 }
+
+[prices."ark:doubao-seed-2-1-lite-260915"]
+regular = { cached = 0.16, input = 0.80, output = 2.70 }
+
+[prices."moonshot:kimi-k3.1-pro"]
+regular = { cached = 1.30, input = 13.00, output = 68.00 }
+
+[prices."dashscope:qwen3.8-max"]
+regular = { cached = 1.50, input = 12.00, output = 36.00 }
+
+[prices."dashscope:qwen3.8-flash"]
+regular = { cached = 0.10, input = 0.80, output = 2.70 }
+
+[prices."mimo:mimo-v2.6-pro"]
+# 建缓存写着限时免费（没写到什么时候、之后多少钱）
+regular = { cached = 0.025, input = 3.00, output = 6.00 }
+
+[prices."mimo:mimo-v2.6-flash"]
+regular = { cached = 0.02, input = 1.00, output = 2.00 }
+
+[prices."zhipuai:glm-5.3"]
+regular = { cached = 2.00, input = 8.00, output = 28.00 }
+
+[prices."zhipuai:glm-5.3-flash"]
+# 官网的 FAQ 写限时五折（0.115 / 0.4 / 1.4），价格表只有原价：先按原价，等控制台的实际扣费确认
+regular = { cached = 0.23, input = 0.80, output = 2.80 }
+
+[prices."zhipuai:glm-5.2"]
+regular = { cached = 2.00, input = 8.00, output = 28.00 }
+
+[prices."hunyuan:hy4"]
+regular = { cached = 0.30, input = 6.00, output = 18.00 }
+promo = { until = 2026-12-31T23:59:59+08:00, cached = 0.15, input = 3.00, output = 9.00 }  # 目录价五折
+
+[prices."hunyuan:hy3"]
+regular = { cached = 0.25, input = 1.00, output = 4.00 }
+
+[prices."minimax:MiniMax-M3"]
+# 官网标的“永久五折”，这里就是折后的价。512k 是 512000 还是 524288 官网没写，先按 512000
+regular = { cached = 0.42, input = 2.10, output = 8.40 }
+tiers = [{ above_input = 512000, cached = 0.84, input = 4.20, output = 16.80 }]
+
+[prices."minimax:MiniMax-M3.1-Flash"]
+regular = { cached = 0.10, input = 1.00, output = 4.00 }

@@ -39,6 +39,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
+from app import costs
 from app.graph.research import history, prompts
 from app.graph.research.memory import MemoryBook
 from app.graph.research.sources import DOCS_TOOL, SEPARATORS, SUBAGENT_TOOL, collect_sources, parse, search_hits
@@ -256,6 +257,7 @@ class _TitleJob:
     模型返回的只去掉首尾空白（引号、书名号是标题的一部分，不删），太长截掉；出错、等不到用用户原话。先定下来的算数，之后的不再发、不再改。
     另起一个任务调模型，用空的上下文：不带这次运行的回调，它的字不进这次运行的流（不然页面上会当成回答）。
     往流里写要在图的上下文里（写的时候按上下文认是哪个图），所以起头时复制一份上下文，发标题时在它里面写。
+    记账要知道是哪段对话、哪一轮（见 app.costs.Scope），也是起头时取下来带过去。
     known 是上一次运行已经起好的（见 ChatContext.title）：直接定下来，不调模型。"""
 
     def __init__(self, planner, text: str, known: str | None = None) -> None:
@@ -266,6 +268,7 @@ class _TitleJob:
         except RuntimeError:  # 不在流式运行里（例如测试直接 invoke）
             self._write = None
         self._ctx = contextvars.copy_context()
+        self._scope = costs.SCOPE.get()
         self._task: asyncio.Task | None = None
         if known:
             self._settle(known)
@@ -274,7 +277,8 @@ class _TitleJob:
 
     async def _run(self, planner) -> None:
         try:
-            title = (await planner.title(self._text)).strip()[:TITLE_CHARS]
+            with costs.within(self._scope):
+                title = (await planner.title(self._text)).strip()[:TITLE_CHARS]
         except Exception as e:  # noqa: BLE001  起标题失败不影响回答，用原话
             log.warning("起标题失败，用原话：%s", e)
             title = ""

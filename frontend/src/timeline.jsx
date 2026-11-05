@@ -10,7 +10,7 @@ import { ImageCards, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
 import { Markdown } from "./markdown.jsx";
-import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
+import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Mark } from "./sources.jsx";
 import { WeatherCard, forecastsOf } from "./weather.jsx";
 
@@ -260,6 +260,7 @@ function Turn({ t, st, live, running, suggesting, stopping, last, now, act, mode
           <div className={"ws-ai-foot" + (last ? "" : " quiet")}>
             <Stamp iso={rec?.ended_at} now={now} />
             {rec?.model && <span className="ws-ai-model" title="这一轮用的模型">{modelName(models, rec.model.ref)}</span>}
+            {rec?.credits != null && <span className="ws-ai-model" title="这一轮的成本（1 credit = ¥0.001）">{creditsText(rec.credits)}</span>}
             {replied && <CopyButton text={() => answerText(items, st?.sources)} />}
             {last && idle && <button className="ws-btn ghost sm" onClick={act.regenerate}><IconLoop size={13} />重新回答</button>}
           </div>

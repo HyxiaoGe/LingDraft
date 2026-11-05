@@ -33,8 +33,9 @@ from langgraph.constants import TAG_NOSTREAM
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, ConfigDict, Field
 
-from app import aio, config, model_catalog
+from app import aio, config, costs, model_catalog
 from app.clock import Clock
+from app.costs import MeteredChatModel
 from app.graph.research import history, prompts
 from app.graph.research.compaction import RECALL_TOOL as RECALL
 from app.graph.research.sources import DOCS_TOOL, doc_snippets, search_hits
@@ -176,17 +177,20 @@ def _pass_back(msgs: list[BaseMessage], payload: dict, keys: Sequence[str]) -> N
 
 
 def make_chat_model(ref: str, *, thinking: bool, effort: str = "", timeout: int = 180, callbacks: list | None = None,
-                    max_tokens: int | None = None, guard: str | None = None) -> BaseChatModel:
+                    max_tokens: int | None = None, guard: str | None = None, purpose: str = costs.AGENT) -> BaseChatModel:
     """按"厂商:模型"建聊天模型（LangChain init_chat_model 的写法，模型选项见 app/models.toml）。effort 是思考强度，空的是厂商默认。
     不直接用 init_chat_model：它只建得出 LangChain 自己的类，我们要的是补过的子类（见下面各家的函数）。接新的一家：OpenAI 兼容接口的
     在 COMPAT 里加一行（开关思考的参数先实测），别的在 PROVIDERS 里加一个建模型的函数。
     每次调用都过熔断，服务商的错误换成 ModelUnavailable / ContentBlocked（见 app.model_guard）。
-    熔断默认按模型名记，同一个模型的各种用途一起断开；guard 给了就这个用途单独记（见 LiveResearchPlanner 的起标题）。"""
+    熔断默认按模型名记，同一个模型的各种用途一起断开；guard 给了就这个用途单独记（见 LiveResearchPlanner 的起标题）。
+    每次调用记一行成本（见 app.costs），purpose 是记账时的用途：主 agent、子 agent 用的是 agent（子 agent 的由 task 工具标出来），
+    内部用途是它的名字（见 role_model）。"""
     provider, _, name = ref.partition(":")
     build = PROVIDERS.get(provider)
     if build is None:
         raise ValueError(f"未知的模型提供方：{provider}")
-    return build(name, thinking=thinking, effort=effort, timeout=timeout, callbacks=callbacks, max_tokens=max_tokens, guard=guard)
+    return build(name, thinking=thinking, effort=effort, timeout=timeout, callbacks=callbacks, max_tokens=max_tokens, guard=guard,
+                 purpose=purpose)
 
 
 def usable(ref: str) -> bool:
@@ -240,11 +244,11 @@ def _compat(provider: str) -> Callable[..., BaseChatModel]:
     spec = COMPAT[provider]
 
     def build(name: str, *, thinking: bool, effort: str, timeout: int, callbacks: list | None, max_tokens: int | None,
-              guard: str | None) -> BaseChatModel:
+              guard: str | None, purpose: str) -> BaseChatModel:
         """走 ChatOpenAI，它只认 OpenAI 官方的字段，各家的思考不取，这里补（见 ChatCompat）。"""
         from langchain_openai import ChatOpenAI
 
-        class ChatCompat(GuardedChatModel, ChatOpenAI):
+        class ChatCompat(GuardedChatModel, MeteredChatModel, ChatOpenAI):
             """OpenAI 兼容接口的一家。思考放进 additional_kwargs：reasoning_content 是页面上显示的思考；豆包 2.x 还回 encrypted_content
             （加密的思考原文）。提供方标成这一家的名字，不用 ChatOpenAI 标的 openai：标成 openai 的话 content_blocks 按 OpenAI 的格式读，
             读不到 additional_kwargs 里的思考（见 history.thinking_of）。
@@ -253,6 +257,12 @@ def _compat(provider: str) -> Callable[..., BaseChatModel]:
 
             def _guard_key(self) -> str:
                 return guard_key(GuardedChatModel._guard_key(self), guard)
+
+            def _cost_ref(self) -> str:
+                return f"{provider}:{name}"
+
+            def _cost_purpose(self) -> str:
+                return purpose
 
             def _create_chat_result(self, response, generation_info=None):
                 result = super()._create_chat_result(response, generation_info)
@@ -292,7 +302,7 @@ def _compat(provider: str) -> Callable[..., BaseChatModel]:
 
 
 def _deepseek(name: str, *, thinking: bool, effort: str, timeout: int, callbacks: list | None, max_tokens: int | None,
-              guard: str | None) -> BaseChatModel:
+              guard: str | None, purpose: str) -> BaseChatModel:
     """DeepSeek 思考模式下：带工具的请求要把 reasoning_content 原样传回（langchain-openai / langchain-deepseek 都不做，这里补）。
     同一轮里的不传接口报 400；之前几轮的照它现在的文档也传，会拼进上下文，只传这一轮的话，下一轮上一轮的消息变了，前缀缓存从那里断
     （2026-11-01 Sean 定）。不接受强制 tool_choice（with_structured_output 会设），这里去掉；temperature 无效。"""
@@ -301,9 +311,15 @@ def _deepseek(name: str, *, thinking: bool, effort: str, timeout: int, callbacks
     if not config.DEEPSEEK_API_KEY:
         raise RuntimeError("未设置 DEEPSEEK_API_KEY")
 
-    class ChatDeepSeekRT(GuardedChatModel, ChatDeepSeek):
+    class ChatDeepSeekRT(GuardedChatModel, MeteredChatModel, ChatDeepSeek):
         def _guard_key(self) -> str:
             return guard_key(GuardedChatModel._guard_key(self), guard)
+
+        def _cost_ref(self) -> str:
+            return f"deepseek:{name}"
+
+        def _cost_purpose(self) -> str:
+            return purpose
 
         def _get_request_payload(self, input_, *, stop=None, **kwargs):
             payload = super()._get_request_payload(input_, stop=stop, **kwargs)
@@ -327,7 +343,7 @@ API_KEYS: dict[str, Callable[[], str | None]] = {"deepseek": lambda: config.DEEP
 def role_model(catalog: Catalog, role: str, **kw: Any) -> BaseChatModel:
     """内部用途（起标题、写短版、评测的裁判……，见 models.toml 的 [roles]）用的模型。"""
     use = catalog.role(role)
-    return make_chat_model(use.ref, thinking=use.thinking, effort=use.effort, **kw)
+    return make_chat_model(use.ref, thinking=use.thinking, effort=use.effort, purpose=role, **kw)
 
 
 # ---- 真实模型 ----
