@@ -92,9 +92,9 @@ def test_plan_falls_back_to_auto():
     assert "deepseek-flash" not in {o.id for o in c.offered(_always)}
     assert c.plan("doubao-seed-2-1-lite", None, _always).option == AUTO
     assert c.plan("nope", None, _always).option == AUTO
-    no_ark = lambda ref: not ref.startswith("ark:")  # noqa: E731
-    assert c.plan("doubao-seed-2-1-pro", None, no_ark).option == AUTO
-    assert [o.id for o in c.offered(no_ark)] == [AUTO, "deepseek-v4-pro"]
+    only_deepseek = lambda ref: ref.startswith("deepseek:")  # noqa: E731
+    assert c.plan("doubao-seed-2-1-pro", None, only_deepseek).option == AUTO
+    assert [o.id for o in c.offered(only_deepseek)] == [AUTO, "deepseek-v4-pro"]
 
 
 def test_plan_thinking_switch():
@@ -160,7 +160,7 @@ def test_models_endpoint_and_default_auto():
     """/api/models 给新对话能选的；没选模型的新对话是 Auto，每轮记下用的模型。"""
     http, rr = _client(FakeResearchPlanner(catalog=_with({"deepseek-flash": "hidden"})))
     models = http.get("/api/models").json()["models"]
-    assert [m["id"] for m in models] == [AUTO, "deepseek-v4-pro", "doubao-seed-2-1-pro", "doubao-seed-2-1-lite"]
+    assert [m["id"] for m in models] == [o.id for o in model_catalog.load().options if o.id != "deepseek-flash"]
     assert models[0] == {"id": AUTO, "name": "Auto", "description": models[0]["description"], "thinking": "toggle", "model": PRO}
     st = _create(http, "直接答：你好")
     assert st["model"] == AUTO
