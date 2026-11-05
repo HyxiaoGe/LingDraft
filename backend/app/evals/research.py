@@ -1,11 +1,12 @@
 """对话回放评测：用真实模型按用例跑对话（evals/research/cases.yaml），每轮做几项自动检查，导出对话记录。
 
-用法（在 backend 目录）：uv run python -m app.evals.research [--case id ...] [--repeat N] [--jobs N] [--no-sources]
+用法（在 backend 目录）：uv run python -m app.evals.research [--case id ...] [--repeat N] [--jobs N] [--no-sources] [--no-smith]
   [--record | --replay | --rejudge 结果文件 | --stats 结果文件 ...]，各项的意思见 evals/README.md。
 每个用例用独立的内存检查点，不碰本机的服务和配置的库；走和页面同一个运行器（ResearchRunner），
 所以顺带检查流式片段的消息 id 和存下来的对得上。结果写到 data/evals/research-<时间>.json，对话记录写到同名的 .md。
 工具结果可以录下来回放（app.evals.tape）；结果文件里存了重新打分要的东西（来源、裁判看的材料、那一轮的日期），
 改了检查、标准或裁判，可以拿旧的回答重新打分，不用重跑 agent。
+配了 LANGSMITH_API_KEY 的话每次评测（重新打分也算）同时传到 LangSmith 成一个实验（app.evals.smith），--no-smith 不传。
 
 每轮的检查：跑完了、有回复（这一轮的结果是 ok，最后一条模型消息有正文）、正文里引用的来源都存在；
 expect 里写了的才检查：搜没搜、读到几篇、取没取当前时间、查没查（搜索、读页、天气、子任务任一）。judge 写了就由裁判模型按标准看这一轮的正文（回答质量）。
@@ -20,6 +21,8 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
+from functools import partial
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
@@ -29,6 +32,7 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.clock import Clock
+from app.evals import smith
 from app.evals.tape import Tape
 from app.graph.research import history
 from app.graph.research.agent import date_anchors
@@ -356,6 +360,25 @@ def rejudge_case(r: dict, case: Case, judge: Judge, run: int, check_sources: boo
     return out
 
 
+# ---- 传到 LangSmith（见 app.evals.smith）----
+
+
+def case_inputs(c: Case) -> dict:
+    """数据集里一个样例的输入：这个用例的几轮（说什么、查什么、裁判看什么）。"""
+    return {"turns": [t.model_dump(mode="json", exclude_none=True) for t in c.turns]}
+
+
+def case_view(r: dict) -> dict:
+    """实验里这一行的输出：每轮说了什么、正文，过没过。完整的过程在这一行的 trace 里。"""
+    return {"passed": r.get("passed"), **({"error": r["error"]} if "error" in r else {}),
+            **({"rejudged_from": r["rejudged_from"]} if "rejudged_from" in r else {}),
+            "turns": [{"say": t["say"], "status": t["status"], "reply": t["reply"]} for t in r.get("turns", [])]}
+
+
+def case_scores(r: dict) -> list[dict]:
+    return smith.check_scores([t["checks"] for t in r.get("turns", [])], r.get("passed", False), r.get("error"))
+
+
 def _total(usages: list[dict]) -> dict:
     keys = ("model_calls", "input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens", "searches", "reads")
     return {k: sum(u.get(k) or 0 for u in usages) for k in keys}
@@ -446,6 +469,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--jobs", type=int, default=3, help="同时跑几个")
     ap.add_argument("--no-sources", action="store_true", help="不核对正文里的引用")
     ap.add_argument("--label", default="", help="写进结果文件名，方便对比")
+    ap.add_argument("--no-smith", action="store_true", help="不传 LangSmith（配了 LANGSMITH_API_KEY 时默认传）")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--record", action="store_true", help="真跑，把工具结果录下来（整份换掉这些用例原来的录像）")
     mode.add_argument("--replay", action="store_true", help="用录像回放工具结果，没对上的真调并补录；时钟挪到录的时候")
@@ -466,31 +490,45 @@ def main(argv: list[str] | None = None) -> int:
         ap.error(f"这些用例还没有录像，先 --record：{missing}")
     judge = LiveJudge()
 
-    results = []
-    with ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        if args.rejudge:
-            by_id = {c.id: c for c in cases}
-            old = [r for r in _load_results(args.rejudge) if r["id"] in by_id]
-            futures = [pool.submit(rejudge_case, r, by_id[r["id"]], judge, n * args.repeat + k + 1, not args.no_sources)
-                       for n, r in enumerate(old) for k in range(args.repeat)]
-        else:
-            # 调 agent-tools 用 research_eval 场景：网关记账时和真实对话分开
-            def make(**kw):
-                return LiveResearchPlanner(scene="research_eval", **kw)
+    # 要跑的每一行：(用例, 跑它)。重新打分是原来那份结果里的每个回答各判 repeat 遍
+    by_id = {c.id: c for c in cases}
+    if args.rejudge:
+        old = [r for r in _load_results(args.rejudge) if r["id"] in by_id]
+        jobs = [(by_id[r["id"]], partial(rejudge_case, r, by_id[r["id"]], judge, n * args.repeat + k + 1, not args.no_sources))
+                for n, r in enumerate(old) for k in range(args.repeat)]
+    else:
+        # 调 agent-tools 用 research_eval 场景：网关记账时和真实对话分开
+        def make(**kw):
+            return LiveResearchPlanner(scene="research_eval", **kw)
 
-            def tape(c: Case) -> Tape | None:
-                return Tape(TAPES_DIR / f"{c.id}.json", fresh=args.record) if args.record or args.replay else None
+        def tape(c: Case) -> Tape | None:
+            return Tape(TAPES_DIR / f"{c.id}.json", fresh=args.record) if args.record or args.replay else None
 
-            futures = [pool.submit(run_case, c, make, judge, i + 1, not args.no_sources, tape(c)) for c in cases for i in range(args.repeat)]
-        for f in as_completed(futures):
-            results.append(f.result())
-            print(summary_line(results[-1]), flush=True)
-    results.sort(key=lambda r: (order.index(r["id"]), r["run"]))
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        jobs = [(c, partial(run_case, c, make, judge, i + 1, not args.no_sources, tape(c))) for c in cases for i in range(args.repeat)]
     how = "record" if args.record else "replay" if args.replay else "rejudge" if args.rejudge else None
     name = "-".join(p for p in (f"research-{datetime.now():%Y%m%d-%H%M%S}", how, args.label) if p)
     model = config.RESEARCH_MODEL or (config.DEEPSEEK_MODEL if config.RESEARCH_PROVIDER == "deepseek" else config.ARK_MODEL)
     head = {"provider": config.RESEARCH_PROVIDER, "model": model, "mode": how, **({"rejudged": args.rejudge} if args.rejudge else {})}
+    exp = None
+    if not args.no_smith and jobs:
+        exp = smith.start(smith.RESEARCH_DATASET, "灵稿对话评测的用例，正本是仓库里的 backend/evals/research/cases.yaml",
+                          [smith.Example(c.id, case_inputs(c), {"source": c.source}) for c in load_cases()], name,
+                          {**head, "label": args.label}, used=len({c.id for c, _ in jobs}), repetitions=max(Counter(c.id for c, _ in jobs).values()))
+    if exp:
+        head["langsmith"] = exp.url
+
+    def row(c: Case, fn: Callable[[], dict]) -> dict:
+        return exp.run(c.id, case_inputs(c), fn, case_scores, case_view) if exp else fn()
+
+    results = []
+    with smith.trimmed() if exp else nullcontext(), ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        for f in as_completed([pool.submit(row, c, fn) for c, fn in jobs]):
+            results.append(f.result())
+            print(summary_line(results[-1]), flush=True)
+    if exp:
+        exp.close()
+    results.sort(key=lambda r: (order.index(r["id"]), r["run"]))
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     (RESULTS_DIR / f"{name}.json").write_text(json.dumps({**head, "cases": results}, ensure_ascii=False, indent=1), encoding="utf-8")
     (RESULTS_DIR / f"{name}.md").write_text(transcript(results), encoding="utf-8")
     passed = sum(r["passed"] for r in results)
@@ -505,6 +543,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.repeat > 1:
         print("\n" + stability(results))
     print(f"结果：{RESULTS_DIR / name}.json / .md")
+    if exp:
+        print(f"LangSmith：{exp.url}" + (f"（{exp.feedback_errors} 个分数没传上去，本地结果里有）" if exp.feedback_errors else ""))
     return 0 if passed == len(results) else 1
 
 
