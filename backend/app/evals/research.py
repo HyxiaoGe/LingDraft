@@ -22,8 +22,8 @@ from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
-from functools import partial
 from datetime import date, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -37,7 +37,19 @@ from app.evals.tape import Tape
 from app.graph.research import history
 from app.graph.research.agent import date_anchors
 from app.graph.research.graph import memory_checkpointer
-from app.graph.research.sources import DOCS_TOOL, SOURCE_ID, SUBAGENT_TOOL, cited, doc_snippets, flatten, hit_text, parse, search_hits, url_key
+from app.graph.research.sources import (
+    DOCS_TOOL,
+    SOURCE_ID,
+    SUBAGENT_TOOL,
+    cited,
+    doc_snippets,
+    flatten,
+    hit_text,
+    parse,
+    search_hits,
+    url_key,
+)
+from app.model_catalog import AUTO
 from app.prompting import PromptFile
 from app.tools.docs_mcp import DOCS_TOOLS
 from app.tools.flyai_mcp import FLIGHT_TOOL, TRAIN_TOOL
@@ -168,13 +180,13 @@ class Judge(Protocol):
 
 
 class LiveJudge:
-    """对话用的同一个提供方，不开思考，结构化输出。"""
+    """models.toml 里 roles.judge 那个模型，不开思考，结构化输出。换被测的模型（--model）时裁判不变，分数才比得了。"""
 
     def __init__(self) -> None:
-        from app import config
-        from app.research_llm import make_chat_model
+        from app import model_catalog
+        from app.research_llm import role_model
 
-        self._llm = make_chat_model(config.RESEARCH_PROVIDER, config.RESEARCH_MODEL, thinking=False, timeout=180)
+        self._llm = role_model(model_catalog.load(), "judge", timeout=180)
 
     def _ask(self, schema, key: str, **values):
         chain = self._llm.with_structured_output(schema, method="json_schema", strict=True)
@@ -197,9 +209,10 @@ def _check(name: str, passed: bool, detail: str = "") -> dict:
     return {"name": name, "passed": bool(passed), "detail": detail}
 
 
-def play(runner, tid: str, turn: CaseTurn) -> dict:
-    """说一句话，跑到这一轮结束。返回这一轮的记录；view（页面看到的）、evidence（整段对话的材料）不进结果文件。"""
-    runner.accept(tid, turn.say)
+def play(runner, tid: str, turn: CaseTurn, option: str | None = None) -> dict:
+    """说一句话，跑到这一轮结束。返回这一轮的记录；view（页面看到的）、evidence（整段对话的材料）不进结果文件。
+    option 是第一句话时给对话选的模型（models.toml 里选项的 id），没给是 Auto。"""
+    runner.accept(tid, turn.say, option=option)
     events: list[dict] = []
     runner.run_turn(tid, None, events.append)
     runner.suggest(tid)  # 这一轮结束之后起推荐问题
@@ -218,6 +231,7 @@ def play(runner, tid: str, turn: CaseTurn) -> dict:
     return {"say": turn.say, "events": len(events), "status": view["status"], "error": view.get("error"),
             "reply": history.final_text(msgs[history.last_human(msgs) + 1:]), "items": t["items"],
             "suggestions": rec_turn.get("suggestions", []), "usage": rec_turn.get("usage"), "outcome": rec_turn.get("outcome"),
+            "model": rec_turn.get("model"),  # 这一轮实际用的（Auto 以后会按问题选）
             "searches": seen["searches"], "failed_searches": seen["failed_searches"], "reads": seen["reads"],
             "time_checks": sum(1 for m in ais for tc in m.tool_calls if tc["name"] == TIME_TOOL), "calls": calls,
             "lookups": [tc["name"] for m in ais for tc in m.tool_calls if tc["name"] in LOOKUP_TOOLS],
@@ -289,8 +303,9 @@ def _diff(after: dict[str, int], before: dict[str, int]) -> dict[str, int]:
 
 
 def run_case(case: Case, make_planner: Callable[..., Any], judge: Judge, run: int = 1, check_sources: bool = True,
-             tape: Tape | None = None) -> dict:
-    """make_planner(clock=, wrap_tool=) 造这个用例的 planner。tape 给了就录像或回放（见 app.evals.tape），时钟跟着它挪；
+             tape: Tape | None = None, option: str | None = None) -> dict:
+    """make_planner(clock=, wrap_tool=) 造这个用例的 planner，option 是对话选的模型（没给是 Auto）。
+    tape 给了就录像或回放（见 app.evals.tape），时钟跟着它挪；
     重新录的时候每一步都存检查点，跑完把每次调模型之前的那个存下来，给决策点回放用（见 app.evals.decisions）。"""
     from app.api.research_runner import ResearchRunner
     from app.evals.decisions import save_snapshots, snapshot_path
@@ -306,10 +321,10 @@ def run_case(case: Case, make_planner: Callable[..., Any], judge: Judge, run: in
         runner = ResearchRunner(planner=make_planner(clock=clock, wrap_tool=tape.wrap if tape else None), checkpointer=memory_checkpointer())
         if tape and tape.fresh:
             runner.durability = "sync"
-        for turn in case.turns:
+        for i, turn in enumerate(case.turns):
             before = tape.counts() if tape else {}
             today = clock.now(CHINA_TZ).date().isoformat()
-            played = {**play(runner, tid, turn), "today": today}
+            played = {**play(runner, tid, turn, option if i == 0 else None), "today": today}
             played["cited_sources"] = cited_sources(played)
             if tape:
                 played["tape"] = _diff(tape.counts(), before)
@@ -459,8 +474,24 @@ def _load_results(path: str) -> list[dict]:
     return json.loads(Path(path).read_text(encoding="utf-8"))["cases"]
 
 
+def model_head(option: str) -> dict[str, str]:
+    """结果文件开头记的模型：选项和它这时对应的主 agent、子 agent 的模型（Auto 的策略以后会变，记下这次实际用的）。
+    选项写错了、停用了、没配 key 直接报错：不然悄悄换成 Auto，测的就不是想测的模型了。
+    Auto 不查 key：它就是换过去的那个，没配 key 的话建 planner 时就报错。"""
+    from app import model_catalog
+    from app.research_llm import usable
+
+    catalog = model_catalog.load()
+    o = catalog.option(option)
+    if o is None or o.status:
+        raise SystemExit(f"没有这个模型可选（看 app/models.toml）：{option}")
+    if option != model_catalog.AUTO and not all(usable(r) for r in o.refs()):
+        raise SystemExit(f"这个模型没配 key：{option}")
+    plan = catalog.plan(option, None, usable)
+    return {"option": option, "model": plan.agent.ref, "subagent_model": plan.subagent.ref}
+
+
 def main(argv: list[str] | None = None) -> int:
-    from app import config
     from app.research_llm import LiveResearchPlanner
 
     ap = argparse.ArgumentParser(description="对话回放评测（真实模型）")
@@ -470,6 +501,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-sources", action="store_true", help="不核对正文里的引用")
     ap.add_argument("--label", default="", help="写进结果文件名，方便对比")
     ap.add_argument("--no-smith", action="store_true", help="不传 LangSmith（配了 LANGSMITH_API_KEY 时默认传）")
+    ap.add_argument("--model", default=AUTO, help="对话选哪个模型（app/models.toml 里选项的 id），默认 Auto；裁判不跟着换")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--record", action="store_true", help="真跑，把工具结果录下来（整份换掉这些用例原来的录像）")
     mode.add_argument("--replay", action="store_true", help="用录像回放工具结果，没对上的真调并补录；时钟挪到录的时候")
@@ -504,11 +536,12 @@ def main(argv: list[str] | None = None) -> int:
         def tape(c: Case) -> Tape | None:
             return Tape(TAPES_DIR / f"{c.id}.json", fresh=args.record) if args.record or args.replay else None
 
-        jobs = [(c, partial(run_case, c, make, judge, i + 1, not args.no_sources, tape(c))) for c in cases for i in range(args.repeat)]
+        jobs = [(c, partial(run_case, c, make, judge, i + 1, not args.no_sources, tape(c), args.model))
+                for c in cases for i in range(args.repeat)]
     how = "record" if args.record else "replay" if args.replay else "rejudge" if args.rejudge else None
-    name = "-".join(p for p in (f"research-{datetime.now():%Y%m%d-%H%M%S}", how, args.label) if p)
-    model = config.RESEARCH_MODEL or (config.DEEPSEEK_MODEL if config.RESEARCH_PROVIDER == "deepseek" else config.ARK_MODEL)
-    head = {"provider": config.RESEARCH_PROVIDER, "model": model, "mode": how, **({"rejudged": args.rejudge} if args.rejudge else {})}
+    name = "-".join(p for p in (f"research-{datetime.now():%Y%m%d-%H%M%S}", how, args.model if args.model != AUTO else "", args.label) if p)
+    # 重新打分不跑 agent，模型看原来那份结果文件
+    head = {**({"rejudged": args.rejudge} if args.rejudge else model_head(args.model)), "mode": how}
     exp = None
     if not args.no_smith and jobs:
         exp = smith.start(smith.RESEARCH_DATASET, "灵稿对话评测的用例，正本是仓库里的 backend/evals/research/cases.yaml",

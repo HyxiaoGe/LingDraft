@@ -19,7 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app import config, tracing
 from app.api.favicon import Favicons
 from app.api.inspiration import InspirationError, Inspirations
-from app.api.research_runner import AlreadyPending, NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner
+from app.api.research_runner import AlreadyPending, NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner, UnknownModel
 from app.api.run_store import STATUSES
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 from app.graph.research.memory import DreamSchedule
@@ -203,8 +203,22 @@ async def export_zip(thread_id: str):
 
 
 class ResearchMessageBody(BaseModel):
+    """thinking 是输入框旁边的思考开关，没给按模型的默认（能开关的默认开）。"""
+
     model_config = ConfigDict(extra="forbid")
     text: str
+    thinking: bool | None = None
+
+
+class ResearchCreateBody(ResearchMessageBody):
+    """新对话：model 是选的模型（/api/models 里的 id），没给是 Auto；定下就不换。"""
+
+    model: str | None = None
+
+
+class ResearchRegenerateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    thinking: bool | None = None
 
 
 class ResearchTitleBody(BaseModel):
@@ -233,9 +247,19 @@ def research_list():
     return {"threads": research().list_threads()}
 
 
+@app.get("/api/models")
+def research_models():
+    """新对话能选的模型，Auto 在第一个（列表见 app/models.toml，没配 key 的不在里面）。"""
+    return {"models": research().models()}
+
+
 @app.post("/api/research/threads")
-def research_create(body: ResearchMessageBody):
-    return _sse(research().start(str(uuid.uuid4()), _text(body)))
+def research_create(body: ResearchCreateBody):
+    """新对话。选的模型没有、停用了时返回 400。"""
+    try:
+        return _sse(research().start(str(uuid.uuid4()), _text(body), body.model, body.thinking))
+    except UnknownModel as e:
+        raise HTTPException(400, str(e)) from None
 
 
 @app.post("/api/research/threads/{thread_id}/messages")
@@ -245,7 +269,7 @@ def research_say(thread_id: str, body: ResearchMessageBody):
     _view(r, thread_id)
     text = _text(body)
     try:
-        return _sse(r.say(thread_id, text))
+        return _sse(r.say(thread_id, text, body.thinking))
     except (RunConflict, NotIdle) as e:
         raise HTTPException(409, str(e)) from None
 
@@ -259,7 +283,7 @@ def research_queue(thread_id: str, body: ResearchMessageBody):
     _view(r, thread_id)
     text = _text(body)
     try:
-        return {"queued": r.queue(thread_id, text)}
+        return {"queued": r.queue(thread_id, text, body.thinking)}
     except (NotIdle, AlreadyPending) as e:
         raise HTTPException(409, str(e)) from None
 
@@ -300,12 +324,12 @@ def research_stop(thread_id: str):
 
 
 @app.post("/api/research/threads/{thread_id}/regenerate")
-def research_regenerate(thread_id: str):
-    """最后一轮重新回答。运行中、上一轮没跑完、还没有回答时返回 409。"""
+def research_regenerate(thread_id: str, body: ResearchRegenerateBody | None = None):
+    """最后一轮重新回答，可以带上这次的思考开关（不带按原来的）。运行中、上一轮没跑完、还没有回答时返回 409。"""
     r = research()
     _view(r, thread_id)
     try:
-        return _sse(r.regenerate(thread_id))
+        return _sse(r.regenerate(thread_id, thinking=body.thinking if body else None))
     except (RunConflict, NotIdle, NothingToRegenerate) as e:
         raise HTTPException(409, str(e)) from None
 
@@ -317,7 +341,7 @@ def research_edit(thread_id: str, body: ResearchMessageBody):
     _view(r, thread_id)
     text = _text(body)
     try:
-        return _sse(r.regenerate(thread_id, text))
+        return _sse(r.regenerate(thread_id, text, body.thinking))
     except (RunConflict, NotIdle, NothingToRegenerate) as e:
         raise HTTPException(409, str(e)) from None
 

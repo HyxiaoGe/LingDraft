@@ -38,6 +38,7 @@ from app.graph.research import history
 from app.graph.research.agent import CHINA_TZ, LOOP_ENTRY, ChatContext, turn_start
 from app.graph.research.graph import memory_checkpointer
 from app.graph.research.sources import collect_sources
+from app.model_catalog import Plan
 from app.tools.research_tools import TIME_TOOL
 
 BACKEND = Path(__file__).resolve().parents[2]
@@ -137,11 +138,14 @@ def pick(snaps: list[dict], d: Decision) -> dict:
 # ---- 从检查点接着跑这一下 ----
 
 
-async def afork(graph, snap: dict, thread_id: str) -> tuple[dict, list[BaseMessage]]:
+async def afork(graph, snap: dict, thread_id: str, plan: Plan | None = None) -> tuple[dict, list[BaseMessage]]:
     """检查点放进 graph 的存储（新的线程），接着跑到执行工具之前。返回 (检查点里的状态, 跑完的消息)。
-    stream_mode=messages 让模型照页面那样流式地调。"""
+    stream_mode=messages 让模型照页面那样流式地调。plan 给了就把这一轮换成用它的模型（--model），不然照录的那遍用的。"""
     saver = graph.checkpointer
     checkpoint, metadata = _load(saver.serde, snap["checkpoint"]), _load(saver.serde, snap["metadata"])
+    if plan is not None and (turns := checkpoint["channel_values"].get("turns")):
+        last = turns[-1].model_copy(update={"option": plan.option, "model": plan.agent, "subagent_model": plan.subagent})
+        checkpoint["channel_values"]["turns"] = [*turns[:-1], last]
     before = dict(checkpoint["channel_values"])
     cfg = saver.put({"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}, checkpoint, metadata, checkpoint["channel_versions"])
     async for _ in graph.astream(None, cfg, context=ChatContext(title=FORK_TITLE), interrupt_before=["tools"], stream_mode="messages",
@@ -155,7 +159,7 @@ def _check(name: str, passed: bool, detail: str = "") -> dict:
     return {"name": name, "passed": bool(passed), "detail": detail}
 
 
-def sample(runner, judge, d: Decision, snap: dict, n: int, check_sources: bool = True) -> dict:
+def sample(runner, judge, d: Decision, snap: dict, n: int, check_sources: bool = True, plan: Plan | None = None) -> dict:
     """跑一次这个决策点，做检查。"""
     from app import aio
     from app.evals.research import LOOKUP_TOOLS, cited, cited_sources, judge_citations, material
@@ -163,7 +167,7 @@ def sample(runner, judge, d: Decision, snap: dict, n: int, check_sources: bool =
     started = time.time()
     out: dict[str, Any] = {"decision": d.id, "sample": n}
     try:
-        state, msgs = aio.run(afork(runner.graph, snap, f"fork-{d.id}-{n}"))
+        state, msgs = aio.run(afork(runner.graph, snap, f"fork-{d.id}-{n}", plan))
         before = state["messages"]
         new = [m for m in msgs[len(before):] if isinstance(m, AIMessage)]
         if not new:
@@ -300,14 +304,15 @@ def sample_scores(r: dict) -> list[dict]:
 
 
 def run(decisions: list[Decision], make_runner: Callable[[], Any], judge, samples: int, jobs: int, check_sources: bool,
-        snaps_for: Callable[[Decision], list[dict]], exp: smith.Experiment | None = None) -> list[dict]:
-    """每个决策点跑 samples 次。所有决策点共用一个运行器（每次是检查点存储里一条新的线程）。给了 exp 就每次在一条 trace 里跑、记分数。"""
+        snaps_for: Callable[[Decision], list[dict]], exp: smith.Experiment | None = None, plan: Plan | None = None) -> list[dict]:
+    """每个决策点跑 samples 次。所有决策点共用一个运行器（每次是检查点存储里一条新的线程）。给了 exp 就每次在一条 trace 里跑、记分数。
+    plan 给了就用它的模型重跑（见 afork）。"""
     runner = make_runner()
     picked = {d.id: pick(snaps_for(d), d) for d in decisions}
 
     def one(d: Decision, n: int) -> dict:
         def go() -> dict:
-            return sample(runner, judge, d, picked[d.id], n, check_sources)
+            return sample(runner, judge, d, picked[d.id], n, check_sources, plan)
 
         return exp.run(d.id, decision_inputs(d), go, sample_scores, sample_view) if exp else go()
 
@@ -324,10 +329,10 @@ def run(decisions: list[Decision], make_runner: Callable[[], Any], judge, sample
 
 
 def main(argv: list[str] | None = None) -> int:
-    from app import config
+    from app import model_catalog
     from app.api.research_runner import ResearchRunner
-    from app.evals.research import RESULTS_DIR, TAPES_DIR, LiveJudge
-    from app.research_llm import LiveResearchPlanner
+    from app.evals.research import RESULTS_DIR, TAPES_DIR, LiveJudge, model_head
+    from app.research_llm import LiveResearchPlanner, usable
 
     ap = argparse.ArgumentParser(description="决策点回放（真实模型）")
     ap.add_argument("--decision", action="append", help="只跑这些决策点（可以写多次）")
@@ -336,6 +341,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-sources", action="store_true", help="不核对正文里的引用")
     ap.add_argument("--label", default="", help="写进结果文件名，方便对比")
     ap.add_argument("--no-smith", action="store_true", help="不传 LangSmith（配了 LANGSMITH_API_KEY 时默认传）")
+    ap.add_argument("--model", help="这一下换成哪个模型（app/models.toml 里选项的 id）；不给照录的那遍用的")
     ap.add_argument("--compare", nargs=2, metavar=("A", "B"), help="不跑：比较两份结果，每项检查差得够不够大")
     args = ap.parse_args(argv)
 
@@ -352,9 +358,9 @@ def main(argv: list[str] | None = None) -> int:
     def snaps_for(d: Decision) -> list[dict]:
         return json.loads((TAPES_DIR / f"{d.case}.snapshots.json").read_text(encoding="utf-8"))["snapshots"]
 
-    name = "-".join(p for p in (f"decisions-{datetime.now():%Y%m%d-%H%M%S}", args.label) if p)
-    model = config.RESEARCH_MODEL or (config.DEEPSEEK_MODEL if config.RESEARCH_PROVIDER == "deepseek" else config.ARK_MODEL)
-    head: dict[str, Any] = {"provider": config.RESEARCH_PROVIDER, "model": model, "samples": args.samples}
+    name = "-".join(p for p in (f"decisions-{datetime.now():%Y%m%d-%H%M%S}", args.model, args.label) if p)
+    head: dict[str, Any] = {**(model_head(args.model) if args.model else {"option": "recorded"}), "samples": args.samples}
+    plan = model_catalog.load().plan(args.model, None, usable) if args.model else None
     exp = None
     if not args.no_smith and decisions and args.samples > 0:
         exp = smith.start(smith.DECISIONS_DATASET, "灵稿的决策点：从录好的对话里挑一次调模型重跑，正本是仓库里的 backend/evals/research/decisions.yaml",
@@ -364,7 +370,7 @@ def main(argv: list[str] | None = None) -> int:
         head["langsmith"] = exp.url
     # 工具不执行（停在执行工具之前），planner 只用来拿模型和工具说明；调 agent-tools 记在 research_eval 场景
     results = run(decisions, lambda: ResearchRunner(planner=LiveResearchPlanner(scene="research_eval"), checkpointer=memory_checkpointer()),
-                  LiveJudge(), args.samples, args.jobs, not args.no_sources, snaps_for, exp)
+                  LiveJudge(), args.samples, args.jobs, not args.no_sources, snaps_for, exp, plan)
     if exp:
         exp.close()
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)

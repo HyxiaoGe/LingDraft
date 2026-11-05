@@ -59,6 +59,20 @@ def _failed(r: dict) -> list[tuple[int, str]]:
     return [(i, c["name"]) for i, t in enumerate(r["turns"], 1) for c in t["checks"] if not c["passed"]]
 
 
+
+def test_case_can_pick_a_model():
+    """--model：对话第一句话时选模型，之后每轮都用它；裁判不跟着换。"""
+    made = []
+
+    def planner(**kw):
+        made.append(FakeResearchPlanner(**kw))
+        return made[-1]
+
+    r = run_case(Case.model_validate({"id": "x", "source": "测试", "turns": [{"say": "直接答：一"}, {"say": "直接答：二"}]}),
+                 planner, FakeJudge(), option="deepseek-flash")
+    assert r["passed"], r
+    assert [t["model"] for t in r["turns"]] == [{"ref": "deepseek:deepseek-flash", "thinking": True, "effort": "high"}] * 2
+
 def test_cases_file_parses():
     cases = load_cases()
     assert cases and all(c.source and c.turns and c.turns[0].say for c in cases)
@@ -325,3 +339,21 @@ def test_citation_judge_gets_the_same_dates_as_the_agent():
     judge = FakeJudge()
     r = _run([{"say": "查一下向量库选型"}], judge)
     assert judge.today == r["turns"][0]["today"]
+
+
+def test_model_head_checks_the_option(monkeypatch):
+    """写错的、没配 key 的选项直接报错（不然悄悄换成 Auto）；Auto 不查 key（CI 没有 key）。"""
+    import pytest
+
+    from app import config
+    from app.evals import research
+
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "")
+    monkeypatch.setattr(config, "ARK_API_KEY", "")
+    assert research.model_head("auto") == {"option": "auto", "model": "deepseek:deepseek-v4-pro", "subagent_model": "deepseek:deepseek-flash"}
+    with pytest.raises(SystemExit, match="没有这个模型"):
+        research.model_head("no-such-model")
+    with pytest.raises(SystemExit, match="没配 key"):
+        research.model_head("deepseek-flash")
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "k")
+    assert research.model_head("deepseek-flash")["model"] == "deepseek:deepseek-flash"

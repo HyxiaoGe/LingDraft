@@ -36,8 +36,9 @@ def test_conversation_over_http(client):
     tid = st["thread_id"]
     assert str(uuid.UUID(tid)) == tid == last(ev, "thread")["thread_id"]  # 新对话的 id 是完整的 UUID，地址栏 /chat/<id> 用它
     assert st["status"] == "idle" and st["title"] == last(ev, "title")["title"] and len(st["sources"]) == 3
-    assert set(st) == {"thread_id", "exists", "scenario", "status", "error", "stopping", "suggesting", "title", "updated_at", "running_since", "turns", "sources",
-                       "queued_message", "guided_message"}
+    assert set(st) == {"thread_id", "exists", "scenario", "status", "error", "model", "stopping", "suggesting", "title", "updated_at", "running_since",
+                       "turns", "sources", "queued_message", "guided_message"}
+    assert st["model"] == "auto"  # 没选模型的新对话是 Auto
     assert client.get(f"/api/research/threads/{tid}/state").json() == st  # 刷新后看到的和刚才一样
 
     ev = events(say(client, tid, "直接答：为什么不稳定？"))
@@ -92,7 +93,7 @@ def deepseek(monkeypatch):
     from app.research_llm import make_chat_model
 
     monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "k")
-    return make_chat_model("deepseek", "m", thinking=True)
+    return make_chat_model("deepseek:m", thinking=True, effort="high")
 
 
 def test_deepseek_passes_back_all_reasoning(deepseek):
@@ -114,7 +115,7 @@ def _ark(monkeypatch, handler):
 
     monkeypatch.setattr(config, "ARK_API_KEY", "k")
     monkeypatch.setattr(config, "ARK_BASE_URL", "http://ark.test/api/v3")
-    llm = make_chat_model("ark", "doubao", thinking=True)
+    llm = make_chat_model("ark:doubao", thinking=True)
     transport = httpx.MockTransport(handler)  # 换成假的 http 客户端，不发真请求
     llm.root_client = openai.OpenAI(api_key="k", base_url=config.ARK_BASE_URL, http_client=httpx.Client(transport=transport))
     llm.root_async_client = openai.AsyncOpenAI(api_key="k", base_url=config.ARK_BASE_URL, http_client=httpx.AsyncClient(transport=transport))

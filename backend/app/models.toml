@@ -1,0 +1,65 @@
+# 模型选项（读它的是 app/model_catalog.py）。2026-11-05 Sean 定：列表放这里随代码走，后台配置以后做（到时候选项整段搬进数据库）。
+#
+# 模型写成 LangChain init_chat_model 的写法：厂商:接口里的模型名。认得哪几家看 research_llm.make_chat_model：
+# 同一家出了新模型，这里加一个选项就行；接新的一家要在那里加一个建模型的函数（思考怎么开关、思考怎么传回去各家不一样）。
+# key 在 env 里，没配 key 的那家，它的选项不出现在列表里。
+
+# ---- 给用户的选项：输入框旁边的列表就是这些，按这个顺序排，Auto 在第一个 ----
+# id 定下来就不改：对话、每轮的记录都按它认（以后的权限、credits 也是）。同一个 id 背后的模型换代了，就新起一个 id。
+# thinking：toggle 是用户可以开关（默认开）；always 一直开，never 一直关，这两种页面上不显示开关。用户关了思考，子 agent 也不思考。
+# effort：思考强度，不给用户看（各家不统一，2026-11-05 Sean 定只做开关）；空的是厂商默认。
+# subagent：主 agent 派出去的子 agent 用哪个；不写就和主 agent 一样。
+# status：不写是正常的；hidden 是新对话里不再提供、老对话照常用；retired 是厂商也停了，老对话从下一轮起改用 Auto。
+# 对话一开始就定下选项，之后不能换（2026-11-05 Sean 定：换模型缓存全废，几家的思考混在一段对话里也说不准）；Auto 例外，由系统在里面换。
+
+[[options]]
+id = "auto"
+name = "Auto"
+description = "默认选择"
+# Auto 是一种策略（model_catalog.Catalog._auto）：现在就是下面这个模型；以后按问题选模型改那里（Sean：用户多半不改默认，Auto 是降成本的地方）
+model = "deepseek:deepseek-v4-pro"
+effort = "high"  # 探针对照后定的（docs/probe/autonomy）
+subagent = { model = "deepseek:deepseek-flash", effort = "high" }
+
+[[options]]
+id = "deepseek-v4-pro"
+name = "DeepSeek V4 Pro"
+description = "深度思考，适合复杂问题和需要多步查资料的"
+model = "deepseek:deepseek-v4-pro"
+effort = "high"
+subagent = { model = "deepseek:deepseek-flash", effort = "high" }
+
+[[options]]
+id = "deepseek-flash"
+name = "DeepSeek Flash"
+description = "速度快、成本低，适合简单问答"
+model = "deepseek:deepseek-flash"
+effort = "high"
+
+[[options]]
+id = "doubao-seed-2-1-pro"
+name = "豆包 Seed 2.1 Pro"
+description = "豆包旗舰模型，深度思考"
+model = "ark:doubao-seed-2-1-pro-260915"
+subagent = { model = "ark:doubao-seed-2-1-lite-260915" }
+
+[[options]]
+id = "doubao-seed-2-1-lite"
+name = "豆包 Seed 2.1 Lite"
+description = "豆包轻量模型，速度快"
+model = "ark:doubao-seed-2-1-lite-260915"
+
+# ---- 内部用途：用户看不到，不跟着选项走 ----
+[roles]
+# 起标题照 Fusion 用轻量模型、不开思考：标题是锦上添花，慢了、坏了就用原话（见 graph.research.agent._TitleJob）
+title = { model = "deepseek:deepseek-flash" }
+# 推荐问题：不开思考，小活
+suggest = { model = "deepseek:deepseek-v4-pro" }
+# 内容审核拦下请求时把资料一条条单独送审。只认得 DeepSeek 的拦截（见 app.model_guard），别家的审核以后统一做（2026-11-05 Sean 定）
+probe = { model = "deepseek:deepseek-v4-pro" }
+# 对话太长时给之前几轮写短版（见 graph.research.compaction）
+summarize = { model = "deepseek:deepseek-flash" }
+# 每天整理一次记忆：开思考，要判断一件事是长期的还是一次性的（见 graph.research.memory）
+dream = { model = "deepseek:deepseek-v4-pro", thinking = true, effort = "high" }
+# 评测的裁判：换被测的模型时裁判不变，分数才比得了（见 app.evals.research）
+judge = { model = "deepseek:deepseek-v4-pro" }

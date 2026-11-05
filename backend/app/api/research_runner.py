@@ -28,7 +28,7 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg_pool import PoolTimeout
 
 from app import aio, config
-from app.api.run_store import ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, PostgresRunStore, RunStore
+from app.api.run_store import ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, Pending, PostgresRunStore, RunStore
 from app.api.runner import BaseRunner, RunConflict, _sse_text, jsonable, log
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, now, stop_turn
@@ -56,6 +56,10 @@ class NothingToRegenerate(Exception):
     """还没有一轮回答。"""
 
 
+class UnknownModel(Exception):
+    """新对话选的模型不在能选的里面（没有这个、停用了、没配 key），或者想给已经开始的对话换模型。"""
+
+
 CUT_SHORT = "上次运行没跑完就停了"
 # 检查点只在一次运行开头（用户的话写进去，见 accept）和结束时各存一份，中间每一步不存：每份都带着整段对话，每步都存的话按平方增长。
 # 出错、点停止也算结束，结束前把做到哪儿存下来，重试从断点接着跑；进程直接崩掉或被杀，这一轮做到一半的没存，重试从头跑这一轮。
@@ -71,8 +75,10 @@ DELTA_S = 0.08  # 逐字片段攒这么久发一次
 SENT_AT = "sent_at"  # 用户那句话的发送时间，记在消息的 additional_kwargs 里（不会发给模型）
 
 
-def _said(text: str, **kw: Any) -> HumanMessage:
-    return HumanMessage(content=text.strip(), additional_kwargs={SENT_AT: now()}, **kw)
+def _said(text: str, thinking: bool | None = None, **kw: Any) -> HumanMessage:
+    """用户的话。thinking 是发的时候输入框旁边的思考开关（没给按选项的默认，见 model_catalog.Catalog.plan）。"""
+    extra = {history.THINK: thinking} if thinking is not None else {}
+    return HumanMessage(content=text.strip(), additional_kwargs={SENT_AT: now(), **extra}, **kw)
 
 
 def _guided(text: str) -> HumanMessage:
@@ -317,33 +323,40 @@ class ResearchRunner(BaseRunner):
 
     # ---- 给接口层的同步方法：在别的线程里调，活交给对话的事件循环 ----
 
-    def start(self, thread_id: str, text: str) -> AsyncIterator[str]:
-        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text), "new")))
+    # option 是新对话选的模型（models.toml 里选项的 id，没给是 Auto），定下就不换；thinking 是这句话的思考开关（没给按选项的默认）
 
-    def say(self, thread_id: str, text: str) -> AsyncIterator[str]:
-        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text), "say")))
+    def start(self, thread_id: str, text: str, option: str | None = None, thinking: bool | None = None) -> AsyncIterator[str]:
+        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking, option), "new")))
+
+    def say(self, thread_id: str, text: str, thinking: bool | None = None) -> AsyncIterator[str]:
+        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking), "say")))
 
     def retry(self, thread_id: str) -> AsyncIterator[str]:
         return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aretry_input(thread_id), "retry")))
 
-    def regenerate(self, thread_id: str, text: str | None = None) -> AsyncIterator[str]:
+    def regenerate(self, thread_id: str, text: str | None = None, thinking: bool | None = None) -> AsyncIterator[str]:
         kind = "regenerate" if text is None else "edit"
-        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aregenerate_input(thread_id, text), kind)))
+        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aregenerate_input(thread_id, text, thinking), kind)))
 
-    def queue(self, thread_id: str, text: str) -> dict | None:
-        return aio.run(self._aqueue(thread_id, text))
+    def queue(self, thread_id: str, text: str, thinking: bool | None = None) -> dict | None:
+        return aio.run(self._aqueue(thread_id, text, thinking))
 
     def guide(self, thread_id: str) -> dict | None:
         return aio.run(self._aguide(thread_id))
 
-    def accept(self, thread_id: str, text: str) -> None:
-        aio.run(self._aaccept(thread_id, text))
+    def accept(self, thread_id: str, text: str, thinking: bool | None = None, option: str | None = None) -> None:
+        aio.run(self._aaccept(thread_id, text, thinking, option))
 
     def retry_input(self, thread_id: str) -> None:
         aio.run(self._aretry_input(thread_id))
 
-    def regenerate_input(self, thread_id: str, text: str | None = None) -> None:
-        aio.run(self._aregenerate_input(thread_id, text))
+    def regenerate_input(self, thread_id: str, text: str | None = None, thinking: bool | None = None) -> None:
+        aio.run(self._aregenerate_input(thread_id, text, thinking))
+
+    def models(self) -> list[dict]:
+        """新对话能选的模型（按 models.toml 的顺序，Auto 在第一个）。thinking：toggle 是页面上显示思考开关，always、never 不显示。"""
+        return [{"id": o.id, "name": o.name, "description": o.description, "thinking": o.thinking}
+                for o in self.planner.catalog.offered(self.planner.usable)]
 
     def rename(self, thread_id: str, title: str) -> None:
         aio.run(self._arename(thread_id, title))
@@ -389,11 +402,13 @@ class ResearchRunner(BaseRunner):
 
     def unqueue(self, thread_id: str) -> str | None:
         """撤回排着的话，返回原文（页面放回输入框）；已经发出去了、或者没有排着的，返回 None。"""
-        return aio.run(self.run_store.take_pending(thread_id, QUEUE))
+        p = aio.run(self.run_store.take_pending(thread_id, QUEUE))
+        return p.text if p else None
 
     def unguide(self, thread_id: str) -> str | None:
         """撤回等着插进这一轮的话，返回原文；已经插进去了、或者没有，返回 None。"""
-        return aio.run(self.run_store.take_pending(thread_id, GUIDE))
+        p = aio.run(self.run_store.take_pending(thread_id, GUIDE))
+        return p.text if p else None
 
     async def _snapshot(self, thread_id: str) -> AsyncIterator[str]:
         yield _sse_text({"event": "state", "data": await aio.call(self._astate_view(thread_id))})
@@ -604,7 +619,7 @@ class ResearchRunner(BaseRunner):
 
     # ---- 回答时又说的话 ----
 
-    async def _aqueue(self, thread_id: str, text: str) -> dict | None:
+    async def _aqueue(self, thread_id: str, text: str, thinking: bool | None = None) -> dict | None:
         """正在回答时又说的话：排着，这一轮答完或停下就接着发（见 _aended）。返回排着的那句。
         没发出去的话最多一句：已经有一句排着或等着插进这一轮的，抛 AlreadyPending（页面上这时发不出去，这里兜底）。
         刚好没在跑（这一轮刚结束）就直接发、返回 None，页面去接这次执行的事件流。上一轮没跑完的抛 NotIdle（先重试）。"""
@@ -614,9 +629,9 @@ class ResearchRunner(BaseRunner):
                 if (await self.run_store.get_pending(thread_id, QUEUE)
                         or await self.run_store.get_pending(thread_id, GUIDE)):
                     raise AlreadyPending("上面那句还没发出去，先撤回改好再发")
-                return await self.run_store.put_pending(thread_id, QUEUE, text.strip())
+                return await self.run_store.put_pending(thread_id, QUEUE, text.strip(), thinking=thinking)
         try:
-            await self._aaccept(thread_id, text)
+            await self._aaccept(thread_id, text, thinking)
             await self._alaunch(thread_id, "say")
         except BaseException:
             self.runs.release(key)
@@ -629,9 +644,8 @@ class ResearchRunner(BaseRunner):
         async with self._queue_mu:  # 和这一轮结束时的交接错开：在锁里看到还在跑，结束时一定看得到这句话
             if self.runs.get(self._run_key(thread_id)) is None:
                 return None
-            text = await self.run_store.take_pending(thread_id, QUEUE)
-            if text:
-                return await self.run_store.put_pending(thread_id, GUIDE, text)
+            if p := await self.run_store.take_pending(thread_id, QUEUE):
+                return await self.run_store.put_pending(thread_id, GUIDE, p.text, thinking=p.thinking)
             return await self.run_store.get_pending(thread_id, GUIDE)
 
     async def _take_guide(self, thread_id: str) -> HumanMessage | None:
@@ -639,20 +653,19 @@ class ResearchRunner(BaseRunner):
         取的时候点了停止：等它取完，取到的放回去（这一轮收尾时照常退回去排着），不然这句话就丢了。"""
         job = asyncio.ensure_future(self.run_store.take_pending(thread_id, GUIDE))
         try:
-            text = await asyncio.shield(job)
+            p = await asyncio.shield(job)
         except asyncio.CancelledError:
             await self._untake_guide(thread_id, job)
             raise
         except Exception:  # noqa: BLE001
             log.warning("插进这一轮的话没取出来：%s", self._run_key(thread_id), exc_info=True)
             return None
-        return _guided(text) if text else None
+        return _guided(p.text) if p else None  # 插进这一轮的话不开新的一轮，思考开关不用
 
     async def _untake_guide(self, thread_id: str, job: asyncio.Future) -> None:
         try:
-            text = await job
-            if text:
-                await self.run_store.put_pending(thread_id, GUIDE, text, front=True)
+            if p := await job:
+                await self.run_store.put_pending(thread_id, GUIDE, p.text, front=True, thinking=p.thinking)
         except Exception:  # noqa: BLE001
             log.warning("停下时取出来的插话没放回去：%s", self._run_key(thread_id), exc_info=True)
 
@@ -665,49 +678,57 @@ class ResearchRunner(BaseRunner):
         async with self._queue_mu:
             try:
                 if left := await self.run_store.take_pending(thread_id, GUIDE):
-                    await self.run_store.put_pending(thread_id, QUEUE, left, front=True)
+                    await self.run_store.put_pending(thread_id, QUEUE, left.text, front=True, thinking=left.thinking)
             except Exception:  # noqa: BLE001
                 log.warning("没插进去的话没退回去排着：%s", key, exc_info=True)
-            text = None
+            p = None
             if status in (SUCCESS, STOPPED):
                 try:
-                    text = await self.run_store.take_pending(thread_id, QUEUE)
+                    p = await self.run_store.take_pending(thread_id, QUEUE)
                 except Exception:  # noqa: BLE001  取不到就当没有，话留在库里，页面会放回输入框
                     log.warning("排着的话没取出来：%s", key, exc_info=True)
             self.runs.release(key)
-            if text is None:
+            if p is None:
                 return
             if not self.runs.admit(key):  # 占位都经过这把锁，不会被抢；万一抢了，话放回去
-                await self._put_back(thread_id, text)
+                await self._put_back(thread_id, p)
                 return
         try:
-            await self._aaccept(thread_id, text)
+            await self._aaccept(thread_id, p.text, p.thinking)
             await self._alaunch(thread_id, "say")
         except Exception:  # noqa: BLE001
             self.runs.release(key)
             log.exception("排着的话没发出去：%s", key)
-            await self._put_back(thread_id, text)
+            await self._put_back(thread_id, p)
 
-    async def _put_back(self, thread_id: str, text: str) -> None:
+    async def _put_back(self, thread_id: str, p: Pending) -> None:
         """取出来却没发出去的话放回去，排在这期间又说的话前面；页面看到线程空闲还排着话，会放回输入框。"""
         try:
-            await self.run_store.put_pending(thread_id, QUEUE, text, front=True)
+            await self.run_store.put_pending(thread_id, QUEUE, p.text, front=True, thinking=p.thinking)
         except Exception:  # noqa: BLE001
             log.warning("排着的话没放回去：%s", self._run_key(thread_id), exc_info=True)
 
     # ---- 一轮的输入 ----
 
-    async def _aaccept(self, thread_id: str, text: str) -> None:
+    async def _aaccept(self, thread_id: str, text: str, thinking: bool | None = None, option: str | None = None) -> None:
         """把用户的话写进检查点，agent 从这里接着跑（输入为 None）。
 
         先落盘再交出执行：排队时服务重启也查得到这句话，算没跑完，可以重试。
+        option 是新对话选的模型，和第一句话一起写进去（第一轮开始时定下，见 agent.TurnMiddleware）；已经开始的对话只能给定下的那个。
         """
         await self._adrop_suggestions(thread_id)
         cfg = self._cfg(thread_id)
         snap = await self.graph.aget_state(cfg)
         if snap.values and snap.next:
             raise NotIdle("上一轮没跑完，先重试")
-        await self.graph.aupdate_state(cfg, {"messages": [_said(text)]}, as_node=START)
+        update: dict[str, Any] = {"messages": [_said(text, thinking)]}
+        if option is not None:
+            if option not in {o.id for o in self.planner.catalog.offered(self.planner.usable)}:
+                raise UnknownModel(f"没有这个模型可选：{option}")
+            if (snap.values or {}).get("messages") and snap.values.get("option") != option:
+                raise UnknownModel("对话开始后不能换模型，想换模型请开新对话")
+            update["option"] = option
+        await self.graph.aupdate_state(cfg, update, as_node=START)
 
     async def _aretry_input(self, thread_id: str) -> None:
         """只有没跑完的线程能重试：从最后一个检查点接着跑，出错那一步重做，之前做过的搜索、读页都不重来。"""
@@ -715,9 +736,10 @@ class ResearchRunner(BaseRunner):
         if not snap.values or not snap.next:
             raise NothingToRetry("这个线程没有失败，不需要重试")
 
-    async def _aregenerate_input(self, thread_id: str, text: str | None = None) -> None:
+    async def _aregenerate_input(self, thread_id: str, text: str | None = None, thinking: bool | None = None) -> None:
         """最后一轮重新回答：去掉用户最后那句话之后的消息和这一轮的记录，从那句话接着跑。
-        带 text 是用户改了最后那句话：先换成 text（消息 id 不变，还是同一轮，发送时间记成改的时候），再重新回答。标题不重起。"""
+        带 text 是用户改了最后那句话：先换成 text（消息 id 不变，还是同一轮，发送时间记成改的时候），再重新回答。标题不重起。
+        thinking 是这次的思考开关：给了就按它（只改开关，发送时间不变），没给按那句话原来的；模型照对话定下的（Auto 的重新选）。"""
         await self._adrop_suggestions(thread_id)
         cfg = self._cfg(thread_id)
         snap = await self.graph.aget_state(cfg)
@@ -730,7 +752,12 @@ class ResearchRunner(BaseRunner):
             raise NothingToRegenerate("还没有回答，不需要重新生成")
         human = msgs[start]
         turns = [t for t in v.get("turns", []) if t.id != human.id]
-        edited = [_said(text, id=human.id)] if text is not None else []
+        if text is not None:
+            edited = [_said(text, history.thinking_switch(human) if thinking is None else thinking, id=human.id)]
+        elif thinking is not None:
+            edited = [human.model_copy(update={"additional_kwargs": {**human.additional_kwargs, history.THINK: thinking}})]
+        else:
+            edited = []
         await self.graph.aupdate_state(cfg, {"messages": edited + [RemoveMessage(id=m.id) for m in msgs[start + 1:]], "turns": turns},
                                        as_node=START)
         await self.images.delete_images([img.id for img in history.stored_images(msgs[start + 1:])])  # 这一轮原来画的图不要了
@@ -864,6 +891,8 @@ class ResearchRunner(BaseRunner):
             "scenario": "research",
             "status": status,
             "error": error,
+            # 对话定下的模型（选项的 id）：没定的（还没开始的老对话）、定的那个停了的，下一轮起是 Auto
+            "model": self.planner.catalog.plan(v.get("option"), None, self.planner.usable).option,
             "stopping": bool(run and run.get("stopping")),
             # 这一轮已经结束、推荐问题还在起（见 _suggest）：页面打开时接上事件流等着，起好了会再来一次状态
             "suggesting": status == "idle" and thread_id in self._suggest_for,

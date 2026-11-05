@@ -132,6 +132,16 @@ def test_said_while_running_goes_after_the_turn(client, rr):
     assert _kinds(client, tid) == ["say", "say", "new"]
 
 
+def test_queued_message_keeps_its_thinking_switch(client, rr):
+    """排着的话记着发的时候的思考开关，接着发成新的一轮时按它；插进这一轮又退回去排着的也一样。"""
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    with _Running(client, rr, tid, "直接答：第二句"):
+        r = client.post(f"/api/research/threads/{tid}/queue", json={"text": "直接答：不用想", "thinking": False})
+        assert r.json()["queued"]["thinking"] is False
+    end = _settled(client, tid, 3)
+    assert [t["record"]["model"]["thinking"] for t in end["turns"]] == [True, True, False]
+
+
 def test_stop_still_sends_the_queued_message(client, rr):
     """排着话的时候点了停止：这一轮停下，排着的话接着发。"""
     tid = new(client, "直接答：先说一句")["thread_id"]
