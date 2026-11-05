@@ -1,7 +1,7 @@
 """决策点回放：从录好的那遍里挑一次调模型（第几轮第几次），把那之前的状态原样拿出来，只重跑这一次调模型，看模型这一下做了什么。
 
 用法（在 backend 目录）：uv run python -m app.evals.decisions [--decision id ...] [--samples N] [--jobs N] [--no-sources] [--label X]
-  | --compare 结果文件A 结果文件B。决策点写在 evals/research/decisions.yaml，各项的意思见 evals/README.md。
+  [--no-smith] | --compare 结果文件A 结果文件B。决策点写在 evals/research/decisions.yaml，各项的意思见 evals/README.md。
 
 - 状态从哪来：录像（research --record）时检查点每一步都存（runner.durability = "sync"；页面照旧一轮结束才写），
   每次调模型之前的那个检查点存进 data/evals/tapes/<用例>.snapshots.json（不进仓库：里面有搜到、读到的内容）。
@@ -12,6 +12,7 @@
   前面的步骤是固定的：改动要是会让模型前面搜别的词，这里看不出来，最后还要整段回放确认（research --replay）。
   工具结果的整理（来源编号、天气整理）在检查点里已经整理好了，改这部分代码这里也测不出来。
 - 每个决策点跑几次（--samples），每项检查算过了几次；两份结果比（--compare），差得够大才算变了（双侧 Fisher 精确检验，p < 0.05）。
+- 配了 LANGSMITH_API_KEY 的话同时传到 LangSmith 成一个实验，每重跑一次是一行（app.evals.smith），--no-smith 不传。
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ import json
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
 from datetime import datetime
 from math import comb
 from pathlib import Path
@@ -31,6 +33,7 @@ import yaml
 from langchain_core.messages import AIMessage, BaseMessage
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.evals import smith
 from app.graph.research import history
 from app.graph.research.agent import CHINA_TZ, LOOP_ENTRY, ChatContext, turn_start
 from app.graph.research.graph import memory_checkpointer
@@ -276,14 +279,41 @@ def transcript(results: list[dict]) -> str:
     return "\n".join(out)
 
 
+# ---- 传到 LangSmith（见 app.evals.smith）----
+
+
+def decision_inputs(d: Decision) -> dict:
+    """数据集里一个样例的输入：哪个用例第几轮第几次调模型、这一下该怎么做。"""
+    return d.model_dump(mode="json", exclude_none=True, exclude={"id", "source"})
+
+
+def sample_view(r: dict) -> dict:
+    """实验里这一行的输出：这一下调了什么、写了什么。"""
+    if "error" in r:
+        return {"error": r["error"]}
+    return {"tool_calls": r["tool_calls"], "reply": r["reply"]}
+
+
+def sample_scores(r: dict) -> list[dict]:
+    checks = r.get("checks", [])
+    return smith.check_scores([checks], all(c["passed"] for c in checks), r.get("error"))
+
+
 def run(decisions: list[Decision], make_runner: Callable[[], Any], judge, samples: int, jobs: int, check_sources: bool,
-        snaps_for: Callable[[Decision], list[dict]]) -> list[dict]:
-    """每个决策点跑 samples 次。所有决策点共用一个运行器（每次是检查点存储里一条新的线程）。"""
+        snaps_for: Callable[[Decision], list[dict]], exp: smith.Experiment | None = None) -> list[dict]:
+    """每个决策点跑 samples 次。所有决策点共用一个运行器（每次是检查点存储里一条新的线程）。给了 exp 就每次在一条 trace 里跑、记分数。"""
     runner = make_runner()
     picked = {d.id: pick(snaps_for(d), d) for d in decisions}
+
+    def one(d: Decision, n: int) -> dict:
+        def go() -> dict:
+            return sample(runner, judge, d, picked[d.id], n, check_sources)
+
+        return exp.run(d.id, decision_inputs(d), go, sample_scores, sample_view) if exp else go()
+
     results = []
-    with ThreadPoolExecutor(max_workers=jobs) as pool:
-        futures = [pool.submit(sample, runner, judge, d, picked[d.id], n + 1, check_sources) for d in decisions for n in range(samples)]
+    with smith.trimmed() if exp else nullcontext(), ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = [pool.submit(one, d, n + 1) for d in decisions for n in range(samples)]
         for f in as_completed(futures):
             results.append(r := f.result())
             print(f"{r['decision']:<24} 第 {r['sample']} 次  " + (f"出错 {r['error'][:120]}" if "error" in r else
@@ -305,6 +335,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--jobs", type=int, default=3, help="同时跑几个")
     ap.add_argument("--no-sources", action="store_true", help="不核对正文里的引用")
     ap.add_argument("--label", default="", help="写进结果文件名，方便对比")
+    ap.add_argument("--no-smith", action="store_true", help="不传 LangSmith（配了 LANGSMITH_API_KEY 时默认传）")
     ap.add_argument("--compare", nargs=2, metavar=("A", "B"), help="不跑：比较两份结果，每项检查差得够不够大")
     args = ap.parse_args(argv)
 
@@ -321,17 +352,29 @@ def main(argv: list[str] | None = None) -> int:
     def snaps_for(d: Decision) -> list[dict]:
         return json.loads((TAPES_DIR / f"{d.case}.snapshots.json").read_text(encoding="utf-8"))["snapshots"]
 
-    # 工具不执行（停在执行工具之前），planner 只用来拿模型和工具说明；调 agent-tools 记在 research_eval 场景
-    results = run(decisions, lambda: ResearchRunner(planner=LiveResearchPlanner(scene="research_eval"), checkpointer=memory_checkpointer()),
-                  LiveJudge(), args.samples, args.jobs, not args.no_sources, snaps_for)
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     name = "-".join(p for p in (f"decisions-{datetime.now():%Y%m%d-%H%M%S}", args.label) if p)
     model = config.RESEARCH_MODEL or (config.DEEPSEEK_MODEL if config.RESEARCH_PROVIDER == "deepseek" else config.ARK_MODEL)
-    head = {"provider": config.RESEARCH_PROVIDER, "model": model, "samples": args.samples, "decisions": [d.model_dump() for d in decisions]}
+    head: dict[str, Any] = {"provider": config.RESEARCH_PROVIDER, "model": model, "samples": args.samples}
+    exp = None
+    if not args.no_smith and decisions and args.samples > 0:
+        exp = smith.start(smith.DECISIONS_DATASET, "灵稿的决策点：从录好的对话里挑一次调模型重跑，正本是仓库里的 backend/evals/research/decisions.yaml",
+                          [smith.Example(d.id, decision_inputs(d), {"source": d.source}) for d in load_decisions()], name,
+                          {**head, "label": args.label}, used=len(decisions), repetitions=args.samples)
+    if exp:
+        head["langsmith"] = exp.url
+    # 工具不执行（停在执行工具之前），planner 只用来拿模型和工具说明；调 agent-tools 记在 research_eval 场景
+    results = run(decisions, lambda: ResearchRunner(planner=LiveResearchPlanner(scene="research_eval"), checkpointer=memory_checkpointer()),
+                  LiveJudge(), args.samples, args.jobs, not args.no_sources, snaps_for, exp)
+    if exp:
+        exp.close()
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    head["decisions"] = [d.model_dump() for d in decisions]
     (RESULTS_DIR / f"{name}.json").write_text(json.dumps({**head, "results": results}, ensure_ascii=False, indent=1), encoding="utf-8")
     (RESULTS_DIR / f"{name}.md").write_text(transcript(results), encoding="utf-8")
     print("\n" + summary(results, [d.id for d in decisions]))
     print(f"结果：{RESULTS_DIR / name}.json / .md")
+    if exp:
+        print(f"LangSmith：{exp.url}" + (f"（{exp.feedback_errors} 个分数没传上去，本地结果里有）" if exp.feedback_errors else ""))
     return 0
 
 
