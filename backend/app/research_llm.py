@@ -1,4 +1,4 @@
-"""对话场景的模型接入层：ResearchPlanner 协议，LiveResearchPlanner（DeepSeek / 豆包，按配置）与 FakeResearchPlanner（离线）。
+"""对话场景的模型接入层：ResearchPlanner 协议，LiveResearchPlanner（用哪家的模型见 app/models.toml）与 FakeResearchPlanner（离线）。
 
 agent 本身由 app.graph.research.agent 构建，这里提供它要的聊天模型和查资料的工具，以及几个不带工具的快模型步骤：
 起标题、推荐问题，内容审核拦下请求时把资料一条条单独送审，还有对话太长时给之前几轮写短版（见 graph.research.compaction）。
@@ -17,7 +17,7 @@ import threading
 import time
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, NamedTuple, Protocol
 from uuid import UUID, uuid4
 
 import httpx
@@ -155,12 +155,12 @@ class ThinkingTimer(BaseCallbackHandler):
 
 # ---- 聊天模型工厂 ----
 
-ARK_PROVIDER = "volcengine"  # 豆包消息的 response_metadata["model_provider"]（见 make_chat_model 里的 ChatArk）
+ARK_PROVIDER = "volcengine"  # 豆包消息的 response_metadata["model_provider"]（见 COMPAT）
 
 
-def _take_thinking(msg: BaseMessage, said: dict) -> None:
-    """接口回来的思考字段（整条的 message 或流式的 delta）放进 additional_kwargs，提供方标成豆包的。"""
-    msg.response_metadata = {**msg.response_metadata, "model_provider": ARK_PROVIDER}
+def _take_thinking(msg: BaseMessage, said: dict, provider: str) -> None:
+    """接口回来的思考字段（整条的 message 或流式的 delta）放进 additional_kwargs，提供方标成这一家的（见 ChatCompat）。"""
+    msg.response_metadata = {**msg.response_metadata, "model_provider": provider}
     for k in history.THINKING_KEYS:
         if said.get(k) is not None:
             msg.additional_kwargs[k] = said[k]
@@ -178,7 +178,8 @@ def _pass_back(msgs: list[BaseMessage], payload: dict, keys: Sequence[str]) -> N
 def make_chat_model(ref: str, *, thinking: bool, effort: str = "", timeout: int = 180, callbacks: list | None = None,
                     max_tokens: int | None = None, guard: str | None = None) -> BaseChatModel:
     """按"厂商:模型"建聊天模型（LangChain init_chat_model 的写法，模型选项见 app/models.toml）。effort 是思考强度，空的是厂商默认。
-    不直接用 init_chat_model：它只建得出 LangChain 自己的类，我们要的是补过的子类（见下面各家的函数）。接新的一家就在 PROVIDERS 里加一个。
+    不直接用 init_chat_model：它只建得出 LangChain 自己的类，我们要的是补过的子类（见下面各家的函数）。接新的一家：OpenAI 兼容接口的
+    在 COMPAT 里加一行（开关思考的参数先实测），别的在 PROVIDERS 里加一个建模型的函数。
     每次调用都过熔断，服务商的错误换成 ModelUnavailable / ContentBlocked（见 app.model_guard）。
     熔断默认按模型名记，同一个模型的各种用途一起断开；guard 给了就这个用途单独记（见 LiveResearchPlanner 的起标题）。"""
     provider, _, name = ref.partition(":")
@@ -194,50 +195,99 @@ def usable(ref: str) -> bool:
     return provider in PROVIDERS and bool(API_KEYS[provider]())
 
 
-def _ark(name: str, *, thinking: bool, effort: str, timeout: int, callbacks: list | None, max_tokens: int | None,
-         guard: str | None) -> BaseChatModel:
-    """豆包走 ChatOpenAI，它只认 OpenAI 官方的字段，豆包的思考不取，这里补（见 ChatArk）。思考只有开关，effort 不用。"""
-    from langchain_openai import ChatOpenAI
+class Compat(NamedTuple):
+    """一家 OpenAI 兼容接口：思考在 reasoning_content 里（豆包还有加密原文 encrypted_content），各家只是开关思考的参数不一样。
+    2026-11-05 逐家实测过（默认思不思考、怎么关、带工具时传回思考报不报错、流式的字段），结果写在下面 COMPAT 各家的说明里。"""
 
-    class ChatArk(GuardedChatModel, ChatOpenAI):
-        """豆包（火山方舟的 OpenAI 兼容接口）。2.x 的模型思考时回两样，都放进 additional_kwargs：reasoning_content 是思考摘要，
-        页面上显示的就是它；encrypted_content 是加密的思考原文。提供方标成 volcengine，不用 ChatOpenAI 标的 openai：
-        标成 openai 的话 content_blocks 按 OpenAI 的格式读，读不到 additional_kwargs 里的思考（见 history.thinking_of）。
-        发出去时两样都原样传回：方舟文档说带工具的多轮对话不传加密原文推理效果会下降，改过的报 Invalid signature，不传不报错；
-        之前几轮的也传，和 DeepSeek 一样，下一轮发出去的开头不变。"""
+    label: str  # 消息的 response_metadata["model_provider"]：不能用 openai 这类 LangChain 专门解析的名字，不然读不到思考（见 ChatCompat）
+    base_url: Callable[[], str]
+    key: Callable[[], str | None]
+    key_name: str
+    on: dict  # 开思考时请求里带的（放进 extra_body）
+    off: dict | None  # 关思考时带的；None 是关不掉：这些模型的选项写 thinking = "always"，要了关思考也照常思考
+    effort: bool = True  # 认 reasoning_effort（思考强度，选项里写了 effort 才带）
+    temperature: float | None = None
 
-        def _guard_key(self) -> str:
-            return guard_key(GuardedChatModel._guard_key(self), guard)
 
-        def _create_chat_result(self, response, generation_info=None):
-            result = super()._create_chat_result(response, generation_info)
-            if isinstance(response, dict):
-                said = (response.get("choices") or [{}])[0].get("message") or {}
-            else:  # openai 的对象：多出来的字段当属性取（整个 model_dump 的话，结构化输出的 parsed 字段会报序列化警告）
-                msg = getattr((getattr(response, "choices", None) or [None])[0], "message", None)
-                said = {k: getattr(msg, k, None) for k in history.THINKING_KEYS}
-            for g in result.generations[:1]:
-                _take_thinking(g.message, said)
-            return result
+_OFF = {"thinking": {"type": "disabled"}}
 
-        def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
-            gen = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
-            if gen and (choices := chunk.get("choices")):
-                _take_thinking(gen.message, choices[0].get("delta") or {})
-            return gen
+COMPAT: dict[str, Compat] = {
+    # 豆包（火山方舟）：开关都要明说；思考只有开关，effort 不用
+    "ark": Compat(ARK_PROVIDER, lambda: config.ARK_BASE_URL, lambda: config.ARK_API_KEY, "ARK_API_KEY",
+                  {"thinking": {"type": "enabled"}}, _OFF, effort=False, temperature=0),
+    # Kimi：默认思考，thinking disabled 能关（K3.1 Pro 实测，reasoning_effort=none 也行；enable_thinking 不认）
+    "moonshot": Compat("moonshot", lambda: config.MOONSHOT_BASE_URL, lambda: config.MOONSHOT_API_KEY, "MOONSHOT_API_KEY", {}, _OFF),
+    # Grok：一直思考，关不掉（thinking disabled 不理，reasoning_effort=none 报 400）；思考多半不返回，只在用量里有 reasoning_tokens，带工具时偶尔回一两句
+    "xai": Compat("xai", lambda: config.XAI_BASE_URL, lambda: config.XAI_API_KEY, "XAI_API_KEY", {}, None),
+    # 千问（阿里云百炼）：默认思考，enable_thinking 开关
+    "dashscope": Compat("dashscope", lambda: config.DASHSCOPE_BASE_URL, lambda: config.DASHSCOPE_API_KEY, "DASHSCOPE_API_KEY",
+                        {"enable_thinking": True}, {"enable_thinking": False}),
+    # 小米 MiMo：默认思考，thinking disabled 能关（enable_thinking 不认）
+    "mimo": Compat("mimo", lambda: config.MIMO_BASE_URL, lambda: config.MIMO_API_KEY, "MIMO_API_KEY", {}, _OFF),
+    # 智谱 GLM-5.3 系列：一直思考，传关思考报 400（"该模型始终思考"）；reasoning_effort 认 low/high/max
+    "zhipuai": Compat("zhipuai", lambda: config.ZHIPUAI_BASE_URL, lambda: config.ZHIPUAI_API_KEY, "ZHIPUAI_API_KEY", {}, None),
+    # 腾讯混元（TokenHub）：默认思考，thinking disabled 能关（enable_thinking 不认）
+    "hunyuan": Compat("hunyuan", lambda: config.HUNYUAN_BASE_URL, lambda: config.HUNYUAN_API_KEY, "HUNYUAN_API_KEY", {}, _OFF),
+    # MiniMax：不带 reasoning_split 时 M3 的思考夹在正文的 <think> 里，带了才放进 reasoning_content；开思考的值是 adaptive，
+    # 传 enabled 报 400，所以开的时候不传；M3.1 Flash 关不掉（关了报 400）
+    "minimax": Compat("minimax", lambda: config.MINIMAX_BASE_URL, lambda: config.MINIMAX_API_KEY, "MINIMAX_API_KEY",
+                      {"reasoning_split": True}, {"reasoning_split": True, **_OFF}),
+}
 
-        def _get_request_payload(self, input_, *, stop=None, **kwargs):
-            payload = super()._get_request_payload(input_, stop=stop, **kwargs)
-            _pass_back(self._convert_input(input_).to_messages(), payload, history.THINKING_KEYS)
-            return payload
 
-    if not config.ARK_API_KEY:
-        raise RuntimeError("未设置 ARK_API_KEY")
-    return ChatArk(
-        model=name, base_url=config.ARK_BASE_URL, api_key=config.ARK_API_KEY,
-        extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}}, timeout=timeout, max_retries=2, temperature=0,
-        stream_usage=True, callbacks=callbacks, max_tokens=max_tokens,
-    )
+def _compat(provider: str) -> Callable[..., BaseChatModel]:
+    spec = COMPAT[provider]
+
+    def build(name: str, *, thinking: bool, effort: str, timeout: int, callbacks: list | None, max_tokens: int | None,
+              guard: str | None) -> BaseChatModel:
+        """走 ChatOpenAI，它只认 OpenAI 官方的字段，各家的思考不取，这里补（见 ChatCompat）。"""
+        from langchain_openai import ChatOpenAI
+
+        class ChatCompat(GuardedChatModel, ChatOpenAI):
+            """OpenAI 兼容接口的一家。思考放进 additional_kwargs：reasoning_content 是页面上显示的思考；豆包 2.x 还回 encrypted_content
+            （加密的思考原文）。提供方标成这一家的名字，不用 ChatOpenAI 标的 openai：标成 openai 的话 content_blocks 按 OpenAI 的格式读，
+            读不到 additional_kwargs 里的思考（见 history.thinking_of）。
+            发出去时原样传回，之前几轮的也传（和 DeepSeek 一样，下一轮发出去的开头不变）：方舟文档说带工具的多轮对话不传加密原文推理效果会下降，
+            改过的报 Invalid signature；别家实测传不传都不报错。"""
+
+            def _guard_key(self) -> str:
+                return guard_key(GuardedChatModel._guard_key(self), guard)
+
+            def _create_chat_result(self, response, generation_info=None):
+                result = super()._create_chat_result(response, generation_info)
+                if isinstance(response, dict):
+                    said = (response.get("choices") or [{}])[0].get("message") or {}
+                else:  # openai 的对象：多出来的字段当属性取（整个 model_dump 的话，结构化输出的 parsed 字段会报序列化警告）
+                    msg = getattr((getattr(response, "choices", None) or [None])[0], "message", None)
+                    said = {k: getattr(msg, k, None) for k in history.THINKING_KEYS}
+                for g in result.generations[:1]:
+                    _take_thinking(g.message, said, spec.label)
+                return result
+
+            def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
+                gen = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
+                if gen and (choices := chunk.get("choices")):
+                    _take_thinking(gen.message, choices[0].get("delta") or {}, spec.label)
+                return gen
+
+            def _get_request_payload(self, input_, *, stop=None, **kwargs):
+                payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+                _pass_back(self._convert_input(input_).to_messages(), payload, history.THINKING_KEYS)
+                return payload
+
+        key = spec.key()
+        if not key:
+            raise RuntimeError(f"未设置 {spec.key_name}")
+        body = spec.on if thinking else (spec.off or {})
+        kw: dict[str, Any] = {"reasoning_effort": effort} if thinking and effort and spec.effort else {}
+        if spec.temperature is not None:
+            kw["temperature"] = spec.temperature
+        return ChatCompat(
+            model=name, base_url=spec.base_url(), api_key=key, extra_body=dict(body) or None, timeout=timeout, max_retries=2,
+            stream_usage=True, callbacks=callbacks, max_tokens=max_tokens, **kw,
+        )
+
+    return build
 
 
 def _deepseek(name: str, *, thinking: bool, effort: str, timeout: int, callbacks: list | None, max_tokens: int | None,
@@ -269,8 +319,8 @@ def _deepseek(name: str, *, thinking: bool, effort: str, timeout: int, callbacks
     )
 
 
-PROVIDERS: dict[str, Callable[..., BaseChatModel]] = {"deepseek": _deepseek, "ark": _ark}  # 厂商 → 建模型的函数
-API_KEYS: dict[str, Callable[[], str | None]] = {"deepseek": lambda: config.DEEPSEEK_API_KEY, "ark": lambda: config.ARK_API_KEY}
+PROVIDERS: dict[str, Callable[..., BaseChatModel]] = {"deepseek": _deepseek, **{p: _compat(p) for p in COMPAT}}  # 厂商 → 建模型的函数
+API_KEYS: dict[str, Callable[[], str | None]] = {"deepseek": lambda: config.DEEPSEEK_API_KEY, **{p: c.key for p, c in COMPAT.items()}}
 
 
 def role_model(catalog: Catalog, role: str, **kw: Any) -> BaseChatModel:

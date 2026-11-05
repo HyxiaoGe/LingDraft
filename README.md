@@ -93,7 +93,7 @@ flowchart TB
 ## 技术栈
 
 - 后端：Python 3.12、FastAPI、LangGraph 1.2、LangChain 1.4、Postgres（psycopg 连接池）、uv
-- 模型：DeepSeek V4 Pro（主 agent、整理记忆）、Flash（子 agent、起标题、写短版）；也能切到豆包
+- 模型：默认 DeepSeek V4 Pro（主 agent、整理记忆）、Flash（子 agent、起标题、写短版）；输入框旁边还能选豆包、Kimi、Grok、千问、MiMo、GLM、混元、MiniMax
 - 前端：React 18、Vite
 - 部署：Docker Compose；GitHub Actions 跑测试，合并后自动部署
 

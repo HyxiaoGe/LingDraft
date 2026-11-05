@@ -33,6 +33,23 @@ ARK_MODEL_LITE = os.environ.get("ARK_MODEL_LITE", "doubao-seed-2-1-lite-260915")
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
 
+# 2026-11-05 新接的几家，都走各家的 OpenAI 兼容接口直连（Sean 定不经 LiteLLM，见 research_llm.COMPAT）。
+# 地址是国内站的默认值，.env 里只填 key；key 是国际站或专属地址的，加一行同名的 *_BASE_URL 覆盖
+MOONSHOT_BASE_URL = os.environ.get("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1")  # Kimi
+MOONSHOT_API_KEY = os.environ.get("MOONSHOT_API_KEY")
+XAI_BASE_URL = os.environ.get("XAI_BASE_URL", "https://api.x.ai/v1")  # Grok
+XAI_API_KEY = os.environ.get("XAI_API_KEY")
+DASHSCOPE_BASE_URL = os.environ.get("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")  # 千问（阿里云百炼），要 compatible-mode 的地址
+DASHSCOPE_API_KEY = os.environ.get("DASHSCOPE_API_KEY")
+MIMO_BASE_URL = os.environ.get("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")  # 小米 MiMo
+MIMO_API_KEY = os.environ.get("MIMO_API_KEY")
+ZHIPUAI_BASE_URL = os.environ.get("ZHIPUAI_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")  # 智谱 GLM
+ZHIPUAI_API_KEY = os.environ.get("ZHIPUAI_API_KEY")
+HUNYUAN_BASE_URL = os.environ.get("HUNYUAN_BASE_URL", "https://tokenhub.tencentmaas.com/v1")  # 腾讯混元，走腾讯云 TokenHub（key 也是 TokenHub 的）
+HUNYUAN_API_KEY = os.environ.get("HUNYUAN_API_KEY")
+MINIMAX_BASE_URL = os.environ.get("MINIMAX_BASE_URL", "https://api.minimaxi.com/v1")  # MiniMax
+MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY")
+
 # 对话用哪些模型（用户能选的选项、子 agent 用哪个、起标题这些内部用途用哪个）不在这里，见 app/models.toml；这里只有各家的 key 和地址。
 # 一个子 agent 最多搜几次、读几页：超了的不执行，每步提醒还剩几次（2026-11-01 Sean 定按工具设上限，11-02 定 8/8）
 SUBAGENT_SEARCH_BUDGET = int(os.environ.get("SUBAGENT_SEARCH_BUDGET", "8"))

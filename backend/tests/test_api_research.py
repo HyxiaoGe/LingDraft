@@ -107,20 +107,25 @@ def test_deepseek_passes_back_all_reasoning(deepseek):
     assert [m.get("reasoning_content") for m in payload["messages"]] == [None, "旧思考", None, "旧结论", None, "新思考", None]
 
 
-def _ark(monkeypatch, handler):
+def _compat(monkeypatch, provider, handler, **kw):
+    """OpenAI 兼容接口的一家（见 research_llm.COMPAT），换成假的 http 客户端，不发真请求。"""
     import openai
 
     from app import config
-    from app.research_llm import make_chat_model
+    from app.research_llm import COMPAT, make_chat_model
 
-    monkeypatch.setattr(config, "ARK_API_KEY", "k")
-    monkeypatch.setattr(config, "ARK_BASE_URL", "http://ark.test/api/v3")
-    llm = make_chat_model("ark:doubao", thinking=True)
-    transport = httpx.MockTransport(handler)  # 换成假的 http 客户端，不发真请求
-    llm.root_client = openai.OpenAI(api_key="k", base_url=config.ARK_BASE_URL, http_client=httpx.Client(transport=transport))
-    llm.root_async_client = openai.AsyncOpenAI(api_key="k", base_url=config.ARK_BASE_URL, http_client=httpx.AsyncClient(transport=transport))
+    monkeypatch.setattr(config, COMPAT[provider].key_name, "k")
+    llm = make_chat_model(f"{provider}:m", **{"thinking": True, **kw})
+    transport = httpx.MockTransport(handler)
+    base = "http://compat.test/v1"
+    llm.root_client = openai.OpenAI(api_key="k", base_url=base, http_client=httpx.Client(transport=transport))
+    llm.root_async_client = openai.AsyncOpenAI(api_key="k", base_url=base, http_client=httpx.AsyncClient(transport=transport))
     llm.client, llm.async_client = llm.root_client.chat.completions, llm.root_async_client.chat.completions
     return llm
+
+
+def _ark(monkeypatch, handler):
+    return _compat(monkeypatch, "ark", handler)
 
 
 def _ark_reply(stream: bool) -> httpx.Response:
@@ -171,6 +176,52 @@ def test_ark_passes_back_thinking(monkeypatch):
     sent = llm._get_request_payload(msgs)["messages"]
     assert [(m.get("reasoning_content"), m.get("encrypted_content")) for m in sent] == [
         (None, None), ("旧摘要", "旧密文"), (None, None), ("新摘要", "新密文"), (None, None), ("只有摘要", None)]
+
+
+NEW_PROVIDERS = ["moonshot", "xai", "dashscope", "mimo", "zhipuai", "hunyuan", "minimax"]
+
+
+@pytest.mark.parametrize("provider", NEW_PROVIDERS)
+def test_new_providers_keep_thinking_like_ark(monkeypatch, provider):
+    """2026-11-05 新接的几家和豆包同一个类：整条、流式都读得到 reasoning_content，标成这一家（不是 openai），发出去时原样传回。"""
+    from langchain_core.messages import AIMessageChunk
+
+    from app.graph.research import history
+    from app.research_llm import COMPAT
+
+    llm = _compat(monkeypatch, provider, lambda req: _ark_reply(json.loads(req.content).get("stream", False)))
+    whole = llm.invoke("上海明天下雨吗")
+    parts: list[AIMessageChunk] = list(llm.stream("上海明天下雨吗"))
+    streamed = parts[0]
+    for c in parts[1:]:
+        streamed += c
+    for m in (whole, streamed):
+        assert m.response_metadata["model_provider"] == COMPAT[provider].label != "openai"
+        assert history.thinking_of(m) == "先查预报。" and history.text_of(m) == "明天上海小雨。"
+    sent = llm._get_request_payload([HumanMessage("问"), whole, HumanMessage("再问")])["messages"]
+    assert [m.get("reasoning_content") for m in sent] == [None, "先查预报。", None]
+
+
+@pytest.mark.parametrize("provider", ["ark", *NEW_PROVIDERS])
+def test_thinking_switch_uses_each_providers_own_params(monkeypatch, provider):
+    """开关思考按各家实测的参数发（见 COMPAT）；关不掉的（off 是 None）要了关也不发；思考强度只在开思考、这家认的时候带。"""
+    from app.research_llm import COMPAT
+
+    spec = COMPAT[provider]
+    on = _compat(monkeypatch, provider, lambda req: httpx.Response(500), effort="high")._get_request_payload([HumanMessage("问")])
+    off = _compat(monkeypatch, provider, lambda req: httpx.Response(500), thinking=False, effort="high")._get_request_payload([HumanMessage("问")])
+    assert on.get("extra_body") == (spec.on or None)
+    assert off.get("extra_body") == (spec.off or None)
+    assert on.get("reasoning_effort") == ("high" if spec.effort else None) and "reasoning_effort" not in off
+
+
+def test_compat_without_key_says_which_env(monkeypatch):
+    from app import config
+    from app.research_llm import make_chat_model
+
+    monkeypatch.setattr(config, "MOONSHOT_API_KEY", "")
+    with pytest.raises(RuntimeError, match="MOONSHOT_API_KEY"):
+        make_chat_model("moonshot:kimi", thinking=True)
 
 
 def test_thinking_is_read_the_same_way_whoever_wrote_it():
