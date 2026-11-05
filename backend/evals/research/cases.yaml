@@ -9,10 +9,10 @@
       judge: 正文列出了几件具体的事，每件写了大致的日期；都是最近一周左右的事，没有把明显更早的旧闻说成这周的；不是只空泛地概括趋势。
 
 - id: weather
-  source: 先只做 chat（2026-10-30）：要查实时信息的日常问题
+  source: 先只做 chat（2026-10-30）：要查实时信息的日常问题。11-05 Sean 定 searched 改成 looked_up：有了天气工具，用天气工具查也算
   turns:
     - say: 深圳这周会不会降温
-      expect: {searched: true}
+      expect: {looked_up: true}
       judge: 正文直接回答了会不会降温，给了这几天的具体气温或变化并写明日期；预报和已经发生的分得清。
 
 - id: fact
@@ -23,10 +23,10 @@
       judge: 正文一开头就给出了一个具体的高度数字，并说明是哪次测量或谁公布的；回答简短，没有写成长篇。
 
 - id: cost
-  source: 先只做 chat（2026-10-30）：说法不一的问题，第二句接着上一轮追问
+  source: 先只做 chat（2026-10-30）：说法不一的问题，第二句接着上一轮追问。11-05 Sean 定去掉 min_reads：读不读交给模型（10-31 定的）
   turns:
     - say: DeepSeek V3训练成本多少
-      expect: {searched: true, min_reads: 1}
+      expect: {searched: true}
       judge: 正文给出了具体数字，并说明这个数字算的是什么范围和出处；有不同说法时说明了各自算的是什么；没有把某一种算法的数字说成全部成本。
     - say: 为什么 SemiAnalysis 的估计比官方高这么多？
       judge: 正文直接回答了差距从哪来，依据写了出处；接着上一轮说，没有把训练成本从头再讲一遍。
