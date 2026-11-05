@@ -196,7 +196,7 @@ def sample(runner, judge, d: Decision, snap: dict, n: int, check_sources: bool =
                 checks.append(_check("judge", v.passed, v.reason))
             if check_sources:
                 played = {"reply": reply, "sources": sources, "evidence": material(msgs)["evidence"]}
-                citations = judge_citations(judge, out["say"], reply, cited_sources(played))
+                citations = judge_citations(judge, out["say"], reply, cited_sources(played), today)
                 bad = [c["statement"][:40] for c in citations if c["verdict"] == "unsupported"]
                 if citations:
                     checks.append(_check("sources_supported", not bad, "；".join(bad) or f"{len(citations)} 条都有依据"))

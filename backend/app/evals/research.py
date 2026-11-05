@@ -20,7 +20,7 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.clock import Clock
 from app.evals.tape import Tape
 from app.graph.research import history
+from app.graph.research.agent import date_anchors
 from app.graph.research.graph import memory_checkpointer
 from app.graph.research.sources import DOCS_TOOL, SOURCE_ID, SUBAGENT_TOOL, cited, doc_snippets, flatten, hit_text, parse, search_hits, url_key
 from app.prompting import PromptFile
@@ -157,7 +158,7 @@ class RubricJudgement(BaseModel):
 
 
 class Judge(Protocol):
-    def citations(self, question: str, reply: str, sources: list[dict]) -> CitationJudgement: ...
+    def citations(self, question: str, reply: str, sources: list[dict], today: str) -> CitationJudgement: ...
 
     def rubric(self, said: str, rubric: str, reply: str, today: str) -> RubricJudgement: ...  # today 是那一轮的日期（回放时是录的那天）
 
@@ -175,8 +176,11 @@ class LiveJudge:
         chain = self._llm.with_structured_output(schema, method="json_schema", strict=True)
         return chain.invoke([("system", PROMPTS.render(f"{key}.system")), ("user", PROMPTS.render(f"{key}.user", **values))])
 
-    def citations(self, question: str, reply: str, sources: list[dict]) -> CitationJudgement:
-        return self._ask(CitationJudgement, "citations", question=question, reply=reply, sources=sources)
+    def citations(self, question: str, reply: str, sources: list[dict], today: str) -> CitationJudgement:
+        # 给裁判和助理一样的日期（今天、明天、这周末……）：正文里“明天（11月6日，星期五）”是助理按日期推的，材料里本来就没有
+        #（2026-11-05 决策点回放查出来：没给日期时裁判把它判成没依据，restriction 用例因此时过时不过）
+        dates = date_anchors(date.fromisoformat(today))
+        return self._ask(CitationJudgement, "citations", question=question, reply=reply, sources=sources, **dates)
 
     def rubric(self, said: str, rubric: str, reply: str, today: str) -> RubricJudgement:
         return self._ask(RubricJudgement, "rubric", said=said, rubric=rubric, reply=reply, today=today)
@@ -247,11 +251,12 @@ def cited_sources(played: dict) -> list[dict]:
     return [{"id": i, "url": srcs[i], "text": text_for(played["evidence"], srcs[i])} for i in cited(played["reply"]) if i in srcs]
 
 
-def judge_citations(judge: Judge, question: str, reply: str, sources: list[dict]) -> list[dict]:
-    """正文里带角标的说法逐条拿引用的来源材料核对。正文没有引用（或引用的都不存在，cited_known 已经不过）就不核对。"""
+def judge_citations(judge: Judge, question: str, reply: str, sources: list[dict], today: str) -> list[dict]:
+    """正文里带角标的说法逐条拿引用的来源材料核对。正文没有引用（或引用的都不存在，cited_known 已经不过）就不核对。
+    today 是那一轮的日期（回放时是录的那天）。"""
     if not sources:
         return []
-    verdicts = judge.citations(question, reply, sources).verdicts
+    verdicts = judge.citations(question, reply, sources, today).verdicts
     # 裁判有时把没带角标的句子也列出来（source_ids 为空）判 unsupported，比如天气工具给的预报（不是来源，本来就不标）。不归这一项管
     return [v.model_dump() for v in verdicts if v.source_ids]
 
@@ -265,7 +270,7 @@ def score(turn: CaseTurn, played: dict, judge: Judge, check_sources: bool) -> tu
             v = judge.rubric(turn.say, turn.judge, played["reply"], played["today"])
             checks.append(_check("judge", v.passed, v.reason))
         if check_sources:
-            citations = judge_citations(judge, turn.say, played["reply"], played["cited_sources"])
+            citations = judge_citations(judge, turn.say, played["reply"], played["cited_sources"], played["today"])
             bad = [c["statement"][:40] for c in citations if c["verdict"] == "unsupported"]
             if citations:
                 checks.append(_check("sources_supported", not bad, "；".join(bad) or f"{len(citations)} 条都有依据"))
