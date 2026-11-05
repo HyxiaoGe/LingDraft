@@ -476,13 +476,17 @@ def _load_results(path: str) -> list[dict]:
 
 def model_head(option: str) -> dict[str, str]:
     """结果文件开头记的模型：选项和它这时对应的主 agent、子 agent 的模型（Auto 的策略以后会变，记下这次实际用的）。
-    选项不在能选的里面（写错了、停用了、没配 key）直接报错：不然悄悄换成 Auto，测的就不是想测的模型了。"""
+    选项写错了、停用了、没配 key 直接报错：不然悄悄换成 Auto，测的就不是想测的模型了。
+    Auto 不查 key：它就是换过去的那个，没配 key 的话建 planner 时就报错。"""
     from app import model_catalog
     from app.research_llm import usable
 
     catalog = model_catalog.load()
-    if option not in {o.id for o in catalog.offered(usable)}:
-        raise SystemExit(f"没有这个模型可选（看 app/models.toml，没配 key 的也不行）：{option}")
+    o = catalog.option(option)
+    if o is None or o.status:
+        raise SystemExit(f"没有这个模型可选（看 app/models.toml）：{option}")
+    if option != model_catalog.AUTO and not all(usable(r) for r in o.refs()):
+        raise SystemExit(f"这个模型没配 key：{option}")
     plan = catalog.plan(option, None, usable)
     return {"option": option, "model": plan.agent.ref, "subagent_model": plan.subagent.ref}
 

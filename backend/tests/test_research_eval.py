@@ -339,3 +339,21 @@ def test_citation_judge_gets_the_same_dates_as_the_agent():
     judge = FakeJudge()
     r = _run([{"say": "查一下向量库选型"}], judge)
     assert judge.today == r["turns"][0]["today"]
+
+
+def test_model_head_checks_the_option(monkeypatch):
+    """写错的、没配 key 的选项直接报错（不然悄悄换成 Auto）；Auto 不查 key（CI 没有 key）。"""
+    import pytest
+
+    from app import config
+    from app.evals import research
+
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "")
+    monkeypatch.setattr(config, "ARK_API_KEY", "")
+    assert research.model_head("auto") == {"option": "auto", "model": "deepseek:deepseek-v4-pro", "subagent_model": "deepseek:deepseek-flash"}
+    with pytest.raises(SystemExit, match="没有这个模型"):
+        research.model_head("no-such-model")
+    with pytest.raises(SystemExit, match="没配 key"):
+        research.model_head("deepseek-flash")
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "k")
+    assert research.model_head("deepseek-flash")["model"] == "deepseek:deepseek-flash"
