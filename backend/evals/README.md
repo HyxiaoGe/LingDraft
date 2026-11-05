@@ -7,8 +7,10 @@ cd backend
 uv run python -m app.evals.research                      # 全部用例
 uv run python -m app.evals.research --case weather --case fact
 uv run python -m app.evals.research --case cost --repeat 3 --no-sources
+uv run python -m app.evals.research --case fact --model deepseek-flash   # 换一个模型选项（app/models.toml 里的 id），默认 Auto
 ```
 
+`--model` 换的是对话选的模型，裁判不跟着换（`models.toml` 的 `roles.judge`），分数才比得了；结果文件开头记着选项和这次实际用的主 agent、子 agent 模型。
 每个用例用独立的内存检查点，不碰本机的服务和配置的库；走和页面同一个运行器。
 结果写到 `data/evals/research-<时间>.json`（每轮的对话、步骤、用量、检查结果、引用核对），
 同名的 `.md` 是给人看的对话记录。终端打印每个用例的检查结果和合计用量。
@@ -39,6 +41,7 @@ uv run python -m app.evals.research --stats data/evals/<结果1>.json data/evals
 ```bash
 uv run python -m app.evals.research --record --case lookup-index      # 先录：录像时顺带存下每次调模型之前的状态
 uv run python -m app.evals.decisions --samples 10                      # 每个决策点只重跑那一下，跑 10 次
+uv run python -m app.evals.decisions --samples 10 --model deepseek-flash   # 那一下换成别的模型；不给照录的那遍用的
 uv run python -m app.evals.decisions --compare data/evals/<改之前>.json data/evals/<改之后>.json  # 两份结果差得够不够大
 ```
 

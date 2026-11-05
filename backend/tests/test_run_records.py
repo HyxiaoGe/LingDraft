@@ -118,10 +118,23 @@ def test_store_pending_messages(store):
     store.put_pending("t1", "guide", "另一种")
     store.put_pending("t2", QUEUE, "别的对话")
     assert store.get_pending("t1", QUEUE)["text"] == "放前面\n第一句\n第二句"
-    assert store.take_pending("t1", QUEUE) == "放前面\n第一句\n第二句" and store.take_pending("t1", QUEUE) is None
+    assert store.take_pending("t1", QUEUE) == ("放前面\n第一句\n第二句", None) and store.take_pending("t1", QUEUE) is None
     assert store.get_pending("t1", "guide")["text"] == "另一种"
     store.delete_thread("t1")
     assert store.get_pending("t1", "guide") is None and store.get_pending("t2", QUEUE)["text"] == "别的对话"
+
+
+def test_store_pending_thinking(store):
+    """排着的话记着思考开关：合成一句时按后发的那句，后发的没给就留着原来的；放回前面的（比排着的早）不盖过排着的。"""
+    assert store.put_pending("t1", QUEUE, "一", thinking=False)["thinking"] is False
+    assert store.put_pending("t1", QUEUE, "二")["thinking"] is False  # 没给开关的不改
+    assert store.put_pending("t1", QUEUE, "三", thinking=True)["thinking"] is True
+    assert store.put_pending("t1", QUEUE, "早先的", front=True, thinking=False)["thinking"] is True
+    assert store.get_pending("t1", QUEUE)["thinking"] is True
+    assert store.take_pending("t1", QUEUE) == ("早先的\n一\n二\n三", True)
+    store.put_pending("t1", QUEUE, "没给")
+    assert store.put_pending("t1", QUEUE, "放回来的", front=True, thinking=False)["thinking"] is False  # 排着的没给，用放回来的
+    assert store.take_pending("t1", QUEUE).thinking is False
 
 
 # ---- 经过运行器和接口 ----

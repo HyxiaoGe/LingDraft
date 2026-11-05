@@ -13,6 +13,8 @@ from typing import Literal, NotRequired
 from langchain.agents.middleware.types import AgentState
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.model_catalog import ModelUse
+
 INVALID_TOOL_CALL_RETRIES = 2  # 模型返回无法解析的工具调用时，让它重发的次数
 
 _SEP = r"(?:\s+[-–—]\s+|\s*[|｜_]\s*)"  # 横线两边要有空格，不然“10-10-2024”也会被当成重复
@@ -306,6 +308,11 @@ class Turn(BaseModel):
     outcome: Literal["ok", "no_reply", "blocked", "stopped"] = Field(
         default="ok", description="no_reply：这一轮结束时模型没有给出正文；blocked：被模型服务的内容审核拦下，这一轮停了；"
                                   "stopped：用户点了停止，已经写出来的正文留着")
+    # 这一轮用的模型，开始时定下（见 agent.TurnMiddleware），出错重试接着用它。空的是 2026-11-05 之前的轮（都是 model_catalog.LEGACY_MODEL 答的），
+    # 和排队时就停了、没开始的轮
+    option: str = Field(default="", description="这一轮按哪个选项（models.toml 的 id）：一般就是对话定下的，那个选项停了改用 Auto 的是 auto")
+    model: ModelUse | None = Field(default=None, description="主 agent 用的模型")
+    subagent_model: ModelUse | None = Field(default=None, description="子 agent 用的模型")
 
 
 class Compaction(BaseModel):
@@ -321,5 +328,6 @@ class Compaction(BaseModel):
 
 class ResearchState(AgentState):
     title: NotRequired[str]  # 线程标题，第一轮开始前由模型起
+    option: NotRequired[str]  # 对话定下的模型选项（models.toml 的 id）：新建对话时写进来，没选的第一轮开始时定成 auto；之后不换（见 agent.TurnMiddleware）
     turns: NotRequired[list[Turn]]
     compaction: NotRequired[Compaction]

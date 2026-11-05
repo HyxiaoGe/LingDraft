@@ -59,6 +59,20 @@ def _failed(r: dict) -> list[tuple[int, str]]:
     return [(i, c["name"]) for i, t in enumerate(r["turns"], 1) for c in t["checks"] if not c["passed"]]
 
 
+
+def test_case_can_pick_a_model():
+    """--model：对话第一句话时选模型，之后每轮都用它；裁判不跟着换。"""
+    made = []
+
+    def planner(**kw):
+        made.append(FakeResearchPlanner(**kw))
+        return made[-1]
+
+    r = run_case(Case.model_validate({"id": "x", "source": "测试", "turns": [{"say": "直接答：一"}, {"say": "直接答：二"}]}),
+                 planner, FakeJudge(), option="deepseek-flash")
+    assert r["passed"], r
+    assert [t["model"] for t in r["turns"]] == [{"ref": "deepseek:deepseek-flash", "thinking": True, "effort": "high"}] * 2
+
 def test_cases_file_parses():
     cases = load_cases()
     assert cases and all(c.source and c.turns and c.turns[0].say for c in cases)

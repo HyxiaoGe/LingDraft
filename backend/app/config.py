@@ -32,33 +32,20 @@ ARK_MODEL_LITE = os.environ.get("ARK_MODEL_LITE", "doubao-seed-2-1-lite-260915")
 
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")
 
-# 调研场景的模型：探针对照后定为 DeepSeek V4 Pro 思考 high（docs/probe/autonomy）；设 RESEARCH_PROVIDER=ark 可切回豆包
-RESEARCH_PROVIDER = os.environ.get("RESEARCH_PROVIDER", "deepseek")
-RESEARCH_MODEL = os.environ.get("RESEARCH_MODEL", "")  # 空则按提供方默认
-RESEARCH_THINKING = _flag("RESEARCH_THINKING", True)
-RESEARCH_EFFORT = os.environ.get("RESEARCH_EFFORT", "high")
-# 子 agent（主 agent 用 task 工具派出去的）用快一些、便宜一些的模型（2026-11-01 Sean 定）。空则按提供方默认：deepseek-flash / 豆包 lite
-SUBAGENT_MODEL = os.environ.get("SUBAGENT_MODEL", "")
-SUBAGENT_THINKING = _flag("SUBAGENT_THINKING", True)
-SUBAGENT_EFFORT = os.environ.get("SUBAGENT_EFFORT", "high")
+# 对话用哪些模型（用户能选的选项、子 agent 用哪个、起标题这些内部用途用哪个）不在这里，见 app/models.toml；这里只有各家的 key 和地址。
 # 一个子 agent 最多搜几次、读几页：超了的不执行，每步提醒还剩几次（2026-11-01 Sean 定按工具设上限，11-02 定 8/8）
 SUBAGENT_SEARCH_BUDGET = int(os.environ.get("SUBAGENT_SEARCH_BUDGET", "8"))
 SUBAGENT_READ_BUDGET = int(os.environ.get("SUBAGENT_READ_BUDGET", "8"))
-DEEPSEEK_FLASH_MODEL = os.environ.get("DEEPSEEK_FLASH_MODEL", "deepseek-flash")
 # 上下文压缩（见 app/graph/research/compaction.py）：发给主 agent 的对话估算超过 TRIGGER 个 token 时，把之前几轮压到 TARGET 以下。
 # 窗口 1M，Sean 记得压到 20%～30% 效果好（2026-11-03 定 20 万触发、压到 10 万左右）
 COMPACT_TRIGGER_TOKENS = int(os.environ.get("COMPACT_TRIGGER_TOKENS", "200000"))
 COMPACT_TARGET_TOKENS = int(os.environ.get("COMPACT_TARGET_TOKENS", "100000"))
 
 # 长期记忆（见 app/graph/research/memory.py）：每天北京时间 DREAM_HOUR 点在后台整理一次（做梦），把有新的几轮的对话整理成关于用户的记忆。
-# 2026-11-03 Sean 定后台整理、每天一次；3 点是 DeepSeek 的闲时价。模型默认和主 agent 一样（Pro），开思考：要判断一件事是长期的还是一次性的
+# 2026-11-03 Sean 定后台整理、每天一次；3 点是 DeepSeek 的闲时价。用哪个模型见 app/models.toml 的 roles.dream
 DREAM_ENABLED = _flag("LINGDRAFT_DREAM", True)  # 关掉就不按时整理（手动的命令照样能用）
 DREAM_HOUR = int(os.environ.get("LINGDRAFT_DREAM_HOUR", "3"))
-DREAM_MODEL = os.environ.get("DREAM_MODEL", "")  # 空则和主 agent 一样
-DREAM_THINKING = _flag("DREAM_THINKING", True)
-DREAM_EFFORT = os.environ.get("DREAM_EFFORT", "high")
 
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-flash-260915")
 # 背景图生成开关（M2 起默认开）；关闭时背景为模板渐变

@@ -33,11 +33,12 @@ from langgraph.constants import TAG_NOSTREAM
 from PIL import Image, ImageDraw
 from pydantic import BaseModel, ConfigDict, Field
 
-from app import aio, config
+from app import aio, config, model_catalog
 from app.clock import Clock
 from app.graph.research import history, prompts
 from app.graph.research.compaction import RECALL_TOOL as RECALL
 from app.graph.research.sources import DOCS_TOOL, doc_snippets, search_hits
+from app.model_catalog import Catalog, ModelUse
 from app.model_guard import ContentBlocked, GuardedChatModel, Interrupted, ModelUnavailable, guard_key
 from app.tools import docs_mcp, flyai_mcp, image_mcp, maps_mcp, web_mcp, weather_mcp
 from app.tools.docs_mcp import LIBRARY_TOOL, docs_tools
@@ -68,10 +69,11 @@ class Suggestions(BaseModel):
 class ResearchPlanner(Protocol):
     gateway: GatewayClient  # 按编号取图、删图（画的图存在 image-service 里，见 app.tools.gateway）
     clock: Clock  # 模型看得到的当前时间（见 app.clock）
+    catalog: Catalog  # 模型选项（见 app/models.toml）
 
-    def agent_model(self) -> BaseChatModel: ...
+    def usable(self, ref: str) -> bool: ...  # 这个模型能不能用（配了 key）
 
-    def subagent_model(self) -> BaseChatModel: ...
+    def chat_model(self, use: ModelUse, *, sub: bool = False) -> BaseChatModel: ...  # 主 agent（sub 是子 agent）这一轮用的模型
 
     def tools(self) -> list: ...
 
@@ -173,61 +175,76 @@ def _pass_back(msgs: list[BaseMessage], payload: dict, keys: Sequence[str]) -> N
             d.update({k: m.additional_kwargs[k] for k in keys if m.additional_kwargs.get(k) is not None})
 
 
-def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: str = "high", timeout: int = 180,
-                    callbacks: list | None = None, max_tokens: int | None = None, guard: str | None = None) -> BaseChatModel:
-    """按提供方构造聊天模型。每次调用都过熔断，服务商的错误换成 ModelUnavailable / ContentBlocked（见 app.model_guard）。
-    熔断默认按模型名记，同一个模型的各种用途一起断开；guard 给了就这个用途单独记（见 LiveResearchPlanner 的起标题）。
-
-    DeepSeek 思考模式下：带工具的请求要把 reasoning_content 原样传回（langchain-openai / langchain-deepseek 都不做，这里补）。
-    同一轮里的不传接口报 400；之前几轮的照它现在的文档也传，会拼进上下文，只传这一轮的话，下一轮上一轮的消息变了，前缀缓存从那里断
-    （2026-11-01 Sean 定）。不接受强制 tool_choice（with_structured_output 会设），这里去掉；temperature 无效。
-
-    豆包走 ChatOpenAI，它只认 OpenAI 官方的字段，豆包的思考不取，这里补（见 ChatArk）。
-    """
-    if provider == "ark":
-        from langchain_openai import ChatOpenAI
-
-        class ChatArk(GuardedChatModel, ChatOpenAI):
-            """豆包（火山方舟的 OpenAI 兼容接口）。2.x 的模型思考时回两样，都放进 additional_kwargs：reasoning_content 是思考摘要，
-            页面上显示的就是它；encrypted_content 是加密的思考原文。提供方标成 volcengine，不用 ChatOpenAI 标的 openai：
-            标成 openai 的话 content_blocks 按 OpenAI 的格式读，读不到 additional_kwargs 里的思考（见 history.thinking_of）。
-            发出去时两样都原样传回：方舟文档说带工具的多轮对话不传加密原文推理效果会下降，改过的报 Invalid signature，不传不报错；
-            之前几轮的也传，和 DeepSeek 一样，下一轮发出去的开头不变。"""
-
-            def _guard_key(self) -> str:
-                return guard_key(GuardedChatModel._guard_key(self), guard)
-
-            def _create_chat_result(self, response, generation_info=None):
-                result = super()._create_chat_result(response, generation_info)
-                if isinstance(response, dict):
-                    said = (response.get("choices") or [{}])[0].get("message") or {}
-                else:  # openai 的对象：多出来的字段当属性取（整个 model_dump 的话，结构化输出的 parsed 字段会报序列化警告）
-                    msg = getattr((getattr(response, "choices", None) or [None])[0], "message", None)
-                    said = {k: getattr(msg, k, None) for k in history.THINKING_KEYS}
-                for g in result.generations[:1]:
-                    _take_thinking(g.message, said)
-                return result
-
-            def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
-                gen = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
-                if gen and (choices := chunk.get("choices")):
-                    _take_thinking(gen.message, choices[0].get("delta") or {})
-                return gen
-
-            def _get_request_payload(self, input_, *, stop=None, **kwargs):
-                payload = super()._get_request_payload(input_, stop=stop, **kwargs)
-                _pass_back(self._convert_input(input_).to_messages(), payload, history.THINKING_KEYS)
-                return payload
-
-        if not config.ARK_API_KEY:
-            raise RuntimeError("未设置 ARK_API_KEY")
-        return ChatArk(
-            model=model or config.ARK_MODEL, base_url=config.ARK_BASE_URL, api_key=config.ARK_API_KEY,
-            extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}}, timeout=timeout, max_retries=2, temperature=0,
-            stream_usage=True, callbacks=callbacks, max_tokens=max_tokens,
-        )
-    if provider != "deepseek":
+def make_chat_model(ref: str, *, thinking: bool, effort: str = "", timeout: int = 180, callbacks: list | None = None,
+                    max_tokens: int | None = None, guard: str | None = None) -> BaseChatModel:
+    """按"厂商:模型"建聊天模型（LangChain init_chat_model 的写法，模型选项见 app/models.toml）。effort 是思考强度，空的是厂商默认。
+    不直接用 init_chat_model：它只建得出 LangChain 自己的类，我们要的是补过的子类（见下面各家的函数）。接新的一家就在 PROVIDERS 里加一个。
+    每次调用都过熔断，服务商的错误换成 ModelUnavailable / ContentBlocked（见 app.model_guard）。
+    熔断默认按模型名记，同一个模型的各种用途一起断开；guard 给了就这个用途单独记（见 LiveResearchPlanner 的起标题）。"""
+    provider, _, name = ref.partition(":")
+    build = PROVIDERS.get(provider)
+    if build is None:
         raise ValueError(f"未知的模型提供方：{provider}")
+    return build(name, thinking=thinking, effort=effort, timeout=timeout, callbacks=callbacks, max_tokens=max_tokens, guard=guard)
+
+
+def usable(ref: str) -> bool:
+    """这个模型能不能用：认得这家、配了 key。"""
+    provider = ref.partition(":")[0]
+    return provider in PROVIDERS and bool(API_KEYS[provider]())
+
+
+def _ark(name: str, *, thinking: bool, effort: str, timeout: int, callbacks: list | None, max_tokens: int | None,
+         guard: str | None) -> BaseChatModel:
+    """豆包走 ChatOpenAI，它只认 OpenAI 官方的字段，豆包的思考不取，这里补（见 ChatArk）。思考只有开关，effort 不用。"""
+    from langchain_openai import ChatOpenAI
+
+    class ChatArk(GuardedChatModel, ChatOpenAI):
+        """豆包（火山方舟的 OpenAI 兼容接口）。2.x 的模型思考时回两样，都放进 additional_kwargs：reasoning_content 是思考摘要，
+        页面上显示的就是它；encrypted_content 是加密的思考原文。提供方标成 volcengine，不用 ChatOpenAI 标的 openai：
+        标成 openai 的话 content_blocks 按 OpenAI 的格式读，读不到 additional_kwargs 里的思考（见 history.thinking_of）。
+        发出去时两样都原样传回：方舟文档说带工具的多轮对话不传加密原文推理效果会下降，改过的报 Invalid signature，不传不报错；
+        之前几轮的也传，和 DeepSeek 一样，下一轮发出去的开头不变。"""
+
+        def _guard_key(self) -> str:
+            return guard_key(GuardedChatModel._guard_key(self), guard)
+
+        def _create_chat_result(self, response, generation_info=None):
+            result = super()._create_chat_result(response, generation_info)
+            if isinstance(response, dict):
+                said = (response.get("choices") or [{}])[0].get("message") or {}
+            else:  # openai 的对象：多出来的字段当属性取（整个 model_dump 的话，结构化输出的 parsed 字段会报序列化警告）
+                msg = getattr((getattr(response, "choices", None) or [None])[0], "message", None)
+                said = {k: getattr(msg, k, None) for k in history.THINKING_KEYS}
+            for g in result.generations[:1]:
+                _take_thinking(g.message, said)
+            return result
+
+        def _convert_chunk_to_generation_chunk(self, chunk, default_chunk_class, base_generation_info):
+            gen = super()._convert_chunk_to_generation_chunk(chunk, default_chunk_class, base_generation_info)
+            if gen and (choices := chunk.get("choices")):
+                _take_thinking(gen.message, choices[0].get("delta") or {})
+            return gen
+
+        def _get_request_payload(self, input_, *, stop=None, **kwargs):
+            payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+            _pass_back(self._convert_input(input_).to_messages(), payload, history.THINKING_KEYS)
+            return payload
+
+    if not config.ARK_API_KEY:
+        raise RuntimeError("未设置 ARK_API_KEY")
+    return ChatArk(
+        model=name, base_url=config.ARK_BASE_URL, api_key=config.ARK_API_KEY,
+        extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}}, timeout=timeout, max_retries=2, temperature=0,
+        stream_usage=True, callbacks=callbacks, max_tokens=max_tokens,
+    )
+
+
+def _deepseek(name: str, *, thinking: bool, effort: str, timeout: int, callbacks: list | None, max_tokens: int | None,
+              guard: str | None) -> BaseChatModel:
+    """DeepSeek 思考模式下：带工具的请求要把 reasoning_content 原样传回（langchain-openai / langchain-deepseek 都不做，这里补）。
+    同一轮里的不传接口报 400；之前几轮的照它现在的文档也传，会拼进上下文，只传这一轮的话，下一轮上一轮的消息变了，前缀缓存从那里断
+    （2026-11-01 Sean 定）。不接受强制 tool_choice（with_structured_output 会设），这里去掉；temperature 无效。"""
     from langchain_deepseek import ChatDeepSeek
 
     if not config.DEEPSEEK_API_KEY:
@@ -244,12 +261,22 @@ def make_chat_model(provider: str, model: str = "", *, thinking: bool, effort: s
             _pass_back(self._convert_input(input_).to_messages(), payload, (history.REASONING,))
             return payload
 
-    kw: dict[str, Any] = {"reasoning_effort": effort} if thinking else {"temperature": 0}
+    kw: dict[str, Any] = ({"reasoning_effort": effort} if effort else {}) if thinking else {"temperature": 0}
     return ChatDeepSeekRT(
-        model=model or config.DEEPSEEK_MODEL, api_key=config.DEEPSEEK_API_KEY, api_base=config.DEEPSEEK_BASE_URL,
+        model=name, api_key=config.DEEPSEEK_API_KEY, api_base=config.DEEPSEEK_BASE_URL,
         extra_body={"thinking": {"type": "enabled" if thinking else "disabled"}}, timeout=timeout, max_retries=2,
         stream_usage=True, callbacks=callbacks, max_tokens=max_tokens, **kw,
     )
+
+
+PROVIDERS: dict[str, Callable[..., BaseChatModel]] = {"deepseek": _deepseek, "ark": _ark}  # 厂商 → 建模型的函数
+API_KEYS: dict[str, Callable[[], str | None]] = {"deepseek": lambda: config.DEEPSEEK_API_KEY, "ark": lambda: config.ARK_API_KEY}
+
+
+def role_model(catalog: Catalog, role: str, **kw: Any) -> BaseChatModel:
+    """内部用途（起标题、写短版、评测的裁判……，见 models.toml 的 [roles]）用的模型。"""
+    use = catalog.role(role)
+    return make_chat_model(use.ref, thinking=use.thinking, effort=use.effort, **kw)
 
 
 # ---- 真实模型 ----
@@ -301,28 +328,26 @@ class McpTools:
 
 class LiveResearchPlanner:
     def __init__(self, gateway: GatewayClient | None = None, scene: str = "research", *, clock: Clock | None = None,
-                 wrap_tool: Callable[[BaseTool], BaseTool] | None = None) -> None:
+                 wrap_tool: Callable[[BaseTool], BaseTool] | None = None, catalog: Catalog | None = None) -> None:
         """scene 是调 agent-tools 时记账的场景（网关按它分开记）：评测用 research_eval。clock、wrap_tool 评测回放用（见 app.evals.tape）。"""
         self.clock = clock or Clock()
-        provider, model = config.RESEARCH_PROVIDER, config.RESEARCH_MODEL
-        self._agent = make_chat_model(provider, model, thinking=config.RESEARCH_THINKING, effort=config.RESEARCH_EFFORT,
-                                      callbacks=[ThinkingTimer()])
-        light = config.DEEPSEEK_FLASH_MODEL if provider == "deepseek" else config.ARK_MODEL_LITE
-        # 子 agent 用快一些、便宜一些的模型（见 config.SUBAGENT_MODEL）
-        sub = config.SUBAGENT_MODEL or light
-        self._sub = make_chat_model(provider, sub, thinking=config.SUBAGENT_THINKING, effort=config.SUBAGENT_EFFORT,
-                                    callbacks=[ThinkingTimer()])
-        # 快模型步骤（推荐问题、单条送审）不开思考：都是小活，开思考慢得多
-        self._fast = make_chat_model(provider, model, thinking=False, timeout=120)
-        # 起标题照 Fusion 用轻量模型、不开思考、超时短：标题是锦上添花，慢了、坏了就用原话（见 graph.research.agent._TitleJob）。
+        self.catalog = catalog or model_catalog.load()
+        if unknown := sorted(r for r in self.catalog.refs() if r.partition(":")[0] not in PROVIDERS):
+            raise ValueError(f"models.toml 里有不认得的厂商：{unknown}")
+        self._models: dict[ModelUse, BaseChatModel] = {}  # 主 agent、子 agent 用的模型，用到时才建（见 chat_model）
+        # 内部用途各用哪个模型见 models.toml 的 [roles]，都不开思考（整理记忆除外）：都是小活，开思考慢得多。
+        # 起标题照 Fusion 超时短：标题是锦上添花，慢了、坏了就用原话（见 graph.research.agent._TitleJob）。
         # 熔断单独记：超时短只是不想等，不说明服务坏了，不能把同一个模型上的子 agent、写短版一起断开；
         # 连续超时就先不起标题（断开期间直接用原话，回答也不用再等它）
-        self._titler = make_chat_model(provider, light, thinking=False, timeout=TITLE_TIMEOUT, max_tokens=TITLE_MAX_TOKENS, guard="起标题")
-        # 对话太长时给之前几轮写短版：轻量模型、不开思考（见 graph.research.compaction）
-        self._summarizer = make_chat_model(provider, light, thinking=False, timeout=120, max_tokens=SUMMARY_MAX_TOKENS)
-        # 每天整理一次记忆：默认和主 agent 同一个模型、开思考，要判断一件事是长期的还是一次性的（见 config.DREAM_MODEL）
-        self._dreamer = make_chat_model(provider, config.DREAM_MODEL or model, thinking=config.DREAM_THINKING, effort=config.DREAM_EFFORT,
-                                        timeout=300)
+        self._titler = role_model(self.catalog, "title", timeout=TITLE_TIMEOUT, max_tokens=TITLE_MAX_TOKENS, guard="起标题")
+        self._suggester = role_model(self.catalog, "suggest", timeout=120)
+        self._prober = role_model(self.catalog, "probe", timeout=120)
+        self._summarizer = role_model(self.catalog, "summarize", timeout=120, max_tokens=SUMMARY_MAX_TOKENS)
+        self._dreamer = role_model(self.catalog, "dream", timeout=300)
+        # Auto 的两个先建好：没配 key 在这里就报错，不等到第一个对话
+        auto = self.catalog.plan(None, None, self.usable)
+        self.chat_model(auto.agent)
+        self.chat_model(auto.subagent, sub=True)
         url, key = config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY
         self.gateway = gateway or GatewayClient(url, key, scene=scene)  # 按编号取图、删图（图存在 image-service 里）
         self._tools = make_research_tools(self.clock)
@@ -334,11 +359,15 @@ class LiveResearchPlanner:
                              lambda: flyai_mcp.gateway_target(url, key, scene=scene),
                              lambda: docs_mcp.gateway_target(url, key, scene=scene), wrap=wrap_tool)
 
-    def agent_model(self) -> BaseChatModel:
-        return self._agent
+    def usable(self, ref: str) -> bool:
+        return usable(ref)
 
-    def subagent_model(self) -> BaseChatModel:
-        return self._sub
+    def chat_model(self, use: ModelUse, *, sub: bool = False) -> BaseChatModel:
+        """主 agent、子 agent 用的模型：同样的（模型、思考开关、强度）共用一个，用到时才建。以后后台改了选项，作废这里就能不重启生效。
+        sub 不影响建出来的模型（主 agent、子 agent 用同一个模型时熔断一起断开），只是离线的假实现用它分开主 agent 和子 agent。"""
+        if (m := self._models.get(use)) is None:
+            m = self._models[use] = make_chat_model(use.ref, thinking=use.thinking, effort=use.effort, callbacks=[ThinkingTimer()])
+        return m
 
     def tools(self) -> list:
         return self._mcp.tools(self._tools)
@@ -352,14 +381,14 @@ class LiveResearchPlanner:
         return str(out.content).strip()
 
     async def suggest(self, question: str, reply: str) -> list[str]:
-        res = await _structured(self._fast, Suggestions).ainvoke([("user", prompts.render("suggest.prompt", question=question, reply=reply))],
+        res = await _structured(self._suggester, Suggestions).ainvoke([("user", prompts.render("suggest.prompt", question=question, reply=reply))],
                                                           config={"run_name": "suggest"})
         return [q.strip() for q in res.questions if q.strip()]
 
     async def blocked(self, texts: Sequence[str]) -> list[bool]:
         """每段文字单独发一次（只有这段、不思考、只要 1 个 token），看内容审核拦不拦，同时最多 PROBE_WORKERS 个。服务不可用照常抛出。
         在 agent 调模型的那一步里调：片段标 nostream，不进这次运行的消息流（不然页面上会当成回答）。"""
-        probe = self._fast.bind(max_tokens=1)
+        probe = self._prober.bind(max_tokens=1)
         slots = asyncio.Semaphore(PROBE_WORKERS)
 
         async def one(text: str) -> bool:
@@ -1093,9 +1122,14 @@ def _hits(messages: list[BaseMessage]) -> list[dict]:
 
 class FakeResearchPlanner:
     def __init__(self, gateway: GatewayClient | None = None, *, page_repeat: int = 5, search: Any = None, read: Any = None,
-                 clock: Clock | None = None, wrap_tool: Callable[[BaseTool], BaseTool] | None = None) -> None:
-        """search、read 是搜索、读页的 MCP 地址，默认是进程内的假服务（测试换成出错的）；读到的正文是一句话重复 page_repeat 遍。"""
+                 clock: Clock | None = None, wrap_tool: Callable[[BaseTool], BaseTool] | None = None, catalog: Catalog | None = None,
+                 usable: Callable[[str], bool] | None = None) -> None:
+        """search、read 是搜索、读页的 MCP 地址，默认是进程内的假服务（测试换成出错的）；读到的正文是一句话重复 page_repeat 遍。
+        模型选项默认用真的那份（models.toml），都算能用（usable 可以换掉，测没配 key 的）。"""
         self.clock = clock or Clock()
+        self.catalog = catalog or model_catalog.load()
+        self._usable = usable or (lambda ref: True)
+        self.model_uses: list[tuple[ModelUse, bool]] = []  # 每次调模型用的（模型, 是不是子 agent），测试看选对了没有
         self.calls: list[tuple[str, Any]] = []
         self.fail_title = False
         self.dream_replies: list[str] = []  # 整理记忆时按顺序给这些回答；用完了照 dream 的说明
@@ -1107,11 +1141,13 @@ class FakeResearchPlanner:
         self._model = FakeToolModel()
         self._sub_model = FakeToolModel(prefix="fake-sub")
 
-    def agent_model(self) -> BaseChatModel:
-        return self._model
+    def usable(self, ref: str) -> bool:
+        return self._usable(ref)
 
-    def subagent_model(self) -> BaseChatModel:
-        return self._sub_model
+    def chat_model(self, use: ModelUse, *, sub: bool = False) -> BaseChatModel:
+        """不管选的是哪个，主 agent 都是 _model、子 agent 都是 _sub_model（测试会换掉它们）；用了哪个记在 model_uses。"""
+        self.model_uses.append((use, sub))
+        return self._sub_model if sub else self._model
 
     def tools(self) -> list:
         return self._mcp.tools(self._tools)

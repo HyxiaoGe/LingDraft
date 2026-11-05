@@ -1,7 +1,8 @@
 """对话 agent：一条线程就是一个 create_agent 的对话，检查点挂在 agent 上，没有外层的图。
 
 用户每说一句话：先写进消息（update_state，as_node=START），再接着跑（stream(None)），直到模型给出不带工具调用的回复。
-- TurnMiddleware：每轮开始、结束时记下这一轮；模型每次调用前换上系统提示词（日期按这一轮开始时北京时间的当天）。
+- TurnMiddleware：每轮开始、结束时记下这一轮；开始时定下这一轮用哪个模型（见 model_catalog.Catalog.plan，记进这一轮的记录）；
+  模型每次调用前换上系统提示词（日期按这一轮开始时北京时间的当天）。
   还没有标题时，按第一句话起标题，和调模型同时跑，不耽误回答（见 _TitleJob）。
   几点钟不放进发给模型的内容，要用时模型自己调 get_current_time（见 tools.research_tools）。
   调模型之前往自定义流里写一个阶段（phase），页面在还没有字和步骤的空档里据此说明在等什么。
@@ -12,6 +13,7 @@
 - InvalidToolCallRetryMiddleware：模型返回无法解析的工具调用时，让它带着解析错误重发，最多几次。
 - ModelCallCapMiddleware：一轮里调模型到了上限，最后一次不许调工具，用已经查到的回答（和子 agent 一样）。
 - InterruptedRetryMiddleware：模型生成到一半断了，自动再调一次，页面去掉断掉的半截（子 agent 也挂）。
+- ModelSelect：每次调模型换上这一轮定下的模型；之前几轮是别的模型答的，发过去时不带那几轮的思考（子 agent 也挂）。
 - ContentGuard：模型服务的内容审核拦下请求时，去掉没通过的搜索、读页结果接着跑；去不掉就停下这一轮，之后不再带进上下文。
 - CompactionMiddleware：对话太长时，发给模型的那份里把之前几轮压一压，state 不改（见 compaction）；压掉的原文用 recall 工具取回。
 工具里有 task：把一件查资料的事交给子 agent（见 subagent），一次回复里调几次就并行跑几个。
@@ -41,6 +43,7 @@ from app.graph.research import history, prompts
 from app.graph.research.memory import MemoryBook
 from app.graph.research.sources import DOCS_TOOL, SEPARATORS, SUBAGENT_TOOL, collect_sources, parse, search_hits
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Source, Turn
+from app.model_catalog import LEGACY_MODEL, LEGACY_USE, ModelUse
 from app.model_guard import ContentBlocked, Interrupted
 
 TITLE_CHARS = 30  # 照 Fusion：标题超过这么长截掉；起标题失败时用用户原话的这么长
@@ -127,11 +130,18 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         self.memory = memory
 
     def before_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
+        """开始一轮：记下开始时间和这一轮用的模型。用哪个模型只在这里定（以后查权限、余额也在这里），一轮里不换，出错重试接着用。
+        对话没定选项的（页面没传、2026-11-05 之前的对话）这时定成 Auto；定下的选项停了，改用 Auto，之后都是 Auto。"""
         msgs = state["messages"]
         human = msgs[history.last_human(msgs)]
         # 按 planner 的时钟（评测回放时挪到录像那时，见 app.clock）；结束时间这些模型看不到的照常用系统时钟
         started = self.planner.clock.now().isoformat(timespec="seconds")
-        return {"turns": list(state.get("turns", [])) + [Turn(id=human.id, started_at=started)]}
+        plan = self.planner.catalog.plan(state.get("option"), history.thinking_switch(human), self.planner.usable)
+        turn = Turn(id=human.id, started_at=started, option=plan.option, model=plan.agent, subagent_model=plan.subagent)
+        out: dict[str, Any] = {"turns": list(state.get("turns", [])) + [turn]}
+        if state.get("option") != plan.option:
+            out["option"] = plan.option
+        return out
 
     async def abefore_model(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         """用户插进这一轮的话：这次调模型之前放进对话（排在已有的工具结果后面），页面同时收到一条 guide 把它放进过程里。
@@ -483,6 +493,38 @@ class InterruptedRetryMiddleware(AgentMiddleware):
             return await handler(request)
 
 
+class ModelSelect(AgentMiddleware):
+    """每次调模型换上这一轮定下的模型：主 agent 的在这一轮的记录里（TurnMiddleware 定的），子 agent 的在它的 state 里（派它时给的）。
+    create_agent 在调模型时才绑工具，换了模型工具照样带上。挂在最里面（InterruptedRetryMiddleware 外面），看到的是压缩、拼好以后要发的那份。
+    之前几轮是别的模型答的（Auto 里换了模型、选的模型停了改用 Auto），发过去时不带那几轮的思考：各家的思考格式不一样，
+    豆包的加密原文换了模型也验不过；同一个模型的照常带上，前缀缓存接得上。"""
+
+    def __init__(self, planner, *, sub: bool = False) -> None:
+        super().__init__()
+        self.planner, self.sub = planner, sub
+
+    async def awrap_model_call(self, request: ModelRequest, handler):
+        if self.sub:
+            use = request.state.get("model") or self.planner.catalog.plan(None, None, self.planner.usable).subagent
+            return await handler(request.override(model=self.planner.chat_model(use, sub=True)))
+        turns = request.state.get("turns", [])
+        use = (turns[-1].model if turns else None) or LEGACY_USE  # 2026-11-05 之前开始、之后重试的那一轮
+        msgs = _others_without_thinking(request.messages, turns, use)
+        return await handler(request.override(model=self.planner.chat_model(use), messages=msgs))
+
+
+def _others_without_thinking(messages: list[BaseMessage], turns: list[Turn], use: ModelUse) -> list[BaseMessage]:
+    """别的模型答的那几轮去掉思考，这一轮和同一个模型答的原样。按每轮的记录认是哪个模型答的，没记的是 LEGACY_MODEL。"""
+    refs = {t.id: t.model.ref if t.model else LEGACY_MODEL for t in turns}
+    out: list[BaseMessage] = []
+    ref = None
+    for m in messages:
+        if history.is_request(m):
+            ref = refs.get(m.id, LEGACY_MODEL)
+        out.append(history.without_thinking(m) if ref not in (None, use.ref) else m)
+    return out
+
+
 def _stop(reason: str) -> AIMessage:
     return AIMessage(content="", response_metadata={history.BLOCKED: reason})
 
@@ -507,7 +549,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     # 排行程（present_itinerary）也一直在，查过航班火车才用得上
     tools = [*planner.tools(), make_task_tool(planner), make_recall_tool(), itinerary_tool()]
     return create_agent(
-        model=planner.agent_model(),
+        model=planner.chat_model(planner.catalog.plan(None, None, planner.usable).agent),  # 只是占位：每次调模型由 ModelSelect 换上这一轮的
         tools=tools,
         state_schema=ResearchState,
         context_schema=ChatContext,
@@ -524,6 +566,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
             ImageMiddleware(),  # 同上：画图每轮的上限、改图只认这段对话的图、卡片要的东西
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
             ModelCallCapMiddleware(),  # 在压缩里面：末尾加的说明不经过压缩
+            ModelSelect(planner),
             InterruptedRetryMiddleware(),  # 最里面：只重发调模型这一下
         ],
         checkpointer=checkpointer,

@@ -19,7 +19,7 @@ from app.graph.research.agent import build_agent
 from app.graph.research.memory import MemoryBook
 from app.research_llm import ResearchPlanner
 
-ALLOWED_MODELS = [("app.graph.research.state", n) for n in ("Turn", "Usage", "Compaction")]
+ALLOWED_MODELS = [*(("app.graph.research.state", n) for n in ("Turn", "Usage", "Compaction")), ("app.model_catalog", "ModelUse")]
 TUNNEL = "本机连 dev 的库要先开隧道：ssh -N -L 15432:127.0.0.1:5432 dev（见 .env.example）"
 NO_DATABASE = f"没配 LINGDRAFT_DATABASE_URL：对话存在 Postgres 里，没配库不能启动。{TUNNEL}"
 NO_POSTGRES = f"连不上 Postgres（LINGDRAFT_DATABASE_URL）。{TUNNEL}"

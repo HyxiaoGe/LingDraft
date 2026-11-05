@@ -77,6 +77,22 @@ ENCRYPTED = "encrypted_content"
 THINKING_KEYS = (REASONING, ENCRYPTED)
 
 
+def without_thinking(m: BaseMessage) -> BaseMessage:
+    """去掉模型消息里的思考（豆包的加密原文也去掉），别的消息原样返回。压缩时用，换了模型时发给新模型的之前几轮也这样（见 agent.ModelSelect）。"""
+    if isinstance(m, AIMessage) and any(k in m.additional_kwargs for k in THINKING_KEYS):
+        return m.model_copy(update={"additional_kwargs": {k: v for k, v in m.additional_kwargs.items() if k not in THINKING_KEYS}})
+    return m
+
+
+# 用户这句话开没开思考（输入框旁边的开关），记在用户消息的 additional_kwargs 里（不会发给模型）；没有的按选项的默认（见 model_catalog.Catalog.plan）
+THINK = "think"
+
+
+def thinking_switch(m: BaseMessage) -> bool | None:
+    v = m.additional_kwargs.get(THINK)
+    return v if isinstance(v, bool) else None
+
+
 def thinking_of(m: BaseMessage) -> str:
     """消息里的思考，按 LangChain 的标准 content blocks 读：DeepSeek、豆包放在 additional_kwargs 里，Claude 这类放在 content 里，读法一样。
     模型类要把提供方标成没有专门解析的名字（见 ChatArk）：标成 openai 的话，content_blocks 按 OpenAI 的格式读，不看 additional_kwargs。"""

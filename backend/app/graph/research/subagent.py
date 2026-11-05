@@ -47,6 +47,7 @@ from app.graph.research.agent import (
     ContentGuard,
     InterruptedRetryMiddleware,
     InvalidToolCallRetryMiddleware,
+    ModelSelect,
     ToolProgressMiddleware,
     _retrying,
     emit,
@@ -56,6 +57,7 @@ from app.graph.research.agent import (
 )
 from app.graph.research.sources import SUBAGENT_TOOL, collect_sources, known_ids
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES
+from app.model_catalog import ModelUse
 from app.model_guard import ModelUnavailable
 from app.tools.gateway import GatewayAuthError
 from app.tools.research_tools import TIME_TOOL
@@ -74,6 +76,7 @@ SYSTEM_PROMPT = ("subagent.identity", "agent.current_date", "subagent.process", 
 class SubagentState(AgentState):
     started_at: NotRequired[str]  # 主 agent 这一轮开始的时间：日期按它算，和主 agent 一样
     parent_sources: NotRequired[dict[str, str]]  # 派它时主 agent 那边已有的来源 {url_key: id}：同一个网址编出同一个 id
+    model: NotRequired[ModelUse]  # 用哪个模型：主 agent 这一轮开始时定的（Turn.subagent_model），见 agent.ModelSelect
 
 
 class SubagentPrompt(AgentMiddleware[SubagentState]):
@@ -121,7 +124,7 @@ def build_subagent(planner):
     from app.tools.web_mcp import WebToolsMiddleware  # 用到 prompts，和 agent.build_agent 一样放这里
 
     return create_agent(
-        model=planner.subagent_model(),
+        model=planner.chat_model(planner.catalog.plan(None, None, planner.usable).subagent, sub=True),  # 只是占位，见 ModelSelect
         tools=[t for t in planner.tools() if t.name in SUBAGENT_TOOLS],
         state_schema=SubagentState,
         context_schema=ChatContext,
@@ -132,6 +135,7 @@ def build_subagent(planner):
             WebToolsMiddleware(),  # 在 ToolProgressMiddleware 里面：过程记录看到的是带来源 id 的结果
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
             *(ToolBudget(t, n) for t, n in TOOL_BUDGET.items()),
+            ModelSelect(planner, sub=True),
             InterruptedRetryMiddleware(),  # 最里面：只重发调模型这一下
         ],
         name="subagent",
@@ -196,6 +200,8 @@ def make_task_tool(planner):
         emit({"type": "subagent", "id": runtime.tool_call_id, "ns": conf.get("checkpoint_ns", "")})
         inp = {"messages": [HumanMessage(prompt.strip())], "started_at": turn_start(msgs, runtime.state).isoformat(),
                "parent_sources": known_ids(msgs)}
+        if (turns := runtime.state.get("turns")) and turns[-1].subagent_model:
+            inp["model"] = turns[-1].subagent_model
         sub: list[BaseMessage] = []
         try:
             async with _slot(conf["thread_id"], runtime.tool_call_id):

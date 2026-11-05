@@ -7,12 +7,13 @@
 同一个库里还有一张 pending_messages：回答进行中用户又说的话，等着交给 agent（Agent Server 的双发策略里的 enqueue）。
 每个对话、每种方式一行：排队（queue）是这一轮结束后开新的一轮发；插话（guide）是插进正在跑的这一轮，主 agent 下一次调模型前放进对话。
 又说的接在排着的那句后面，合成一句。存进库里，服务重启也不丢。
+每行还记着用户发的时候开没开思考（输入框旁边的开关，没给是空）：合成一句时按后发的那句，发出去时带上（见 ResearchRunner._aended）。
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 from psycopg_pool import AsyncConnectionPool
 
@@ -23,6 +24,13 @@ STATUSES = (QUEUED, RUNNING, SUCCESS, STOPPED, ERROR, LOST)
 QUEUE = "queue"  # 排着的话的方式：这一轮结束后开新的一轮发（见 ResearchRunner.queue）
 GUIDE = "guide"  # 插进正在跑的这一轮：主 agent 下一次调模型之前放进对话（见 ResearchRunner.guide）
 JOIN = "\n"  # 又说的话接在排着的那句后面，中间换行
+class Pending(NamedTuple):
+    """取出来的排着的话。"""
+
+    text: str
+    thinking: bool | None = None
+
+
 FIELDS = ("id", "thread_id", "kind", "turn_id", "status", "created_at", "started_at", "ended_at", "error_type", "error", "traceback", "version")
 
 
@@ -40,9 +48,10 @@ class RunStore(Protocol):
     async def delete_thread(self, thread_id: str) -> None: ...  # 运行记录和排着的话一起删
 
     # 排着的话：{"text", "created_at", "updated_at"}
-    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False) -> dict: ...  # 接在排着的那句后面（front：放到前面），没有就新建
+    # 接在排着的那句后面（front：放到前面，是取出来又放回去的，比排着的那句早），没有就新建
+    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict: ...
     async def get_pending(self, thread_id: str, mode: str) -> dict | None: ...
-    async def take_pending(self, thread_id: str, mode: str) -> str | None: ...  # 取出来并删掉；两处同时取，只有一处拿得到
+    async def take_pending(self, thread_id: str, mode: str) -> Pending | None: ...  # 取出来并删掉；两处同时取，只有一处拿得到
 
 
 def _now() -> datetime:
@@ -96,22 +105,24 @@ class MemoryRunStore:
         self._rows = {k: r for k, r in self._rows.items() if r["thread_id"] != thread_id}
         self._pending = {k: r for k, r in self._pending.items() if k[0] != thread_id}
 
-    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False) -> dict:
+    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict:
         now = _iso(_now())
         row = self._pending.get((thread_id, mode))
         if row is None:
-            row = self._pending[(thread_id, mode)] = {"text": text, "created_at": now, "updated_at": now}
+            row = self._pending[(thread_id, mode)] = {"text": text, "thinking": thinking, "created_at": now, "updated_at": now}
+        elif front:
+            row.update(text=text + JOIN + row["text"], thinking=thinking if row["thinking"] is None else row["thinking"], updated_at=now)
         else:
-            row.update(text=text + JOIN + row["text"] if front else row["text"] + JOIN + text, updated_at=now)
+            row.update(text=row["text"] + JOIN + text, thinking=row["thinking"] if thinking is None else thinking, updated_at=now)
         return dict(row)
 
     async def get_pending(self, thread_id: str, mode: str) -> dict | None:
         row = self._pending.get((thread_id, mode))
         return dict(row) if row else None
 
-    async def take_pending(self, thread_id: str, mode: str) -> str | None:
+    async def take_pending(self, thread_id: str, mode: str) -> Pending | None:
         row = self._pending.pop((thread_id, mode), None)
-        return row["text"] if row else None
+        return Pending(row["text"], row["thinking"]) if row else None
 
 
 _POSTGRES_DDL = (
@@ -124,7 +135,8 @@ _POSTGRES_DDL = (
     "CREATE INDEX IF NOT EXISTS runs_status_idx ON runs (status, seq)",
     """CREATE TABLE IF NOT EXISTS pending_messages (
         thread_id text NOT NULL, mode text NOT NULL, text text NOT NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
-        PRIMARY KEY (thread_id, mode))""",
+        thinking boolean, PRIMARY KEY (thread_id, mode))""",
+    "ALTER TABLE pending_messages ADD COLUMN IF NOT EXISTS thinking boolean",  # 2026-11-05 加的，之前建好的表补上
 )
 
 
@@ -180,18 +192,25 @@ class PostgresRunStore:
         await self._exec("DELETE FROM runs WHERE thread_id = %s", (thread_id,))
         await self._exec("DELETE FROM pending_messages WHERE thread_id = %s", (thread_id,))
 
-    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False) -> dict:
-        merged = "excluded.text || CAST(%s AS TEXT) || pending_messages.text" if front else "pending_messages.text || CAST(%s AS TEXT) || excluded.text"
+    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict:
+        # 思考开关按后发的那句：放到前面的（取出来又放回去的）比排着的早
+        if front:
+            merged, think = "excluded.text || CAST(%s AS TEXT) || pending_messages.text", "COALESCE(pending_messages.thinking, excluded.thinking)"
+        else:
+            merged, think = "pending_messages.text || CAST(%s AS TEXT) || excluded.text", "COALESCE(excluded.thinking, pending_messages.thinking)"
         now = _now()
-        return (await self._rows("INSERT INTO pending_messages (thread_id, mode, text, created_at, updated_at) VALUES (%s, %s, %s, %s, %s) "
-                                 f"ON CONFLICT (thread_id, mode) DO UPDATE SET text = {merged}, updated_at = excluded.updated_at "
-                                 "RETURNING text, created_at, updated_at", (thread_id, mode, text, now, now, JOIN)))[0]
+        return (await self._rows("INSERT INTO pending_messages (thread_id, mode, text, thinking, created_at, updated_at) "
+                                 "VALUES (%s, %s, %s, %s, %s, %s) "
+                                 f"ON CONFLICT (thread_id, mode) DO UPDATE SET text = {merged}, thinking = {think}, "
+                                 "updated_at = excluded.updated_at RETURNING text, thinking, created_at, updated_at",
+                                 (thread_id, mode, text, thinking, now, now, JOIN)))[0]
 
     async def get_pending(self, thread_id: str, mode: str) -> dict | None:
-        rows = await self._rows("SELECT text, created_at, updated_at FROM pending_messages WHERE thread_id = %s AND mode = %s",
+        rows = await self._rows("SELECT text, thinking, created_at, updated_at FROM pending_messages WHERE thread_id = %s AND mode = %s",
                                 (thread_id, mode))
         return rows[0] if rows else None
 
-    async def take_pending(self, thread_id: str, mode: str) -> str | None:
-        rows = await self._exec("DELETE FROM pending_messages WHERE thread_id = %s AND mode = %s RETURNING text", (thread_id, mode))
-        return rows[0]["text"] if rows else None
+    async def take_pending(self, thread_id: str, mode: str) -> Pending | None:
+        rows = await self._exec("DELETE FROM pending_messages WHERE thread_id = %s AND mode = %s RETURNING text, thinking",
+                                (thread_id, mode))
+        return Pending(rows[0]["text"], rows[0]["thinking"]) if rows else None

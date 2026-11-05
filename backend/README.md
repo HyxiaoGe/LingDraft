@@ -29,12 +29,12 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 - 通用：`LINGDRAFT_FAKE=1` 用假模型；`LINGDRAFT_DATA_DIR`、`LINGDRAFT_OUTPUT_DIR` 改数据和产出目录；`LINGDRAFT_STATIC_DIR` 由后端出前端页面（镜像里配好了）；`LINGDRAFT_VERSION` 是部署的提交号（镜像构建时带进来）。
 - 海报：`ARK_API_KEY`、`ARK_BASE_URL`、`ARK_MODEL`、`ARK_MODEL_LITE`、`ARK_IMAGE_MODEL`；`LINGDRAFT_BACKGROUND=0` 关闭背景图生成。
 - 对话的存储：`LINGDRAFT_DATABASE_URL`，必须配。
-- 对话的模型：
-  - `DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`（默认 `deepseek-v4-pro`）、`DEEPSEEK_FLASH_MODEL`。
-  - 主 agent：`RESEARCH_PROVIDER`（deepseek / ark）、`RESEARCH_MODEL`、`RESEARCH_THINKING`、`RESEARCH_EFFORT`。
-    思考统一按 LangChain 的 content blocks 读（`history.thinking_of`），哪家模型都一样。DeepSeek 的思考原样传回（同一轮不传报 400）；豆包 2.x 给的是思考摘要（页面显示它）和加密的思考原文，两样都原样传回（不传加密原文推理效果会下降）。
-  - 子 agent：`SUBAGENT_MODEL`（默认 Flash，豆包时是 lite）、`SUBAGENT_THINKING`、`SUBAGENT_EFFORT`。`SUBAGENT_SEARCH_BUDGET`、`SUBAGENT_READ_BUDGET` 是一个子 agent 最多搜几次、读几页，默认都是 8。
-  - 整理记忆：`DREAM_MODEL`（默认和主 agent 一样）、`DREAM_THINKING`、`DREAM_EFFORT`。
+- 对话的模型：env 里只放各家的 key 和地址（`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`ARK_API_KEY`、`ARK_BASE_URL`），用哪些模型写在 `app/models.toml`：
+  - 选项（`[[options]]`）是输入框旁边能选的，Auto 在第一个。模型写成 LangChain `init_chat_model` 的“厂商:模型”，可以另配子 agent 用的模型、思考开关（`toggle` 用户能开关、`always`、`never`）和思考强度（不给用户看）。没配 key 的那家不出现在列表里。`status = "hidden"` 是新对话不再提供、老对话照常用；`"retired"` 是厂商也停了，老对话从下一轮起改用 Auto。
+  - 对话第一句话时定下选项，之后不能换（Auto 例外，由系统在里面换）。每一轮开始时定下这一轮主 agent、子 agent 用的模型，记进这一轮的记录（`model_catalog.Catalog.plan`，以后查权限、余额也在这里）；之前几轮是别的模型答的，发过去时不带那几轮的思考。
+  - 内部用途（`[roles]`）：起标题、推荐问题、单条送审、写短版、整理记忆、评测的裁判各用哪个，不跟着选项走。
+  - 接新的一家要在 `research_llm.PROVIDERS` 里加一个建模型的函数：思考怎么开关、思考怎么传回去各家不一样。思考统一按 LangChain 的 content blocks 读（`history.thinking_of`），哪家模型都一样。DeepSeek 的思考原样传回（同一轮不传报 400）；豆包 2.x 给的是思考摘要（页面显示它）和加密的思考原文，两样都原样传回（不传加密原文推理效果会下降）。
+  - `SUBAGENT_SEARCH_BUDGET`、`SUBAGENT_READ_BUDGET` 是一个子 agent 最多搜几次、读几页，默认都是 8。
 - 对话的其他：
   - `LINGDRAFT_RESEARCH_WORKERS`：同时跑几段对话，默认 4，多出来的排队。
   - `COMPACT_TRIGGER_TOKENS`、`COMPACT_TARGET_TOKENS`：上下文压缩的触发线和压到多少，默认 20 万、10 万。
@@ -47,13 +47,14 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 
 ## 对话接口
 
-前缀 `/api/research/threads`。请求体是 json `{"text"}`，说的话为空返回 400；线程不存在返回 404；正在跑、或者上一轮没跑完时，大多数操作返回 409（各接口另有的 409 写在后面）。
+前缀 `/api/research/threads`。请求体是 json `{"text", "thinking"}`（`thinking` 是思考开关，不给按模型的默认），说的话为空返回 400；线程不存在返回 404；正在跑、或者上一轮没跑完时，大多数操作返回 409（各接口另有的 409 写在后面）。
 
 - 说话：
-  - `POST`：开一段新对话。
+  - `GET /api/models`：新对话能选的模型（`{id, name, description, thinking}`，Auto 在第一个）。
+  - `POST`：开一段新对话，可以带 `model`（选项的 id，不给是 Auto），没有这个、停用了的返回 400。
   - `/{id}/messages`：接着说。
   - `/{id}/retry`：失败的线程接着跑；没失败的返回 409。
-  - `/{id}/regenerate`：最后一轮重新回答。
+  - `/{id}/regenerate`：最后一轮重新回答，可以带 `{"thinking"}`。
   - `/{id}/edit`：改了最后那句话，按新的话重新回答。
 
   这几个 POST 都返回 SSE。
@@ -91,7 +92,8 @@ SSE 事件：
 - `stopping`：点了停止，还没停下。
 - `suggesting`：答完了，推荐问题还在起，页面这时打开会接上事件流等着。
 - `title`、`running_since`。
-- `turns`：每一轮用户说的话，加上模型的思考、正文、工具步骤、插进来的话，按先后排；子任务那一步带着子 agent 的条目。`record` 是这一轮的用时、推荐问题、用量（主 agent 和子 agent 分开记）和结果（`ok` / `no_reply` / `blocked` / `stopped`）。
+- `model`：对话定下的模型（选项的 id）；还没定的老对话、定的那个停了的是 `auto`。
+- `turns`：每一轮用户说的话，加上模型的思考、正文、工具步骤、插进来的话，按先后排；子任务那一步带着子 agent 的条目。`record` 是这一轮的用时、推荐问题、用量（主 agent 和子 agent 分开记）、结果（`ok` / `no_reply` / `blocked` / `stopped`）和用的模型（`option`、`model`、`subagent_model`，模型里带着开没开思考）。
 - `sources`：来源。
 - `queued_message` / `guided_message`：排着的、等着插进这一轮的话。
 

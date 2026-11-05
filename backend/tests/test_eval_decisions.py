@@ -86,6 +86,21 @@ def test_fork_reruns_only_that_model_call_and_runs_no_tools(tmp_path):
     assert later["messages"][1].id != msgs[-1].id
 
 
+def test_fork_can_switch_the_model(tmp_path):
+    """--model：这一下换成别的模型（这一轮的记录换掉），不给就照录的那遍用的。"""
+    from app import model_catalog
+
+    snaps = _record(tmp_path, [{"say": "广州天气怎么样"}])
+    plan = model_catalog.load().plan("doubao-seed-2-1-pro", False, lambda ref: True)
+    runner = _runner()
+    runner.planner.model_uses.clear()
+    aio.run(afork(runner.graph, pick(snaps, _decision(call=1)), "t1", plan))
+    assert runner.planner.model_uses == [(plan.agent, False)]
+    runner.planner.model_uses.clear()
+    aio.run(afork(runner.graph, pick(snaps, _decision(call=1)), "t2"))
+    assert [u.ref for u, _ in runner.planner.model_uses] == ["deepseek:deepseek-v4-pro"]  # 录的那遍是 Auto
+
+
 def test_sample_checks_the_tool_decision(tmp_path):
     snaps = _record(tmp_path, [{"say": "广州天气怎么样"}])
     runner = _runner()

@@ -272,12 +272,14 @@ def test_title_timeouts_only_break_titles(clock, monkeypatch):
     from app import config
     from app.research_llm import LiveResearchPlanner, make_chat_model
 
-    for name, value in (("DEEPSEEK_API_KEY", "k"), ("AGENT_TOOLS_API_KEY", "k"), ("RESEARCH_PROVIDER", "deepseek")):
+    for name, value in (("DEEPSEEK_API_KEY", "k"), ("AGENT_TOOLS_API_KEY", "k")):
         monkeypatch.setattr(config, name, value)
     p = LiveResearchPlanner()
-    flash = config.DEEPSEEK_FLASH_MODEL
+    ref = p.catalog.roles["title"].model
+    assert ref == p.catalog.roles["summarize"].model  # 起标题和写短版用同一个模型（models.toml）
+    flash = ref.partition(":")[2]
     assert p._titler._guard_key() == f"{flash}·起标题" and p._summarizer._guard_key() == flash
-    other = make_chat_model("deepseek", flash, thinking=False)  # 子 agent 默认也是它
+    other = make_chat_model(ref, thinking=False)  # Auto 的子 agent 也是它
     calls = []
 
     async def service(self, messages, stop=None, run_manager=None, **kwargs):
