@@ -160,7 +160,7 @@ def test_models_endpoint_and_default_auto():
     """/api/models 给新对话能选的；没选模型的新对话是 Auto，每轮记下用的模型。"""
     http, rr = _client(FakeResearchPlanner(catalog=_with({"deepseek-flash": "hidden"})))
     models = http.get("/api/models").json()["models"]
-    assert [m["id"] for m in models] == [o.id for o in model_catalog.load().options if o.id != "deepseek-flash"]
+    assert [m["id"] for m in models] == [o.id for o in model_catalog.load().options if o.id != "deepseek-flash" and not o.status]
     assert models[0] == {"id": AUTO, "name": "Auto", "description": models[0]["description"], "thinking": "toggle", "model": PRO}
     st = _create(http, "直接答：你好")
     assert st["model"] == AUTO

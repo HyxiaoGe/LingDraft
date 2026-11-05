@@ -33,7 +33,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - 选项（`[[options]]`）是输入框旁边能选的，Auto 在第一个。模型写成 LangChain `init_chat_model` 的“厂商:模型”，可以另配子 agent 用的模型、思考开关（`toggle` 用户能开关、`always`、`never`）和思考强度（不给用户看）。没配 key 的那家不出现在列表里。`status = "hidden"` 是新对话不再提供、老对话照常用；`"retired"` 是厂商也停了，老对话从下一轮起改用 Auto。
   - 对话第一句话时定下选项，之后不能换（Auto 例外，由系统在里面换）。每一轮开始时定下这一轮主 agent、子 agent 用的模型，记进这一轮的记录（`model_catalog.Catalog.plan`，以后查权限、余额也在这里）；之前几轮是别的模型答的，发过去时不带那几轮的思考。
   - 内部用途（`[roles]`）：起标题、推荐问题、单条送审、写短版、整理记忆、评测的裁判各用哪个，不跟着选项走。
-  - 接新的一家：OpenAI 兼容接口的在 `research_llm.COMPAT` 里加一行（怎么开关思考，先实测），别的在 `research_llm.PROVIDERS` 里加一个建模型的函数：思考怎么开关、思考怎么传回去各家不一样。思考统一按 LangChain 的 content blocks 读（`history.thinking_of`），哪家模型都一样。DeepSeek 的思考原样传回（同一轮不传报 400）；豆包 2.x 给的是思考摘要（页面显示它）和加密的思考原文，两样都原样传回（不传加密原文推理效果会下降）。别的几家思考都在 `reasoning_content` 里（MiniMax 要带 `reasoning_split`，不然 M3 的思考夹在正文的 `<think>` 里），也原样传回；GLM-5.3、MiniMax M3.1 Flash、Grok 关不掉思考（选项写 `always`），Grok 的思考多半不返回。
+  - 接新的一家：OpenAI 兼容接口的在 `research_llm.COMPAT` 里加一行（怎么开关思考，先实测），别的在 `research_llm.PROVIDERS` 里加一个建模型的函数：思考怎么开关、思考怎么传回去各家不一样。思考统一按 LangChain 的 content blocks 读（`history.thinking_of`），哪家模型都一样。DeepSeek 的思考原样传回（同一轮不传报 400）；豆包 2.x 给的是思考摘要（页面显示它）和加密的思考原文，两样都原样传回（不传加密原文推理效果会下降）。别的几家思考都在 `reasoning_content` 里（MiniMax 要带 `reasoning_split`，不然 M3 的思考夹在正文的 `<think>` 里），也原样传回；GLM-5.3、MiniMax M3.1 Flash、Grok 关不掉思考（选项写 `always`），Grok 的思考多半不返回（所以它的选项先 `hidden`，页面上不出现）。
   - `SUBAGENT_SEARCH_BUDGET`、`SUBAGENT_READ_BUDGET` 是一个子 agent 最多搜几次、读几页，默认都是 8。
 - 对话的其他：
   - `LINGDRAFT_RESEARCH_WORKERS`：同时跑几段对话，默认 4，多出来的排队。
