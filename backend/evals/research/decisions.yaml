@@ -1,0 +1,32 @@
+# 决策点回放：从用例录的那遍里挑一次调模型，只重跑这一下（工具不执行），看模型这一下做了什么。字段见 app/evals/decisions.py，用法见 ../README.md。
+# 状态取自 research --record 存下的检查点（data/evals/tapes/<用例>.snapshots.json），重录以后决策点前面的对话会跟着变。
+
+# ---- 查不查：第一次调模型就定了 ----
+
+- id: weather-month-call1
+  case: lookup-weather-month
+  source: 11-05 天气说明改成明显超出预报范围的不调（agent-tools #57）：下个月 20 号这种不该调，直接说还查不到
+  expect: {looked_up: false, replied: true}
+
+- id: weather-far-call1
+  case: lookup-weather-far
+  source: 同上的另一边：下下周三在 15 天里、离边上近，照样要调
+  expect: {looked_up: true}
+
+# ---- 写正文：材料固定以后，正文里带角标的说法有没有依据 ----
+# 11-05 噪声 3 遍里 sources_supported 时过时不过（8 个用例）；这里材料每次一样，只剩模型写正文这一下的差别
+
+- id: index-reply
+  case: lookup-index
+  call: last
+  source: 11-05 噪声：sources_supported 1/2（“当日两市成交额约2.04万亿元”判没依据）
+
+- id: restriction-reply
+  case: lookup-restriction
+  call: last
+  source: 11-05 噪声：sources_supported 1/2（“明天北京限行尾号 4 和 9”判没依据）
+
+- id: price-reply
+  case: lookup-price
+  call: last
+  source: 11-05 噪声：sources_supported 1/2（“部分早期报道把 512GB 写成了 7999 元”判没依据）

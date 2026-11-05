@@ -255,6 +255,7 @@ class ResearchRunner(BaseRunner):
         # 传了检查点（测试、评测用内存的）：长期记忆、运行记录没传的也记在内存里，不碰配置的库
         self.memory = MemoryBook(store or InMemoryStore())
         self._checkpointer = checkpointer
+        self.durability = DURABILITY  # 评测录像时换成 "sync"：每一步都存，决策点回放从中间接着跑（见 app.evals.decisions）
         self._tools_retry = None  # 起服务时没连上 MCP 的工具：后台接着试的那个任务（见 _keep_connecting）
         if not aio.run(self._connect_tools()):
             self._tools_retry = asyncio.run_coroutine_threadsafe(self._keep_connecting(), aio.loop())
@@ -544,7 +545,7 @@ class ResearchRunner(BaseRunner):
         做完的 step 带着工具结果（result，不发给页面），记进 done：点停止时它那一步可能还没提交，收尾时补上（见 _write_stop）。"""
         ctx = ChatContext(take_guide=lambda: self._take_guide(thread_id), title=self._titles.get(thread_id))
         async for ns, mode, chunk in self.graph.astream(inp, self._cfg(thread_id), context=ctx, stream_mode=["messages", "updates", "custom"],
-                                                        subgraphs=True, durability=DURABILITY):
+                                                        subgraphs=True, durability=self.durability):
             task = tasks.get(ns[0]) if ns else None
             if ns and task is None:  # 不是子 agent 的嵌套图（现在没有）
                 continue

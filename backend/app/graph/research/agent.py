@@ -49,6 +49,7 @@ MAX_MODEL_CALLS = 20  # 主 agent 一轮最多调几次模型（2026-11-03 Sean 
 RESTART_WAIT_S = 2  # 模型生成到一半断了，等这么久再调一次（DeepSeek 资源不足时马上再发多半还是不够）
 log = logging.getLogger(__name__)
 TURN_END = "TurnMiddleware.after_agent"  # 一轮的最后一个节点：在它名下写状态，线程就停在这一轮结束的地方
+LOOP_ENTRY = "TurnMiddleware.before_model"  # 每次调模型从这个节点开始（工具做完也回到这里）：停在它前面的检查点就是“要调模型了”
 CHINA_TZ = timezone(timedelta(hours=8))
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 # 系统提示词按这个顺序拼（见 prompts.toml 的 [agent]）
