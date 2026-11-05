@@ -23,6 +23,12 @@ export function elapsed(since, now) {
 // 今天的显示时刻，更早的显示日期
 // 时间的写法，左栏和对话里一样：今天的只写钟点“14:32”，别的天写日期“10月30日”，不是今年的带上年份。
 // 一句话、一条回答下面是 text：日期后面再跟钟点；full 精确到秒，放在悬停提示里
+// 每轮记下的模型（"厂商:模型"）显示成什么：能选的模型里用它的那个的名字（Auto 在第一个，跳过它，Auto 的那轮显示它实际用的）；
+// 列表里没有的（不再提供的）显示模型名本身
+export function modelName(models, ref) {
+  return models?.slice(1).find((m) => m.model === ref)?.name || ref.split(":").pop();
+}
+
 export function stamp(iso, now = Date.now()) {
   if (!iso) return null;
   const d = new Date(iso);

@@ -50,7 +50,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 前缀 `/api/research/threads`。请求体是 json `{"text", "thinking"}`（`thinking` 是思考开关，不给按模型的默认），说的话为空返回 400；线程不存在返回 404；正在跑、或者上一轮没跑完时，大多数操作返回 409（各接口另有的 409 写在后面）。
 
 - 说话：
-  - `GET /api/models`：新对话能选的模型（`{id, name, description, thinking}`，Auto 在第一个）。
+  - `GET /api/models`：新对话能选的模型（`{id, name, description, thinking, model}`，Auto 在第一个；`model` 是主 agent 用的“厂商:模型”，页面按它给每轮找名字）。
   - `POST`：开一段新对话，可以带 `model`（选项的 id，不给是 Auto），没有这个、停用了的返回 400。
   - `/{id}/messages`：接着说。
   - `/{id}/retry`：失败的线程接着跑；没失败的返回 409。

@@ -354,8 +354,9 @@ class ResearchRunner(BaseRunner):
         aio.run(self._aregenerate_input(thread_id, text, thinking))
 
     def models(self) -> list[dict]:
-        """新对话能选的模型（按 models.toml 的顺序，Auto 在第一个）。thinking：toggle 是页面上显示思考开关，always、never 不显示。"""
-        return [{"id": o.id, "name": o.name, "description": o.description, "thinking": o.thinking}
+        """新对话能选的模型（按 models.toml 的顺序，Auto 在第一个）。thinking：toggle 是页面上显示思考开关，always、never 不显示。
+        model 是这个选项主 agent 用的模型（"厂商:模型"），页面按它给每轮记下的模型找名字。"""
+        return [{"id": o.id, "name": o.name, "description": o.description, "thinking": o.thinking, "model": o.model}
                 for o in self.planner.catalog.offered(self.planner.usable)]
 
     def rename(self, thread_id: str, title: str) -> None:

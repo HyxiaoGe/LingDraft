@@ -4,7 +4,7 @@
 // 回答时又说的话排在服务器上，这一轮答完或停下就接着发成新的一轮：这一轮的事件流结束时线程又在跑了，页面接着读下一次执行的。
 // 这一轮出错时排着的话不发，取回输入框。排着的话也能插进这一轮：放进对话时事件流里来一条 guide，页面把它挪进过程里。
 import { useEffect, useRef, useState } from "react";
-import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getResearchState, guideResearch, listResearchThreads, queueResearch,
+import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getResearchState, guideResearch, listModels, listResearchThreads, queueResearch,
   regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
 import { IconDownload, IconEdit, IconMore, IconPlus, IconTrash } from "./icons.jsx";
 import { MemoryPage } from "./memory.jsx";
@@ -49,6 +49,12 @@ export default function Workspace() {
   const [busy, setBusyState] = useState(false);
   const [error, setError] = useState(null);
   const [putBack, setPutBack] = useState(null); // 要放回输入框的话：{thread, text}，每次是个新对象
+  // 能选的模型（/api/models，Auto 在第一个）：没取到是 []，不显示选择，新对话按 Auto
+  const [models, setModels] = useState(null);
+  // 新对话选的模型：null 是 Auto；开新对话时还是上次选的，刷新页面回到 Auto。开始的对话以它定下的为准（st.model）
+  const [pick, setPick] = useState(null);
+  // 深度思考开关：每句话发的时候带上（选的模型能开关才带），换对话、开新对话都留着，刷新回到开
+  const [thinking, setThinking] = useState(true);
   const gen = useRef(0); // 每切一次线程加一：旧线程的连接和回调发现对不上，就不再改页面
   const tidRef = useRef(tid);
   const ctl = useRef(new AbortController()); // 当前线程的连接；切走、或开始新的一次执行时断开（服务器上的执行照常跑）
@@ -94,6 +100,13 @@ export default function Workspace() {
   useEffect(() => {
     document.title = memory ? "灵稿 · 记忆" : title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : "灵稿 · 新对话";
   }, [title, tid, memory]);
+
+  useEffect(() => { listModels().then(setModels).catch(() => setModels([])); }, []);
+  const picked = models?.some((m) => m.id === pick) ? pick : models?.[0]?.id; // 选的不在列表里了（刚下架）也按 Auto
+  // 输入框旁边显示的模型：新对话是选的；开始的对话是它定下的（状态还没取回来时，刚发出去的按选的，打开的老对话先不显示）
+  const current = !tid ? picked : st?.thread_id === tid && st.model ? st.model : live ? picked : null;
+  // 这句话带不带思考开关：按输入框旁边显示的那个模型（能开关才带，不带的按模型的默认）
+  const thinkOpts = () => (models?.find((m) => m.id === current)?.thinking === "toggle" ? { thinking } : {});
 
   // ---- 切换线程 ----
 
@@ -306,6 +319,15 @@ export default function Workspace() {
     } catch (e) {
       if (e.aborted || g !== gen.current) return;
       if (r.done) return setSuggesting(false); // 等推荐问题时断了：不再接，下次打开线程能看到
+      // 新对话被拒（比如选的模型刚下架）：话放回输入框，重新取能选的模型
+      if (!tidRef.current && e.status === 400 && said) {
+        setPutBack({ thread: "new", text: said });
+        setError(`这句话没发出去，已经放回输入框（${e.message || e}）`);
+        listModels().then(setModels).catch(() => {});
+        setBusy(false);
+        setLive(null);
+        return;
+      }
       // 话被拒（400）、正在跑或上一轮没跑完（409）、连接断了（没有状态码）——都回服务器接上当前进度
       const recoverable = tidRef.current && (!e.status || e.status === 400 || e.status === 409);
       // 被拒的话（说的、改的）服务器没存下来：不再显示在对话里，放回输入框，和排队没排上一样
@@ -323,21 +345,25 @@ export default function Workspace() {
   }
 
   const act = {
-    start: (text) => run((cb, sig) => createResearchThread(text, cb, sig), text),
+    // 新对话带上选的模型（没取到列表就不带，按 Auto）；之后每句话带上深度思考开关（对话定下的模型能开关才带）
+    start: (text) => run((cb, sig) => createResearchThread(text, { model: picked, ...thinkOpts() }, cb, sig), text),
     say: (text) => {
       const id = tidRef.current;
-      return run((cb, sig) => sayResearch(id, text, cb, sig), text);
+      const opts = thinkOpts();
+      return run((cb, sig) => sayResearch(id, text, opts, cb, sig), text);
     },
     retry: () => run((cb, sig) => retryResearchThread(tidRef.current, cb, sig), null),
     // 最后一轮的旧回答先藏起来，新回答在同一轮里接着出现
     regenerate: () => {
       const hidden = new Set((st?.turns?.at(-1)?.items || []).map(itemKey));
-      return run((cb, sig) => regenerateResearchThread(tidRef.current, cb, sig), null, { hidden });
+      const opts = thinkOpts();
+      return run((cb, sig) => regenerateResearchThread(tidRef.current, opts, cb, sig), null, { hidden });
     },
     // 改最后一句：同样藏起旧回答，改过的话先显示出来
     edit: (text) => {
       const hidden = new Set((st?.turns?.at(-1)?.items || []).map(itemKey));
-      return run((cb, sig) => editResearchThread(tidRef.current, text, cb, sig), null, { hidden, edit: text });
+      const opts = thinkOpts();
+      return run((cb, sig) => editResearchThread(tidRef.current, text, opts, cb, sig), null, { hidden, edit: text });
     },
     // 正在回答时又说的话：排在服务器上，这一轮答完就发（又说的接在后面，合成一句）。
     // 话到的时候这一轮刚好答完了，服务器直接发了出去：接上那次执行（流还连着的那次执行可能已经以空闲收尾，不能指望它）
@@ -345,7 +371,7 @@ export default function Workspace() {
       const id = tidRef.current;
       const g = gen.current;
       try {
-        const q = await queueResearch(id, text);
+        const q = await queueResearch(id, text, thinkOpts());
         if (g !== gen.current) return;
         if (q) setSt((s) => (s ? { ...s, queued_message: q } : s));
         else run((cb, sig) => followResearchThread(id, null, cb, sig), null);
@@ -425,7 +451,8 @@ export default function Workspace() {
       <Sidebar threads={threads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={select} manage={manage}
         memory={memory} onMemory={openMemory} />
       {memory ? <MemoryPage />
-        : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} />}
+        : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack}
+          models={models} picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking }} />}
     </div>
   );
 }

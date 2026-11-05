@@ -131,6 +131,9 @@
 .ws-ai-foot .ws-btn { color: var(--muted); }
 .ws-ai-foot .ws-btn:hover { color: var(--ink); }
 .ws-ai-foot.quiet { opacity: 0; transition: opacity .15s; } /* 之前的回答：悬停才出现 */
+.ws-ai-model { display: inline-flex; align-items: center; height: 28px; padding-right: 4px; font-size: 12px; color: var(--faint); white-space: nowrap; }
+.ws-time + .ws-ai-model { margin-left: -8px; }
+.ws-time + .ws-ai-model::before { content: "·"; margin-right: 6px; }
 .ws-ai:hover .ws-ai-foot.quiet, .ws-ai-foot.quiet:focus-within { opacity: 1; }
 
 .ws-tool { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; font-size: 12.5px; color: var(--ink2); animation: ws-in .25s var(--ease); }
@@ -411,8 +414,26 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-input textarea { width: 100%; border: 0; outline: none; resize: none; font: inherit; background: transparent; line-height: 1.6; max-height: 160px; padding: 0; color: var(--ink); }
 .ws-input textarea::placeholder { color: var(--faint); }
 .ws-input-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
-.ws-input-bar .ws-send { margin-left: auto; }
 .ws-input-hint { font-size: 12px; color: var(--faint); }
+.ws-input-tools { margin-left: auto; display: flex; align-items: center; }
+/* 发送左边：深度思考开关、选模型（菜单往上开） */
+.ws-model { position: relative; display: flex; align-items: center; gap: 4px; }
+.ws-think-toggle { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border: 1px solid var(--line2); border-radius: 999px; background: var(--paper);
+  color: var(--muted); font-size: 12.5px; white-space: nowrap; transition: background .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease); }
+.ws-think-toggle:hover { background: var(--hover); color: var(--ink2); }
+.ws-think-toggle.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+.ws-model-btn { display: inline-flex; align-items: center; gap: 3px; height: 28px; padding: 0 6px 0 9px; border: 0; border-radius: var(--r-sm); background: none;
+  color: var(--ink2); font-size: 13px; white-space: nowrap; transition: background .15s var(--ease); }
+.ws-model-btn:hover, .ws-model-btn[aria-expanded="true"] { background: var(--hover); }
+.ws-model-btn svg { color: var(--muted); transform: rotate(180deg); transition: transform .2s var(--ease); }
+.ws-model-btn[aria-expanded="true"] svg { transform: none; }
+.ws-model-menu { position: absolute; bottom: calc(100% + 8px); right: 0; width: 290px; }
+.ws-model-menu > button { height: auto; min-height: 32px; padding: 7px 10px; justify-content: space-between; }
+.ws-model-menu > button svg { flex: none; color: var(--accent); }
+.ws-model-item { display: flex; flex-direction: column; min-width: 0; }
+.ws-model-item b { font-weight: 500; }
+.ws-model-item small { font-size: 12px; line-height: 1.45; color: var(--muted); }
+.ws-model-menu > button:disabled small { color: var(--faint); }
 
 
 /* ---------- 来源：正文里的角标、来源卡、回答下面的来源 ---------- */
