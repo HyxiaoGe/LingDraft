@@ -371,7 +371,10 @@ def report(url: str, days: int) -> str:
     from psycopg.rows import dict_row
 
     with psycopg.connect(url, row_factory=dict_row, connect_timeout=10) as conn:
-        rows = conn.execute(_REPORT, (days,)).fetchall()
+        try:
+            rows = conn.execute(_REPORT, (days,)).fetchall()
+        except psycopg.errors.UndefinedTable:  # 表在第一次记账时才建
+            return "还没记过账"
     lines = [f"{'日期':<10}  {'厂商':<10}  {'模型':<32} {'算了钱':>5} {'不知道':>5} {'输入':>11} {'命中缓存':>11} {'输出':>10} {'元':>9}"]
     for day in sorted({r["day"] for r in rows}):
         for provider in sorted({r["provider"] for r in rows if r["day"] == day}):
