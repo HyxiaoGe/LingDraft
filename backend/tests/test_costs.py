@@ -223,6 +223,7 @@ def test_compat_model_charges_from_the_vendor_usage(rows, monkeypatch):
         return httpx.Response(200, content=body.encode(), headers={"content-type": "text/event-stream"})
 
     monkeypatch.setattr(config, "ARK_API_KEY", "k")
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "k")  # CI 没配 key
     llm = make_chat_model("ark:doubao-seed-2-1-pro-260915", thinking=True)
     transport, base = httpx.MockTransport(reply), "http://compat.test/v1"
     llm.root_client = openai.OpenAI(api_key="k", base_url=base, http_client=httpx.Client(transport=transport))
