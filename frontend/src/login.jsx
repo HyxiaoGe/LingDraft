@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { EmailLogin, checkSession, completeCallback, emailLoginAvailable, init, signIn, signOut, snapshot, subscribeAuth } from "./auth.js";
 import { IconBook, IconClose, IconLock, Spinner } from "./icons.jsx";
-import { creditsLeft, creditsNum, creditsText } from "./research.js";
+import { creditsLeft } from "./research.js";
 
 // 当前身份：{ready, login, me}（见 auth.snapshot）。回到这个标签页时和 auth 服务对一下账（别处退出了就跟着退）
 export function useAuth() {
@@ -92,14 +92,14 @@ export function CreditsFoot({ credits, guest, onLogin, onOpen }) {
   if (!credits.unlimited && !left) return null;
   const frac = left ? Math.max(0, Math.min(1, left.remaining / left.limit)) : 1;
   const cls = "ws-credits-btn" + (left?.exhausted ? " out" : left?.warn ? " warn" : "");
-  const title = credits.unlimited ? "额度不限" : `${left.span}还剩 ${creditsNum(left.remaining)} / ${left.limit} credits，${left.resetText}`;
+  const title = credits.unlimited ? "额度不限" : `${left.span}还剩 ${Math.floor(left.remaining)} / ${left.limit} credits，${left.resetText}`;
   const rect = open ? btn.current?.getBoundingClientRect() : null;
   return (
     <>
       <button ref={btn} className={cls} title={title} aria-label={"额度：" + title} aria-haspopup="dialog" aria-expanded={open}
         onClick={() => { if (!open) onOpen?.(); setOpen(!open); }}>
         <Ring frac={frac} />
-        <span>{credits.unlimited ? "不限" : <>{guest && <small>试用</small>}{creditsNum(left.remaining)}</>}</span>
+        <span>{credits.unlimited ? "不限" : <>{guest && <small>试用</small>}{Math.floor(left.remaining)}</>}</span>
       </button>
       {open && rect && (
         <div ref={box} className="ws-menu ws-usage" role="dialog" aria-label="额度" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: 232 }}>
@@ -139,7 +139,7 @@ function UsagePanel({ credits, guest, onLogin }) {
             <span>{w.kind === "week" ? "每周限额" : "每日限额"}</span><b>剩余 {pct(w)}%</b>
           </div>
         ))}
-        <div className="ws-usage-row"><span>余额</span><b>{creditsText(left.remaining)}</b></div>
+        <div className="ws-usage-row"><span>余额</span><b>{Math.floor(left.remaining)} credits</b></div>
       </div>
       <div className="ws-menu-note">{ws.some((w) => w.kind === "week") ? "每天 0 点、每周一 0 点重置" : "每天 0 点重置"}（北京时间）</div>
       {guest && onLogin && <button onClick={onLogin}><IconLock size={14} />登录后每天 10000 credits</button>}
