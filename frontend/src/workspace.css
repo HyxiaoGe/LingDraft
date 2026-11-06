@@ -90,11 +90,20 @@
 .ws-group { display: flex; flex-direction: column; gap: 1px; }
 .ws-group-name { font-size: 12px; font-weight: 500; color: var(--muted); padding: 0 8px 4px; display: flex; gap: 6px; }
 .ws-group-name span { color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
-.ws-task { position: relative; border-radius: var(--r-sm); transition: background .12s; }
-.ws-task-link { display: flex; gap: 9px; align-items: flex-start; padding: 7px 8px; color: var(--ink) !important; text-decoration: none !important; }
-.ws-task:hover, .ws-task.menu { background: var(--hover); }
-.ws-task.sel { background: var(--sel); }
+/* 左栏的一行（第 13 条）：圆点和小字标状态，右边是时间，再右边“⋯”自己占一格，不盖时间。
+   和过程里的子任务卡同名（.ws-task，在后面），这里限定在 .ws-side 下把卡片的边框、底色、出现动画去掉：以前左栏每行被那条规则画成了白底带框的卡片 */
+.ws-side .ws-task { position: relative; display: flex; align-items: flex-start; border: 0; margin: 0; background: none; border-radius: var(--r-sm); transition: background .12s; animation: none; }
+/* 一行里排成两层：上面圆点、标题、时间，下面的小字（进行中用了多久、重名的日期）从标题下面一直铺到时间下面，不挤在标题那一栏里折行 */
+.ws-task-link { flex: 1; min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; padding: 7px 4px 7px 8px;
+  color: var(--ink) !important; text-decoration: none !important; }
+.ws-task-link .body { display: contents; }
+.ws-task-link .title { grid-column: 2; grid-row: 1; }
+.ws-task-link .sub { grid-column: 2 / 4; grid-row: 2; }
+.ws-task-link .time { grid-column: 3; grid-row: 1; margin-left: 8px; }
+.ws-side .ws-task:hover, .ws-side .ws-task.menu { background: var(--hover); }
+.ws-side .ws-task.sel { background: var(--sel); }
 .ws-task .dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 8px; flex: none; background: var(--faint); }
+.ws-task-link .dot { grid-column: 1; grid-row: 1; margin-right: 9px; }
 .ws-task .dot.active { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: ws-pulse 1.6s ease-in-out infinite; }
 .ws-task .dot.failed { background: var(--danger); }
 .ws-task .dot.idle { display: none; } /* 只有进行中、没跑完才标点 */
@@ -103,14 +112,35 @@
 .ws-task .title { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-task.sel .title { font-weight: 500; }
 .ws-task .sub { display: block; font-size: 12px; color: var(--muted); }
-.ws-task .time { font-size: 11.5px; color: var(--faint); margin-top: 2px; flex: none; font-variant-numeric: tabular-nums; }
-/* “⋯”：悬停、键盘聚焦或菜单开着时出现，盖在时间上 */
-.ws-task .more { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; border: 0; border-radius: var(--r-sm); background: var(--hover); color: var(--muted);
+.ws-task .title mark { background: var(--accent-soft); color: var(--accent); }
+.ws-task .time { font-size: 12px; color: var(--faint); margin-top: 1px; flex: none; font-variant-numeric: tabular-nums; }
+/* “⋯”：悬停、键盘聚焦、选中、菜单开着时出现；没有悬停的设备（触屏）一直在 */
+.ws-task .more { flex: none; width: 26px; height: 26px; margin: 4px 4px 0 0; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted);
   display: inline-flex; align-items: center; justify-content: center; opacity: 0; }
 .ws-task .more:hover { color: var(--ink); background: var(--line); }
-.ws-task:hover .more, .ws-task.menu .more, .ws-task .more:focus-visible { opacity: 1; }
-.ws-task:hover .time, .ws-task.menu .time, .ws-task:focus-within .time { visibility: hidden; }
-.ws-task.renaming { padding: 3px 4px; }
+.ws-task:hover .more, .ws-task:focus-within .more, .ws-task.sel .more, .ws-task.menu .more { opacity: 1; }
+@media (hover: none) { .ws-task .more { opacity: 1; } }
+.ws-side .ws-task.renaming { display: block; padding: 4px; }
+/* 搜索（第 13 条、M1）：只搜标题 */
+/* 边框用内阴影画：输入框能撑满整个框的高度（手机上 44px 的热区就是输入框本身）；点框里的图标、空白处也把光标放进去 */
+.ws-search { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 4px 0 12px; border-radius: var(--r); background: var(--paper);
+  box-shadow: inset 0 0 0 1px var(--line2); color: var(--faint); margin-top: -8px; cursor: text; }
+.ws-search:focus-within { box-shadow: inset 0 0 0 1px var(--accent-line), 0 0 0 3px var(--accent-soft); }
+.ws-search svg { flex: none; }
+.ws-search input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: none; padding: 0; font: inherit; font-size: 13px; color: var(--ink); -webkit-appearance: none; appearance: none; border-radius: 0; }
+.ws-search input::placeholder { color: var(--faint); }
+.ws-search input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+.ws-kbd { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 4px; margin-right: 4px; border: 1px solid var(--line2); border-radius: var(--r-sm);
+  font: 12px/1 var(--sans); color: var(--faint); }
+.ws-search-clear { flex: none; width: 26px; height: 26px; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
+.ws-search-clear:hover { background: var(--hover); color: var(--ink); }
+/* 改标题的框：右边写着几个字、最多几个 */
+.ws-title-input { position: relative; display: block; min-width: 0; }
+.ws-title-input .ws-rename { padding-right: 48px; }
+.ws-count { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ws-count.full { color: var(--warn); }
+.ws-title-input .ws-count { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.ws-title-input.head .ws-rename { height: 34px; font-size: 16px; font-weight: 600; }
 .ws-rename { width: 100%; height: 30px; border: 1px solid var(--accent-line); border-radius: var(--r-sm); padding: 0 8px; font: inherit; font-size: 13px; color: var(--ink);
   background: var(--paper); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
 .ws-menu { position: fixed; z-index: 60; background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r); box-shadow: var(--lift); padding: 4px;
@@ -125,7 +155,24 @@
 .ws-menu > button.danger:not(:disabled), .ws-menu > button.danger:not(:disabled) svg { color: var(--danger); }
 .ws-menu-note { font-size: 12px; color: var(--muted); padding: 6px 10px; line-height: 1.5; }
 .ws-menu-actions { display: flex; justify-content: flex-end; gap: 6px; padding: 2px 6px 6px; }
-.ws-side-empty { color: var(--muted); font-size: 13px; padding: 8px; }
+.ws-side-empty { color: var(--muted); font-size: 13px; padding: 8px; line-height: 1.6; }
+/* 手机上的“⋯”菜单：底部弹层里一行一项 */
+.ws-sheet-act { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 0 12px; border: 0; border-radius: var(--r-sm); background: none;
+  font: inherit; font-size: 16px; color: var(--ink); text-align: left; }
+.ws-sheet-act svg { flex: none; color: var(--muted); }
+.ws-sheet-act:active:not(:disabled) { background: var(--hover); }
+.ws-sheet-act:disabled, .ws-sheet-act:disabled svg { color: var(--faint); }
+.ws-sheet-act.danger:not(:disabled), .ws-sheet-act.danger:not(:disabled) svg { color: var(--danger); }
+.ws-act-sheet .ws-sheet-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 删了能撤销的提示（第 44 条）：桌面在左下角，手机在输入框上面（位置见 undo.jsx） */
+.ws-toast-host { position: fixed; z-index: 80; left: 16px; bottom: 16px; max-width: calc(100vw - 32px); pointer-events: none; }
+.ws-toast { pointer-events: auto; display: flex; align-items: center; gap: 12px; max-width: 400px; min-height: 44px; padding: 4px 4px 4px 16px; border-radius: var(--r);
+  background: var(--ink); color: var(--paper); box-shadow: var(--lift); font-size: 13px; animation: ws-in .2s var(--ease); }
+.ws-toast .text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-toast-act { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 36px; padding: 0 12px; border: 0; border-radius: var(--r-sm); background: none;
+  color: var(--paper); font: inherit; font-weight: 600; }
+.ws-toast-act:hover { background: var(--ink2); }
+.ws-toast-act:focus-visible { outline: 2px solid var(--paper); outline-offset: -4px; }
 .ws-foot { display: flex; align-items: center; gap: 12px; padding: 8px 8px 2px; border-top: 1px solid var(--line); }
 /* 左栏最下面的额度按钮：小圆环（剩余比例）+ 剩余数字，和头像并排；点开是额度面板 */
 .ws-credits-btn { display: inline-flex; align-items: center; gap: 6px; height: 24px; margin: -4px 0; padding: 0 9px 0 6px; border: 1px solid var(--line2); border-radius: 999px;
@@ -772,9 +819,14 @@ button.ws-proc-head:hover { color: var(--ink); }
   .ws-icon-btn { width: 44px; height: 44px; }
   .ws-side-toggle { margin: 0 -8px 0 auto; }
   .ws-new { height: 44px; }
-  .ws-side .ws-task-link { padding: 12px 48px 12px 8px; }
-  .ws-side .ws-task .more { top: 0; right: 0; width: 44px; height: 44px; background: none; opacity: 1; } /* 没有悬停：一直在，不盖时间 */
-  .ws-side .ws-task:hover .time, .ws-side .ws-task.menu .time, .ws-side .ws-task:focus-within .time { visibility: visible; }
+  .ws-side .ws-task-link { padding: 12px 4px 12px 8px; }
+  .ws-side .ws-task .more { width: 44px; height: 44px; margin: 0; opacity: 1; } /* 没有悬停：一直在 */
+  .ws-search { height: 44px; margin-top: 0; }
+  .ws-search input { font-size: 16px; }
+  .ws-search-clear { width: 44px; height: 44px; margin-right: -4px; }
+  .ws-toast-host { right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); }
+  .ws-toast { max-width: none; }
+  .ws-toast-act { height: 44px; }
   .ws-foot { min-height: 44px; padding: 4px 4px 0; }
   .ws-credits-btn { position: relative; height: 28px; margin: 0; }
   .ws-credits-btn::after { content: ""; position: absolute; inset: -8px 0; }
@@ -855,7 +907,7 @@ button.ws-proc-head:hover { color: var(--ink); }
   .ws-main, .ws-scroll { display: block; overflow: visible; height: auto; }
   .ws-flow { max-width: none; padding: 0; }
   .ws-side, .ws-scrim, .ws-head, .ws-dock, .ws-rail, .ws-jump, .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-live, .ws-error,
-  .ws-user-foot, .ws-ai-foot, .ws-pop, .ws-sheet, .ws-sheet-scrim, .ws-btn, .ws-icon-btn, .ws-notify, .ws-svc-tools, .ws-svc .fare a,
+  .ws-user-foot, .ws-ai-foot, .ws-pop, .ws-menu, .ws-toast-host, .ws-sheet, .ws-sheet-scrim, .ws-btn, .ws-icon-btn, .ws-notify, .ws-svc-tools, .ws-svc .fare a,
   .chev, .md .md-table-box::before, .md .md-table-box::after { display: none !important; }
   .ws-print-title { display: block; margin: 0 0 24px; font: 600 20px/1.4 var(--serif); }
   .ws-user { margin-bottom: 16px; }
@@ -878,10 +930,33 @@ button.ws-proc-head:hover { color: var(--ink); }
 }
 
 /* ---------- 记忆页 ---------- */
-.mem-intro { color: var(--ink2); margin: 0 0 10px; }
+.mem-intro { color: var(--ink2); margin: 0 0 12px; }
+.mem-intro.sub { color: var(--muted); font-size: 13px; line-height: 1.6; margin-bottom: 16px; }
 .mem-status { color: var(--muted); font-size: 13px; margin: 0 0 20px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .mem-empty { color: var(--muted); padding: 24px 0; border-top: 1px solid var(--line); }
 .mem-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
-.mem-list li { display: flex; gap: 16px; align-items: baseline; padding: 11px 2px; border-bottom: 1px solid var(--line); }
-.mem-list .text { flex: 1; min-width: 0; line-height: 1.65; }
+.mem-list li { display: flex; flex-direction: column; gap: 4px; padding: 12px 0 8px; border-bottom: 1px solid var(--line); }
+.mem-list li.editing { padding-bottom: 12px; }
+.mem-list .text { min-width: 0; line-height: 1.65; overflow-wrap: anywhere; }
 .mem-list .meta { flex: none; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+/* 每条下面：什么时候记的、从哪段对话记下的（点了打开），右边改、删 */
+.mem-foot { display: flex; align-items: center; gap: 8px; min-height: 32px; min-width: 0; }
+.mem-from { min-width: 0; font-size: 12px; color: var(--muted) !important; text-decoration: none !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.mem-from:hover { color: var(--accent) !important; text-decoration: underline !important; }
+.mem-from.gone { color: var(--faint) !important; }
+.mem-acts { margin-left: auto; display: flex; gap: 4px; flex: none; }
+.mem-acts .ws-icon-btn { color: var(--faint); }
+.mem-acts .ws-icon-btn:hover { color: var(--ink); }
+.mem-acts .ws-icon-btn.danger:hover { color: var(--danger); background: var(--danger-soft); }
+.mem-edit textarea { display: block; width: 100%; resize: none; overflow: hidden; border: 1px solid var(--accent-line); border-radius: var(--r-sm); padding: 8px 12px;
+  font: inherit; line-height: 1.65; color: var(--ink); background: var(--paper); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+.mem-edit-bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.mem-edit-bar .ws-count { margin-right: auto; }
+.mem-edit-error { color: var(--danger); font-size: 13px; margin-top: 8px; }
+.mem .ws-error { margin: 0 0 16px; }
+@media (max-width: 720px) {
+  .mem-edit textarea { font-size: 16px; }
+  .mem-edit-bar .ws-btn { height: 44px; padding: 0 16px; font-size: 14px; }
+  .mem-foot { min-height: 44px; }
+  .mem-from { padding: 12px 0; line-height: 20px; } /* 点按区 44 高 */
+}

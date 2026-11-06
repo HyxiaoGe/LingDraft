@@ -111,11 +111,25 @@ export async function listResearchThreads() {
   return (await resp.json()).threads;
 }
 
-// 长期记忆：{memories: [{id, text, created_at, updated_at}], last_dream, next_dream}（见后端 ResearchRunner.memory_view）
+// 长期记忆：{memories: [{id, text, created_at, updated_at, thread_id}], last_dream, next_dream}（见后端 ResearchRunner.memory_view）。
+// thread_id 是从哪段对话记下的（很早的几条没有）
 export async function getMemory() {
   const resp = await authFetch("/api/memory");
   if (!resp.ok) throw await httpError(resp);
   return resp.json();
+}
+
+// 改一条记忆的文字，返回改过的这一条。空的、超过 200 字 400；不是自己的、没有这一条 404
+export async function editMemory(id, text) {
+  const resp = await authFetch(`/api/memory/${encodeURIComponent(id)}`, { ...postJson({ text }), method: "PATCH" });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 删一条记忆。keepalive：关页面时撤销还没过期，照样发出去
+export async function deleteMemory(id, { keepalive = false } = {}) {
+  const resp = await authFetch(`/api/memory/${encodeURIComponent(id)}`, { method: "DELETE", keepalive });
+  if (!resp.ok) throw await httpError(resp);
 }
 
 // 新对话页的“今日灵感”（后端从 Fusion 代取）；取不到抛错，页面用固定的例子
@@ -210,10 +224,17 @@ export async function renameResearchThread(threadId, title) {
   return resp.json();
 }
 
-// 删掉这段对话，找不回来。运行中返回 409
-export async function deleteResearchThread(threadId) {
-  const resp = await authFetch(`/api/research/threads/${threadId}`, { method: "DELETE" });
+// 删掉这段对话，找不回来（页面上先给 5 秒撤销，过了才调这里，见 undo.jsx）。运行中返回 409。keepalive：关页面时照样发出去
+export async function deleteResearchThread(threadId, { keepalive = false } = {}) {
+  const resp = await authFetch(`/api/research/threads/${threadId}`, { method: "DELETE", keepalive });
   if (!resp.ok) throw await httpError(resp);
+}
+
+// 置顶、取消置顶，返回列表里的这一行（pinned_at 是置顶的时间，取消了是 null）。存在后端，换设备也在
+export async function pinResearchThread(threadId, pinned) {
+  const resp = await authFetch(`/api/research/threads/${threadId}/pin`, { method: pinned ? "POST" : "DELETE" });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
 }
 
 // 失败的线程从断开的那一步接着跑；没失败的返回 409

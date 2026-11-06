@@ -1,20 +1,22 @@
-// 对话页：左侧对话列表（每条能改名、导出、删除），右侧对话；左栏下面的“记忆”在右侧换成记忆页（/memory）。
+// 对话页：左侧对话列表（能搜标题，每条能置顶、改名、导出、删除），右侧对话；左栏下面的“记忆”在右侧换成记忆页（/memory）。
 // 页面以服务器上的线程状态为准：对话和来源都从状态里取。执行中的事件（思考和正文的逐字片段、工具步骤）
 // 叠在存下来的对话上实时显示，并提示该重新取一次状态了；所以刷新、换个页面打开、或者中途断线重连，看到的都一样。
 // 回答时又说的话排在服务器上，这一轮答完或停下就接着发成新的一轮：这一轮的事件流结束时线程又在跑了，页面接着读下一次执行的。
 // 这一轮出错时排着的话不发，取回输入框。排着的话也能插进这一轮：放进对话时事件流里来一条 guide，页面把它挪进过程里。
 import { useEffect, useRef, useState } from "react";
-import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads, queueResearch,
-  regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
-import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPlus, IconTrash } from "./icons.jsx";
+import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads,
+  pinResearchThread, queueResearch, regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
+import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconPlus, IconSearch, IconTrash } from "./icons.jsx";
 import { setDraft } from "./drafts.js";
 import { AFTER_RUN_ERROR, errorText, quotaText } from "./errors.js";
 import { CreditsFoot, LoginDialog, UserFoot, useAuth } from "./login.jsx";
 import { MemoryPage } from "./memory.jsx";
-import { MOBILE, NavContext, SIDE_ARIA_KEY, SIDE_KEY, isSideKey, useMedia } from "./nav.jsx";
-import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, threadMarkdown, useNow, when } from "./research.js";
+import { ActionMenu, TitleInput } from "./menu.jsx";
+import { MOBILE, NavContext, SEARCH_ARIA_KEY, SEARCH_KEY, SIDE_ARIA_KEY, SIDE_KEY, isSearchKey, isSideKey, useMedia } from "./nav.jsx";
+import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, stamp, threadMarkdown, useNow, when } from "./research.js";
 import { useDoneAlert } from "./alert.jsx";
-import { Conversation, focusInput } from "./timeline.jsx";
+import { Conversation, forgetReading } from "./timeline.jsx";
+import { UndoToast, useUndo } from "./undo.jsx";
 import { uploadErrorText } from "./upload.js";
 import "./workspace.css";
 
@@ -83,6 +85,8 @@ export default function Workspace() {
   const [sideOff, setSideOff] = useState(sideOffSaved);
   const [drawer, setDrawer] = useState(false);
   const navFocus = useRef(null); // 收起、展开、关抽屉以后焦点去哪个按钮（按下的那个按钮没了）
+  const undo = useUndo(); // 删了能撤销（见 undo.jsx）：对话、记忆共用一条提示
+  const [gone, setGone] = useState(() => new Set()); // 点了删除、还在等撤销的对话：列表里不显示（隔几秒取回的列表里还有它）
 
   const setBusy = (b) => {
     busyRef.current = b;
@@ -487,7 +491,12 @@ export default function Workspace() {
     },
   };
 
-  // 左栏菜单：改名、导出、删除。出错就在对话区提示
+  // 左栏、顶栏菜单：置顶、改名、导出、删除。出错就在对话区提示
+  const unhide = (id) => setGone((g) => {
+    const n = new Set(g);
+    n.delete(id);
+    return n;
+  });
   const manage = {
     rename: async (id, title) => {
       try {
@@ -506,16 +515,50 @@ export default function Workspace() {
         setError(errorText("没导出成", e));
       }
     },
-    remove: async (id) => {
+    // 删除（第 44 条）：不再先确认，马上从列表里拿掉，5 秒内能撤销，过了才真删（见 undo.jsx）。
+    // 删的是开着的这个：先换成新对话；撤销时还停在那个新对话上、没动过，就回到它（阅读位置也回来，见 timeline.jsx）
+    remove: (id) => {
+      const open = id === tidRef.current;
+      const name = (open && (live?.title || st?.title)) || threads?.find((t) => t.thread_id === id)?.title || "这段对话";
+      setGone((g) => new Set(g).add(id));
+      if (open) select(null, "replace");
+      undo.push({
+        kind: "thread",
+        text: `已删除“${name}”`,
+        commit: async ({ keepalive }) => {
+          const forget = () => {
+            setDraft(id, ""); // 对话没了，没发出去的字、看到哪儿了也不留
+            forgetReading(id);
+          };
+          if (keepalive) forget(); // 页面正在关：等不到回来
+          try {
+            await deleteResearchThread(id, { keepalive });
+            forget();
+            setThreads((ts) => ts && ts.filter((t) => t.thread_id !== id));
+          } catch (e) {
+            setError(errorText("没删成", e));
+          }
+          unhide(id);
+          refreshList();
+        },
+        undo: () => {
+          unhide(id);
+          if (open && tidRef.current === null && !memoryRef.current && !busyRef.current) select(id);
+        },
+      });
+    },
+    // 置顶、取消（第 13 条）：存在后端。先改页面，没改成再改回来
+    pin: async (id, on) => {
+      const was = threads?.find((t) => t.thread_id === id)?.pinned_at ?? null;
+      const put = (v) => setThreads((ts) => ts && ts.map((t) => (t.thread_id === id ? { ...t, pinned_at: v } : t)));
+      put(on ? was || new Date().toISOString() : null);
       try {
-        await deleteResearchThread(id);
-        setDraft(id, ""); // 对话没了，没发出去的字也不留
-        setThreads((ts) => ts && ts.filter((t) => t.thread_id !== id));
-        if (id === tidRef.current) select(null, "replace");
+        const row = await pinResearchThread(id, on);
+        if (row) setThreads((ts) => ts && ts.map((t) => (t.thread_id === id ? { ...t, ...row } : t)));
       } catch (e) {
-        setError(errorText("没删成", e));
+        put(was);
+        setError(errorText(on ? "没置顶成" : "没取消置顶", e));
       }
-      refreshList();
     },
   };
 
@@ -544,12 +587,34 @@ export default function Workspace() {
     if (to) document.querySelector(`[data-nav="${to}"]`)?.focus();
   }, [sideOff, drawer]);
   useEffect(() => { if (!mobile) setDrawer(false); }, [mobile]); // 窗口拉宽了：抽屉不再是抽屉
-  // 快捷键：桌面上收起、展开左栏，窄屏开、关抽屉
+  // 快捷键：桌面上收起、展开左栏，窄屏开、关抽屉；⌘K 到左栏的搜索框（收起着先展开，窄屏先开抽屉）。别的弹窗开着时 ⌘K 不动
   const sideKey = useRef(null);
   sideKey.current = () => (mobile ? (drawer ? closeDrawer() : setDrawer(true)) : toggleSide());
+  const searchKey = useRef(null);
+  searchKey.current = () => {
+    if (mobile && !drawer) {
+      navFocus.current = "search";
+      setDrawer(true);
+    } else if (!mobile && sideOff) {
+      navFocus.current = "search";
+      saveSideOff(false);
+      setSideOff(false);
+    } else {
+      const box = document.querySelector('[data-nav="search"]');
+      box?.focus();
+      box?.select();
+    }
+  };
   useEffect(() => {
     const key = (e) => {
-      if (!isSideKey(e) || e.repeat) return;
+      if (e.repeat) return;
+      if (isSearchKey(e)) {
+        if (document.querySelector('[aria-modal="true"]:not(#ws-side)')) return;
+        e.preventDefault();
+        searchKey.current();
+        return;
+      }
+      if (!isSideKey(e)) return;
       e.preventDefault();
       sideKey.current();
     };
@@ -562,17 +627,20 @@ export default function Workspace() {
     return fn(...args);
   };
   const listedTitle = tid ? threads?.find((t) => t.thread_id === tid)?.title : null; // 打开中还没取回状态时，顶栏先用列表里的标题
+  const shownThreads = threads && (gone.size ? threads.filter((t) => !gone.has(t.thread_id)) : threads); // 等着撤销的不显示
 
   return (
     <NavContext.Provider value={nav}>
       <div className={"ws" + (sideOff ? " side-off" : "") + (mobile && drawer ? " drawer" : "")}>
         {mobile && drawer && <div className="ws-scrim" onClick={closeDrawer} aria-hidden="true" />}
-        <Sidebar threads={threads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={fromSide(select)} manage={manage}
+        <Sidebar threads={shownThreads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={fromSide(select)} manage={manage}
           memory={memory} onMemory={fromSide(openMemory)} auth={auth} onLogin={fromSide(() => setLoginOpen(true))} credits={credits} onCredits={refreshCredits} nav={nav} />
-        {memory ? <MemoryPage auth={auth} onLogin={onLogin} />
+        {memory ? <MemoryPage auth={auth} onLogin={onLogin} undo={undo} threads={shownThreads} onOpen={(id) => select(id)} />
           : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
-            models={models} credits={credits} picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />}
+            models={models} credits={credits} manage={manage}
+            picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />}
         <LoginDialog open={loginOpen} crowded={auth.crowded} onClose={() => setLoginOpen(false)} />
+        <UndoToast undo={undo} />
       </div>
     </NavContext.Provider>
   );
@@ -580,11 +648,18 @@ export default function Workspace() {
 
 // ---------------- 左栏：对话列表 ----------------
 
-const GROUPS = [
-  ["active", "进行中", (t) => ACTIVE.has(t.status)],
-  ["failed", "没跑完", (t) => t.status === "failed"],
-  ["idle", "最近", (t) => t.status === "idle"],
-];
+// 分组（第 13 条、M1）：置顶的在最前（后置顶的在上），其余按最后动过的时间分今天、昨天、近 7 天、更早。
+// 进行中、没跑完在每一行里用点和小字标，不再按状态分组：以前状态一变，那一行就在分组间跳
+const GROUPS = [["pinned", "置顶"], ["today", "今天"], ["yesterday", "昨天"], ["week", "近 7 天"], ["older", "更早"]];
+const timeOf = (t, now) => Date.parse(t.updated_at || "") || now; // 刚新建、列表里还没有的那一行按现在
+function groupOf(t, now) {
+  if (t.pinned_at) return "pinned";
+  const d = new Date(now);
+  const ago = (n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - n).getTime(); // n 天前的 0 点
+  const at = timeOf(t, now);
+  return at >= ago(0) ? "today" : at >= ago(1) ? "yesterday" : at >= ago(6) ? "week" : "older";
+}
+const newest = (now) => (a, b) => timeOf(b, now) - timeOf(a, now);
 
 function rowSub(t, now) {
   if (t.status === "queued") return "排队中";
@@ -593,13 +668,21 @@ function rowSub(t, now) {
   return "";
 }
 
+// 搜到的那几个字标出来（只搜标题，不分大小写）
+function Hit({ text, q }) {
+  const i = q ? text.toLowerCase().indexOf(q) : -1;
+  if (i < 0) return text;
+  return <>{text.slice(0, i)}<mark>{text.slice(i, i + q.length)}</mark>{text.slice(i + q.length)}</>;
+}
+
 // 窄屏时这一栏是抽屉（nav.drawer 开着）：打开时焦点进来，Tab 在里面转，Esc、点外面、右上角的关闭都能关上。
-// 抽屉里的菜单、改名框开着时，Esc 先归它们
+// 抽屉里的菜单、改名框开着、搜索框里有字时，Esc 先归它们
 const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
 function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memory, onMemory, auth, onLogin, credits, onCredits, nav }) {
-  const [menu, setMenu] = useState(null); // 打开菜单的那一行：{t, rect}
+  const [menu, setMenu] = useState(null); // 打开菜单的那一行：{id, anchor: 那一行的“⋯”}
   const [renaming, setRenaming] = useState(null); // 正在改名的线程 id
+  const [query, setQuery] = useState(""); // 搜索框里的字
   const box = useRef(null);
   const modal = nav.mobile && nav.drawer;
   useEffect(() => { if (modal) box.current?.querySelector('[data-nav="close"]')?.focus(); }, [modal]);
@@ -627,6 +710,63 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
     rows = mine ? rows.map((t) => (t.thread_id === current ? { ...t, ...patch } : t))
       : [{ thread_id: current, title: live?.said || "新对话", status: "running", ...patch }, ...rows];
   }
+  // 标题一样的几条（比如两个“广州今日天气”）：下面多一行日期和钟点，好分清
+  const seen = {};
+  for (const t of rows) seen[t.title] = (seen[t.title] || 0) + 1;
+  const q = query.trim().toLowerCase();
+  const hits = q ? rows.filter((t) => (t.title || "").toLowerCase().includes(q)).sort(newest(now)) : null;
+  const groups = GROUPS.map(([key, name]) => {
+    const items = rows.filter((t) => groupOf(t, now) === key);
+    items.sort(key === "pinned" ? (a, b) => Date.parse(b.pinned_at) - Date.parse(a.pinned_at) : newest(now));
+    return [key, name, items];
+  }).filter(([, , items]) => items.length);
+
+  // 删掉一行以后焦点放到下一行（没有就上一行、再没有就“新对话”）：删的按钮跟着那一行没了，焦点不掉到页面上
+  const neighbor = (id) => {
+    const links = [...box.current.querySelectorAll(".ws-groups .ws-task-link")];
+    const i = links.findIndex((a) => a.dataset.id === id);
+    return links[i + 1] || links[i - 1] || box.current.querySelector(".ws-new");
+  };
+  const focusRow = (id) => box.current?.querySelector(`.ws-task-link[data-id="${CSS.escape(id)}"]`)?.focus();
+  const menuRow = menu && rows.find((t) => t.thread_id === menu.id); // 菜单开着时那一行变了（开始回答了）按新的
+  const sz = nav.mobile ? 18 : 14;
+
+  const row = (t) => {
+    if (renaming === t.thread_id) {
+      return (
+        <div key={t.thread_id} className="ws-task renaming">
+          <TitleInput value={t.title} onDone={(title, how) => {
+            setRenaming(null);
+            if (title && title !== t.title) manage.rename(t.thread_id, title);
+            if (how !== "blur") requestAnimationFrame(() => focusRow(t.thread_id)); // 回车、Esc：回到这一行；点了别处就在别处
+          }} />
+        </div>
+      );
+    }
+    const sel = t.thread_id === current;
+    const open = menu?.id === t.thread_id;
+    const status = ACTIVE.has(t.status) ? "active" : t.status === "failed" ? "failed" : "idle";
+    const twin = seen[t.title] > 1 && stamp(t.updated_at, now);
+    const sub = rowSub(t, now) || (twin ? `${twin.day || "今天"} ${twin.hm}` : "");
+    return (
+      <div key={t.thread_id} className={"ws-task" + (sel ? " sel" : "") + (open ? " menu" : "")}>
+        <a href={chatPath(t.thread_id)} data-id={t.thread_id} className="ws-task-link" aria-current={sel ? "page" : undefined}
+          onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onSelect(t.thread_id); }}>
+          <span className={"dot " + status} />
+          <span className="body">
+            <span className="title" title={t.title}><Hit text={t.title} q={q} /></span>
+            {sub && <span className="sub">{sub}</span>}
+          </span>
+          <span className="time">{when(t.updated_at, now)}</span>
+        </a>
+        <button className="more" aria-label={`“${t.title}”的更多操作`} aria-haspopup={nav.mobile ? "dialog" : "menu"} aria-expanded={open}
+          onClick={(e) => setMenu(open ? null : { id: t.thread_id, anchor: e.currentTarget })}>
+          <IconMore size={15} />
+        </button>
+      </div>
+    );
+  };
+
   return (
     <aside ref={box} id="ws-side" className="ws-side" onKeyDown={onKeyDown}
       {...(modal ? { role: "dialog", "aria-modal": true, "aria-label": "对话列表" } : {})}>
@@ -642,124 +782,82 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
       <button className="ws-new" onClick={() => onSelect(null)} aria-current={!current && !memory ? "page" : undefined}>
         <IconPlus size={15} /> 新对话
       </button>
+      {/* 搜索（第 13 条、M1）：边打边筛，只搜标题；Esc 清空，↓ 到第一条，回车打开第一条 */}
+      <div className="ws-search" role="search"
+        onMouseDown={(e) => { if (!e.target.closest("input, button")) { e.preventDefault(); e.currentTarget.querySelector("input").focus(); } }}>
+        <IconSearch size={15} />
+        <input type="search" data-nav="search" value={query} placeholder="搜索对话标题" aria-label="搜索对话标题" aria-keyshortcuts={SEARCH_ARIA_KEY}
+          enterKeyHint="search" autoComplete="off" onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.nativeEvent.isComposing) return;
+            if (e.key === "Escape" && query) {
+              e.preventDefault();
+              e.stopPropagation();
+              setQuery("");
+            } else if (e.key === "ArrowDown") {
+              const a = box.current.querySelector(".ws-groups .ws-task-link");
+              if (a) { e.preventDefault(); a.focus(); }
+            } else if (e.key === "Enter" && hits?.length) {
+              e.preventDefault();
+              onSelect(hits[0].thread_id);
+            }
+          }} />
+        {query ? (
+          <button className="ws-search-clear" aria-label="清空搜索" onClick={(e) => { setQuery(""); e.currentTarget.parentElement.querySelector("input").focus(); }}>
+            <IconClose size={14} />
+          </button>
+        ) : !nav.mobile && <kbd className="ws-kbd" aria-hidden="true">{SEARCH_KEY}</kbd>}
+      </div>
       <nav className="ws-groups" aria-label="对话列表">
         {threads === null && (
           <div className="ws-side-skel" role="status" aria-label="正在取对话列表">
             {[78, 62, 70, 54, 66].map((w) => <span key={w} className="ws-skel ws-skel-row" style={{ width: `${w}%` }} />)}
           </div>
         )}
-        {threads !== null && rows.length === 0 && <div className="ws-side-empty">还没有对话</div>}
-        {GROUPS.map(([key, name, test]) => {
-          const items = rows.filter(test);
-          if (!items.length) return null;
-          return (
-            <div className="ws-group" key={key}>
-              <div className="ws-group-name">{name}<span>{items.length}</span></div>
-              {items.map((t) => (renaming === t.thread_id
-                ? <RenameRow key={t.thread_id} t={t} onDone={(title) => { setRenaming(null); if (title && title !== t.title) manage.rename(t.thread_id, title); }} />
-                : (
-                  <div key={t.thread_id} className={"ws-task" + (t.thread_id === current ? " sel" : "") + (menu?.t.thread_id === t.thread_id ? " menu" : "")}>
-                    <a href={chatPath(t.thread_id)} className="ws-task-link" aria-current={t.thread_id === current ? "page" : undefined}
-                      onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onSelect(t.thread_id); }}>
-                      <span className={"dot " + key} />
-                      <span className="body">
-                        <span className="title" title={t.title}>{t.title}</span>
-                        {rowSub(t, now) && <span className="sub">{rowSub(t, now)}</span>}
-                      </span>
-                      <span className="time">{when(t.updated_at, now)}</span>
-                    </a>
-                    <button className="more" aria-label={`“${t.title}”的更多操作`} aria-haspopup="menu" aria-expanded={menu?.t.thread_id === t.thread_id}
-                      onClick={(e) => setMenu(menu?.t.thread_id === t.thread_id ? null : { t, rect: e.currentTarget.getBoundingClientRect() })}>
-                      <IconMore size={15} />
-                    </button>
-                  </div>
-                )))}
+        {threads !== null && !hits && rows.length === 0 && <div className="ws-side-empty">还没有对话</div>}
+        {hits ? (hits.length ? (
+          <div className="ws-group" role="group" aria-label="搜索结果">
+            <div className="ws-group-name">标题里有“{query.trim()}”<span>{hits.length}</span></div>
+            {hits.map(row)}
+          </div>
+        ) : threads !== null && <div className="ws-side-empty">没有标题里有“{query.trim()}”的对话。只搜标题，不搜对话内容。</div>)
+          : groups.map(([key, name, items]) => (
+            <div className="ws-group" key={key} role="group" aria-label={name}>
+              <div className="ws-group-name" aria-hidden="true">{name}<span>{items.length}</span></div>
+              {items.map(row)}
             </div>
-          );
-        })}
+          ))}
       </nav>
+      <div className="ws-sr" role="status">{hits ? (hits.length ? `找到 ${hits.length} 段对话` : "没有找到") : ""}</div>
       <div className="ws-foot">
         <CreditsFoot credits={credits} guest={!auth.me} onLogin={auth.login ? onLogin : null} onOpen={onCredits} />
         <span className="ws-foot-user"><UserFoot auth={auth} onLogin={onLogin} memory={memory} onMemory={onMemory} /></span>
       </div>
-      {menu && (
-        <RowMenu key={menu.t.thread_id} t={menu.t} rect={menu.rect} onClose={() => setMenu(null)}
-          onRename={() => { setRenaming(menu.t.thread_id); setMenu(null); }}
-          onExport={() => { manage.exportMd(menu.t.thread_id); setMenu(null); }}
-          onDelete={() => { manage.remove(menu.t.thread_id); setMenu(null); }} />
+      {menuRow && (
+        <RowMenu key={menuRow.thread_id} t={menuRow} anchor={menu.anchor} mobile={nav.mobile} size={sz} onClose={() => setMenu(null)}
+          onPin={() => { manage.pin(menuRow.thread_id, !menuRow.pinned_at); setMenu(null); }}
+          onRename={() => { setRenaming(menuRow.thread_id); setMenu(null); }}
+          onExport={() => { manage.exportMd(menuRow.thread_id); setMenu(null); }}
+          onDelete={() => {
+            const next = neighbor(menuRow.thread_id);
+            setMenu(null);
+            manage.remove(menuRow.thread_id);
+            next?.focus();
+          }} />
       )}
     </aside>
   );
 }
 
-// 一行对话的菜单：重命名、导出、删除。删除先在菜单里确认一次；正在回答的不能改名、删除，没跑完的不能改名
-function RowMenu({ t, rect, onClose, onRename, onExport, onDelete }) {
-  const [confirm, setConfirm] = useState(false);
-  const box = useRef(null);
+// 一行对话的菜单：置顶、重命名、导出、删除。删除不再先确认，删了 5 秒内能撤销（第 44 条）；正在回答的不能改名、删除，没跑完的不能改名
+function RowMenu({ t, anchor, mobile, size, onClose, onPin, onRename, onExport, onDelete }) {
   const running = ACTIVE.has(t.status);
-  useEffect(() => { box.current?.querySelector("button:not(:disabled)")?.focus(); }, [confirm]);
-  useEffect(() => {
-    const down = (e) => !box.current?.contains(e.target) && !e.target.closest?.(".ws-task.menu .more") && onClose(); // 点“⋯”自己由它切换
-    const key = (e) => {
-      if (e.key !== "Escape") return;
-      document.querySelector(".ws-task.menu .more")?.focus(); // 焦点回到“⋯”
-      onClose();
-    };
-    addEventListener("mousedown", down);
-    addEventListener("keydown", key);
-    addEventListener("scroll", onClose, true); // 列表滚动、窗口变化时菜单跟不上那一行，收起
-    addEventListener("resize", onClose);
-    return () => {
-      removeEventListener("mousedown", down);
-      removeEventListener("keydown", key);
-      removeEventListener("scroll", onClose, true);
-      removeEventListener("resize", onClose);
-    };
-  }, [onClose]);
-  const below = rect.bottom + 4 + 150 < innerHeight;
-  const style = { left: Math.max(8, rect.right - 196), width: 196, ...(below ? { top: rect.bottom + 4 } : { bottom: innerHeight - rect.top + 4 }) };
   const note = running ? "正在回答，答完或停下后才能改名、删除" : t.status === "failed" ? "这段对话没跑完，重试以后才能改名" : null;
-  return (
-    <div ref={box} className="ws-menu" role="menu" aria-label={`“${t.title}”的操作`} style={style}>
-      {confirm ? (
-        <>
-          <div className="ws-menu-note">删除“{t.title}”？删除后找不回来。</div>
-          <div className="ws-menu-actions">
-            <button className="ws-btn sm" onClick={() => setConfirm(false)}>取消</button>
-            <button className="ws-btn danger sm" onClick={onDelete}>删除</button>
-          </div>
-        </>
-      ) : (
-        <>
-          <button role="menuitem" disabled={t.status !== "idle"} onClick={onRename}><IconEdit size={14} />重命名</button>
-          <button role="menuitem" onClick={onExport}><IconDownload size={14} />导出为 Markdown</button>
-          <button role="menuitem" className="danger" disabled={running} onClick={() => setConfirm(true)}><IconTrash size={14} />删除</button>
-          {note && <div className="ws-menu-note">{note}</div>}
-        </>
-      )}
-    </div>
-  );
-}
-
-// 改名：回车或点别处保存，Esc 不改
-function RenameRow({ t, onDone }) {
-  const [v, setV] = useState(t.title);
-  const ref = useRef(null);
-  const done = useRef(false);
-  useEffect(() => { ref.current?.select(); }, []);
-  const finish = (title) => {
-    if (done.current) return;
-    done.current = true;
-    onDone(title);
-  };
-  return (
-    <div className="ws-task renaming">
-      <input ref={ref} className="ws-rename" value={v} maxLength={40} aria-label="对话标题" onChange={(e) => setV(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.nativeEvent.isComposing) { finish(v.trim()); focusInput(); }
-          else if (e.key === "Escape") { finish(null); focusInput(); }
-        }}
-        onBlur={() => finish(v.trim())} /* 点了别处：光标就在别处，不拉回输入框 */ />
-    </div>
-  );
+  const items = [
+    { key: "pin", icon: <IconPinTop size={size} />, text: t.pinned_at ? "取消置顶" : "置顶", onClick: onPin },
+    { key: "rename", icon: <IconEdit size={size} />, text: "重命名", disabled: t.status !== "idle", onClick: onRename },
+    { key: "export", icon: <IconDownload size={size} />, text: "导出为 Markdown", onClick: onExport },
+    { key: "delete", icon: <IconTrash size={size} />, text: "删除", danger: true, disabled: running, onClick: onDelete },
+  ];
+  return <ActionMenu label={`“${t.title}”的操作`} anchor={anchor} mobile={mobile} items={items} note={note} onClose={onClose} />;
 }
