@@ -320,7 +320,9 @@ blocked_turn = "Turn {{ turn }} was stopped by the model service's content revie
 [tools.generate_image]
 # 说明、参数，画成、没画成时给模型的话都在 image-service 里（Fusion 和灵稿共用，见 agent-tools 的 services/image/src/mcp/owned.py）。
 # 这里是灵稿接在工具说明后面的一段、画成时接在结果后面的一句，和灵稿自己回的几种失败（见 app.tools.image_mcp）
-lingdraft = """In LingDraft each generated image is shown to the user as an image card in your reply, labeled with the image model that drew it."""
+lingdraft = """In LingDraft each generated image is shown to the user as an image card in your reply, labeled with the image model that drew it. The user can also attach an image to a message; that message then says so and gives the image's id, which you can pass as source_image_id just like the id of a generated image."""
+# 用户发的图：接在那句话后面给模型（存着的消息里没有）。模型看不到图，只能改、照着画（2026-11-06 Sean 定不做看图问答）
+attached = """[The user attached an image to this message. Image id: {{ id }} ({{ width }}x{{ height }}). You cannot see images, so never guess or describe what this one shows. If the user wants this image changed, or a new image made from it (another style, a variation, something added or removed), call generate_image with source_image_id set to this id and write the prompt as an edit instruction: what to change, and what to keep. If the user asks what the image shows or anything else about its contents, say plainly that you cannot view images yet and can only edit it or make a new image from it. Do not show the image id to the user.]"""
 shown = """The image card is shown to the user in this reply and already labels which image model drew it, so do not mention the model."""
 # 还没连上时的占位工具
 brief = """Generate a new image from a text description, or edit an image generated earlier in this conversation. Call it only when the user asks you to create, draw, or design an image, or to change an image generated earlier in this conversation."""

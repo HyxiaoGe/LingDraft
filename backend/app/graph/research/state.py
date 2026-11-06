@@ -244,6 +244,18 @@ class GeneratedImage(BaseModel):
         return self.file is None
 
 
+class AttachedImage(BaseModel):
+    """用户发消息时带的一张图（2026-11-06 Sean 定：只拿来改图、照着画，不做看图问答）。
+    灵稿后端收到就传进 image-service（POST /v1/images，归灵稿，和画的图放在一起），记在那条用户消息上；
+    改图时它的编号和画的图一样当 source_image_id。跟着对话删，重新回答、改那句话都留着。"""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(description="图片编号（image-service 的）")
+    mime_type: str
+    width: int
+    height: int
+
+
 class ToolStep(BaseModel):
     """一次工具调用，给页面的过程记录用。"""
 

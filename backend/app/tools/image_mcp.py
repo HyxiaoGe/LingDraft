@@ -5,7 +5,9 @@ services/image/README.md「产品用的生图工具」）。图存在服务里�
 页面要看时灵稿后端按编号经网关取（见 api.main），删对话、重新回答时按编号删（见 api.research_runner）。
 工具说明后面接上灵稿的一段（prompts.toml 的 tools.generate_image.lingdraft）。这里只做灵稿自己的事（ImageMiddleware）：
 - 每轮最多画 MAX_IMAGES_PER_TURN 张。照 Fusion：发出去就可能花了钱，没画成的也算；参数不对、找不到原图的服务没去画，不算。
-- 改图只认这段对话里画的、还在服务里的图：别的编号（编的、别的对话的、以前灵稿自己存的）不交给服务，照找不到原图告诉模型。
+- 改图只认这段对话里画的、用户发的、还在服务里的图：别的编号（编的、别的对话的、以前灵稿自己存的）不交给服务，照找不到原图告诉模型。
+- 用户发的图（见 history.attached_image）：模型看不到图，给模型的那句话后面接一段说明（编号、看不到图、要改就当 source_image_id），
+  存着的消息不变。2026-11-06 Sean 定只做改图、照着画，不做看图问答。
 - 画成的：卡片要的东西（编号、大小、模型、描述）记在结果的 artifact 里，history 把它换成图片卡片；
   给模型的是服务的那段英文，后面接一句卡片上已经标了模型。
 - 没画成：服务的那段英文照给模型，status=error，错误码在 artifact 里（页面上换成中文，见 history.IMAGE_FAILURES）。
@@ -30,7 +32,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.graph.research import prompts
-from app.graph.research.history import IMAGE_TOOL, last_human, stored_images
+from app.graph.research.history import IMAGE_TOOL, attached_image, last_human, owned_image_ids
 from app.graph.research.state import GeneratedImage
 from app.tools import mcp
 from app.tools.gateway import GatewayAuthError, GatewayLimitError
@@ -116,6 +118,15 @@ def ratio_of(width: int, height: int) -> str:
     return f"{width // g}:{height // g}"
 
 
+def with_attachment_note(m: BaseMessage) -> BaseMessage:
+    """用户这句话带了图：给模型的那份后面接一段说明；没带图的原样返回。"""
+    if (img := attached_image(m)) is None:
+        return m
+    note = prompts.render(f"tools.{IMAGE_TOOL}.attached", id=img.id, width=img.width, height=img.height)
+    content = f"{m.content}\n\n{note}" if isinstance(m.content, str) else [*m.content, {"type": "text", "text": note}]
+    return m.model_copy(update={"content": content})
+
+
 def failed(call_id: str, code: str, *, attempted: bool) -> ToolMessage:
     """中间件自己回的失败（服务没给结果，或者没交给服务）。"""
     text = prompts.render(f"tools.{IMAGE_TOOL}.{code}", max_per_turn=MAX_IMAGES_PER_TURN)
@@ -126,6 +137,12 @@ def failed(call_id: str, code: str, *, attempted: bool) -> ToolMessage:
 class ImageMiddleware(AgentMiddleware):
     """只管 generate_image，见模块说明。放在 ToolProgressMiddleware 里面：过程记录看到的是整理好的结果。"""
 
+    async def awrap_model_call(self, request, handler):
+        msgs = [with_attachment_note(m) for m in request.messages]
+        if all(a is b for a, b in zip(msgs, request.messages, strict=True)):
+            return await handler(request)
+        return await handler(request.override(messages=msgs))
+
     async def awrap_tool_call(self, request, handler):
         call = request.tool_call
         if call["name"] != IMAGE_TOOL:
@@ -134,7 +151,7 @@ class ImageMiddleware(AgentMiddleware):
         msgs = request.state.get("messages", [])
         source = args.get("source_image_id")
         source = source.strip() if isinstance(source, str) else ""
-        if source and source not in {img.id for img in stored_images(msgs)}:
+        if source and source not in owned_image_ids(msgs):
             # 不交给服务：编号是编的、别的对话的、以前的图，都照找不到原图说，不算画了一次
             return failed(cid, "source_image_unavailable", attempted=False)
         if attempts_before(msgs, cid) >= MAX_IMAGES_PER_TURN:
