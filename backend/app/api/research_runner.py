@@ -38,7 +38,8 @@ from app.identity import Identity, is_guest_sub
 from app.graph.research.sources import collect_sources, subagent_messages
 from app.graph.research.state import AttachedImage, Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
-from app.tools.gateway import IMAGE_ID
+from app.model_guard import ContentBlocked, Interrupted, ModelUnavailable
+from app.tools.gateway import IMAGE_ID, GatewayError
 
 
 class NothingToRetry(Exception):
@@ -62,6 +63,11 @@ class UnknownModel(Exception):
 
 
 CUT_SHORT = "上次运行没跑完就停了"
+# 这一轮没跑完的原因分几类给页面（状态里的 error_kind，事件流 error 事件的 kind），页面按类别说下一步能做什么（见 _failure）：
+# model：模型服务不可用；blocked：内容审核没通过；cut_short：半路停了、没有错误记录（进程重启）；tool：工具服务（网关）出错；internal：别的
+FAILURE_MODEL, FAILURE_BLOCKED, FAILURE_CUT, FAILURE_TOOL, FAILURE_INTERNAL = "model", "blocked", "cut_short", "tool", "internal"
+_SHOWN = {ModelUnavailable.__name__: FAILURE_MODEL, Interrupted.__name__: FAILURE_MODEL, ContentBlocked.__name__: FAILURE_BLOCKED}  # 提示原样给的
+FAILURE_TEXT = {FAILURE_TOOL: "查资料、地图或画图用的服务出了问题", FAILURE_INTERNAL: "处理这一轮时出了意外的错误"}
 # 检查点只在一次运行开头（用户的话写进去，见 accept）和结束时各存一份，中间每一步不存：每份都带着整段对话，每步都存的话按平方增长。
 # 出错、点停止也算结束，结束前把做到哪儿存下来，重试从断点接着跑；进程直接崩掉或被杀，这一轮做到一半的没存，重试从头跑这一轮。
 # 执行中页面要的东西（来源、标题、进度）都跟着事件走，不从库里取。
@@ -205,28 +211,52 @@ def subagent_items(result: ToolMessage | None) -> list[dict]:
     return [i for x in sub if isinstance(x, AIMessage) for i in _items_of(x, results)]
 
 
+def _error_event(e: Exception) -> dict:
+    """事件流里的 error 事件：和状态里的 error / error_kind 一样分类、转写（见 _failure）。"""
+    kind, message = _failure(type(e).__name__, str(e))
+    return {"message": message, "kind": kind}
+
+
 def _public(run: dict) -> dict:
     return {k: v for k, v in run.items() if k != "traceback"}
 
 
-def _error_text(err: str) -> str:
-    """检查点里存的是异常的 repr（ModelUnavailable('…')），页面上只要里面那句话；解不开就原样给。"""
+def _parse_error(err: str) -> tuple[str, str | None]:
+    """检查点里存的是异常的 repr（ModelUnavailable('…')）：拆成（类名，里面那句话）。解不开的（不止一个参数、不是这个样子）那句话是 None。"""
     name, sep, rest = err.partition("(")
     if sep and name.isidentifier() and rest.endswith(")"):
         try:
             msg = ast.literal_eval("(" + rest)
         except (ValueError, SyntaxError):
-            return err
+            return name, None
         if isinstance(msg, str):
-            return msg
-    return err
+            return name, msg
+    return (name if sep and name.isidentifier() else ""), None
 
 
-def _failure_text(errors: list[str]) -> str:
-    """这一轮没跑完的原因（errors 是检查点里各步的错误，见 _error_text）。几个工具同时跑、一个抛了错，LangGraph 会取消其余还在跑的，
-    被取消的也可能记一条 CancelledError：给真正出错的那条。只有被取消的（进程退出时整轮被掐断），和没有错误记录一样是半路停了。"""
-    real = next((e for e in errors if e.partition("(")[0] != asyncio.CancelledError.__name__), None)
-    return _error_text(real) if real else CUT_SHORT
+def _subclass_names(cls: type) -> set[str]:
+    return {cls.__name__, *(n for c in cls.__subclasses__() for n in _subclass_names(c))}
+
+
+def _failure(name: str, message: str | None) -> tuple[str, str]:
+    """一个异常（类名、那句话）给页面看的（类别，说法）。只有我们写给用户看的提示原样给：模型服务不可用（带原因、多久以后再试）、内容审核没通过；
+    别的异常原文不给页面（库的英文、网关的 HTTP 状态码、内部细节），换成这一类的通用说法。原文照旧在日志和运行记录里（见 run_store 的 error）"""
+    kind = _SHOWN.get(name)
+    if kind and message:
+        return kind, message
+    kind = FAILURE_TOOL if name in _subclass_names(GatewayError) else FAILURE_INTERNAL
+    return kind, FAILURE_TEXT[kind]
+
+
+def _failure_of(errors: list[str]) -> tuple[str, str]:
+    """这一轮没跑完的（类别，说法）。errors 是检查点里各步的错误（见 _parse_error）。几个工具同时跑、一个抛了错，LangGraph 会取消其余还在跑的，
+    被取消的也可能记一条 CancelledError：看真正出错的那条。只有被取消的（进程退出时整轮被掐断），和没有错误记录一样是半路停了。"""
+    real = _real_error(errors)
+    return _failure(*_parse_error(real)) if real else (FAILURE_CUT, CUT_SHORT)
+
+
+def _real_error(errors: list[str]) -> str | None:
+    return next((e for e in errors if e.partition("(")[0] != asyncio.CancelledError.__name__), None)
 
 
 async def open_storage(url: str) -> tuple[AsyncPostgresSaver, AsyncPostgresStore, PostgresRunStore]:
@@ -517,7 +547,7 @@ class ResearchRunner(BaseRunner):
                 except Exception as e:  # noqa: BLE001
                     error = e
                     log.exception("执行出错：%s 运行 %s", key, run)
-                    out({"event": "error", "data": {"message": str(e)}})
+                    out({"event": "error", "data": _error_event(e)})
                 finally:
                     await self._afinish(run, status, error)
                     await self._aended(thread_id, status)
@@ -525,7 +555,8 @@ class ResearchRunner(BaseRunner):
                     out({"event": "state", "data": await self._astate_view(thread_id)})
                     await self._suggest(thread_id, out)
                 except Exception as e:  # noqa: BLE001
-                    out({"event": "error", "data": {"message": str(e)}})
+                    log.exception("这一轮结束后出错：%s 运行 %s", key, run)
+                    out({"event": "error", "data": _error_event(e)})
         finally:
             self._inflight -= 1
             self.events.close(run)
@@ -936,13 +967,15 @@ class ResearchRunner(BaseRunner):
         v = snap.values
         if not v:  # 线程 id 交出去之前用户的话已经写进检查点（见 _aaccept），没有就是不存在
             return {"thread_id": thread_id, "exists": False}
-        status, error = self._status(snap, run)
+        status, failure = self._status(snap, run)
         return {
             "thread_id": thread_id,
             "exists": True,
             "scenario": "research",
             "status": status,
-            "error": error,
+            # 没跑完（failed）时的说法和类别（见 _failure）；别的状态都是 None
+            "error": failure and failure[1],
+            "error_kind": failure and failure[0],
             # 对话定下的模型（选项的 id）：没定的（还没开始的老对话）、定的那个停了的，下一轮起是 Auto
             "model": self.planner.catalog.plan(v.get("option"), None, self.planner.usable).option,
             "stopping": bool(run and run.get("stopping")),
@@ -957,6 +990,11 @@ class ResearchRunner(BaseRunner):
             "queued_message": await self.run_store.get_pending(thread_id, QUEUE),
             "guided_message": await self.run_store.get_pending(thread_id, GUIDE),  # 等着插进这一轮的话，同上
         }
+
+    def failure_detail(self, thread_id: str) -> str | None:
+        """开发用（评测、命令行）：这一轮没跑完时检查点里记的异常原文（页面上只给转写过的，见 _failure）。没跑完以外的、没有错误记录的是 None。"""
+        snap = aio.run(self.graph.aget_state(self._cfg(thread_id)))
+        return _real_error([str(t.error) for t in snap.tasks if t.error]) if snap.next else None
 
     def _title_of(self, thread_id: str, v: dict) -> str:
         """页面上的标题：起好写进 state 的、改过的；没写进去的先看这次进程里起好过的（见 _titles），都没有用这段对话的第一句。"""
@@ -984,14 +1022,15 @@ class ResearchRunner(BaseRunner):
         return sorted(rows, key=lambda x: x["updated_at"] or "", reverse=True)
 
     @staticmethod
-    def _status(snap, run: dict | None) -> tuple[str, str | None]:
+    def _status(snap, run: dict | None) -> tuple[str, tuple[str, str] | None]:
         """queued / running：有执行占着位；idle：这一轮跑完了（或停下了），可以接着说；
-        failed：没在跑、也没跑完——某一步抛了错（错误记在检查点里），或执行半路被掐断（进程重启，没有错误记录）。"""
+        failed：没在跑、也没跑完——某一步抛了错（错误记在检查点里），或执行半路被掐断（进程重启，没有错误记录）。
+        failed 时第二项是原因的（类别，说法）（见 _failure_of），别的状态是 None。"""
         if run is not None:
             return ("queued" if run["queued"] else "running"), None
         if not snap.next:
             return "idle", None
-        return "failed", _failure_text([str(t.error) for t in snap.tasks if t.error])
+        return "failed", _failure_of([str(t.error) for t in snap.tasks if t.error])
 
 
 async def _settle(mark: object) -> None:

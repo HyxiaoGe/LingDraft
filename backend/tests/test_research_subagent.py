@@ -348,7 +348,7 @@ def test_a_gateway_auth_error_in_a_subagent_still_fails_the_turn():
     with pytest.raises(GatewayAuthError):
         c.say("子任务查一下杭州美食")
     v = c.view()
-    assert v["status"] == "failed" and "401" in v["error"]
+    assert v["status"] == "failed" and v["error_kind"] == "tool" and "401" not in v["error"]  # 密钥问题照旧让这一轮失败，原文不给页面
 
 
 def test_moderation_stop_in_a_subagent_is_reported_and_the_turn_goes_on():
