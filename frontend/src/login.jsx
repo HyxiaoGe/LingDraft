@@ -23,8 +23,7 @@ export function useAuth() {
 }
 
 // 左栏下面：游客看到“登录”，登录了看到头像和邮箱，点开能去记忆页、退出（2026-11-06 Sean 定：记忆入口收进这里，游客没有记忆）
-// credits 是额度（/api/credits），菜单里显示今天、这周还剩多少；onOpen 在打开菜单时调（重新取一次）
-export function UserFoot({ auth, onLogin, credits, onOpen, memory, onMemory }) {
+export function UserFoot({ auth, onLogin, onOpen, memory, onMemory }) {
   const [open, setOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const btn = useRef(null);
@@ -47,7 +46,7 @@ export function UserFoot({ auth, onLogin, credits, onOpen, memory, onMemory }) {
   const rect = open ? btn.current?.getBoundingClientRect() : null;
   return (
     <>
-      <button ref={btn} className="ws-user-btn" aria-haspopup="menu" aria-expanded={open} title={me.email} onClick={() => { if (!open) onOpen?.(); setOpen(!open); }}>
+      <button ref={btn} className="ws-user-btn" aria-haspopup="menu" aria-expanded={open} title={me.email} onClick={() => setOpen(!open)}>
         <Avatar me={me} />
         <span className="ws-user-name">{label}</span>
       </button>
@@ -58,7 +57,6 @@ export function UserFoot({ auth, onLogin, credits, onOpen, memory, onMemory }) {
             {me.name && me.email && <span>{me.email}</span>}
             {me.tier === "admin" && <span>管理员</span>}
           </div>
-          <CreditsLine credits={credits} />
           <button role="menuitem" aria-current={memory ? "page" : undefined} onClick={() => { setOpen(false); onMemory?.(); }}>
             <IconBook size={14} />记忆
           </button>
@@ -72,29 +70,63 @@ export function UserFoot({ auth, onLogin, credits, onOpen, memory, onMemory }) {
   );
 }
 
-// 左栏最下面常驻的一行（2026-11-06 Sean 定）：游客“试用额度 今天还剩 980 / 1000”（点了去登录），登录了“今天还剩 9800 / 10000”；
-// 显示最紧的那个窗口，用到八成变黄、用完变红；管理员“额度不限”，没取到不显示
-export function CreditsFoot({ credits, guest, onLogin }) {
+// 左栏最下面常驻的一行（2026-11-06 Sean 定）：游客“试用额度 今天还剩 980 / 1000”，登录了“今天还剩 9800 / 10000”，管理员“额度不限”；
+// 显示最紧的那个窗口，用到八成变黄、用完变红；没取到不显示。点开是额度面板（UsagePanel）：来源、每个窗口剩百分之几、余额、什么时候重置
+export function CreditsFoot({ credits, guest, onLogin, onOpen }) {
+  const [open, setOpen] = useState(false);
+  const btn = useRef(null);
+  const box = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e) => !box.current?.contains(e.target) && !btn.current?.contains(e.target) && setOpen(false);
+    const key = (e) => e.key === "Escape" && (setOpen(false), btn.current?.focus());
+    addEventListener("mousedown", down);
+    addEventListener("keydown", key);
+    return () => {
+      removeEventListener("mousedown", down);
+      removeEventListener("keydown", key);
+    };
+  }, [open]);
   if (!credits) return null;
-  if (credits.unlimited) return <span className="ws-foot-credits">额度不限</span>;
-  const left = creditsLeft(credits);
-  if (!left) return null;
-  const text = <>{guest && "试用额度 "}{left.span}还剩 <b>{creditsNum(left.remaining)}</b> / {left.limit}</>;
-  const cls = "ws-foot-credits" + (left.exhausted ? " out" : left.warn ? " warn" : "");
-  if (guest && onLogin) return <button className={cls} title="登录后额度更多" onClick={onLogin}>{text}</button>;
-  return <span className={cls}>{text}</span>;
+  const left = credits.unlimited ? null : creditsLeft(credits);
+  if (!credits.unlimited && !left) return null;
+  const cls = "ws-foot-credits" + (left?.exhausted ? " out" : left?.warn ? " warn" : "");
+  const rect = open ? btn.current?.getBoundingClientRect() : null;
+  return (
+    <>
+      <button ref={btn} className={cls} aria-haspopup="dialog" aria-expanded={open} onClick={() => { if (!open) onOpen?.(); setOpen(!open); }}>
+        {credits.unlimited ? "额度不限" : <>{guest && "试用额度 "}{left.span}还剩 <b>{creditsNum(left.remaining)}</b> / {left.limit}</>}
+      </button>
+      {open && rect && (
+        <div ref={box} className="ws-menu ws-usage" role="dialog" aria-label="额度" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: 232 }}>
+          <UsagePanel credits={credits} guest={guest} onLogin={onLogin && (() => { setOpen(false); onLogin(); })} />
+        </div>
+      )}
+    </>
+  );
 }
 
-// 今天、这周还剩多少 credits（1 credit = ¥0.001 的 API 成本）；管理员不限，没取到不显示
-function CreditsLine({ credits }) {
-  if (!credits) return null;
-  if (credits.unlimited) return <div className="ws-menu-note ws-credits-line">额度不限</div>;
+// 额度面板（照 Claude 用量弹层的样子）：来源一行；每个窗口一行，左标签右“剩余 xx%”；余额一行；底下是重置时间，游客多一个去登录的按钮
+function UsagePanel({ credits, guest, onLogin }) {
+  const source = credits.unlimited ? "管理员" : guest ? "游客试用" : "登录账号";
+  if (credits.unlimited) return <div className="ws-menu-note">额度来源：{source}<br />不限用量</div>;
   const ws = credits.windows.filter((w) => w.kind === "day" || w.kind === "week");
-  if (!ws.length) return null;
+  const left = creditsLeft(credits);
+  const pct = (w) => Math.max(0, Math.floor((1 - w.used / w.limit) * 100));
   return (
-    <div className="ws-menu-note ws-credits-line">
-      {ws.map((w) => <span key={w.kind}>{w.kind === "week" ? "这周" : "今天"}还剩 <b>{creditsText(Math.max(0, w.limit - w.used))}</b> / {w.limit}</span>)}
-    </div>
+    <>
+      <div className="ws-menu-note">额度来源：{source}</div>
+      <div className="ws-usage-rows">
+        {ws.map((w) => (
+          <div key={w.kind} className={"ws-usage-row" + (w.used >= w.limit ? " out" : w.used >= w.limit * (credits.warn_at ?? 0.8) ? " warn" : "")}>
+            <span>{w.kind === "week" ? "每周限额" : "每日限额"}</span><b>剩余 {pct(w)}%</b>
+          </div>
+        ))}
+        <div className="ws-usage-row"><span>余额</span><b>{creditsText(left.remaining)}</b></div>
+      </div>
+      <div className="ws-menu-note">{ws.some((w) => w.kind === "week") ? "每天 0 点、每周一 0 点重置" : "每天 0 点重置"}（北京时间）</div>
+      {guest && onLogin && <button onClick={onLogin}><IconLock size={14} />登录后每天 10000 credits</button>}
+    </>
   );
 }
 
