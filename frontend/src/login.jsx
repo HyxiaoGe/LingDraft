@@ -70,7 +70,7 @@ export function UserFoot({ auth, onLogin, onOpen, memory, onMemory }) {
   );
 }
 
-// 左栏最下面常驻的一行（2026-11-06 Sean 定）：游客“试用额度 今天还剩 980 / 1000”，登录了“今天还剩 9800 / 10000”，管理员“额度不限”；
+// 左栏最下面常驻的额度按钮（2026-11-06 Sean 定，照 Claude 用量弹层）：小圆环画剩余比例、旁边是剩余数字（游客前面标“试用”，管理员“不限”）；
 // 显示最紧的那个窗口，用到八成变黄、用完变红；没取到不显示。点开是额度面板（UsagePanel）：来源、每个窗口剩百分之几、余额、什么时候重置
 export function CreditsFoot({ credits, guest, onLogin, onOpen }) {
   const [open, setOpen] = useState(false);
@@ -90,12 +90,16 @@ export function CreditsFoot({ credits, guest, onLogin, onOpen }) {
   if (!credits) return null;
   const left = credits.unlimited ? null : creditsLeft(credits);
   if (!credits.unlimited && !left) return null;
-  const cls = "ws-foot-credits" + (left?.exhausted ? " out" : left?.warn ? " warn" : "");
+  const frac = left ? Math.max(0, Math.min(1, left.remaining / left.limit)) : 1;
+  const cls = "ws-credits-btn" + (left?.exhausted ? " out" : left?.warn ? " warn" : "");
+  const title = credits.unlimited ? "额度不限" : `${left.span}还剩 ${creditsNum(left.remaining)} / ${left.limit} credits，${left.resetText}`;
   const rect = open ? btn.current?.getBoundingClientRect() : null;
   return (
     <>
-      <button ref={btn} className={cls} aria-haspopup="dialog" aria-expanded={open} onClick={() => { if (!open) onOpen?.(); setOpen(!open); }}>
-        {credits.unlimited ? "额度不限" : <>{guest && "试用额度 "}{left.span}还剩 <b>{creditsNum(left.remaining)}</b> / {left.limit}</>}
+      <button ref={btn} className={cls} title={title} aria-label={"额度：" + title} aria-haspopup="dialog" aria-expanded={open}
+        onClick={() => { if (!open) onOpen?.(); setOpen(!open); }}>
+        <Ring frac={frac} />
+        <span>{credits.unlimited ? "不限" : <>{guest && <small>试用</small>}{creditsNum(left.remaining)}</>}</span>
       </button>
       {open && rect && (
         <div ref={box} className="ws-menu ws-usage" role="dialog" aria-label="额度" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: 232 }}>
@@ -103,6 +107,19 @@ export function CreditsFoot({ credits, guest, onLogin, onOpen }) {
         </div>
       )}
     </>
+  );
+}
+
+// 剩余比例的小圆环：frac 是剩下的份额（1 满、0 空），颜色跟着按钮的 warn / out 走
+function Ring({ frac, size = 16 }) {
+  const r = (size - 3) / 2;
+  const c = 2 * Math.PI * r;
+  return (
+    <svg className="ws-ring" width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="currentColor" strokeOpacity=".18" strokeWidth="2.5" />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
+        strokeDasharray={c} strokeDashoffset={c * (1 - frac)} transform={`rotate(-90 ${size / 2} ${size / 2})`} />
+    </svg>
   );
 }
 
