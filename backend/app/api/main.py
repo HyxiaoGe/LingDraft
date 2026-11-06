@@ -27,7 +27,7 @@ from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 from app.graph.research.memory import TEXT_MAX as MEMORY_TEXT_MAX
 from app.graph.research.memory import DreamSchedule
 from app.identity import ADMIN, Authenticator, AuthUnavailable, BadToken, Identity, make_authenticator
-from app.quota import Exhausted
+from app.quota import Exhausted, Limits
 from app.graph.research.state import AttachedImage
 from app.tools.gateway import MAX_UPLOAD_BYTES, GatewayError, ImageRejected
 
@@ -369,13 +369,21 @@ def auth_config():
     return {"login": on, "auth_url": config.AUTH_URL if on else None, "client_id": config.AUTH_CLIENT_ID if on else None}
 
 
+GUESTS_PER_IP = "guests_per_ip"  # 领游客身份 429 的 detail.code
+
+
 @app.post("/api/auth/guest")
 def auth_guest(request: Request):
     """领一个新的游客身份：{"token", "expires_at"}。页面没有身份（第一次来、或存的令牌被拒了）时调，存在浏览器里，每个请求带上。
-    一个地址一天领太多返回 429。"""
-    got = authenticator().guests.issue(client_ip(request))
+    一个地址一天领太多返回 429，detail 带上每个地址一天几个、登录后的额度和换算（页面这时没有身份、取不到 /api/credits，
+    靠这些说清“为什么 + 登录后会怎样”，见 frontend/src/login.jsx 的 LoginDialog）。"""
+    guests = authenticator().guests
+    got = guests.issue(client_ip(request))
     if got is None:
-        raise HTTPException(429, "今天领的游客身份太多了，请登录或明天再来")
+        limits = Limits.from_config()
+        raise HTTPException(429, {"code": GUESTS_PER_IP, "message": "这个网络今天新领的游客身份太多了，请登录或明天再来",
+                                  "per_ip": guests.per_ip_daily, "per_ask": config.CREDITS_PER_ASK,
+                                  "login": {"day": limits.user_daily, "week": limits.user_weekly}})
     token, exp = got
     return {"token": token, "expires_at": exp}
 
