@@ -9,11 +9,12 @@ import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { listInspirations } from "./api.js";
 import { getDraft, setDraft } from "./drafts.js";
 import { failureText } from "./errors.js";
-import { IconArrowDown, IconArrowUp, IconBook, IconBulb, IconCheck, IconChevron, IconClose, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconInsert, IconList, IconLock, IconLoop, IconPage, IconPin, IconPlane, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconUndo, IconWarn, Spinner } from "./icons.jsx";
+import { IconArrowDown, IconArrowUp, IconBook, IconBulb, IconCheck, IconChevron, IconClose, IconCloudSun, IconCopy, IconDownload, IconEdit, IconFork, IconImage, IconInsert, IconList, IconLock, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconTrash, IconUndo, IconWarn, Spinner } from "./icons.jsx";
 import { ImageCards, Viewer, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
 import { Markdown } from "./markdown.jsx";
+import { ActionMenu } from "./menu.jsx";
 import { HeadBar, NavContext } from "./nav.jsx";
 import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, creditsLeft, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping } from "./research.js";
 import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
@@ -32,7 +33,14 @@ const EXAMPLES = [
 // 正文 680 居中，右边空出来的那块放得下 184 宽的目录加两边各 16 的空：滚动区至少这么宽才放右栏
 const RAIL_MIN = 1120;
 
-export function Conversation({ st, live, busy, suggesting, error, now, act: rawAct, tid, putBack, listedTitle, models, credits, picker }) {
+// 阅读位置（第 45 条）：每个对话看到哪儿了记在这个标签页里（sessionStorage），离开（换对话、去记忆页、去海报页、登录后整页重载、刷新）
+// 再回来，回到原处。记的是“第几轮，视口上沿在这一轮顶上往下多少”；在底部就记“底部”，回来还在底部、接着跟。从没记过的照旧到底（最新一轮）
+const READING = "lingdraft.reading.";
+const readingOf = (id) => { try { return JSON.parse(sessionStorage.getItem(READING + id)); } catch { return null; } };
+const keepReadingOf = (id, at) => { try { sessionStorage.setItem(READING + id, JSON.stringify(at)); } catch { /* 存不下就只管这一次打开 */ } };
+export const forgetReading = (id) => { try { sessionStorage.removeItem(READING + id); } catch { /* 没有就算了 */ } };
+
+export function Conversation({ st, live, busy, suggesting, error, now, act: rawAct, tid, putBack, listedTitle, models, credits, picker, manage }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
   const lastTop = useRef(0); // 上一次滚动时的位置：往上滚了才算用户离开底部
@@ -45,17 +53,75 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   const opening = !!tid && !st && !live && !error; // 点开了一个对话，状态还没取回来：先显示骨架
   const toBottom = () => {
     const el = scrollRef.current;
+    holding.current = null;
     stick.current = true;
     setAway(false);
     setMore(false);
     el.scrollTop = el.scrollHeight;
     lastTop.current = el.scrollTop;
   };
+  // 阅读位置：滚动时量好放在 reading 里（这时页面上还是这个对话），隔一会儿、离开时写下
+  const reading = useRef(null); // {tid, at: {bottom: true} | {turn, offset}}
+  const readTimer = useRef(0);
+  // 刚回到上次看到的地方：那一轮里视口上面的内容可能还在长（天气卡先量宽度、下一遍才画出逐小时图，一张高 132），
+  // 浏览器的滚动锚定会让看到的字不动，结果比原处往下偏了那么多。所以回去以后先守着这个位置，内容一变高就再对一次，
+  // 用户自己动了（滚、按键、点、摸）或者过了 3 秒就不守了
+  const holding = useRef(null);
+  const holdTimer = useRef(0);
+  const keepReading = () => {
+    clearTimeout(readTimer.current);
+    if (reading.current) keepReadingOf(reading.current.tid, reading.current.at);
+  };
+  const measure = (el) => {
+    if (stick.current) return { bottom: true };
+    const top = el.getBoundingClientRect().top;
+    for (const turn of el.querySelectorAll(".ws-turn[data-turn]")) {
+      const r = turn.getBoundingClientRect();
+      if (r.bottom > top + 1) return { turn: Number(turn.dataset.turn), offset: Math.round(top - r.top) };
+    }
+    return { bottom: true };
+  };
+  const backTo = (at) => {
+    const el = scrollRef.current;
+    const turn = at && !at.bottom && el.querySelector(`.ws-turn[data-turn="${Number(at.turn)}"]`);
+    if (!turn) return false; // 那一轮没了（改了最后一句以后轮数变了）：到底
+    el.scrollTop += turn.getBoundingClientRect().top - el.getBoundingClientRect().top + (Number(at.offset) || 0);
+    lastTop.current = el.scrollTop;
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stick.current = near;
+    setAway(!near);
+    setMore(false);
+    return true;
+  };
 
-  // 换了对话就到底；之后内容变高（字出来、过程展开）或可视区变矮时，贴着底的跟到底，往上翻着看的不动，“回到底部”写上“有新内容”。
-  // 看的是尺寸变化，不靠这里重新渲染
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useLayoutEffect(toBottom, [st?.thread_id]);
+  // 换了对话：先把上一个看到哪儿写下，再到这个对话上次看到的地方（没记过就到底）；之后内容变高（字出来、过程展开）或可视区变矮时，
+  // 贴着底的跟到底，往上翻着看的不动，“回到底部”写上“有新内容”。看的是尺寸变化，不靠这里重新渲染
+  useLayoutEffect(() => {
+    keepReading();
+    const at = st?.thread_id && readingOf(st.thread_id);
+    if (!backTo(at)) return toBottom();
+    holding.current = at;
+    clearTimeout(holdTimer.current);
+    holdTimer.current = setTimeout(() => { holding.current = null; }, 3000);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [st?.thread_id]);
+  useEffect(() => {
+    const release = () => { holding.current = null; };
+    const evs = ["wheel", "touchstart", "keydown", "pointerdown"];
+    evs.forEach((e) => addEventListener(e, release, { capture: true, passive: true }));
+    return () => {
+      evs.forEach((e) => removeEventListener(e, release, { capture: true, passive: true }));
+      clearTimeout(holdTimer.current);
+    };
+  }, []);
+  useEffect(() => {
+    addEventListener("pagehide", keepReading);
+    return () => { // 去记忆页、海报页：这个对话看到哪儿写下
+      removeEventListener("pagehide", keepReading);
+      keepReading();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useLayoutEffect(() => {
     const el = scrollRef.current;
     let h = el.firstElementChild.offsetHeight;
@@ -63,7 +129,10 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
       const grew = el.firstElementChild.offsetHeight > h;
       h = el.firstElementChild.offsetHeight;
       if (stick.current) el.scrollTop = el.scrollHeight;
-      else if (grew && runningRef.current) setMore(true);
+      else {
+        if (holding.current) backTo(holding.current); // 刚回到原处，上面又长了：再对一次（见 holding）
+        if (!stick.current && grew && runningRef.current) setMore(true);
+      }
     });
     ro.observe(el);
     ro.observe(el.firstElementChild);
@@ -100,6 +169,46 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   };
   const title = live?.title || st?.title || live?.said || (opening ? listedTitle ?? null : "新对话"); // null：打开中、列表里也还没有，顶栏先放占位
   const running = busy || ACTIVE.has(st?.status);
+  // 顶栏的“⋯”（第 14 条）：这个对话的重命名、导出、打印、删除，和左栏那一行的菜单是同一些事（置顶只在左栏）。改名就在顶栏标题处改
+  const [menuAt, setMenuAt] = useState(null); // 菜单开着：打开它的按钮
+  const [renaming, setRenaming] = useState(false);
+  useEffect(() => {
+    setMenuAt(null);
+    setRenaming(false);
+  }, [tid]);
+  const manageable = !!(manage && tid && st && !opening);
+  const status = running ? "running" : st?.status;
+  const headMenu = manageable && (
+    <button className="ws-icon-btn ws-head-more" aria-label="这段对话的更多操作" title="更多操作" aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={!!menuAt}
+      onClick={(e) => setMenuAt(menuAt ? null : e.currentTarget)}>
+      <IconMore size={18} />
+    </button>
+  );
+  const sz = mobile ? 18 : 14;
+  const closeMenu = () => setMenuAt(null);
+  const menuItems = [
+    { key: "rename", icon: <IconEdit size={sz} />, text: "重命名", disabled: status !== "idle", onClick: () => { closeMenu(); setRenaming(true); } },
+    { key: "export", icon: <IconDownload size={sz} />, text: "导出为 Markdown", onClick: () => { closeMenu(); manage.exportMd(tid); } },
+    // 打印：等菜单收起来再开打印（打印的是收起菜单以后的页面）
+    { key: "print", icon: <IconPrint size={sz} />, text: "打印", onClick: () => { closeMenu(); setTimeout(() => window.print(), 50); } },
+    { key: "delete", icon: <IconTrash size={sz} />, text: "删除", danger: true, disabled: status === "running" || status === "queued",
+      onClick: () => {
+        closeMenu();
+        manage.remove(tid);
+        // 对话换成了新对话：桌面上光标去输入框；手机上不弹键盘，焦点放到抽屉钮
+        if (mobile) requestAnimationFrame(() => document.querySelector('[data-nav="drawer"]')?.focus());
+        else focusInput();
+      } },
+  ];
+  const menuNote = running ? "正在回答，答完或停下后才能改名、删除" : status === "failed" ? "这段对话没跑完，重试以后才能改名" : null;
+  const edit = renaming && manageable ? {
+    value: title || "",
+    onDone: (t, how) => {
+      setRenaming(false);
+      if (t && t !== title) manage.rename(tid, t);
+      if (how !== "blur") requestAnimationFrame(() => document.querySelector(".ws-head-more")?.focus());
+    },
+  } : null;
   runningRef.current = running;
   const pendingKinds = running ? [st?.guided_message && "guided", st?.queued_message && "queued"].filter(Boolean) : [];
   const said = useAnnounce(st, running, stopping); // 读屏：只在开始、答完、停下、出错时说一句（见 useAnnounce）
@@ -116,7 +225,9 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
 
   return (
     <section className={"ws-main" + (fresh ? " fresh" : "")} aria-label="对话">
-      <HeadBar title={fresh ? "新对话" : title} end={index && !wide && <TurnIndexButton entries={entries} scroller={scrollRef} onJump={jumpTo} />} />
+      <HeadBar title={fresh ? "新对话" : title} edit={edit}
+        end={<>{index && !wide && <TurnIndexButton entries={entries} scroller={scrollRef} onJump={jumpTo} />}{headMenu}</>} />
+      {menuAt && manageable && <ActionMenu label="这段对话的操作" anchor={menuAt} mobile={mobile} items={menuItems} note={menuNote} onClose={closeMenu} />}
       <div className={"ws-scroll" + (index && wide ? " rail" : "")} ref={scrollRef}
         onScroll={(e) => {
           // 往上滚了：离底部远了就不再跟着到底。没往上滚（内容长高了、往下滚）不算离开：跳到底以后内容马上长高，滚动事件晚一帧到，
@@ -127,6 +238,11 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
           lastTop.current = el.scrollTop;
           setAway(!stick.current);
           if (stick.current) setMore(false);
+          if (st?.thread_id && !opening) {
+            reading.current = { tid: st.thread_id, at: measure(el) };
+            clearTimeout(readTimer.current);
+            readTimer.current = setTimeout(keepReading, 400);
+          }
         }}>
         <div className="ws-flow">
           {!fresh && !opening && <h1 className="ws-print-title">{title}</h1>/* 只在打印时出现：屏幕上标题在顶栏，打印不印顶栏（第 49 条） */}

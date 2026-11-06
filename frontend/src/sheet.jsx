@@ -22,6 +22,7 @@ export function Sheet({ title, onClose, className = "", children }) {
       return;
     }
     if (e.key !== "Tab") return;
+    e.stopPropagation(); // 开在抽屉上面时（抽屉里一行的菜单）：Tab 只在弹层里转，不让抽屉再转一次
     const els = [...ref.current.querySelectorAll(FOCUSABLE)];
     const i = els.indexOf(document.activeElement);
     if (e.shiftKey && i <= 0) {
