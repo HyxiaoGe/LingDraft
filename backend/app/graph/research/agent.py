@@ -10,6 +10,7 @@
   不开新的一轮（见 history.is_guide），页面上排在这一轮的过程里它起作用的地方。
   推荐问题不在这一轮里起：正文写完这一轮就结束，运行器在结束之后再起（见 api.research_runner）。
 - ToolProgressMiddleware：工具开始、结束时往自定义流里写一步，页面据此显示进度；做完的那一步带上它得到的来源。
+- ToolChargeMiddleware：做成了的工具调用按次记一行账（见 app.costs），钱数写进工具结果。
 - InvalidToolCallRetryMiddleware：模型返回无法解析的工具调用时，让它带着解析错误重发，最多几次。
 - ModelCallCapMiddleware：一轮里调模型到了上限，最后一次不许调工具，用已经查到的回答（和子 agent 一样）。
 - InterruptedRetryMiddleware：模型生成到一半断了，自动再调一次，页面去掉断掉的半截（子 agent 也挂）。
@@ -326,6 +327,24 @@ class ToolProgressMiddleware(AgentMiddleware):
         return result
 
 
+class ToolChargeMiddleware(AgentMiddleware):
+    """工具调用也算钱（2026-11-06 Sean 定“都扣”）：做成了的按次记一行账（价格见 models.toml 的 [tools]），钱数写进工具结果的 response_metadata，
+    这一轮的用量从消息里加、算进这一轮的 credits（和模型调用一样，见 history.usage_of、costs.credits）。
+    没做成的（服务报错、点了停止、灵稿自己没交给服务的、没真执行的）不收；没定价的工具（task、recall、排行程）不记。"""
+
+    async def awrap_tool_call(self, request, handler):
+        name = request.tool_call["name"]
+        if costs.tool_price(name) is None:
+            return await handler(request)
+        started = costs.now()
+        result = await handler(request)
+        msg = _result_message(result)
+        step = history.step_of(request.tool_call, msg) if msg is not None else None
+        if step is not None and step.ok and not step.pending and (yuan := costs.charge_tool(name, started)) is not None:
+            msg.response_metadata = {**msg.response_metadata, costs.COST: yuan}
+        return result
+
+
 def _step_sources(state, result: ToolMessage | None, ids: list[str]) -> dict[str, dict]:
     """这一步得到的来源，按这条线程（子 agent 是它自己的那段）到这一步为止的全部结果算：读到正文的用正文开头，标题沿用搜索时的。"""
     if result is None or not ids:
@@ -568,6 +587,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
             TurnMiddleware(planner, memory),
             ContentGuard(planner),  # 在 TurnMiddleware 里面：重发的请求也带着换好的系统提示词
             CompactionMiddleware(planner, tools, memory),  # 在 ContentGuard 里面：被内容审核停下的那几轮先去掉再压；用户插的话放进对话以后再估
+            ToolChargeMiddleware(),  # 做成了的工具调用记账；看的结果和 ToolProgressMiddleware 一样是整理好的
             ToolProgressMiddleware(),
             WeatherMiddleware(),  # 在 ToolProgressMiddleware 里面：过程记录看到的是整理好的天气结果
             TravelMiddleware(),  # 同上：航班火车的结果、每轮的次数、排行程；在 MapsMiddleware 外面：车站城市不对的比路线不交给地图

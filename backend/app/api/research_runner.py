@@ -27,7 +27,7 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg_pool import PoolTimeout
 
-from app import aio, config, costs
+from app import aio, config, costs, quota
 from app.api.run_store import ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, Pending, PostgresRunStore, RunStore
 from app.api.runner import BaseRunner, RunConflict, _sse_text, jsonable, log
 from app.graph.research import history
@@ -268,6 +268,7 @@ class ResearchRunner(BaseRunner):
             self._tools_retry = asyncio.run_coroutine_threadsafe(self._keep_connecting(), aio.loop())
         self.graph = build_graph(self.planner, checkpointer, self.memory)
         self.run_store = run_store or MemoryRunStore()
+        self.quota = quota.Quota(quota.usage_for(self.run_store))  # 额度按账上的记录算（见 app.quota）
         self.images = self.planner.gateway  # 画好的图存在 image-service 里，按编号取、删（见 app.tools.gateway）
         self.workers = workers or config.RESEARCH_WORKERS
         self._slots = asyncio.BoundedSemaphore(self.workers)  # 同时跑的执行
@@ -539,7 +540,8 @@ class ResearchRunner(BaseRunner):
     async def _run_turn(self, thread_id: str, inp: Any, out: Callable[[dict], None]) -> str | None:
         """跑一轮，事件交给 out。用户点了停止：排队时就点的不跑，直接收尾；跑着的马上取消（见 stop），正在等的模型、工具一起断开，
         已经流出来的正文、做完的工具结果留着（取消时照常存检查点，见 DURABILITY）。停下的返回 STOPPED（记进运行记录）。"""
-        scope = costs.Scope(thread_id=thread_id, turn_id=await self._aturn_of(thread_id))  # 这一轮调的模型记账时记上对话和轮（见 app.costs）
+        # 这一轮调的模型、工具记账时记上对话、轮和归谁（见 app.costs；额度按归谁算，见 app.quota）
+        scope = costs.Scope(thread_id=thread_id, turn_id=await self._aturn_of(thread_id), owner=await self.run_store.owner_of(thread_id))
         if self._stop_requested(thread_id):
             await self._write_stop(thread_id)
             out({"event": "node", "data": {"node": TURN_END}})
@@ -850,7 +852,7 @@ class ResearchRunner(BaseRunner):
         turn_id, question, reply = job
         out({"event": "phase", "data": {"phase": "suggest"}})  # 页面在回答下面先说一声正在起
         try:
-            with costs.within(costs.Scope(thread_id=thread_id, turn_id=turn_id)):
+            with costs.within(costs.Scope(thread_id=thread_id, turn_id=turn_id, owner=await self.run_store.owner_of(thread_id))):
                 items = (await self.planner.suggest(question, reply))[:3]
         except Exception:  # noqa: BLE001  推荐问题失败就不给
             items = []

@@ -35,6 +35,17 @@ export function creditsText(n) {
   return `${n >= 10 ? Math.round(n) : n >= 0.1 ? n.toFixed(1) : "<0.1"} credits`;
 }
 
+// 额度里最紧的那个窗口（自己的：今天、这周；所有游客合计的那个不显示），加上剩多少、是不是该提醒（用了 warn_at 以上）、是不是用完了。
+// 没取到、管理员不限是 null
+export function creditsLeft(credits) {
+  const ws = (credits?.windows || []).filter((w) => w.kind === "day" || w.kind === "week");
+  if (!ws.length) return null;
+  const w = ws.reduce((a, b) => (b.limit - b.used < a.limit - a.used ? b : a));
+  const remaining = Math.max(0, w.limit - w.used);
+  return { ...w, remaining, warn: w.used >= w.limit * (credits.warn_at ?? 0.8), exhausted: w.used >= w.limit,
+    span: w.kind === "week" ? "这周" : "今天", resetText: w.kind === "week" ? "下周一 0 点重置" : "明天 0 点重置" };
+}
+
 export function stamp(iso, now = Date.now()) {
   if (!iso) return null;
   const d = new Date(iso);

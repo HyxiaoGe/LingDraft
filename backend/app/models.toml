@@ -185,6 +185,21 @@ hours = [[9, 12], [14, 18]]
 holidays = []
 holidays_through = 2026-12-31
 
+# 工具每次调用算多少元，只算成功的（见 app.costs.charge_tool）。按上游的大致成本估的（2026-11-06）：
+# 画图是豆包 Seedream 一张约 0.2 元；搜索、读页按 agent-tools 后面付费 provider（Brave、Firecrawl）的单价约 0.005；
+# 地图、航班火车是高德、flyai 的免费额度，象征性收一点免得刷；天气、Context7 查文档也一样。没列的（task、recall、排行程）不收
+[tools]
+generate_image = 0.2
+search_web = 0.005
+read_page = 0.005
+place_search = 0.002
+route_compare = 0.002
+search_flights = 0.002
+search_trains = 0.002
+get_weather = 0.001
+resolve-library-id = 0.001
+query-docs = 0.001
+
 [prices."deepseek:deepseek-v4-pro"]
 regular = { cached = 0.30, input = 9.0, output = 27.0 }
 off_peak = { cached = 0.15, input = 4.5, output = 13.5 }

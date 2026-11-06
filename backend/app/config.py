@@ -85,7 +85,14 @@ AUTH_REDIS_URL = os.environ.get("AUTH_REDIS_URL", "")
 # 游客：没登录也能聊，身份是灵稿自己签的令牌（HS256），对话归这个游客，登录后并进账号。密钥不配就每次启动随机一个（重启后游客要重新领身份，对话就找不回了），
 # 部署一定要配。每个来源地址一天最多领这么多个新游客身份（防爬虫、脚本刷）
 GUEST_SECRET = os.environ.get("LINGDRAFT_GUEST_SECRET", "")
-GUEST_PER_IP_DAILY = int(os.environ.get("LINGDRAFT_GUEST_PER_IP_DAILY", "30"))
+GUEST_PER_IP_DAILY = int(os.environ.get("LINGDRAFT_GUEST_PER_IP_DAILY", "5"))
+# 额度（见 app.quota）：1 credit = ¥0.001 的 API 成本。北京时间的自然日、自然周（周一起）。
+# 2026-11-06 Sean 定：游客每天 1000，登录用户每天 10000、每周 50000（项目前期要用户量，给足，别让游客体验打折）；管理员不限。
+# 所有游客合计每天 50000（约 50 元）：防脚本批量领游客身份刷，配合上面每个地址一天 5 个身份
+CREDITS_GUEST_DAILY = int(os.environ.get("LINGDRAFT_CREDITS_GUEST_DAILY", "1000"))
+CREDITS_USER_DAILY = int(os.environ.get("LINGDRAFT_CREDITS_USER_DAILY", "10000"))
+CREDITS_USER_WEEKLY = int(os.environ.get("LINGDRAFT_CREDITS_USER_WEEKLY", "50000"))
+CREDITS_GUESTS_DAILY = int(os.environ.get("LINGDRAFT_CREDITS_GUESTS_DAILY", "50000"))
 VERSION = os.environ.get("LINGDRAFT_VERSION", "")  # 部署时的提交号（镜像构建时带进来），记进运行记录；本机为空
 
 MAX_CHECK_RETRIES = 2

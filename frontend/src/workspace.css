@@ -250,6 +250,16 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-suggest-item:hover { border-color: var(--accent-line); color: var(--accent); }
 .ws-error { display: flex; gap: 8px; align-items: flex-start; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-line); border-radius: var(--r); padding: 9px 12px; font-size: 13px; margin: 0 0 16px; }
 .ws-error svg { flex: none; margin-top: 2px; }
+.ws-error span { flex: 1; }
+.ws-error-act { height: 26px; padding: 0 10px; font-size: 12.5px; color: var(--danger); border-color: var(--danger-line); background: #fff; flex: none; }
+/* 输入框上面：额度快用完、用完了的提醒 */
+.ws-credits-note { width: calc(100% - 56px); max-width: 668px; margin: 0 auto 4px; display: flex; gap: 6px; align-items: center; font-size: 12px; line-height: 1.5;
+  color: var(--warn); }
+.ws-credits-note svg { flex: none; }
+.ws-credits-note.out { color: var(--danger); }
+.ws-link { background: none; border: 0; padding: 0; font: inherit; color: var(--accent, var(--ink)); text-decoration: underline; cursor: pointer; }
+.ws-credits-line { display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--line); margin-top: 2px; padding-top: 8px; }
+.ws-credits-line b { color: var(--ink); font-weight: 500; }
 
 /* 提示卡：没跑完、内容审核没通过 */
 .ws-card { border: 1px solid var(--line2); border-radius: var(--r-lg); padding: 14px 16px; background: var(--paper);

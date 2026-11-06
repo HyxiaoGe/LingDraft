@@ -4,7 +4,7 @@
 // 回答时又说的话排在服务器上，这一轮答完或停下就接着发成新的一轮：这一轮的事件流结束时线程又在跑了，页面接着读下一次执行的。
 // 这一轮出错时排着的话不发，取回输入框。排着的话也能插进这一轮：放进对话时事件流里来一条 guide，页面把它挪进过程里。
 import { useEffect, useRef, useState } from "react";
-import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getResearchState, guideResearch, listModels, listResearchThreads, queueResearch,
+import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads, queueResearch,
   regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
 import { IconDownload, IconEdit, IconMore, IconPlus, IconTrash } from "./icons.jsx";
 import { LoginDialog, UserFoot, useAuth } from "./login.jsx";
@@ -58,6 +58,9 @@ export default function Workspace() {
   const [pick, setPick] = useState(null);
   // 深度思考开关：每句话发的时候带上（选的模型能开关才带），换对话、开新对话都留着，刷新回到开
   const [thinking, setThinking] = useState(true);
+  // 额度（/api/credits）：打开页面、每轮结束、打开账号菜单时取；没取到是 null（不显示）
+  const [credits, setCredits] = useState(null);
+  const refreshCredits = () => getCredits().then(setCredits).catch(() => {});
   const gen = useRef(0); // 每切一次线程加一：旧线程的连接和回调发现对不上，就不再改页面
   const tidRef = useRef(tid);
   const ctl = useRef(new AbortController()); // 当前线程的连接；切走、或开始新的一次执行时断开（服务器上的执行照常跑）
@@ -105,6 +108,9 @@ export default function Workspace() {
   }, [title, tid, memory]);
 
   useEffect(() => { listModels().then(setModels).catch(() => setModels([])); }, []);
+  // 身份定了取一次额度；每轮结束（busy 回到 false）再取：这一轮花的已经记上了
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (auth.ready && !busy) refreshCredits(); }, [auth.ready, busy]);
   const picked = models?.some((m) => m.id === pick && !m.locked) ? pick : models?.[0]?.id; // 选的不在列表里了（刚下架）、锁上了也按 Auto
   // 输入框旁边显示的模型：新对话是选的；开始的对话是它定下的（状态还没取回来时，刚发出去的按选的，打开的老对话先不显示）
   const current = !tid ? picked : st?.thread_id === tid && st.model ? st.model : live ? picked : null;
@@ -322,6 +328,16 @@ export default function Workspace() {
     } catch (e) {
       if (e.aborted || g !== gen.current) return;
       if (r.done) return setSuggesting(false); // 等推荐问题时断了：不再接，下次打开线程能看到
+      // 额度用完了（429）：话放回输入框，提示里带上什么时候重置，游客还给登录入口；服务器上没有执行要去接
+      if (e.status === 429 && e.detail?.code === "credits_exhausted") {
+        const text = said ?? extra.edit;
+        if (text) setPutBack({ thread: tidRef.current || "new", text });
+        setError({ text: e.message, login: !!e.detail.guest });
+        refreshCredits();
+        setBusy(false);
+        setLive(null);
+        return;
+      }
       // 新对话被拒（比如选的模型刚下架）：话放回输入框，重新取能选的模型
       if (!tidRef.current && e.status === 400 && said) {
         setPutBack({ thread: "new", text: said });
@@ -453,10 +469,10 @@ export default function Workspace() {
   return (
     <div className="ws">
       <Sidebar threads={threads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={select} manage={manage}
-        memory={memory} onMemory={openMemory} auth={auth} onLogin={() => setLoginOpen(true)} />
+        memory={memory} onMemory={openMemory} auth={auth} onLogin={() => setLoginOpen(true)} credits={credits} onCredits={refreshCredits} />
       {memory ? <MemoryPage auth={auth} onLogin={onLogin} />
         : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack}
-          models={models} picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />}
+          models={models} credits={credits} picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />}
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} />
     </div>
   );
@@ -477,7 +493,7 @@ function rowSub(t, now) {
   return "";
 }
 
-function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memory, onMemory, auth, onLogin }) {
+function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memory, onMemory, auth, onLogin, credits, onCredits }) {
   const [menu, setMenu] = useState(null); // 打开菜单的那一行：{t, rect}
   const [renaming, setRenaming] = useState(null); // 正在改名的线程 id
   // 列表每隔几秒取一次；当前这个线程以页面手上的状态为准，刚新建、列表里还没有的先补一行
@@ -536,7 +552,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
         <a href={MEMORY_PATH} aria-current={memory ? "page" : undefined}
           onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onMemory(); }}>记忆</a>
         <a href="#poster">宣传海报</a>
-        <span className="ws-foot-user"><UserFoot auth={auth} onLogin={onLogin} /></span>
+        <span className="ws-foot-user"><UserFoot auth={auth} onLogin={onLogin} credits={credits} onOpen={onCredits} /></span>
       </div>
       {menu && (
         <RowMenu key={menu.t.thread_id} t={menu.t} rect={menu.rect} onClose={() => setMenu(null)}

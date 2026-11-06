@@ -10,7 +10,7 @@ import { ImageCards, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
 import { Markdown } from "./markdown.jsx";
-import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
+import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, creditsLeft, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Mark } from "./sources.jsx";
 import { WeatherCard, forecastsOf } from "./weather.jsx";
 
@@ -21,7 +21,7 @@ const EXAMPLES = [
   "珠穆朗玛峰现在的官方高度是多少？",
 ];
 
-export function Conversation({ st, live, busy, suggesting, error, now, act, tid, putBack, models, picker }) {
+export function Conversation({ st, live, busy, suggesting, error, now, act, tid, putBack, models, credits, picker }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
   const [away, setAway] = useState(false); // 离底部远了：输入框上面出“回到底部”
@@ -81,10 +81,12 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid,
         }}>
         <div className="ws-flow">
           {fresh ? <Welcome /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} />}
-          {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error}</span></div>}
+          {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error.text ?? error}</span>
+            {error.login && picker.onLogin && <button className="ws-btn ws-error-act" onClick={picker.onLogin}>登录</button>}</div>}
         </div>
       </div>
       <div className="ws-dock">
+        <CreditsNote credits={credits} onLogin={picker.onLogin} />
         {/* 按下去不抢光标：输入框里写着的字和光标都留着 */}
         {away && <button className="ws-jump" aria-label="回到底部" title="回到底部" onMouseDown={(e) => e.preventDefault()} onClick={toBottom}><IconArrowDown size={16} /></button>}
         <Composer thread={tid || "new"} carry={!!live} mode={mode} queueing={queueing} held={pendingKinds.length > 0} stopping={stopping} putBack={putBack} onSend={onSend} onStop={act.stop}
@@ -731,6 +733,20 @@ const PLACEHOLDER = {
   failed: "这一轮没跑完，点上面的“重试”",
 };
 const HELD = "上面那句发出去以后才能再发，也可以撤回它一起改";
+
+// 额度快用完（用了八成）或用完了时，输入框上面提醒一句（见后端 app.quota，按最紧的那个窗口）；游客带上登录入口
+function CreditsNote({ credits, onLogin }) {
+  const left = creditsLeft(credits);
+  if (!left?.warn) return null;
+  const more = onLogin ? <>，<button className="ws-link" onClick={onLogin}>登录</button>后每天 10000</> : null;
+  return (
+    <div className={"ws-credits-note" + (left.exhausted ? " out" : "")} role="status">
+      <IconWarn size={13} />
+      <span>{left.exhausted ? <>{left.span}的额度用完了（{left.limit} credits），{left.resetText}{more}</>
+        : <>{left.span}的额度快用完了：还剩 {creditsText(left.remaining)}（共 {left.limit}），{left.resetText}{more}</>}</span>
+    </div>
+  );
+}
 
 // 回答时也能打字、发出去（queueing）：话排着，这一轮答完就发；这时输入框里有字是发送键，没字是停止键。Esc 停止回答。
 // held：已经有一句没发出去（排着或等着插进这一轮）。没发出去的话最多一句：这时还能打字，但发不出去，要先撤回那句、改好一起发

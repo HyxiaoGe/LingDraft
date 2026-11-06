@@ -48,6 +48,7 @@ from app.graph.research.agent import (
     InterruptedRetryMiddleware,
     InvalidToolCallRetryMiddleware,
     ModelSelect,
+    ToolChargeMiddleware,
     ToolProgressMiddleware,
     _retrying,
     emit,
@@ -131,6 +132,7 @@ def build_subagent(planner):
         middleware=[
             SubagentPrompt(),
             ContentGuard(planner),
+            ToolChargeMiddleware(),
             ToolProgressMiddleware(),
             WebToolsMiddleware(),  # 在 ToolProgressMiddleware 里面：过程记录看到的是带来源 id 的结果
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
