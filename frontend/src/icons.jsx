@@ -51,6 +51,9 @@ export const IconImage = (p) => svg(<><rect x="3" y="4" width="18" height="16" r
 export const IconInsert = (p) => svg(<><path d="M5 4v7a4 4 0 0 0 4 4h11" /><path d="M15 10l5 5-5 5" /></>, p);
 export const IconUndo = (p) => svg(<><path d="M9 14L4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></>, p);
 export const IconClose = (p) => svg(<path d="M6 6l12 12M18 6L6 18" />, p);
+export const IconMenu = (p) => svg(<path d="M4 7h16M4 12h16M4 17h16" />, p);
+// 左栏开合：一个框，左边隔出一栏
+export const IconPanel = (p) => svg(<><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></>, p);
 export const IconMore = (p) => svg(<><circle cx="5.5" cy="12" r="1" fill="currentColor" /><circle cx="12" cy="12" r="1" fill="currentColor" /><circle cx="18.5" cy="12" r="1" fill="currentColor" /></>, p);
 
 // 转圈：正在进行的步骤

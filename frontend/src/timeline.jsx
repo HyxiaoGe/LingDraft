@@ -3,13 +3,14 @@
 // 也能插进这一轮：模型做完手上这一步就看到它，插进去以后排在过程里。过程正在跑时展开，这一轮结束后收成一行“已完成 25 秒”，点开看每一步。
 // 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。最后一轮的这些一直显示，之前的悬停才出现。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
 import { IconArrowDown, IconArrowUp, IconBook, IconBulb, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconInsert, IconLock, IconLoop, IconPage, IconPin, IconPlane, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconUndo, IconWarn, Spinner } from "./icons.jsx";
 import { ImageCards, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
 import { Markdown } from "./markdown.jsx";
+import { HeadBar, NavContext } from "./nav.jsx";
 import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, creditsLeft, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Mark } from "./sources.jsx";
 import { WeatherCard, forecastsOf } from "./weather.jsx";
@@ -21,11 +22,15 @@ const EXAMPLES = [
   "珠穆朗玛峰现在的官方高度是多少？",
 ];
 
-export function Conversation({ st, live, busy, suggesting, error, now, act, tid, putBack, models, credits, picker }) {
+export function Conversation({ st, live, busy, suggesting, error, now, act, tid, putBack, listedTitle, models, credits, picker }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
   const [away, setAway] = useState(false); // 离底部远了：输入框上面出“回到底部”
   const fresh = !tid && !live;
+  const mobile = !!useContext(NavContext)?.mobile;
+  // 新对话的“能做的事 + 今日灵感”：桌面在输入框下面，窄屏输入框贴底、它们在输入框上面。按看到的顺序放，Tab 和读屏的先后和眼睛看的一致
+  const starters = fresh && <Inspirations onPick={act.start} />;
+  const opening = !!tid && !st && !live && !error; // 点开了一个对话，状态还没取回来：先显示骨架
   const toBottom = () => {
     const el = scrollRef.current;
     stick.current = true;
@@ -54,7 +59,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid,
     return () => ro.disconnect();
   }, []);
 
-  const mode = fresh ? "new" : st?.status === "queued" ? "queued" : busy || ACTIVE.has(st?.status) ? "busy" : st?.status || "busy";
+  const mode = fresh ? "new" : opening ? "opening" : st?.status === "queued" ? "queued" : busy || ACTIVE.has(st?.status) ? "busy" : st?.status || "busy";
   const stopping = !!(live?.stopping || st?.stopping);
   // 回答时（包括还在排队、正在停止）发的话排着，这一轮答完就发；新对话刚发出去、还没拿到 id 时排不了
   const queueing = !!tid && (mode === "busy" || mode === "queued");
@@ -64,15 +69,13 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid,
     if (queueing) return act.queue(text);
     return undefined;
   };
-  const title = live?.title || st?.title || live?.said || "新对话";
+  const title = live?.title || st?.title || live?.said || (opening ? listedTitle ?? null : "新对话"); // null：打开中、列表里也还没有，顶栏先放占位
   const running = busy || ACTIVE.has(st?.status);
   const pendingKinds = running ? [st?.guided_message && "guided", st?.queued_message && "queued"].filter(Boolean) : [];
 
   return (
     <section className={"ws-main" + (fresh ? " fresh" : "")} aria-label="对话">
-      <header className="ws-head">
-        <div className="ws-head-title" title={title}>{fresh ? "新对话" : title}</div>
-      </header>
+      <HeadBar title={fresh ? "新对话" : title} />
       <div className="ws-scroll" ref={scrollRef}
         onScroll={(e) => {
           const el = e.currentTarget;
@@ -80,40 +83,80 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid,
           setAway(!stick.current);
         }}>
         <div className="ws-flow">
-          {fresh ? <Welcome /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} />}
+          {fresh ? <Welcome /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} />}
           {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error.text ?? error}</span>
             {error.login && picker.onLogin && <button className="ws-btn ws-error-act" onClick={picker.onLogin}>登录</button>}</div>}
         </div>
       </div>
+      {mobile && starters}
       <div className="ws-dock">
         <CreditsNote credits={credits} onLogin={picker.onLogin} />
         {/* 按下去不抢光标：输入框里写着的字和光标都留着 */}
         {away && <button className="ws-jump" aria-label="回到底部" title="回到底部" onMouseDown={(e) => e.preventDefault()} onClick={toBottom}><IconArrowDown size={16} /></button>}
         <Composer thread={tid || "new"} carry={!!live} mode={mode} queueing={queueing} held={pendingKinds.length > 0} stopping={stopping} putBack={putBack} onSend={onSend} onStop={act.stop}
           above={running && <Pending st={st} act={act} />} onTakeBack={pendingKinds.length ? () => act.withdraw(pendingKinds) : null}
-          tools={<ModelTools models={models} {...picker} />} />
+          tools={<ModelTools models={models} loading={models === null || opening} {...picker} />} />
       </div>
-      {fresh && <Inspirations onPick={act.start} />}
+      {!mobile && starters}
     </section>
   );
 }
 
-// 新对话：欢迎语在输入框上面，今日灵感在下面，三样一起放在中间偏上
-function Welcome() {
+// 打开对话、状态还没回来时的骨架：一句话、几行回答的样子。取得快（本机、缓存）时不闪一下：过 200ms 还没回来才显示
+function ThreadSkeleton() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setShow(true), 200);
+    return () => clearTimeout(t);
+  }, []);
   return (
-    <div className="ws-welcome">
-      <h2>想问什么？</h2>
-      <p>直接问。需要查的会上网搜、读原文，回答里标出处，鼠标放在角标上能看到是哪条来源。也能按描述画图、改图。</p>
+    <div className="ws-skel-thread" role="status" aria-label="正在打开对话">
+      {show && (
+        <>
+          <div className="ws-skel ws-skel-bubble" />
+          {[96, 88, 92, 60].map((w) => <div key={w} className="ws-skel ws-skel-line" style={{ width: `${w}%` }} />)}
+          <div className="ws-skel ws-skel-bubble short" />
+          {[90, 72].map((w) => <div key={w} className="ws-skel ws-skel-line" style={{ width: `${w}%` }} />)}
+        </>
+      )}
     </div>
   );
 }
 
-// 今日灵感：Fusion 每天照热榜出的题（后端代取，只留新闻、调研、常识、天气、生图），每次打开新对话打乱顺序。
-// 照 Fusion 的样子：排两行，放得下几个放几个；每 6 秒一个接一个翻过去，换成接下来的一批；鼠标放在上面、键盘停在上面时不翻。
-// 取不到就显示固定的几个例子，不写“今日灵感”。取回来之前先空着占好位置，出来时页面不跳
-const ROTATE_MS = 6000;
-const FLIP_MS = 300; // 和 .ws-inspire 里的过渡时长一致
-const FLIP_STAGGER = 80;
+// 新对话：欢迎语在输入框上面，下面是能做的几件事和今日灵感，三样一起放在中间偏上（窄屏输入框贴底，这些在它上面）
+function Welcome() {
+  return (
+    <div className="ws-welcome">
+      <h2>想问什么？</h2>
+      <p>需要查的会上网搜、读原文，复杂的问题拆开分头去查，回答里标明出处。</p>
+    </div>
+  );
+}
+
+// 能做的几件事：点一下把一个例子放进输入框（不直接发），改改地点、日期再发
+const ABILITIES = [
+  [IconSearch, "查资料", "国内几款 AI 眼镜各有什么优缺点？对比一下"],
+  [IconCloudSun, "看天气", "这周末北京天气怎么样？"],
+  [IconRoute, "地点和路线", "从上海虹桥站到外滩，坐地铁怎么走？"],
+  [IconTrain, "航班和火车", "下周五北京到上海的高铁有哪些车次？"],
+  [IconImage, "画图", "画一张秋天北京胡同的插画，暖色调"],
+];
+
+function Abilities() {
+  return (
+    <div className="ws-abilities" role="group" aria-label="能做的事">
+      {ABILITIES.map(([Icon, name, example]) => (
+        <button key={name} className="ws-ability" title={`放进输入框：${example}`} onClick={() => fillInput(example)}>
+          <Icon size={15} />{name}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// 今日灵感：Fusion 每天出的题（后端代取，只留新闻、调研、常识、天气、生图），大家看到的一样，每次打开新对话打乱顺序。
+// 排两行，放得下几个放几个，不自己翻；想看别的点“换一批”。一行放不下的题折成两行，不截断。点一下直接发。
+// 取不到就显示固定的几个例子，不写“今日灵感”。取回来之前先放占位，出来时页面不跳
 const CHIP_GAP = 8; // 和 .ws-inspire 的 gap 一致
 const ROWS = 2;
 
@@ -126,7 +169,7 @@ function shuffled(xs) {
   return a;
 }
 
-// 从第 start 个往后（到头了接着从头来），两行放得下的那几个的序号
+// 从第 start 个往后（到头了接着从头来），两行放得下的那几个的序号；比一行还宽的独占一行（折成两行显示）
 function fitRows(widths, start, room) {
   const out = [];
   let row = 0;
@@ -147,22 +190,15 @@ function Inspirations({ onPick }) {
   const [pool, setPool] = useState(null); // {questions, today}；today 为假：没取到，用的固定例子
   const [start, setStart] = useState(0);
   const [size, setSize] = useState(null); // {room：能用多宽, widths：每个题多宽}
-  const [flipped, setFlipped] = useState(false);
-  const [hover, setHover] = useState(false);
-  const [focused, setFocused] = useState(false);
   const box = useRef(null);
   const ruler = useRef(null); // 看不见的一排，用来量每个题多宽
-  const timers = useRef([]);
 
   useEffect(() => {
     let on = true;
     listInspirations()
       .then((qs) => on && setPool(qs.length ? { questions: shuffled(qs), today: true } : { questions: EXAMPLES, today: false }))
       .catch(() => on && setPool({ questions: EXAMPLES, today: false }));
-    return () => {
-      on = false;
-      timers.current.forEach(clearTimeout);
-    };
+    return () => { on = false; };
   }, []);
   useLayoutEffect(() => {
     if (!pool) return undefined;
@@ -174,41 +210,23 @@ function Inspirations({ onPick }) {
   }, [pool]);
 
   const shown = pool && size?.room ? fitRows(size.widths, start, size.room) : [];
-  const next = useRef(null);
-  next.current = () => {
-    if (!shown.length || pool.questions.length <= shown.length) return; // 一屏就放得下全部：不翻
-    const to = (start + shown.length) % pool.questions.length;
-    timers.current.forEach(clearTimeout);
-    timers.current = [];
-    setFlipped(true);
-    timers.current.push(setTimeout(() => {
-      setStart(to);
-      timers.current.push(setTimeout(() => setFlipped(false), 50));
-    }, shown.length * FLIP_STAGGER + FLIP_MS));
-  };
-  const paused = hover || focused;
-  useEffect(() => {
-    if (paused) return undefined;
-    const t = setInterval(() => next.current(), ROTATE_MS);
-    return () => clearInterval(t);
-  }, [paused]);
+  const more = !!pool && shown.length > 0 && pool.questions.length > shown.length;
 
   return (
-    <section className="ws-examples" aria-label={pool?.today ? "今日灵感" : "可以这样问"}>
-      {/* 停翻只看小标题和两行题：外面这块往下撑满了页面，鼠标放在下面的空白处不算 */}
-      <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-        onFocus={() => setFocused(true)} onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setFocused(false)}>
-        <div className="ws-inspire-label">{pool?.today && <><IconSparkle size={13} />今日灵感</>}</div>
-        <div className="ws-inspire-ruler" ref={ruler} aria-hidden="true">
-          {pool?.questions.map((q) => <span key={q} className="ws-suggest-item">{q}</span>)}
-        </div>
-        <div className={"ws-inspire" + (flipped ? " flip" : "")} ref={box}>
-          {shown.map((i, n) => {
-            const q = pool.questions[i];
-            const d = `${n * FLIP_STAGGER}ms`; // 只有翻的两项错开，悬停变色不等
-            return <button key={q} className="ws-suggest-item" style={{ transitionDelay: `${d}, ${d}, 0ms, 0ms` }} onClick={() => onPick(q)}>{q}</button>;
-          })}
-        </div>
+    <section className="ws-examples" aria-label="新对话的起点">
+      <Abilities />
+      <div className="ws-inspire-label">
+        {pool?.today && <><IconSparkle size={13} /><b>今日灵感</b><span className="hint">每日更新，与你的对话无关</span></>}
+        {more && <button className="ws-inspire-more" onClick={() => setStart((start + shown.length) % pool.questions.length)}><IconLoop size={12} />换一批</button>}
+      </div>
+      <div className="ws-inspire-ruler" ref={ruler} aria-hidden="true">
+        {pool?.questions.map((q) => <span key={q} className="ws-suggest-item">{q}</span>)}
+      </div>
+      <div className="ws-inspire" ref={box} aria-label={pool?.today ? "今日灵感" : "可以这样问"} role="group">
+        {pool ? shown.map((i) => {
+          const q = pool.questions[i];
+          return <button key={q} className="ws-suggest-item" onClick={() => onPick(q)}>{q}</button>;
+        }) : [112, 168, 136, 150].map((w) => <span key={w} className="ws-skel ws-skel-chip" style={{ width: w }} aria-hidden="true" />)}
       </div>
     </section>
   );
@@ -277,6 +295,8 @@ function Turn({ t, st, live, running, suggesting, stopping, last, now, act, mode
 // 用户说的话：下面是发送时间和“复制”，最后一句在空闲时还有“编辑”。pinned（最后一轮）一直显示，其他的悬停才出现
 // 临时的输入框（改这句话、左栏改名）关掉以后，光标回到对话的输入框（等它从页面上撤掉再放）
 export const focusInput = () => setTimeout(() => dispatchEvent(new Event("ws-focus-input")));
+// 把一句话放进输入框（新对话页“能做的事”的例子），光标放在它后面
+const fillInput = (text) => dispatchEvent(new CustomEvent("ws-fill-input", { detail: text }));
 
 function UserMsg({ text, at, pinned, now, editable, onEdit }) {
   const [editing, setEditing] = useState(false);
@@ -727,6 +747,7 @@ function Failed({ st, act }) {
 
 const PLACEHOLDER = {
   new: "想问什么？",
+  opening: "正在打开对话…",
   idle: "接着问…",
   busy: "正在回答，现在发的话等这一轮答完就发",
   queued: QUEUED,
@@ -802,6 +823,22 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
     } else drafts.current.set(putBack.thread, join(drafts.current.get(putBack.thread) || ""));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [putBack]);
+  // 放进来的例子（见 fillInput）：输入框空着、或者还是上次放进来的那句，就换成这句；写着别的字时接在前面（和放回输入框的话一样）
+  const filled = useRef(null);
+  useEffect(() => {
+    const fill = (e) => {
+      const t = e.detail;
+      const prev = filled.current; // setText 的更新函数是之后才跑的，先把上一句记下来
+      setText((cur) => (!cur.trim() || cur === prev ? t : `${t}\n${cur}`));
+      filled.current = t;
+      const el = ref.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      requestAnimationFrame(() => el.setSelectionRange(t.length, t.length));
+    };
+    addEventListener("ws-fill-input", fill);
+    return () => removeEventListener("ws-fill-input", fill);
+  }, []);
   useEffect(() => {
     const back = () => focus(false);
     // 光标在输入框里、或者没在哪儿（点了正文）时才停；在改名、菜单、角标这些地方，Esc 归它们自己。
@@ -863,8 +900,9 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
 // 输入框里发送按钮左边：深度思考开关（选的模型能开关才有）和选模型。新对话随便选；对话开始后模型定下不换，
 // 点开只说明一句、列出能选的给开新对话时参考。思考开关每句话都能改，按下去不抢光标（输入框里的字和光标都留着）。
 // 菜单打开时光标在菜单里：Esc 只收起菜单，不会停掉正在跑的这一轮（见 Composer 的 Esc）。
-// 这一档选不了的（locked：游客看到的要登录的模型）照样列出来，锁着；游客点它去登录（onLogin），登录了还锁着的是不开放的
-function ModelTools({ models, current, locked, onPick, thinking, onThinking, onLogin }) {
+// 这一档选不了的（locked：游客看到的要登录的模型）照样列出来，锁着；游客点它去登录（onLogin），登录了还锁着的是不开放的。
+// loading：模型列表还没取到、或者打开的对话状态还没回来，先放一块占位，回来时不突然冒出来（输入框照常能打字、能发，按 Auto）
+function ModelTools({ models, loading, current, locked, onPick, thinking, onThinking, onLogin }) {
   const [open, setOpen] = useState(false);
   const box = useRef(null);
   const menu = useRef(null);
@@ -887,6 +925,7 @@ function ModelTools({ models, current, locked, onPick, thinking, onThinking, onL
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   const opt = models?.find((m) => m.id === current);
+  if (loading) return <span className="ws-skel ws-skel-model" aria-hidden="true" />;
   if (!models?.length || !current) return null;
   return (
     <div className="ws-model" ref={box}>

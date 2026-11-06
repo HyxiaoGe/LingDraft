@@ -2,6 +2,7 @@
 // 现在只能看，不能改、删（2026-11-03 Sean 定先展示）。记忆按账号分（2026-11-06）：游客的对话不整理，登录后才有。
 import { useEffect, useState } from "react";
 import { getMemory } from "./api.js";
+import { HeadBar } from "./nav.jsx";
 import { stamp } from "./research.js";
 
 // 上次整理的结果，一句话
@@ -28,7 +29,7 @@ export function MemoryPage({ auth, onLogin }) {
   const guest = auth?.ready && !auth.me; // 游客：没有记忆，说明登录了才有
   return (
     <section className="ws-main" aria-label="记忆">
-      <div className="ws-head"><div className="ws-head-title">记忆</div></div>
+      <HeadBar title="记忆" />
       <div className="ws-scroll">
         <div className="ws-flow mem">
           <p className="mem-intro">

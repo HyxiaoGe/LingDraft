@@ -6,9 +6,10 @@
 import { useEffect, useRef, useState } from "react";
 import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads, queueResearch,
   regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
-import { IconDownload, IconEdit, IconMore, IconPlus, IconTrash } from "./icons.jsx";
+import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPlus, IconTrash } from "./icons.jsx";
 import { CreditsFoot, LoginDialog, UserFoot, useAuth } from "./login.jsx";
 import { MemoryPage } from "./memory.jsx";
+import { MOBILE, NavContext, SIDE_ARIA_KEY, SIDE_KEY, isSideKey, useMedia } from "./nav.jsx";
 import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, threadMarkdown, useNow, when } from "./research.js";
 import { Conversation, focusInput } from "./timeline.jsx";
 import "./workspace.css";
@@ -28,6 +29,10 @@ const navigate = (path, push) => {
   if (location.pathname !== path || location.hash) history[push ? "pushState" : "replaceState"](null, "", path);
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// 桌面上左栏收起没有：记在本机（取不到、存不下就按展开）
+const SIDE_STORE = "lingdraft.side";
+const sideOffSaved = () => { try { return localStorage.getItem(SIDE_STORE) === "off"; } catch { return false; } };
+const saveSideOff = (off) => { try { if (off) localStorage.setItem(SIDE_STORE, "off"); else localStorage.removeItem(SIDE_STORE); } catch { /* 存不下就只管这一次 */ } };
 const fileName = (title) => (title || "").replace(/[\\/:*?"<>|\s]+/g, " ").trim().slice(0, 60) || "对话";
 
 // 一轮结束时还留在服务器上的话：要放回输入框的那几种
@@ -68,6 +73,11 @@ export default function Workspace() {
   const busyRef = useRef(false);
   const refetchAt = useRef(0);
   const refetchTimer = useRef(null);
+  // 导航（见 nav.jsx）：桌面上左栏可以整栏收起；窄屏左栏是抽屉，drawer 是开着没有
+  const mobile = useMedia(MOBILE);
+  const [sideOff, setSideOff] = useState(sideOffSaved);
+  const [drawer, setDrawer] = useState(false);
+  const navFocus = useRef(null); // 收起、展开、关抽屉以后焦点去哪个按钮（按下的那个按钮没了）
 
   const setBusy = (b) => {
     busyRef.current = b;
@@ -472,15 +482,58 @@ export default function Workspace() {
   const shown = st && live?.sources ? { ...st, sources: { ...st.sources, ...live.sources } } : st;
 
   const onLogin = auth.login && !auth.me ? () => setLoginOpen(true) : null; // 游客点“登录后可用”的模型、记忆页的登录都开这个弹窗
+
+  // ---- 导航：收起左栏、抽屉 ----
+  // 收起、展开：按下的按钮跟着没了，焦点挪到对面那个按钮上（顶栏的展开钮 / 左栏的收起钮）
+  const toggleSide = (e) => {
+    if (e?.currentTarget) navFocus.current = sideOff ? "collapse" : "expand";
+    setSideOff((off) => {
+      saveSideOff(!off);
+      return !off;
+    });
+  };
+  const closeDrawer = () => {
+    if (document.activeElement?.closest?.(".ws-side")) navFocus.current = "drawer"; // 焦点在抽屉里：关上以后回到抽屉钮
+    setDrawer(false);
+  };
+  const nav = { mobile, collapsed: sideOff, drawer, toggleSide, openDrawer: () => setDrawer(true), closeDrawer, newChat: () => select(null) };
+  useEffect(() => {
+    const to = navFocus.current;
+    navFocus.current = null;
+    if (to) document.querySelector(`[data-nav="${to}"]`)?.focus();
+  }, [sideOff, drawer]);
+  useEffect(() => { if (!mobile) setDrawer(false); }, [mobile]); // 窗口拉宽了：抽屉不再是抽屉
+  // 快捷键：桌面上收起、展开左栏，窄屏开、关抽屉
+  const sideKey = useRef(null);
+  sideKey.current = () => (mobile ? (drawer ? closeDrawer() : setDrawer(true)) : toggleSide());
+  useEffect(() => {
+    const key = (e) => {
+      if (!isSideKey(e) || e.repeat) return;
+      e.preventDefault();
+      sideKey.current();
+    };
+    addEventListener("keydown", key);
+    return () => removeEventListener("keydown", key);
+  }, []);
+  // 在抽屉里点了一条对话、新对话、记忆、登录：换过去（登录弹窗打开），抽屉收起
+  const fromSide = (fn) => (...args) => {
+    setDrawer(false);
+    return fn(...args);
+  };
+  const listedTitle = tid ? threads?.find((t) => t.thread_id === tid)?.title : null; // 打开中还没取回状态时，顶栏先用列表里的标题
+
   return (
-    <div className="ws">
-      <Sidebar threads={threads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={select} manage={manage}
-        memory={memory} onMemory={openMemory} auth={auth} onLogin={() => setLoginOpen(true)} credits={credits} onCredits={refreshCredits} />
-      {memory ? <MemoryPage auth={auth} onLogin={onLogin} />
-        : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack}
-          models={models} credits={credits} picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />}
-      <LoginDialog open={loginOpen} crowded={auth.crowded} onClose={() => setLoginOpen(false)} />
-    </div>
+    <NavContext.Provider value={nav}>
+      <div className={"ws" + (sideOff ? " side-off" : "") + (mobile && drawer ? " drawer" : "")}>
+        {mobile && drawer && <div className="ws-scrim" onClick={closeDrawer} aria-hidden="true" />}
+        <Sidebar threads={threads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={fromSide(select)} manage={manage}
+          memory={memory} onMemory={fromSide(openMemory)} auth={auth} onLogin={fromSide(() => setLoginOpen(true))} credits={credits} onCredits={refreshCredits} nav={nav} />
+        {memory ? <MemoryPage auth={auth} onLogin={onLogin} />
+          : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
+            models={models} credits={credits} picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />}
+        <LoginDialog open={loginOpen} crowded={auth.crowded} onClose={() => setLoginOpen(false)} />
+      </div>
+    </NavContext.Provider>
   );
 }
 
@@ -499,9 +552,30 @@ function rowSub(t, now) {
   return "";
 }
 
-function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memory, onMemory, auth, onLogin, credits, onCredits }) {
+// 窄屏时这一栏是抽屉（nav.drawer 开着）：打开时焦点进来，Tab 在里面转，Esc、点外面、右上角的关闭都能关上。
+// 抽屉里的菜单、改名框开着时，Esc 先归它们
+const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
+
+function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memory, onMemory, auth, onLogin, credits, onCredits, nav }) {
   const [menu, setMenu] = useState(null); // 打开菜单的那一行：{t, rect}
   const [renaming, setRenaming] = useState(null); // 正在改名的线程 id
+  const box = useRef(null);
+  const modal = nav.mobile && nav.drawer;
+  useEffect(() => { if (modal) box.current?.querySelector('[data-nav="close"]')?.focus(); }, [modal]);
+  const onKeyDown = (e) => {
+    if (!modal) return;
+    if (e.key === "Escape" && !e.nativeEvent.isComposing) {
+      if (menu || e.target.closest?.(".ws-menu, .ws-rename") || box.current?.querySelector('[aria-expanded="true"]')) return;
+      e.preventDefault();
+      nav.closeDrawer();
+    } else if (e.key === "Tab") {
+      const all = [...box.current.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+      if (!all.length) return;
+      const [first, last] = [all[0], all.at(-1)];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  };
   // 列表每隔几秒取一次；当前这个线程以页面手上的状态为准，刚新建、列表里还没有的先补一行
   let rows = threads || [];
   if (current) {
@@ -513,17 +587,26 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
       : [{ thread_id: current, title: live?.said || "新对话", status: "running", ...patch }, ...rows];
   }
   return (
-    <aside className="ws-side">
+    <aside ref={box} id="ws-side" className="ws-side" onKeyDown={onKeyDown}
+      {...(modal ? { role: "dialog", "aria-modal": true, "aria-label": "对话列表" } : {})}>
       <div className="ws-brand">
         <span className="logo">灵</span>
         <span className="name">灵稿</span>
         <span className="tag">对话</span>
+        {nav.mobile
+          ? <button className="ws-icon-btn ws-side-toggle" data-nav="close" aria-label="关闭对话列表" onClick={nav.closeDrawer}><IconClose size={18} /></button>
+          : <button className="ws-icon-btn ws-side-toggle" data-nav="collapse" aria-label="收起侧栏" title={`收起侧栏（${SIDE_KEY}）`} aria-keyshortcuts={SIDE_ARIA_KEY}
+            onClick={nav.toggleSide}><IconPanel size={18} /></button>}
       </div>
       <button className="ws-new" onClick={() => onSelect(null)} aria-current={!current && !memory ? "page" : undefined}>
         <IconPlus size={15} /> 新对话
       </button>
       <nav className="ws-groups" aria-label="对话列表">
-        {threads === null && <div className="ws-side-empty">正在取对话列表…</div>}
+        {threads === null && (
+          <div className="ws-side-skel" role="status" aria-label="正在取对话列表">
+            {[78, 62, 70, 54, 66].map((w) => <span key={w} className="ws-skel ws-skel-row" style={{ width: `${w}%` }} />)}
+          </div>
+        )}
         {threads !== null && rows.length === 0 && <div className="ws-side-empty">还没有对话</div>}
         {GROUPS.map(([key, name, test]) => {
           const items = rows.filter(test);
