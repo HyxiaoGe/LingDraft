@@ -47,9 +47,14 @@ def test_windows_follow_the_beijing_day_and_week():
     assert (day.kind, day.limit, day.used, day.remaining) == (DAY, 100, 20, 80)
     assert (week.kind, week.limit, week.used) == (WEEK, 300, 50)
     assert day.resets_at == datetime(2026, 11, 5, tzinfo=CHINA_TZ) and week.resets_at == datetime(2026, 11, 9, tzinfo=CHINA_TZ)
-    assert windows(q, Identity("root", ADMIN)) == []  # 管理员不限
+    u.put(row("root", 9.0))  # 管理员不限，但也看得到自己用了多少
+    rd, rw = windows(q, Identity("root", ADMIN))
+    assert (rd.kind, rd.limit, rd.used, rd.remaining, rd.exhausted) == (DAY, None, 9000, float("inf"), False) and (rw.kind, rw.limit) == (WEEK, None)
+    aio.run(q.check(Identity("root", ADMIN)))
     assert q.view(U1)["windows"][0] == {"kind": DAY, "limit": 100, "used": 20, "resets_at": "2026-11-05T00:00:00+08:00"}
-    assert q.view(Identity("root", ADMIN)) == {"unlimited": True, "warn_at": 0.8, "windows": []}
+    assert q.view(Identity("root", ADMIN)) == {"unlimited": True, "warn_at": 0.8, "windows": [
+        {"kind": DAY, "limit": None, "used": 9000, "resets_at": "2026-11-05T00:00:00+08:00"},
+        {"kind": WEEK, "limit": None, "used": 9000, "resets_at": "2026-11-09T00:00:00+08:00"}]}
 
 
 def test_guests_have_their_own_day_and_share_a_pool():
@@ -132,7 +137,8 @@ def test_api_refuses_to_start_a_turn_when_exhausted_and_reports_credits():
     assert [w["kind"] for w in u.get("/api/credits").json()["windows"]] == [DAY, WEEK]
     _new(u)
     root = TestClient(api_main.app, headers=bearer(user_token("root", admin=True)))
-    assert root.get("/api/credits").json() == {"unlimited": True, "warn_at": 0.8, "windows": []}
+    v = root.get("/api/credits").json()
+    assert v["unlimited"] and [(w["kind"], w["limit"], w["used"]) for w in v["windows"]] == [(DAY, None, 0), (WEEK, None, 0)]
 
 
 def test_limits_come_from_config():

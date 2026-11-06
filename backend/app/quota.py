@@ -61,17 +61,17 @@ class Limits:
 @dataclass(frozen=True)
 class Window:
     kind: str  # DAY / WEEK / GUESTS
-    limit: int  # credits
+    limit: int | None  # credits；管理员不限是 None（只看用了多少）
     used: float  # credits
     resets_at: datetime  # 窗口什么时候重新开始（北京时间的下一个 0 点 / 下周一 0 点）
 
     @property
     def remaining(self) -> float:
-        return max(0.0, self.limit - self.used)
+        return float("inf") if self.limit is None else max(0.0, self.limit - self.used)
 
     @property
     def exhausted(self) -> bool:
-        return self.used >= self.limit
+        return self.limit is not None and self.used >= self.limit
 
     def view(self) -> dict[str, Any]:
         return {"kind": self.kind, "limit": self.limit, "used": round(self.used, 2), "resets_at": self.resets_at.isoformat()}
@@ -202,20 +202,19 @@ class Quota:
         aio.run(usage.setup())
 
     async def windows(self, who: Identity) -> list[Window]:
-        """这个人现在的几个窗口（管理员没有）。重置过的，窗口里只算重置之后的。"""
-        if who.tier == ADMIN:
-            return []
+        """这个人现在的几个窗口；管理员也有日、周两个，只是 limit 是 None（不限，只看用了多少）。重置过的，窗口里只算重置之后的。"""
         now = self.clock()
         reset = await self.usage.last_reset(who.sub)
         day, week = day_start(now), week_start(now)
 
-        async def own(kind: str, limit: int, start: datetime, resets_at: datetime) -> Window:
+        async def own(kind: str, limit: int | None, start: datetime, resets_at: datetime) -> Window:
             return Window(kind, limit, await self.usage.spent(who.sub, max(start, reset) if reset else start) * costs.CREDITS_PER_YUAN, resets_at)
         if who.tier == GUEST:
             return [await own(DAY, self.limits.guest_daily, day, day + timedelta(days=1)),
                     Window(GUESTS, self.limits.guests_daily, await self.usage.spent_by_guests(day) * costs.CREDITS_PER_YUAN, day + timedelta(days=1))]
-        return [await own(DAY, self.limits.user_daily, day, day + timedelta(days=1)),
-                await own(WEEK, self.limits.user_weekly, week, week + timedelta(days=7))]
+        admin = who.tier == ADMIN
+        return [await own(DAY, None if admin else self.limits.user_daily, day, day + timedelta(days=1)),
+                await own(WEEK, None if admin else self.limits.user_weekly, week, week + timedelta(days=7))]
 
     async def check(self, who: Identity) -> None:
         for w in await self.windows(who):
@@ -227,7 +226,7 @@ class Quota:
         aio.run(self.check(who))
 
     def view(self, who: Identity) -> dict[str, Any]:
-        """GET /api/credits：{"unlimited": 管理员, "windows": [...]}。游客总额那个窗口也在里面（kind 是 guests），页面只显示自己的。"""
+        """GET /api/credits：{"unlimited": 管理员, "windows": [...]}。游客总额那个窗口也在里面（kind 是 guests），页面只显示自己的；管理员的窗口 limit 是 null。"""
         windows = aio.run(self.windows(who))
         return {"unlimited": who.tier == ADMIN, "warn_at": WARN_AT, "windows": [w.view() for w in windows]}
 

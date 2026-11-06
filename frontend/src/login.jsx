@@ -89,17 +89,19 @@ export function CreditsFoot({ credits, guest, onLogin, onOpen }) {
   }, [open]);
   if (!credits) return null;
   const left = credits.unlimited ? null : creditsLeft(credits);
+  const used = usedBy(credits); // 管理员不限：按钮上显示今天用了多少
   if (!credits.unlimited && !left) return null;
   const frac = left ? Math.max(0, Math.min(1, left.remaining / left.limit)) : 1;
   const cls = "ws-credits-btn" + (left?.exhausted ? " out" : left?.warn ? " warn" : "");
-  const title = credits.unlimited ? "额度不限" : `${left.span}还剩 ${Math.floor(left.remaining)} / ${left.limit} credits，${left.resetText}`;
+  const title = credits.unlimited ? `额度不限；今天用了 ${used.day} credits，这周 ${used.week}`
+    : `${left.span}还剩 ${Math.floor(left.remaining)} / ${left.limit} credits，${left.resetText}`;
   const rect = open ? btn.current?.getBoundingClientRect() : null;
   return (
     <>
       <button ref={btn} className={cls} title={title} aria-label={"额度：" + title} aria-haspopup="dialog" aria-expanded={open}
         onClick={() => { if (!open) onOpen?.(); setOpen(!open); }}>
         <Ring frac={frac} />
-        <span>{credits.unlimited ? "不限" : <>{guest && <small>试用</small>}{Math.floor(left.remaining)}</>}</span>
+        <span>{credits.unlimited ? <><small>今天</small>{used.day}</> : <>{guest && <small>试用</small>}{Math.floor(left.remaining)}</>}</span>
       </button>
       {open && rect && (
         <div ref={box} className="ws-menu ws-usage" role="dialog" aria-label="额度" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: 232 }}>
@@ -108,6 +110,12 @@ export function CreditsFoot({ credits, guest, onLogin, onOpen }) {
       )}
     </>
   );
+}
+
+// 今天、这周用了多少（取整）；没有那个窗口算 0
+function usedBy(credits) {
+  const of = (kind) => Math.floor(credits.windows.find((w) => w.kind === kind)?.used || 0);
+  return { day: of("day"), week: of("week") };
 }
 
 // 剩余比例的小圆环：frac 是剩下的份额（1 满、0 空），颜色跟着按钮的 warn / out 走
@@ -126,7 +134,19 @@ function Ring({ frac, size = 16 }) {
 // 额度面板（照 Claude 用量弹层的样子）：来源一行；每个窗口一行，左标签右“剩余 xx%”；余额一行；底下是重置时间，游客多一个去登录的按钮
 function UsagePanel({ credits, guest, onLogin }) {
   const source = credits.unlimited ? "管理员" : guest ? "游客试用" : "登录账号";
-  if (credits.unlimited) return <div className="ws-menu-note">额度来源：{source}<br />不限用量</div>;
+  if (credits.unlimited) {
+    const used = usedBy(credits);
+    return (
+      <>
+        <div className="ws-menu-note">额度来源：{source}（不限）</div>
+        <div className="ws-usage-rows">
+          <div className="ws-usage-row"><span>今天已用</span><b>{used.day} credits</b></div>
+          <div className="ws-usage-row"><span>这周已用</span><b>{used.week} credits</b></div>
+        </div>
+        <div className="ws-menu-note">每天 0 点、每周一 0 点重新计（北京时间）</div>
+      </>
+    );
+  }
   const ws = credits.windows.filter((w) => w.kind === "day" || w.kind === "week");
   const left = creditsLeft(credits);
   const pct = (w) => Math.max(0, Math.floor((1 - w.used / w.limit) * 100));
