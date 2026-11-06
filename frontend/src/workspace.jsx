@@ -111,6 +111,12 @@ export default function Workspace() {
   // 身份定了取一次额度；每轮结束（busy 回到 false）再取：这一轮花的已经记上了
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (auth.ready && !busy) refreshCredits(); }, [auth.ready, busy]);
+  // 领不到游客身份（同一地址今天领得太多，2026-11-06 Sean 定）：弹登录框，说人多、请先登录；没有登录功能的部署只能提示稍后再来
+  useEffect(() => {
+    if (!auth.crowded) return;
+    if (auth.login) setLoginOpen(true);
+    else setError("当前访问人数过多，请稍后再来");
+  }, [auth.crowded, auth.login]);
   const picked = models?.some((m) => m.id === pick && !m.locked) ? pick : models?.[0]?.id; // 选的不在列表里了（刚下架）、锁上了也按 Auto
   // 输入框旁边显示的模型：新对话是选的；开始的对话是它定下的（状态还没取回来时，刚发出去的按选的，打开的老对话先不显示）
   const current = !tid ? picked : st?.thread_id === tid && st.model ? st.model : live ? picked : null;
@@ -473,7 +479,7 @@ export default function Workspace() {
       {memory ? <MemoryPage auth={auth} onLogin={onLogin} />
         : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack}
           models={models} credits={credits} picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />}
-      <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} />
+      <LoginDialog open={loginOpen} crowded={auth.crowded} onClose={() => setLoginOpen(false)} />
     </div>
   );
 }

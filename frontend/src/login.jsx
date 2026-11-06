@@ -137,7 +137,8 @@ function Avatar({ me }) {
 }
 
 // 登录弹窗。验证码换登录的那几秒不能关（关了这次验证码就作废，用户还以为在登录）
-export function LoginDialog({ open, onClose }) {
+// crowded：是因为领不到游客身份弹出来的，标题和说明换成“人多、请先登录”
+export function LoginDialog({ open, onClose, crowded }) {
   const [view, setView] = useState("methods");
   const [going, setGoing] = useState(null); // 正在跳去的 provider
   const [email, setEmail] = useState(null); // 邮箱验证码能不能用：null 还没问
@@ -170,8 +171,8 @@ export function LoginDialog({ open, onClose }) {
           <EmailPanel onBack={() => setView("methods")} onDone={onClose} setCritical={setCritical} />
         ) : (
           <>
-            <h2 id="ws-login-title" className="ws-dialog-title">登录灵稿</h2>
-            <p className="ws-dialog-desc">登录后能用全部模型，对话和记忆按账号保存。现在这些对话会一起并进账号。</p>
+            <h2 id="ws-login-title" className="ws-dialog-title">{crowded ? "当前访问人数过多" : "登录灵稿"}</h2>
+            <p className="ws-dialog-desc">{crowded ? "请先登录，登录后可以马上继续聊天；对话和记忆也会按账号保存。" : "登录后能用全部模型，对话和记忆按账号保存。现在这些对话会一起并进账号。"}</p>
             <div className="ws-login-methods">
               <button className="ws-login-btn" disabled={!!going} onClick={() => go("github")}>{going === "github" ? <Spinner size={15} /> : <GitHubMark />}用 GitHub 登录</button>
               <button className="ws-login-btn" disabled={!!going} onClick={() => go("google")}>{going === "google" ? <Spinner size={15} /> : <GoogleMark />}用 Google 登录</button>
