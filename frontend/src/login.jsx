@@ -1,7 +1,7 @@
 // 登录：左栏下面的登录入口和用户菜单、登录弹窗（GitHub、Google、邮箱验证码）、/auth/callback 页。身份本身见 auth.js。
 import { useEffect, useRef, useState } from "react";
 import { EmailLogin, checkSession, completeCallback, emailLoginAvailable, init, signIn, signOut, snapshot, subscribeAuth } from "./auth.js";
-import { IconClose, IconLock, Spinner } from "./icons.jsx";
+import { IconBook, IconClose, IconLock, Spinner } from "./icons.jsx";
 import { creditsLeft, creditsNum, creditsText } from "./research.js";
 
 // 当前身份：{ready, login, me}（见 auth.snapshot）。回到这个标签页时和 auth 服务对一下账（别处退出了就跟着退）
@@ -22,9 +22,9 @@ export function useAuth() {
   return s;
 }
 
-// 左栏下面：游客看到“登录”，登录了看到头像和邮箱，点开能退出
+// 左栏下面：游客看到“登录”，登录了看到头像和邮箱，点开能去记忆页、退出（2026-11-06 Sean 定：记忆入口收进这里，游客没有记忆）
 // credits 是额度（/api/credits），菜单里显示今天、这周还剩多少；onOpen 在打开菜单时调（重新取一次）
-export function UserFoot({ auth, onLogin, credits, onOpen }) {
+export function UserFoot({ auth, onLogin, credits, onOpen, memory, onMemory }) {
   const [open, setOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const btn = useRef(null);
@@ -59,6 +59,9 @@ export function UserFoot({ auth, onLogin, credits, onOpen }) {
             {me.tier === "admin" && <span>管理员</span>}
           </div>
           <CreditsLine credits={credits} />
+          <button role="menuitem" aria-current={memory ? "page" : undefined} onClick={() => { setOpen(false); onMemory?.(); }}>
+            <IconBook size={14} />记忆
+          </button>
           <button role="menuitem" disabled={leaving} onClick={() => { setLeaving(true); signOut().catch(() => setLeaving(false)); }}>
             {leaving ? <Spinner size={14} /> : <IconClose size={14} />}退出登录
           </button>

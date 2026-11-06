@@ -550,10 +550,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
       </nav>
       <div className="ws-foot">
         <CreditsFoot credits={credits} guest={!auth.me} onLogin={auth.login ? onLogin : null} />
-        <a href={MEMORY_PATH} aria-current={memory ? "page" : undefined}
-          onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onMemory(); }}>记忆</a>
-        <a href="#poster">宣传海报</a>
-        <span className="ws-foot-user"><UserFoot auth={auth} onLogin={onLogin} credits={credits} onOpen={onCredits} /></span>
+        <span className="ws-foot-user"><UserFoot auth={auth} onLogin={onLogin} credits={credits} onOpen={onCredits} memory={memory} onMemory={onMemory} /></span>
       </div>
       {menu && (
         <RowMenu key={menu.t.thread_id} t={menu.t} rect={menu.rect} onClose={() => setMenu(null)}
