@@ -1,19 +1,23 @@
 // 对话。一轮是用户的一句话加上模型这一轮做的事：先是过程（思考、搜索、读页按发生的先后），然后是天气卡片、画的图，再是正文和这条回答用到的来源；
 // 最后一轮下面是推荐问题（起的时候先说一声）。回答时又说的话排着（最多一句），贴在输入框上沿，这一轮答完就发，能撤回到输入框；
-// 也能插进这一轮：模型做完手上这一步就看到它，插进去以后排在过程里。过程正在跑时展开，这一轮结束后收成一行“已完成 25 秒”，点开看每一步。
+// 也能插进这一轮：模型做完手上这一步就看到它，插进去以后排在过程里。过程正在跑时展开，跑完不自动收起（用户自己收）；重新打开的对话里收成一行
+// “已完成 25 秒 · 搜了 6 次 · 读了 4 页”，点开看每一步。收起的内容还留在页面里，浏览器的查找搜得到（见 Fold）。
+// 每一轮是一个 section（.ws-turn），回答开头有“灵稿”的标识；三轮起右边（宽屏）或顶栏（窄屏）有轮次目录，见 TurnIndex。
 // 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。最后一轮的这些一直显示，之前的悬停才出现。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
 import { getDraft, setDraft } from "./drafts.js";
-import { IconArrowDown, IconArrowUp, IconBook, IconBulb, IconCheck, IconChevron, IconClose, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconInsert, IconLock, IconLoop, IconPage, IconPin, IconPlane, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconUndo, IconWarn, Spinner } from "./icons.jsx";
+import { failureText } from "./errors.js";
+import { IconArrowDown, IconArrowUp, IconBook, IconBulb, IconCheck, IconChevron, IconClose, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconInsert, IconList, IconLock, IconLoop, IconPage, IconPin, IconPlane, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconUndo, IconWarn, Spinner } from "./icons.jsx";
 import { ImageCards, Viewer, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
 import { Markdown } from "./markdown.jsx";
 import { HeadBar, NavContext } from "./nav.jsx";
-import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, creditsLeft, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
-import { AnswerSources, Mark } from "./sources.jsx";
+import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, creditsLeft, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping } from "./research.js";
+import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
+import { TurnIndex, TurnIndexButton, turnEntries } from "./turns.jsx";
 import { IMAGE_ACCEPT, ImageError, prepareImage } from "./upload.js";
 import { WeatherCard, forecastsOf } from "./weather.jsx";
 
@@ -24,42 +28,64 @@ const EXAMPLES = [
   "珠穆朗玛峰现在的官方高度是多少？",
 ];
 
-export function Conversation({ st, live, busy, suggesting, error, now, act, tid, putBack, listedTitle, models, credits, picker }) {
+// 正文 680 居中，右边空出来的那块放得下 184 宽的目录加两边各 16 的空：滚动区至少这么宽才放右栏
+const RAIL_MIN = 1120;
+
+export function Conversation({ st, live, busy, suggesting, error, now, act: rawAct, tid, putBack, listedTitle, models, credits, picker }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
+  const lastTop = useRef(0); // 上一次滚动时的位置：往上滚了才算用户离开底部
   const [away, setAway] = useState(false); // 离底部远了：输入框上面出“回到底部”
+  const [more, setMore] = useState(false); // 离开底部以后下面又长出了内容：“回到底部”写上“有新内容”
+  const [wide, setWide] = useState(false); // 正文右边放得下轮次目录（见 RAIL_MIN）
+  const runningRef = useRef(false); // 有一轮在跑：这时内容变高才算“有新内容”（用户自己点开收起的过程不算）
   const fresh = !tid && !live;
   const mobile = !!useContext(NavContext)?.mobile;
-  // 新对话的“能做的事 + 今日灵感”：桌面在输入框下面，窄屏输入框贴底、它们在输入框上面。按看到的顺序放，Tab 和读屏的先后和眼睛看的一致
-  const starters = fresh && <Inspirations onPick={act.start} />;
   const opening = !!tid && !st && !live && !error; // 点开了一个对话，状态还没取回来：先显示骨架
   const toBottom = () => {
     const el = scrollRef.current;
     stick.current = true;
     setAway(false);
+    setMore(false);
     el.scrollTop = el.scrollHeight;
+    lastTop.current = el.scrollTop;
   };
 
-  // 换了对话就到底；之后内容变高（字一个个出来、过程展开）或可视区变矮时，贴着底的跟到底。
-  // 看的是尺寸变化，不靠这里重新渲染：逐字出现只重新渲染那一段，每帧也跟得上
+  // 换了对话就到底；之后内容变高（字出来、过程展开）或可视区变矮时，贴着底的跟到底，往上翻着看的不动，“回到底部”写上“有新内容”。
+  // 看的是尺寸变化，不靠这里重新渲染
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(toBottom, [st?.thread_id]);
-  // 发出一句话（或重新回答、重试）：往上翻着看的也跳到底，跟着看这一轮；
-  // 点的是今日灵感、推荐问题，按钮点完就没了，光标回到输入框，好接着写下一句
-  const started = !!live;
-  useLayoutEffect(() => {
-    if (!started) return;
-    toBottom();
-    focusInput();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [started]);
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    const ro = new ResizeObserver(() => { if (stick.current) el.scrollTop = el.scrollHeight; });
+    let h = el.firstElementChild.offsetHeight;
+    const ro = new ResizeObserver(() => {
+      const grew = el.firstElementChild.offsetHeight > h;
+      h = el.firstElementChild.offsetHeight;
+      if (stick.current) el.scrollTop = el.scrollHeight;
+      else if (grew && runningRef.current) setMore(true);
+    });
     ro.observe(el);
     ro.observe(el.firstElementChild);
-    return () => ro.disconnect();
+    const width = new ResizeObserver(() => setWide(el.clientWidth >= RAIL_MIN));
+    width.observe(el);
+    return () => {
+      ro.disconnect();
+      width.disconnect();
+    };
   }, []);
+  // 用户自己做的（发一句话、重新回答、重试、改最后一句、点接着问）：跳到底跟着看这一轮。排着的话自动开跑、打开一个正在跑的对话都不拉人。
+  // 光标不搬：按钮点完没了（接着问、重试、重新回答这一轮跑起来就不在了），焦点会掉到页面上，这时才放回输入框，好接着写；原来在哪就还在哪
+  const act = { ...rawAct };
+  for (const k of ["start", "say", "retry", "regenerate", "edit"]) {
+    act[k] = (...a) => {
+      toBottom();
+      const r = rawAct[k](...a);
+      requestAnimationFrame(() => { if (!document.activeElement || document.activeElement === document.body) focusInput(); });
+      return r;
+    };
+  }
+  // 新对话的“能做的事 + 今日灵感”：桌面在输入框下面，窄屏输入框贴底、它们在输入框上面。按看到的顺序放，Tab 和读屏的先后和眼睛看的一致
+  const starters = fresh && <Inspirations onPick={act.start} />;
 
   const mode = fresh ? "new" : opening ? "opening" : st?.status === "queued" ? "queued" : busy || ACTIVE.has(st?.status) ? "busy" : st?.status || "busy";
   const stopping = !!(live?.stopping || st?.stopping);
@@ -73,16 +99,33 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid,
   };
   const title = live?.title || st?.title || live?.said || (opening ? listedTitle ?? null : "新对话"); // null：打开中、列表里也还没有，顶栏先放占位
   const running = busy || ACTIVE.has(st?.status);
+  runningRef.current = running;
   const pendingKinds = running ? [st?.guided_message && "guided", st?.queued_message && "queued"].filter(Boolean) : [];
+  const said = useAnnounce(st, running, stopping); // 读屏：只在开始、答完、停下、出错时说一句（见 useAnnounce）
+  // 轮次目录：三轮起（或一条回答有三个以上小标题）才有，见 turnEntries。正文右边放得下就放一栏，放不下顶栏右边一个按钮点开
+  const entries = !fresh && !opening ? turnEntries(st, live, running) : [];
+  const index = entries.length > 0;
+  const jumpTo = (id) => {
+    const el = scrollRef.current?.querySelector(`[data-turn="${CSS.escape(id)}"]`);
+    if (!el) return;
+    stick.current = false;
+    el.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    el.focus({ preventScroll: true }); // 键盘、读屏接着从这一轮往下读
+  };
 
   return (
     <section className={"ws-main" + (fresh ? " fresh" : "")} aria-label="对话">
-      <HeadBar title={fresh ? "新对话" : title} />
+      <HeadBar title={fresh ? "新对话" : title} end={index && !wide && <TurnIndexButton entries={entries} scroller={scrollRef} onJump={jumpTo} />} />
       <div className="ws-scroll" ref={scrollRef}
         onScroll={(e) => {
+          // 往上滚了：离底部远了就不再跟着到底。没往上滚（内容长高了、往下滚）不算离开：跳到底以后内容马上长高，滚动事件晚一帧到，
+          // 这时离底已经远了，但用户没动
           const el = e.currentTarget;
-          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+          const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+          stick.current = el.scrollTop < lastTop.current - 1 ? near : stick.current || near;
+          lastTop.current = el.scrollTop;
           setAway(!stick.current);
+          if (stick.current) setMore(false);
         }}>
         <div className="ws-flow">
           {fresh ? <Welcome /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} />}
@@ -90,11 +133,14 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid,
             {error.login && picker.onLogin && <button className="ws-btn ws-error-act" onClick={picker.onLogin}>登录</button>}</div>}
         </div>
       </div>
+      {index && wide && <TurnIndex entries={entries} scroller={scrollRef} onJump={jumpTo} />}
+      <div className="ws-sr" role="status" aria-live="polite">{said}</div>
       {mobile && starters}
       <div className="ws-dock">
         <CreditsNote credits={credits} onLogin={picker.onLogin} />
         {/* 按下去不抢光标：输入框里写着的字和光标都留着 */}
-        {away && <button className="ws-jump" aria-label="回到底部" title="回到底部" onMouseDown={(e) => e.preventDefault()} onClick={toBottom}><IconArrowDown size={16} /></button>}
+        {away && <button className={"ws-jump" + (more ? " more" : "")} aria-label={more ? "有新内容，回到底部" : "回到底部"} title="回到底部"
+          onMouseDown={(e) => e.preventDefault()} onClick={toBottom}><IconArrowDown size={16} />{more && <span>有新内容</span>}</button>}
         <Composer thread={tid || "new"} carry={!!live} mode={mode} queueing={queueing} held={pendingKinds.length > 0} stopping={stopping} putBack={putBack} onSend={onSend} onStop={act.stop}
           above={running && <Pending st={st} act={act} />} onTakeBack={pendingKinds.length ? () => act.withdraw(pendingKinds) : null}
           tools={<ModelTools models={models} loading={models === null || opening} {...picker} />} />
@@ -102,6 +148,33 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid,
       {!mobile && starters}
     </section>
   );
+}
+
+// 读屏播报（polite）：这一轮开始、答完（带来源条数）、停下、出错时各说一句。过程里的阶段、正文逐字出现都不播：
+// 阶段一变就播会打断，正文要听的人等“答完了”再从这一轮开头读（这一轮在跑时标着 aria-busy，见 Turns）
+function useAnnounce(st, running, stopping) {
+  const [said, setSaid] = useState("");
+  const was = useRef(running);
+  const tid = st?.thread_id;
+  const seen = useRef(tid);
+  useEffect(() => {
+    if (seen.current !== tid) { // 换了对话：不播，从这个对话现在的样子开始算
+      seen.current = tid;
+      was.current = running;
+      return;
+    }
+    if (running === was.current) return;
+    was.current = running;
+    if (running) { setSaid(stopping ? "" : "开始回答"); return; }
+    const t = st?.turns?.at(-1);
+    const rec = t?.record;
+    const n = Object.keys(citeNumbers((t?.items || []).filter((i) => i.type === "text").map((i) => i.text), st?.sources)).length; // 这一轮正文引用的
+    setSaid(st?.status === "failed" ? "这一轮中途停下了，可以重试"
+      : rec?.outcome === "stopped" ? "已停止"
+        : rec?.outcome === "blocked" ? "内容审核没通过，这一轮停下了"
+          : `回答完了${n ? `，用到 ${n} 个来源` : ""}`);
+  }, [running, tid, st, stopping]);
+  return said;
 }
 
 // 打开对话、状态还没回来时的骨架：一句话、几行回答的样子。取得快（本机、缓存）时不闪一下：过 200ms 还没回来才显示
@@ -244,17 +317,23 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models }) {
   // 刚说的话还没出现在存下来的对话里：先按页面手上的显示
   const pending = live?.said && turns.length <= (live.turnsAtStart ?? 0) ? { id: "pending", user: live.said, items: [], record: null, local: live.image?.url } : null;
   const all = pending ? [...turns, pending] : turns;
+  // 每一轮一个 section：轮次目录跳过来的落点（data-turn 是第几轮，从 0 数；正在发的那句还没 id，按位置记），这一轮在跑时 aria-busy
   return (
     <>
       {all.map((t, i) => {
         const last = i === all.length - 1;
-        return <Turn key={t.id} t={t} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} models={models} />;
+        return (
+          <section key={t.id} className="ws-turn" data-turn={i} tabIndex={-1} aria-label={`第 ${i + 1} 轮`} aria-busy={last && running ? true : undefined}>
+            <Turn t={t} k={`${st?.thread_id}:${i}`} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} models={models} />
+          </section>
+        );
       })}
     </>
   );
 }
 
-function Turn({ t, st, live, running, suggesting, stopping, last, now, act, models }) {
+// k：这一轮在页面上的记号（对话 id + 第几轮）。正在发的这一轮存下来以后 id 会变（见 Turns 的 pending），过程展开没展开按 k 记，不跟着重来
+function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, models }) {
   const items = mergeItems(t.items, live);
   const { process, answer } = splitTurn(items);
   const texts = items.filter((i) => i.type === "text").map((i) => i.text);
@@ -270,28 +349,29 @@ function Turn({ t, st, live, running, suggesting, stopping, last, now, act, mode
       {t.user && <UserMsg text={live?.edit ?? t.user} image={t.image} src={userImageSrc(t, live, st?.thread_id)} at={live?.sentAt ?? t.sent_at} pinned={last} now={now}
         editable={last && idle} onEdit={act.edit} />}
       <div className="ws-ai">
-        {(running || rec) && <Process items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} />}
+        <div className="ws-ai-head"><span className="ws-ai-mark" aria-hidden="true">灵</span>灵稿</div>
+        {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} />}
         {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
         {mapsOf(items).map((card) => <MapCard key={card.key} card={card} />)}
         {travelOf(items).map((card) => <TravelCard key={card.key} card={card} />)}
         {itinerariesOf(items).map((card) => <ItineraryCard key={card.key} card={card} />)}
         <ImageCards steps={imagesOf(items)} tid={st?.thread_id} running={running} onRegenerate={last && idle ? act.say : null} />
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
-        {running && <LiveLine live={live} items={items} stopping={stopping} />}
+        {running && <LiveLine live={live} items={items} stopping={stopping} now={now} />}
         {!running && <AnswerSources nums={nums} sources={st?.sources} />}
         {!running && rec?.ended_at && rec.outcome === "no_reply" && <p className="ws-muted">这一轮没有给出文字回复。</p>}
         {failed && <Failed st={st} act={act} />}
         {!running && (replied || rec?.ended_at || (last && idle)) && (
           <div className={"ws-ai-foot" + (last ? "" : " quiet")}>
             <Stamp iso={rec?.ended_at} now={now} />
-            {rec?.model && <span className="ws-ai-model" title="这一轮用的模型">{modelName(models, rec.model.ref)}</span>}
-            {rec?.credits != null && <span className="ws-ai-model" title="这一轮的成本（1 credit = ¥0.001）">{creditsText(rec.credits)}</span>}
+            {rec?.model && <span className="ws-ai-model">{modelName(models, rec.model.ref)}</span>}
+            {rec?.credits != null && <span className="ws-ai-model">本轮 {creditsText(rec.credits)}</span>}
             {replied && <CopyButton text={() => answerText(items, st?.sources)} />}
             {last && idle && <button className="ws-btn ghost sm" onClick={act.regenerate}><IconLoop size={13} />重新回答</button>}
           </div>
         )}
       </div>
-      {last && idle && rec?.suggestions?.length > 0 && <Suggestions items={rec.suggestions} onPick={act.say} />}
+      {last && idle && rec?.suggestions?.length > 0 && <Suggestions items={rec.suggestions} onPick={(q) => act.say(q)} />}
       {last && idle && suggesting && !rec?.suggestions?.length && <SuggestWait />}
     </>
   );
@@ -441,22 +521,36 @@ function useAutoHeight(ref, value) {
   }, [ref, value]);
 }
 
-// 这一轮的过程：正在跑时展开，结束后收成一行（已完成 / 已停止 / 已中断 / 没跑完，加上用时），点开看每一步
-function Process({ items, st, nums, rec, running, failed, now }) {
-  const [open, setOpen] = useState(null); // null：按默认（正在跑就展开）
-  const shown = (open ?? running) && items.length > 0;
+// 这一轮的过程：一行“已完成 / 已停止 / 已中断 / 中途停下 + 用时 + 做了什么”，点开看每一步。正在跑时展开，跑完不自动收
+function Process({ k, items, st, nums, rec, running, failed, now }) {
+  const [open, toggle, found] = useFoldOpen(`proc:${k}`, running); // 正在跑、这次打开页面里跑过的展开；重新打开的对话收起
+  const shown = open && items.length > 0;
   const time = running ? elapsed(st?.running_since || rec?.started_at, now)
     : rec?.ended_at ? elapsed(rec.started_at, Date.parse(rec.ended_at)) : "";
-  const verb = running ? "处理中" : failed ? "没跑完" : rec?.outcome === "stopped" ? "已停止" : rec?.outcome === "blocked" ? "已中断" : "已完成";
-  const label = `${verb}${time ? ` ${time}` : ""}`;
+  const verb = running ? "处理中" : failed ? "中途停下" : rec?.outcome === "stopped" ? "已停止" : rec?.outcome === "blocked" ? "已中断" : "已完成";
+  const did = running ? "" : didText(items);
+  const label = `${verb}${time ? ` ${time}` : ""}${did ? ` · ${did}` : ""}`;
   return (
     <div className="ws-proc">
       {items.length
-        ? <button className="ws-proc-head" aria-expanded={shown} onClick={() => setOpen(!shown)}>{label}<IconChevron size={13} className={"chev" + (shown ? " up" : "")} /></button>
+        ? <button className="ws-proc-head" aria-expanded={shown} onClick={toggle}>{label}<IconChevron size={13} className={"chev" + (shown ? " up" : "")} /></button>
         : <div className="ws-proc-head">{label}</div>}
-      {shown && <div className="ws-proc-body"><ProcItems items={items} st={st} nums={nums} running={running} /></div>}
+      {items.length > 0 && <Fold open={shown} onFound={found}><div className="ws-proc-body"><ProcItems items={items} st={st} nums={nums} running={running} /></div></Fold>}
     </div>
   );
+}
+
+// 收起来那一行带上做了什么：搜了几次、读了几页（子任务里的也算），开了几个子任务；做成了的才算
+function didText(items) {
+  let search = 0, read = 0, tasks = 0;
+  const count = (xs) => xs.forEach((i) => {
+    if (i.type !== "step" || i.pending) return;
+    if (i.kind === "task") { tasks++; count(i.items || []); }
+    else if (i.kind === "search" && i.ok) search++;
+    else if (i.kind === "read" && i.body) read++; // 和 ToolRow 一样：读到原文的才算
+  });
+  count(items);
+  return [search && `搜了 ${search} 次`, read && `读了 ${read} 页`, tasks && `${tasks} 个子任务`].filter(Boolean).join(" · ");
 }
 
 // 过程里的一条条：思考、中途说的话、工具步骤，子任务是一张卡片。子任务卡里是它的子 agent 的这些，排法一样。
@@ -487,7 +581,7 @@ const subTexts = (items) => items.flatMap((i) => (i.type === "step" && i.kind ==
 // 子任务：主 agent 派给一个子 agent 去查的事。卡片一行是任务标题和它现在在做什么，做完了是搜了几次、读了几页；
 // 点开是交代给它的话，和它的思考、搜索、读页、交回的报告。默认收着：几个子 agent 并行时，展开的过程太长
 function TaskCard({ s, st, nums, running }) {
-  const [open, setOpen] = useState(false);
+  const [open, toggle, found] = useFoldOpen(`task:${s.id}`, false); // 默认收着，卡头一行说它在做什么
   const sub = s.items || [];
   const live = running && s.pending;
   const done = (k) => sub.filter((i) => i.type === "step" && i.kind === k && !i.pending).length;
@@ -495,18 +589,18 @@ function TaskCard({ s, st, nums, running }) {
   const status = live ? taskActivity(s) : s.pending ? "没做完" : !s.ok ? s.message || "没做成" : did || "已完成";
   return (
     <div className={"ws-task" + (live ? " live" : !s.pending && !s.ok ? " bad" : "")}>
-      <button className="ws-task-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <button className="ws-task-head" aria-expanded={open} onClick={toggle}>
         {live ? <Spinner size={12} /> : <IconFork size={12} />}
         <span className="main" title={s.text}>{s.text || "子任务"}</span>
         <span className="sub" title={status}>{status}</span>
         <IconChevron size={13} className={"chev" + (open ? " up" : "")} />
       </button>
-      {open && (
+      <Fold open={open} onFound={found}>
         <div className="ws-task-body">
           {s.prompt && <div className="ws-task-prompt">{s.prompt}</div>}
           <ProcItems items={sub} st={st} nums={nums} running={live} hideUnknown={live} />
         </div>
-      )}
+      </Fold>
     </div>
   );
 }
@@ -551,69 +645,28 @@ function Item({ it, st, nums, running, lastItem }) {
   return <Reply it={it} cite={(sid) => <Mark n={nums[sid]} s={st?.sources?.[sid]} />} caret={running && lastItem} />;
 }
 
-// 正文：逐字出现，正在写的时候末尾有光标
+// 正文：收到多少显示多少（后端约每 80ms 来一批），不再人为地一个个字往外放；正在写的时候末尾有光标
 function Reply({ it, cite, caret }) {
-  const text = useTyped(`text:${it.id}`, it.text, it.live, typingUnit);
   return (
-    <div className={"ws-reply" + (caret || text.length < it.text.length ? " typing" : "")}>
-      <Markdown text={mdText(it, text)} cite={cite} />
+    <div className={"ws-reply" + (caret ? " typing" : "")}>
+      <Markdown text={mdText(it)} cite={cite} />
     </div>
   );
 }
 
-// 过程里中途说的话（之后又去搜了、读了），一样逐字出现
+// 过程里中途说的话（之后又去搜了、读了），一样收到就显示
 function ProcText({ it, cite }) {
-  const text = useTyped(`text:${it.id}`, it.text, it.live, typingUnit);
-  return <div className="ws-proc-text"><Markdown text={mdText(it, text)} cite={cite} /></div>;
+  return <div className="ws-proc-text"><Markdown text={mdText(it)} cite={cite} /></div>;
 }
 
-// 还在出现的，最后一行半截的 Markdown 先收拾一下（见 tidyTyping）；写完的只去掉末尾半个引用
-const mdText = (it, text) => (it.live || text.length < it.text.length ? tidyTyping(text) : cutPartialCite(text));
+// 还在写的，最后一行半截的 Markdown 先收拾一下（见 tidyTyping）；写完的只去掉末尾半个引用
+const mdText = (it) => (it.live ? tidyTyping(it.text) : cutPartialCite(it.text));
 
-// ---------------- 逐字出现 ----------------
-// 后端约每 80ms 发来一批字（几个到十几个），直接显示是一跳一跳的。这里按帧把收到的字一点点放出来：
-// 每秒放“还没显示的字数 / LAG_S”这么多，最少 MIN_CPS 个。收得快就放得快，不会越落越远；一批字也不会一下子全冒出来。
-// 显示到第几个字按条目记在 typed 里：条目在过程和正文之间挪动、重新挂载时接着往下显示，不从头再来。
-// 打开时就已经写完的（存下来的对话）直接整段显示。unit(text, n) 给出 n 所在的那一整块的末尾（见 typingUnit），整块一起出来。
-const LAG_S = 0.18;
-const MIN_CPS = 20;
-const typed = new Map();
-
-function useTyped(key, text, live, unit) {
-  const pos = useRef(null);
-  pos.current ??= live || typed.has(key) ? Math.min(typed.get(key) ?? 0, text.length) : text.length;
-  const [, setShown] = useState(0);
-  useEffect(() => {
-    if (pos.current >= text.length) {
-      if (!live) typed.delete(key);
-      return undefined;
-    }
-    let raf = 0;
-    let last = performance.now();
-    const frame = (t) => {
-      const left = text.length - pos.current;
-      pos.current = Math.min(text.length, pos.current + (Math.max(MIN_CPS, left / LAG_S) * Math.max(0, t - last)) / 1000);
-      if (unit) pos.current = Math.max(pos.current, unit(text, Math.floor(pos.current)));
-      last = t;
-      typed.set(key, pos.current);
-      setShown(Math.floor(pos.current)); // 整数没变就不重新渲染
-      if (pos.current < text.length) raf = requestAnimationFrame(frame);
-      else if (!live) typed.delete(key);
-    };
-    raf = requestAnimationFrame(frame);
-    return () => cancelAnimationFrame(raf);
-  }, [key, text, live]);
-  let n = Math.floor(pos.current);
-  if (n >= text.length) return text;
-  if (/[\uD800-\uDBFF]/.test(text[n - 1] || "")) n++; // 不把占两个码元的字（emoji 之类）切成两半
-  return text.slice(0, n);
-}
-
-// 思考：逐字出现。这一轮还在跑时展开，想完的那段也不收（收起来页面会往回缩、跳一下）；这一轮结束后折叠成一行，点开看原文
+// 思考：收到就显示。这一轮在跑时展开，想完的那段不收（跑着的时候收起来页面会往回缩、跳一下）；这一轮跑完就收成一行（过程不收）：
+// 思考往往很长，开着把回答推远。重新打开的对话里也收着，点开看原文
 function Thinking({ it, running, thinking }) {
-  const text = useTyped(`thinking:${it.id}`, it.text, it.live);
-  const [open, setOpen] = useState(null); // null：按默认（这一轮在跑就展开）
-  const shown = open ?? running;
+  const text = it.text;
+  const [shown, toggle, found] = useFoldOpen(`thinking:${it.id}`, running, false);
   const box = useRef(null);
   useLayoutEffect(() => { // 正在想的时候框里跟着最新的字
     if (thinking && box.current) box.current.scrollTop = box.current.scrollHeight;
@@ -622,11 +675,11 @@ function Thinking({ it, running, thinking }) {
   const label = thinking ? "深度思考中" : secs ? `思考了 ${secs} 秒` : "思考过程";
   return (
     <div className={"ws-think" + (thinking ? " live" : "")}>
-      <button className="ws-think-head" aria-expanded={shown} onClick={() => setOpen(!shown)}>
+      <button className="ws-think-head" aria-expanded={shown} onClick={toggle}>
         {thinking ? <Spinner size={12} /> : <IconChevron size={13} className={"chev" + (shown ? " up" : "")} />}
         <span>{label}</span>
       </button>
-      {shown && <div ref={box} className="ws-think-text">{text}</div>}
+      <Fold open={shown} onFound={found}><div ref={box} className="ws-think-text">{text}</div></Fold>
     </div>
   );
 }
@@ -694,83 +747,76 @@ const PHASES = {
   restart: "模型中途断了，正在重新生成…",
 };
 
-// 好一会儿看不到新进展时冒一句俏皮话，按在等什么挑
-const TIPS_ANY = [
-  "稍等一下，客官，“菜”马上就好",
-  "答应给你的，马上就来",
-  "快了快了，已经看到终点线了",
-  "别担心，没睡着，在干活呢",
-  "泡杯茶的功夫就好",
-  "好饭不怕晚，再等等",
-  "稳住，马上就好",
-  "再给我一点点时间",
+// 在等的那一步是什么（并行的几步里先做完的排在后面也算还在等；有子任务在查，先说子任务）
+const WAITING = [
+  ["task", (n) => `${n} 个子任务在查`],
+  ["image", () => "正在画图"],
+  ["read", (n) => (n > 1 ? `正在读 ${n} 个网页` : "正在读网页")],
+  ["search", (n) => (n > 1 ? `正在搜 ${n} 组关键词` : "正在搜索")],
+  ["docs", () => "正在查文档"],
+  ["library", () => "正在找文档库"],
+  ["weather", () => "正在查天气"],
+  ["place", () => "正在查地点"],
+  ["route", () => "正在算路线"],
+  ["flight", () => "正在查航班"],
+  ["train", () => "正在查火车"],
+  ["itinerary", () => "正在排行程"],
 ];
-const TIPS = {
-  model: [...TIPS_ANY, "脑子转得飞快，嘴还没跟上", "正在憋大招，马上放出来", "这题有点意思，值得多想一会儿", "正在把线索串成一条线", "让子弹再飞一会儿"],
-  search: [...TIPS_ANY, "正在全网翻箱倒柜", "线索正在赶来的路上", "大海捞针中，针快捞到了", "搜索有点堵车，马上通"],
-  read: [...TIPS_ANY, "这页有点长，容我多看两眼", "网页加载慢吞吞的，我也干着急", "正在逐字逐句地啃这篇", "有的网站慢，再给它一点时间"],
-  weather: TIPS_ANY,
-  place: [...TIPS_ANY, "正在地图上一家家找", "地图翻到这一片了"],
-  route: [...TIPS_ANY, "正在比哪条路快", "地图在算路线了"],
-  flight: [...TIPS_ANY, "正在一趟趟比航班", "机票价格正在赶来"],
-  train: [...TIPS_ANY, "正在翻列车时刻表", "车次一趟趟比着呢"],
-  itinerary: TIPS_ANY,
-  library: TIPS_ANY,
-  docs: [...TIPS_ANY, "正在翻官方文档", "文档有点厚，挑要紧的看"],
-  image: [...TIPS_ANY, "正在一笔一笔地画", "画师正在构图", "颜料快调好了", "好图值得多等几秒"],
-  task: [...TIPS_ANY, "几个帮手正分头查着呢", "分头行动中，等它们交回报告", "帮手们还在翻资料"],
-};
-const TIP_AFTER = 3000; // 看不到新进展多久以后开始说
-const TIP_EVERY = 6000; // 一直没进展就隔一会儿换一句
+const SHOW_WAIT = 3000; // 同一步等了这么久才写秒数，一闪而过的不写
+const SLOW = 30000; // 同一步这么久没有新进展：说一声比平常慢，可以接着等，也可以停止
 
-// 正在跑的这一轮最下面一行：空档里说清在等什么（思考、搜索、读页、写正文时各自已经有显示，这里不重复）；等久了加一句俏皮话。
-// 两样都没有时这一行空着、高度不变，俏皮话冒出来、消失时页面不跳
-function LiveLine({ live, items, stopping }) {
+// 正在跑的这一轮最下面一行：在等什么、等了几秒（思考、正文在出字时这一行空着，它们自己在动）。
+// 不是读屏的活区：阶段一变就播会打断，开始、答完由 useAnnounce 说
+function LiveLine({ live, items, stopping, now }) {
   const lastItem = items.at(-1);
-  const pending = items.filter((i) => i.type === "step" && i.pending); // 并行的几步里先做完的排在后面也算还在等
+  const pending = items.filter((i) => i.type === "step" && i.pending);
   const streaming = lastItem?.live && (lastItem.type === "text" || (lastItem.type === "thinking" && lastItem.ms == null));
-  const stage = stopping ? "正在停止…" : live?.stage || (pending.length || streaming ? null : PHASES[live?.phase] || "正在准备…");
-  const waitingFor = ["image", "task", "read", "search", "docs", "library", "weather", "place", "route", "flight", "train", "itinerary"].find((k) => pending.some((i) => i.kind === k)) || "model";
-  // 子任务卡里有进展也算：子 agent 在搜、在写，主 agent 这边一直没动静
+  const kind = WAITING.find(([k]) => pending.some((i) => i.kind === k));
+  const stage = stopping ? "正在停止…" : live?.stage || (kind ? kind[1](pending.filter((i) => i.kind === kind[0]).length)
+    : streaming ? null : PHASES[live?.phase] || "正在准备…");
+  // 看得到的进展：条目多了、字长了、子任务里有动静、阶段变了。变了就重新计时
   const sub = pending.filter((i) => i.kind === "task").map((i) => `${i.items?.length ?? 0}.${i.items?.at(-1)?.text?.length ?? 0}.${i.phase}`).join(",");
-  const tip = useTip(`${items.length}:${lastItem?.text?.length ?? 0}:${pending.length}:${live?.phase}:${stage}:${sub}`, stopping ? null : TIPS[waitingFor]);
+  const waited = useWaited(`${items.length}:${lastItem?.text?.length ?? 0}:${pending.length}:${live?.phase}:${stage}:${sub}`, now);
+  const secs = stage && !stopping && waited >= SHOW_WAIT ? Math.floor(waited / 1000) : 0;
   return (
-    <div className="ws-live" role="status">
+    <div className="ws-live">
       {stage && <><Spinner size={14} /><span className="stage">{stage}</span></>}
-      {tip && <span key={tip} className="tip" aria-hidden="true">{tip}</span>}
+      {secs > 0 && <span className="secs">{secs} 秒</span>}
+      {secs * 1000 >= SLOW && <span className="slow">这一步比平常慢，可以接着等，也可以停止</span>}
     </div>
   );
 }
 
-// sig 是“看得到的进展”：变了就重新计时；没变的时间超过 TIP_AFTER，从 pool 里挑一句，之后隔 TIP_EVERY 换下一句。
-// 这一轮在跑时页面每秒重新渲染一次（见 useNow），这里跟着重算
-function useTip(sig, pool) {
-  const mark = useRef({ sig: null, at: 0, seed: 0 });
-  const t = Date.now();
-  if (mark.current.sig !== sig) mark.current = { sig, at: t, seed: Math.floor(Math.random() * 1000) };
-  const waited = t - mark.current.at;
-  if (!pool || waited < TIP_AFTER) return null;
-  return pool[(mark.current.seed + Math.floor((waited - TIP_AFTER) / TIP_EVERY)) % pool.length];
+// sig 是“看得到的进展”：变了就重新计时，返回没变的这段已经多久。这一轮在跑时页面每秒重新渲染一次（见 useNow）
+function useWaited(sig, now) {
+  const mark = useRef({ sig: null, at: 0 });
+  if (mark.current.sig !== sig) mark.current = { sig, at: Date.now() };
+  return Math.max(0, now - mark.current.at);
 }
 
-// 正文写完以后在起推荐问题：起好了换成推荐问题，没起成（或用户先说了话）就不显示
+// 正文写完以后在起“接着问”：起好了换成那几个问题，没起成（或用户先说了话）就不显示
 function SuggestWait() {
-  return <div className="ws-suggest-wait" role="status"><Spinner size={12} /><span>猜猜你接下来还想问什么…</span></div>;
+  return <div className="ws-suggest-wait"><Spinner size={12} /><span>正在想接着问什么…</span></div>;
 }
 
+// 接着问：和新对话页的今日灵感同一种胶囊（横排、放不下换行），名字分开（规范术语表，2026-11-06 Sean 定）
 function Suggestions({ items, onPick }) {
   return (
-    <div className="ws-suggest" aria-label="可以接着问">
-      {items.map((q) => <button key={q} className="ws-suggest-item" onClick={() => onPick(q)}>{q}</button>)}
+    <div className="ws-suggest" role="group" aria-labelledby="ws-suggest-label">
+      <div className="ws-suggest-label" id="ws-suggest-label">接着问</div>
+      <div className="ws-suggest-list">
+        {items.map((q) => <button key={q} className="ws-suggest-item" onClick={() => onPick(q)}>{q}</button>)}
+      </div>
     </div>
   );
 }
 
+// 这一轮中途停下了：原因和能做什么按后端给的类别说（见 errors.js 的 failureText）
 function Failed({ st, act }) {
   return (
     <div className="ws-card warn">
-      <div className="ws-card-title"><IconWarn size={15} />这一轮没跑完</div>
-      <div className="ws-card-sub">{st.error}。已经查到的内容都还在，重试会从断开的地方接着跑。</div>
+      <div className="ws-card-title"><IconWarn size={15} />这一轮中途停下了</div>
+      <div className="ws-card-sub">{failureText(st)}</div>
       <div className="ws-card-actions"><button className="ws-btn primary" onClick={act.retry}><IconRetry size={14} />重试</button></div>
     </div>
   );
@@ -799,7 +845,7 @@ function CreditsNote({ credits, onLogin }) {
   return (
     <div className={"ws-credits-note" + (left.exhausted ? " out" : "")} role="status">
       <IconWarn size={13} />
-      <span>{left.exhausted ? <>{left.span}的额度用完了（{left.limit} credits），{left.resetText}{more}</>
+      <span>{left.exhausted ? <>{left.span}的额度用完了（共 {left.limit}），{left.resetText}{more}</>
         : <>{left.span}的额度快用完了：还剩 {creditsText(left.remaining)}（共 {left.limit}），{left.resetText}{more}</>}</span>
     </div>
   );

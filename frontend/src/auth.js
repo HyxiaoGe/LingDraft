@@ -210,7 +210,7 @@ export async function completeCallback() {
     await adopt();
     return r.redirectPath || "/";
   }
-  if (r.status === "unauthenticated") throw new Error(r.error === "access_denied" ? "你取消了登录" : `登录没成功（${r.error}）`);
+  if (r.status === "unauthenticated") throw Object.assign(new Error(r.error), { code: r.error === "access_denied" ? "denied" : "failed" }); // 页面上的说法见 login.jsx
   return "/";
 }
 

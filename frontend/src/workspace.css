@@ -183,7 +183,7 @@
 .ws-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
 /* 顶栏：左边导航按钮、中间标题、右边（窄屏的新对话）。标题那栏和对话正文同宽、居中 */
 .ws-head { padding: 0 12px; border-bottom: 1px solid var(--line); height: 58px; flex: none; display: grid; grid-template-columns: 1fr minmax(0, 624px) 1fr; align-items: center; gap: 8px; }
-.ws-head-side { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.ws-head-side { display: flex; align-items: center; gap: 4px; } /* 至少放得下自己的按钮：正文区窄、标题长时中间一栏让出来，按钮不被挤出去 */
 .ws-head-side.end { justify-content: flex-end; }
 .ws-head-title { min-width: 0; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-scroll { flex: 1; overflow-y: auto; }
@@ -211,7 +211,18 @@
 .ws-edit-bar .hint { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); }
 .ws-bubble { background: var(--side); border: 1px solid var(--line); border-radius: var(--r-lg) var(--r-lg) 4px var(--r-lg); padding: 9px 14px; max-width: 80%; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ws-ai { margin: 0 0 26px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
-.ws-ai-foot { display: flex; gap: 6px; margin: -4px 0 0 -10px; }
+/* 一轮一个 section：轮与轮之间一道细线；轮次目录跳过来时顶上留一点空，键盘跳过来的有焦点框 */
+.ws-turn, .ws-reply .md > :is(h3, h4, h5, h6) { scroll-margin-top: 16px; }
+.ws-turn { border-radius: var(--r); }
+.ws-turn + .ws-turn { position: relative; padding-top: 24px; }
+/* 轮与轮之间的线单独画：直接用 border-top 会跟着上面的圆角（给焦点框用的）在两头弯下去 */
+.ws-turn + .ws-turn::before { content: ""; position: absolute; top: 0; left: 0; right: 0; border-top: 1px solid var(--line); }
+.ws-turn:focus { outline: none; }
+.ws-turn:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 8px; }
+/* 回答开头：“灵稿”的标识，和左栏的品牌一样的宋体小方块 */
+.ws-ai-head { display: flex; align-items: center; gap: 8px; font: 600 13px/20px var(--serif); letter-spacing: .04em; color: var(--accent); }
+.ws-ai-mark { width: 20px; height: 20px; flex: none; border-radius: var(--r-sm); background: var(--ink); color: var(--paper); font: 600 12px/20px var(--serif); text-align: center; letter-spacing: 0; }
+.ws-ai-foot { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 0 -10px; } /* 窄屏一行放不下就折行，“重新回答”不被挤出去 */
 .ws-ai-foot .ws-btn { color: var(--muted); }
 .ws-ai-foot .ws-btn:hover { color: var(--ink); }
 .ws-ai-foot.quiet { opacity: 0; transition: opacity .15s; } /* 之前的回答：悬停才出现 */
@@ -232,7 +243,8 @@
 
 .ws-live { display: flex; align-items: center; gap: 8px; min-height: 20px; font-size: 13px; line-height: 20px; color: var(--accent); flex-wrap: wrap; }
 .ws-live .stage { color: var(--ink2); }
-.ws-live .tip { color: var(--ink2); animation: ws-in .3s var(--ease); }
+.ws-live .secs { color: var(--faint); font-variant-numeric: tabular-nums; }
+.ws-live .slow { color: var(--warn); }
 .ws-live span + span::before { content: "·"; margin-right: 8px; color: var(--faint); }
 /* 一轮里的东西：思考、工具步骤、正文、来源、推荐问题 */
 .ws-think-head { border: 0; background: none; padding: 2px 6px 2px 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); border-radius: var(--r-sm); }
@@ -292,7 +304,10 @@ button.ws-proc-head:hover { color: var(--ink); }
 @keyframes ws-blink { to { opacity: 0; } }
 .ws-mark.off { background: var(--hover); color: var(--faint); cursor: help; }
 
-.ws-suggest { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: -12px 0 26px; }
+/* 接着问：和今日灵感同一种胶囊，横排、放不下换行 */
+.ws-suggest { margin: -12px 0 26px; }
+.ws-suggest-label { margin-bottom: 8px; font-size: 12px; color: var(--muted); }
+.ws-suggest-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .ws-suggest-wait { display: flex; align-items: center; gap: 6px; margin: -12px 0 26px; font-size: 12.5px; color: var(--accent); }
 .ws-suggest-wait span { color: var(--muted); }
 .ws-suggest-item { border: 1px solid var(--line2); background: var(--paper); border-radius: var(--r); padding: 6px 12px; font-size: 13px; color: var(--ink2); text-align: left; transition: border-color .15s, color .15s; }
@@ -497,7 +512,7 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-inspire { min-height: 72px; display: flex; flex-wrap: wrap; justify-content: center; align-content: flex-start; gap: 8px; }
 .ws-inspire-ruler { position: absolute; top: 0; left: 0; right: 0; height: 0; overflow: hidden; visibility: hidden; display: flex; } /* 一排放不下的剪掉，不把页面撑宽；量的宽度不受影响 */
 .ws-inspire-ruler .ws-suggest-item { flex: none; height: 32px; padding: 0 12px; line-height: 30px; white-space: nowrap; }
-.ws-inspire .ws-suggest-item { flex: none; max-width: 100%; min-height: 32px; padding: 4px 12px; line-height: 1.5; text-align: left; }
+.ws-inspire .ws-suggest-item, .ws-suggest-list .ws-suggest-item { flex: none; max-width: 100%; min-height: 32px; padding: 4px 12px; line-height: 1.5; text-align: left; }
 
 /* 输入框；往上翻着看时，上面浮一个“回到底部” */
 .ws-dock { position: relative; flex: none; }
@@ -505,6 +520,34 @@ button.ws-proc-head:hover { color: var(--ink); }
   border: 1px solid var(--line2); background: var(--paper); color: var(--ink2); box-shadow: 0 2px 10px rgba(20, 24, 31, .1);
   display: inline-flex; align-items: center; justify-content: center; transition: color .15s, border-color .15s; }
 .ws-jump:hover { color: var(--ink); border-color: var(--muted); }
+/* 离开底部以后下面又有了新内容：写上字，变成一枚胶囊 */
+.ws-jump.more { width: auto; padding: 0 12px; gap: 4px; border-radius: var(--r); font-size: 12.5px; color: var(--accent); border-color: var(--accent-line); }
+.ws-jump.more:hover { color: var(--accent); border-color: var(--accent); }
+/* 只给读屏的：看不见，读屏会读（开始回答、答完了、停下了……见 timeline.jsx 的 useAnnounce） */
+.ws-sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* 轮次目录（turns.jsx）。宽的时候在正文右边一栏，从顶栏下面开始，太长自己滚 */
+.ws-rail { position: absolute; top: calc(58px + 24px); right: 16px; width: 184px; max-height: calc(100% - 58px - 24px - 48px); overflow-y: auto; overscroll-behavior: contain; z-index: 1; } /* 顶栏 58px 下面空 24px */
+.ws-rail-title { padding: 0 8px 8px; font-size: 12px; color: var(--faint); }
+.ws-index-list, .ws-index-heads { list-style: none; margin: 0; padding: 0; }
+.ws-index-heads { padding: 0 0 4px 24px; }
+.ws-index-turn, .ws-index-head { width: 100%; border: 0; background: none; text-align: left; border-radius: var(--r-sm); color: var(--muted); transition: background .12s, color .12s; }
+.ws-index-turn { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; font-size: 12.5px; line-height: 20px; }
+.ws-index-turn .n { flex: none; min-width: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.ws-index-turn .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-index-head { display: block; padding: 4px 8px; font-size: 12px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-index-head.sub { padding-left: 16px; }
+.ws-index-turn:hover, .ws-index-head:hover { background: var(--hover); color: var(--ink); }
+.ws-index-turn.on { background: var(--accent-soft); color: var(--accent); }
+.ws-index-turn.on .n { color: var(--accent); }
+.ws-index-head.on { color: var(--accent); }
+/* 窄的时候：顶栏右边的“轮次”按钮，电脑上点开是按钮下面的浮层 */
+.ws-index-btn-box { position: relative; display: flex; }
+.ws-index-btn { width: auto; padding: 0 8px; gap: 4px; font-size: 13px; white-space: nowrap; }
+.ws-index-pop { position: absolute; top: calc(100% + 8px); right: 0; z-index: 60; width: 320px; max-height: min(480px, 70vh); max-height: min(480px, 70dvh); overflow-y: auto; overscroll-behavior: contain;
+  padding: 4px; background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r); box-shadow: var(--lift); animation: ws-in .12s var(--ease); }
+.ws-index-pop-head { display: flex; align-items: center; justify-content: space-between; padding: 0 0 4px 8px; font-size: 13px; }
+.ws-index-pop-head b { font-weight: 600; }
 .ws-composer { padding: 10px 28px 10px; }
 .ws-ai-note { max-width: 700px; margin: 6px auto 0; text-align: center; font-size: 11.5px; color: var(--faint); }
 /* 还没发出去的话（最多一句）：一条窄一点的托盘贴在输入框上沿；文字只显示一行，悬停看全文 */
@@ -703,10 +746,16 @@ button.ws-proc-head:hover { color: var(--ink); }
   .ws-main.fresh .ws-ai-note { position: static; }
   /* 能做的事、今日灵感：看得见的 36px，透明点按区上下各补 4px 到 44px（两行之间隔 8px，点按区正好挨着不重叠） */
   .ws-abilities { margin-bottom: 16px; }
-  .ws-ability, .ws-inspire .ws-suggest-item, .ws-inspire-more { position: relative; }
+  .ws-ability, .ws-inspire .ws-suggest-item, .ws-suggest-list .ws-suggest-item, .ws-inspire-more { position: relative; }
   .ws-ability { height: 36px; }
-  .ws-inspire .ws-suggest-item { min-height: 36px; }
-  .ws-ability::after, .ws-inspire .ws-suggest-item::after { content: ""; position: absolute; inset: -4px 0; }
+  .ws-inspire .ws-suggest-item, .ws-suggest-list .ws-suggest-item { min-height: 36px; }
+  .ws-ability::after, .ws-inspire .ws-suggest-item::after, .ws-suggest-list .ws-suggest-item::after { content: ""; position: absolute; inset: -4px 0; }
+  .ws-index-btn { width: 44px; padding: 0; }
+  .ws-index-sheet .ws-index-turn { min-height: 48px; align-items: center; padding: 8px 12px; font-size: 16px; line-height: 24px; }
+  .ws-index-sheet .ws-index-turn .n { min-width: 16px; }
+  .ws-index-sheet .ws-index-heads { padding-left: 32px; }
+  .ws-index-sheet .ws-index-head { min-height: 44px; padding: 12px; font-size: 14px; line-height: 20px; }
+  .ws-index-sheet .ws-index-head.sub { padding-left: 24px; }
   .ws-inspire { min-height: 80px; }
   .ws-skel-chip { height: 36px; }
   .ws-inspire-label { margin-bottom: 12px; }

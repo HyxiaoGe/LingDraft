@@ -26,8 +26,9 @@ export const SIDE_KEY = MAC ? "⌘⇧S" : "Ctrl+Shift+S";
 export const SIDE_ARIA_KEY = MAC ? "Meta+Shift+S" : "Control+Shift+S";
 export const isSideKey = (e) => (MAC ? e.metaKey : e.ctrlKey) && e.shiftKey && !e.altKey && e.code === "KeyS";
 
-// 顶栏：左边是导航按钮，中间标题（和正文同宽、居中），右边窄屏时是新对话。title 为 null 是还不知道标题（打开中），显示一条占位
-export function HeadBar({ title }) {
+// 顶栏：左边是导航按钮，中间标题（和正文同宽、居中），右边窄屏时是新对话。title 为 null 是还不知道标题（打开中），显示一条占位。
+// end：右边再放的（对话页三轮起的轮次目录按钮，见 turns.jsx）
+export function HeadBar({ title, end }) {
   const nav = useContext(NavContext);
   const side = nav?.mobile ? (
     <button className="ws-icon-btn" data-nav="drawer" aria-label="打开对话列表" aria-controls="ws-side" aria-expanded={nav.drawer} onClick={nav.openDrawer}>
@@ -48,6 +49,7 @@ export function HeadBar({ title }) {
         {title ?? <span className="ws-skel ws-skel-title" aria-label="正在打开对话" role="status" />}
       </div>
       <div className="ws-head-side end">
+        {end}
         {nav?.mobile && <button className="ws-icon-btn" aria-label="新对话" onClick={nav.newChat}><IconPlus size={18} /></button>}
       </div>
     </header>

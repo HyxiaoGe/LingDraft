@@ -29,11 +29,11 @@ export function modelName(models, ref) {
   return models?.slice(1).find((m) => m.model === ref)?.name || ref.split(":").pop();
 }
 
-// 这一轮用了多少 credits（后端按各模型的单价算好的，1 credit = ¥0.001 成本）：10 以上取整，以下留一位小数
-// 一轮的花费：零头有意义，不到 10 带一位小数（余额不用这个，余额取整）
+// 多少额度（后端按各模型的单价算好的 credits，1 credit = ¥0.001 成本；页面上叫“额度”，不露 credits，见规范术语表）：
+// 10 以上取整，以下留一位小数
 export function creditsText(n) {
   if (n == null) return null;
-  return `${n >= 10 ? Math.round(n) : n >= 0.1 ? n.toFixed(1) : "<0.1"} credits`;
+  return `${n >= 10 ? Math.round(n) : n >= 0.1 ? n.toFixed(1) : "<0.1"} 额度`;
 }
 
 // 额度里最紧的那个窗口（自己的：今天、这周；所有游客合计的那个不显示），加上剩多少、是不是该提醒（用了 warn_at 以上）、是不是用完了。
@@ -101,47 +101,7 @@ function fenceOpen(lines) {
 }
 const TABLE_LINE = /^\s*\|/;
 
-// 逐字出现时不该一个字一个字放的，显示到的位置 n 直接跳过去：
-// - 引用 [s3fa9c1] 和链接的网址 ](https://…)：本身不显示，一个个字放只会让正文停一下。收全了整块跳过
-// - 表格的分隔行 | --- | --- |：不显示，收全了整行跳过
-// - 紧跟着的不显示的 Markdown 符号：换行、行首的列表符号 / # / >、** 和 `
-export function typingUnit(text, n) {
-  for (let next = unitEnd(text, n); next > n; next = unitEnd(text, n)) n = next;
-  return n;
-}
-
-function unitEnd(text, n) {
-  const k = text.lastIndexOf("[", n - 1);
-  if (k >= 0 && n - k < 12) {
-    const m = text.slice(k, k + 12).match(/^\[s[0-9a-f]{6}(?:[0-9a-f]{4})?\]/);
-    if (m && k + m[0].length > n) return k + m[0].length;
-  }
-  const u = text.lastIndexOf("](", n - 1);
-  if (u >= 0 && n - u < 300) {
-    const m = text.slice(u, u + 300).match(/^\]\(https?:\/\/[^)\s]+\)/); // 和 Markdown 里认的链接一样
-    if (m && u + m[0].length > n) return u + m[0].length;
-  }
-  const b = text.lastIndexOf("\n", n - 1) + 1;
-  if (n > b && TABLE_LINE.test(text.slice(b, n)) && tableLinesAbove(text, b) === 1) {
-    const e = text.indexOf("\n", n);
-    if (e >= n) return e + 1; // 连换行一起：这一行不再是“正在写的那一行”
-  }
-  const m = text.slice(n, n + 8).match(n === b ? /^(\n+|[ \t]*(\d+[.)]|[-*+])[ \t]+|#{1,4}[ \t]+|>[ \t]?|\*\*|`)/ : /^(\n+|\*\*|`)/);
-  return m ? n + m[0].length : n;
-}
-
-// 从 b 开始的这一行上面紧挨着几行表格（数到 2 为止）：0 是表头，1 是分隔行，2 起是数据行
-function tableLinesAbove(text, b) {
-  let c = 0;
-  for (let e = b - 1; c < 2 && e > 0; c++) {
-    const s = text.lastIndexOf("\n", e - 1) + 1;
-    if (!TABLE_LINE.test(text.slice(s, e))) break;
-    e = s - 1;
-  }
-  return c;
-}
-
-// 正在逐字出现的文字，最后一行可能停在半截的 Markdown 上：没配对的 ** 和 ` 先补上（刚出来的半个先去掉），
+// 还在写的文字，最后一行可能停在半截的 Markdown 上：没配对的 ** 和 ` 先补上（刚出来的半个先去掉），
 // 写到一半的链接先只显示文字，只有 # 或列表符号的行先不显示。表头一出来就按表格显示：分隔行还没写完时先补一行，
 // 不然先露出一行竖线、等分隔行写完再突然变成表格。字出来时不先露出符号、等配上了再突然变样式。
 // 代码块里的、围栏那一行原样显示（代码里的 ` 和 ** 不是 Markdown）；只写了一两个 ` 的行先不显示（可能是围栏写到一半）

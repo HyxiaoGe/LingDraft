@@ -198,7 +198,7 @@ export function LoginDialog({ open, onClose, crowded }) {
   const go = (provider) => {
     setGoing(provider);
     setError(null);
-    signIn(provider).catch((e) => { setGoing(null); setError(e?.message || "没跳过去，再试一次"); });
+    signIn(provider).catch(() => { setGoing(null); setError("没能打开登录页：检查网络后再点一次；一直不行，可以换一种方式登录。"); });
   };
   return (
     <div className="ws-overlay" onMouseDown={(e) => e.target === e.currentTarget && !critical && onClose()}>
@@ -329,7 +329,8 @@ export function AuthCallbackPage() {
   useEffect(() => {
     if (once.current) return;
     once.current = true;
-    completeCallback().then((path) => location.replace(path)).catch((e) => setError(e?.message || "登录没成功"));
+    completeCallback().then((path) => location.replace(path))
+      .catch((e) => setError(e?.code === "denied" ? "你取消了登录。回到首页可以接着用，想登录时再点登录。" : "登录没成功。回到首页再登录一次；一直不行，可以先不登录接着用。"));
   }, []);
   const interactive = new URLSearchParams(location.search).has("code");
   return (

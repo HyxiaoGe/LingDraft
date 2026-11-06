@@ -8,6 +8,7 @@ import { createResearchThread, deleteResearchThread, editResearchThread, followR
   regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
 import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPlus, IconTrash } from "./icons.jsx";
 import { setDraft } from "./drafts.js";
+import { AFTER_RUN_ERROR, errorText, quotaText } from "./errors.js";
 import { CreditsFoot, LoginDialog, UserFoot, useAuth } from "./login.jsx";
 import { MemoryPage } from "./memory.jsx";
 import { MOBILE, NavContext, SIDE_ARIA_KEY, SIDE_KEY, isSideKey, useMedia } from "./nav.jsx";
@@ -183,7 +184,7 @@ export default function Workspace() {
     } catch (e) {
       if (g !== gen.current) return;
       if (e.status === 404) select(null, "replace"); // 线程确实不在了才换成新对话；网络抖动时地址留着，刷新还能再试
-      setError(e.status === 404 ? "这个对话不存在，可能已经删掉了" : `打开失败：${e.message || e}`);
+      setError(errorText("没能打开这个对话", e, e.status === 404 ? null : "刷新页面再试一次"));
     }
   }
 
@@ -214,7 +215,7 @@ export default function Workspace() {
         if (e.aborted || g !== gen.current) return;
         if (r.done) return setSuggesting(false); // 等推荐问题时断了：不再接，下次打开线程能看到
         if (e.status === 404 || ++fails > 30) { // 线程不在了，或者几分钟都连不上；后端重启时代理回的 5xx 也按断线重连
-          setError(`取回进度失败：${e.message || e}`);
+          setError(errorText("没能取回这一轮的进度", e, e.status === 404 ? null : "刷新页面看看这一轮现在的样子"));
           setBusy(false);
           setLive(null);
           return;
@@ -235,7 +236,7 @@ export default function Workspace() {
     setBusy(false);
     setLive(null);
     setSuggesting(false);
-    if (errs.length && s.status !== "failed") setError(errs.at(-1));
+    if (errs.length && s.status !== "failed") setError(AFTER_RUN_ERROR); // 没算失败的出错：答完以后收尾时（见 errors.js）
     takeBack(s.thread_id, leftover(s)); // 这一轮出错，排着的话没发
     refreshList();
   }
@@ -253,7 +254,7 @@ export default function Workspace() {
       const text = texts.filter(Boolean).join("\n");
       if (text) setPutBack({ thread: id, text });
     } catch (e) {
-      if (id === tidRef.current) setError(`排着的话没能取回输入框（${e.message || e}）`);
+      if (id === tidRef.current) setError(errorText("排着的话没能取回输入框", e, "刷新页面看看它还在不在"));
     }
   }
 
@@ -360,7 +361,7 @@ export default function Workspace() {
       if (e.status === 429 && e.detail?.code === "credits_exhausted") {
         const text = said ?? extra.edit;
         if (text) setPutBack({ thread: tidRef.current || "new", text, image, rejected: true });
-        setError({ text: e.message, login: !!e.detail.guest });
+        setError({ text: quotaText(e.detail), login: !!e.detail.guest });
         refreshCredits();
         setBusy(false);
         setLive(null);
@@ -369,7 +370,7 @@ export default function Workspace() {
       // 新对话被拒（比如选的模型刚下架）：话放回输入框，重新取能选的模型
       if (!tidRef.current && e.status === 400 && said) {
         setPutBack({ thread: "new", text: said, image, rejected: true });
-        setError(`这句话没发出去，已经放回输入框（${e.message || e}）`);
+        setError("这句话没发出去，已经放回输入框：选的模型现在用不了，换一个再发。");
         listModels().then(setModels).catch(() => {});
         setBusy(false);
         setLive(null);
@@ -380,7 +381,7 @@ export default function Workspace() {
       // 被拒的话（说的、改的）服务器没存下来：不再显示在对话里，放回输入框，和排队没排上一样
       const lost = recoverable && e.status ? said ?? extra.edit : null;
       if (lost) setPutBack({ thread: tidRef.current, text: lost, image });
-      if (e.status || !recoverable) setError(lost ? `这句话没发出去，已经放回输入框（${e.message || e}）` : String(e.message || e));
+      if (e.status || !recoverable) setError(errorText(lost ? "这句话没发出去，已经放回输入框" : extra.what || (said ? "这句话没发出去" : "这一步没做成"), e));
       if (recoverable) {
         const rejected = e.status ? { said: null, edit: undefined, sentAt: undefined } : {};
         setLive((l) => ({ items: [], ...l, ...rejected, stage: e.status ? "服务器还在处理，等它完成" : "连接断了，正在重连…" }));
@@ -400,12 +401,12 @@ export default function Workspace() {
       const opts = { ...thinkOpts(), image: image?.file };
       return run((cb, sig) => sayResearch(id, text, opts, cb, sig), text, { image });
     },
-    retry: () => run((cb, sig) => retryResearchThread(tidRef.current, cb, sig), null),
+    retry: () => run((cb, sig) => retryResearchThread(tidRef.current, cb, sig), null, { what: "没能重试" }),
     // 最后一轮的旧回答先藏起来，新回答在同一轮里接着出现
     regenerate: () => {
       const hidden = new Set((st?.turns?.at(-1)?.items || []).map(itemKey));
       const opts = thinkOpts();
-      return run((cb, sig) => regenerateResearchThread(tidRef.current, opts, cb, sig), null, { hidden });
+      return run((cb, sig) => regenerateResearchThread(tidRef.current, opts, cb, sig), null, { hidden, what: "没能重新回答" });
     },
     // 改最后一句：同样藏起旧回答，改过的话先显示出来
     edit: (text) => {
@@ -426,7 +427,7 @@ export default function Workspace() {
       } catch (e) {
         if (g !== gen.current) return;
         setPutBack({ thread: id, text, rejected: true }); // 没排上：话放回输入框
-        setError(`这句话没能排上，已经放回输入框，可以再发一次（${e.message || e}）`);
+        setError(errorText("这句话没能排上，已经放回输入框", e, "可以再发一次"));
       }
     },
     unqueue: () => takeBack(tidRef.current),
@@ -439,7 +440,8 @@ export default function Workspace() {
         if (g === gen.current) setSt((s) => (s ? { ...s, queued_message: null, guided_message: gd } : s));
       } catch (e) {
         if (g !== gen.current) return;
-        setError(`没能插进这一轮（${e.message || e}）`);
+        // 409：这一轮刚好结束了，排着的话已经发出去，或者这一轮出错、放回了输入框
+        setError(e.status === 409 ? "没能插进这一轮：这一轮刚好结束了，排着的话会接着发出去，或者放回输入框。" : errorText("没能插进这一轮", e, "它还排着，这一轮答完就发"));
         refetch(g, 0); // 这句话现在是排着还是等着插，以服务器为准
       }
     },
@@ -455,7 +457,7 @@ export default function Workspace() {
       } catch (e) {
         if (g !== gen.current || e.status === 409) return; // 409：这一轮刚好已经跑完
         setLive((l) => (l ? { ...l, stopping: false } : l));
-        setError(`没停下来：${e.message || e}`);
+        setError(errorText("没停下来", e, "再点一次停止"));
       }
     },
   };
@@ -468,7 +470,7 @@ export default function Workspace() {
         setThreads((ts) => ts && ts.map((t) => (t.thread_id === id ? { ...t, ...row } : t)));
         if (id === tidRef.current) setSt((s) => (s ? { ...s, title: row.title } : s));
       } catch (e) {
-        setError(`标题没改成：${e.message || e}`);
+        setError(errorText("标题没改成", e));
       }
     },
     exportMd: async (id) => {
@@ -476,7 +478,7 @@ export default function Workspace() {
         const s = id === tidRef.current && st ? st : await getResearchState(id);
         saveFile(`${fileName(s.title)}.md`, threadMarkdown(s));
       } catch (e) {
-        setError(`没导出成：${e.message || e}`);
+        setError(errorText("没导出成", e));
       }
     },
     remove: async (id) => {
@@ -486,7 +488,7 @@ export default function Workspace() {
         setThreads((ts) => ts && ts.filter((t) => t.thread_id !== id));
         if (id === tidRef.current) select(null, "replace");
       } catch (e) {
-        setError(`没删成：${e.message || e}`);
+        setError(errorText("没删成", e));
       }
       refreshList();
     },
