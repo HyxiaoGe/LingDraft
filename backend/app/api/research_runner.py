@@ -34,7 +34,7 @@ from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, now, stop_turn
 from app.graph.research.graph import NO_POSTGRES, build_graph, make_serde, postgres_pool, thread_ids
 from app.graph.research.memory import MemoryBook, next_at
-from app.identity import ADMIN, Identity, is_guest_sub
+from app.identity import Identity, is_guest_sub
 from app.graph.research.sources import collect_sources, subagent_messages
 from app.graph.research.state import Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
@@ -327,7 +327,7 @@ class ResearchRunner(BaseRunner):
     # option 是新对话选的模型（models.toml 里选项的 id，没给是 Auto），定下就不换；thinking 是这句话的思考开关（没给按选项的默认）
 
     def start(self, thread_id: str, text: str, option: str | None = None, thinking: bool | None = None, owner: str | None = None) -> AsyncIterator[str]:
-        """owner 是这段新对话归谁（见 app.identity 和 run_store 的 thread_owners）；命令行、评测不传，对话就没归谁（只有管理员看得到）。"""
+        """owner 是这段新对话归谁（见 app.identity 和 run_store 的 thread_owners）；命令行、评测不传，对话就没归谁（页面上谁都看不到）。"""
         return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking, option, owner), "new")))
 
     def say(self, thread_id: str, text: str, thinking: bool | None = None) -> AsyncIterator[str]:
@@ -394,9 +394,8 @@ class ResearchRunner(BaseRunner):
         return aio.run(self.run_store.owner_of(thread_id))
 
     def can_see(self, thread_id: str, who: Identity) -> bool:
-        """这段对话 who 能不能看、能不能动：归 TA 的；没归谁的（登录以前的老对话）只有管理员能。"""
-        owner = self.owner_of(thread_id)
-        return owner == who.sub if owner is not None else who.tier == ADMIN
+        """这段对话 who 能不能看、能不能动：归 TA 的才行。没归谁的（登录以前的老对话）谁都看不到，相当于归档了（2026-11-06 Sean 定）。"""
+        return self.owner_of(thread_id) == who.sub
 
     def claim(self, who: Identity, guest: Identity) -> int:
         """游客登录了：TA 游客期间的对话全改归账号（2026-11-06 Sean 定并进去），返回改了几段。游客没有记忆，不用搬。"""
@@ -961,12 +960,8 @@ class ResearchRunner(BaseRunner):
         }
 
     async def _alist_threads(self, who: Identity) -> list[dict]:
-        """who 的对话（管理员还有没归谁的老对话），最近有动静的在前。"""
-        tids = await self.run_store.threads_of(who.sub)
-        if who.tier == ADMIN:
-            owned = await self.run_store.owned()
-            tids += [t for t in await thread_ids(self.graph.checkpointer) if t not in owned]
-        rows = [x for t in tids if (x := await self._asummary_view(t))]
+        """who 的对话，最近有动静的在前。"""
+        rows = [x for t in await self.run_store.threads_of(who.sub) if (x := await self._asummary_view(t))]
         return sorted(rows, key=lambda x: x["updated_at"] or "", reverse=True)
 
     @staticmethod

@@ -135,7 +135,7 @@ def test_auth_config_tells_the_page_whether_login_is_on(monkeypatch):
 
 
 def test_threads_belong_to_whoever_started_them():
-    """每个人只看到、只能动自己的对话；别人的一律 404（不透露有没有）。没归谁的老对话只有管理员看得到。"""
+    """每个人只看到、只能动自己的对话；别人的一律 404（不透露有没有）。没归谁的老对话谁都看不到，管理员也不行。"""
     c = _client()
     u1, u2, root, guest = bearer(user_token("u1")), bearer(user_token("u2")), bearer(user_token("root", admin=True)), bearer(guest_token())
     c.headers.update(u1)
@@ -149,14 +149,13 @@ def test_threads_belong_to_whoever_started_them():
     def seen(h):
         return {t["thread_id"] for t in c.get("/api/research/threads", headers=h).json()["threads"]}
     assert seen(u1) == {mine} and seen(guest) == {theirs} and seen(u2) == set()
-    assert seen(root) == {"old"}  # 管理员：自己的加没归谁的，不包括别人的
-    for h, tid in ((u2, mine), (guest, mine), (u1, theirs), (root, mine), (u1, "old")):
+    assert seen(root) == set()  # 管理员也只看自己的：没归谁的老对话相当于归档
+    for h, tid in ((u2, mine), (guest, mine), (u1, theirs), (root, mine), (u1, "old"), (root, "old")):
         assert c.get(f"/api/research/threads/{tid}/state", headers=h).status_code == 404
         assert _say(c, tid, "再说", h).status_code == 404
         assert c.delete(f"/api/research/threads/{tid}", headers=h).status_code == 404
         assert c.get(f"/api/research/threads/{tid}/events", headers=h).status_code == 404
     assert c.get(f"/api/research/threads/{mine}/state", headers=u1).status_code == 200
-    assert c.get("/api/research/threads/old/state", headers=root).status_code == 200
     assert _say(c, mine, "直接答：再说", u1).status_code == 200
     assert c.get("/api/research/runs", headers=u1).status_code == 403  # 跨所有人的运行记录只有管理员看
     assert c.get("/api/research/runs", headers=root).status_code == 200

@@ -158,7 +158,7 @@ def _view(r: BaseRunner, thread_id: str) -> dict:
 
 
 def _mine(r: ResearchRunner, thread_id: str, who: Identity) -> dict:
-    """对话接口都先过这里：线程不存在、或不归这个人（没归谁的只有管理员能看，见 ResearchRunner.can_see），一律 404，不透露有没有。"""
+    """对话接口都先过这里：线程不存在、或不归这个人（见 ResearchRunner.can_see），一律 404，不透露有没有。"""
     view = _view(r, thread_id)
     if not r.can_see(thread_id, who):
         raise HTTPException(404, "thread 不存在")
@@ -341,7 +341,7 @@ def memory_view(who: Who):
 
 @app.get("/api/research/threads")
 def research_list(who: Who):
-    """线程列表：这个人的对话的标题和状态（管理员还看到登录以前没归谁的老对话）。"""
+    """线程列表：这个人的对话的标题和状态。登录以前没归谁的老对话谁都看不到。"""
     return {"threads": research().list_threads(who)}
 
 
