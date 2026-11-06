@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import Field, ValidationError
 
-from app import aio, model_catalog
+from app import aio, config, model_catalog
 from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
 from app.graph.research import history
@@ -80,9 +80,19 @@ def test_catalog_rejects_mistakes():
         ({**good, "roles": {k: v for k, v in good["roles"].items() if k != "judge"}}, "内部用途"),
         ({**good, "options": [*good["options"], {**good["options"][1], "id": "x", "model": "deepseek-v4-pro"}]}, "厂商:模型"),
         ({**good, "options": [{**good["options"][0], "status": "retired"}, *good["options"][1:]]}, "不能停用"),
+        ({**good, "options": [{**good["options"][0], "access": "user"}, *good["options"][1:]]}, "游客也能用"),
+        ({**good, "options": [*good["options"][:-1], {**good["options"][-1], "access": "vip"}]}, "access"),
     ]:
         with pytest.raises(ValidationError, match=why):
             Catalog.model_validate(broken)
+
+
+def test_guests_get_auto_and_the_light_models():
+    """游客能选 Auto 和轻量模型（2026-11-06 Sean 定），别的要登录；现在没有只给管理员的。"""
+    c = model_catalog.load()
+    assert {o.id for o in c.offered(_always) if o.allows("guest")} == {
+        AUTO, "deepseek-flash", "doubao-seed-2-1-lite", "qwen3-8-flash", "mimo-v2-6-flash", "glm-5-3-flash", "hy3", "minimax-m3-1-flash"}
+    assert all(o.allows("user") and o.allows("admin") for o in c.options)
 
 
 def test_plan_falls_back_to_auto():
@@ -124,7 +134,7 @@ def test_live_planner_builds_each_model_once(monkeypatch):
     assert p.chat_model(off).reasoning_effort is None and p.chat_model(off).temperature == 0
     assert p.chat_model(off).extra_body == {"thinking": {"type": "disabled"}}
     assert not usable(DOUBAO) and usable(PRO) and not usable("openai:gpt-x")
-    assert [o["id"] for o in ResearchRunner.models(type("R", (), {"planner": p})())] == [AUTO, "deepseek-v4-pro", "deepseek-flash"]
+    assert [o["id"] for o in ResearchRunner.models(type("R", (), {"planner": p})(), "user")] == [AUTO, "deepseek-v4-pro", "deepseek-flash"]
     with pytest.raises(ValueError, match="未知的模型提供方"):
         make_chat_model("openai:gpt-x", thinking=False)
 
@@ -161,7 +171,8 @@ def test_models_endpoint_and_default_auto():
     http, rr = _client(FakeResearchPlanner(catalog=_with({"deepseek-flash": "hidden"})))
     models = http.get("/api/models").json()["models"]
     assert [m["id"] for m in models] == [o.id for o in model_catalog.load().options if o.id != "deepseek-flash" and not o.status]
-    assert models[0] == {"id": AUTO, "name": "Auto", "description": models[0]["description"], "thinking": "toggle", "model": PRO}
+    assert models[0] == {"id": AUTO, "name": "Auto", "description": models[0]["description"], "thinking": "toggle", "model": PRO, "locked": False}
+    assert not any(m["locked"] for m in models)  # 现在没有登录，默认都算登录用户
     st = _create(http, "直接答：你好")
     assert st["model"] == AUTO
     rec = _records(st)[0]
@@ -178,6 +189,22 @@ def test_bad_model_is_rejected():
     assert http.get("/api/research/threads").json()["threads"] == []  # 没留下半截的对话
     tid = _create(http, "直接答：你好")["thread_id"]
     assert say(http, tid, "再说", model="deepseek-v4-pro").status_code == 422
+
+
+def test_guest_sees_locked_models_and_cannot_pick_them(monkeypatch):
+    """游客：要登录的模型也列出来，标着 locked；直接调接口选它开不了对话（403，不留下对话）。游客能选的、不选（Auto）照常开；
+    不再提供的照常是 400。"""
+    http, _ = _client(FakeResearchPlanner(catalog=_with({"kimi-k3-1-pro": "hidden"})))
+    monkeypatch.setattr(config, "TIER", "guest")
+    locked = {m["id"]: m["locked"] for m in http.get("/api/models").json()["models"]}
+    assert not locked[AUTO] and not locked["deepseek-flash"] and locked["deepseek-v4-pro"] and locked["qwen3-8-max"]
+    r = http.post("/api/research/threads", json={"text": "你好", "model": "deepseek-v4-pro"})
+    assert r.status_code == 403 and "登录" in r.json()["detail"]
+    r = http.post("/api/research/threads", json={"text": "你好", "model": "kimi-k3-1-pro"})
+    assert r.status_code == 400 and "没有这个模型" in r.json()["detail"]
+    assert http.get("/api/research/threads").json()["threads"] == []
+    assert _create(http, "直接答：你好", model="deepseek-flash")["model"] == "deepseek-flash"
+    assert _create(http, "直接答：你好")["model"] == AUTO
 
 
 def test_conversation_keeps_its_model_and_thinking_per_turn():

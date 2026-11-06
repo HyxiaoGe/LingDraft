@@ -353,11 +353,17 @@ class ResearchRunner(BaseRunner):
     def regenerate_input(self, thread_id: str, text: str | None = None, thinking: bool | None = None) -> None:
         aio.run(self._aregenerate_input(thread_id, text, thinking))
 
-    def models(self) -> list[dict]:
+    def models(self, tier: str) -> list[dict]:
         """新对话能选的模型（按 models.toml 的顺序，Auto 在第一个）。thinking：toggle 是页面上显示思考开关，always、never 不显示。
-        model 是这个选项主 agent 用的模型（"厂商:模型"），页面按它给每轮记下的模型找名字。"""
-        return [{"id": o.id, "name": o.name, "description": o.description, "thinking": o.thinking, "model": o.model}
+        model 是这个选项主 agent 用的模型（"厂商:模型"），页面按它给每轮记下的模型找名字。
+        locked 是 tier 这一档（见 model_catalog.TIERS）选不了的：照样列出来，页面上锁着（游客看得到要登录的模型）。"""
+        return [{"id": o.id, "name": o.name, "description": o.description, "thinking": o.thinking, "model": o.model, "locked": not o.allows(tier)}
                 for o in self.planner.catalog.offered(self.planner.usable)]
+
+    def locked(self, option_id: str, tier: str) -> bool:
+        """新对话能选的里面有这个选项，但 tier 这一档选不了。不在能选的里面的不算（开对话时照常报没有这个模型）。"""
+        o = next((o for o in self.planner.catalog.offered(self.planner.usable) if o.id == option_id), None)
+        return o is not None and not o.allows(tier)
 
     def rename(self, thread_id: str, title: str) -> None:
         aio.run(self._arename(thread_id, title))

@@ -102,7 +102,7 @@ export default function Workspace() {
   }, [title, tid, memory]);
 
   useEffect(() => { listModels().then(setModels).catch(() => setModels([])); }, []);
-  const picked = models?.some((m) => m.id === pick) ? pick : models?.[0]?.id; // 选的不在列表里了（刚下架）也按 Auto
+  const picked = models?.some((m) => m.id === pick && !m.locked) ? pick : models?.[0]?.id; // 选的不在列表里了（刚下架）、锁上了也按 Auto
   // 输入框旁边显示的模型：新对话是选的；开始的对话是它定下的（状态还没取回来时，刚发出去的按选的，打开的老对话先不显示）
   const current = !tid ? picked : st?.thread_id === tid && st.model ? st.model : live ? picked : null;
   // 这句话带不带思考开关：按输入框旁边显示的那个模型（能开关才带，不带的按模型的默认）
