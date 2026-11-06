@@ -10,7 +10,7 @@
 每行还记着用户发的时候开没开思考（输入框旁边的开关，没给是空）：合成一句时按后发的那句，发出去时带上（见 ResearchRunner._aended）。
 
 还有一张 thread_owners：每段对话归谁（见 app.identity，登录用户的 id 或游客的 guest:…），开对话时记下，列表和所有对话接口按它查。
-登录以前的老对话没有这一行（没归谁）：只有管理员看得到（2026-11-06 Sean 定，都是测试数据）。游客登录后把 TA 的对话整批改归账号（transfer）。
+登录以前的老对话没有这一行（没归谁）：页面上谁都看不到，相当于归档了，库里还在（2026-11-06 Sean 定，都是测试数据）。游客登录后把 TA 的对话整批改归账号（transfer）。
 """
 
 from __future__ import annotations
@@ -54,7 +54,6 @@ class RunStore(Protocol):
     async def claim(self, thread_id: str, owner: str) -> None: ...  # 记下归谁；已经记过的不改
     async def owner_of(self, thread_id: str) -> str | None: ...  # 没记过（登录以前的老对话）是 None
     async def threads_of(self, owner: str) -> list[str]: ...  # 这个人的所有对话（线程 id）
-    async def owned(self) -> set[str]: ...  # 记过归谁的所有线程 id（列管理员能看的没归谁的对话时，拿全部线程减掉它）
     async def transfer(self, source: str, target: str) -> int: ...  # source 的对话全改归 target，返回改了几段
 
     # 排着的话：{"text", "created_at", "updated_at"}
@@ -125,9 +124,6 @@ class MemoryRunStore:
 
     async def threads_of(self, owner: str) -> list[str]:
         return [t for t, o in self._owners.items() if o == owner]
-
-    async def owned(self) -> set[str]:
-        return set(self._owners)
 
     async def transfer(self, source: str, target: str) -> int:
         moved = [t for t, o in self._owners.items() if o == source]
@@ -235,9 +231,6 @@ class PostgresRunStore:
 
     async def threads_of(self, owner: str) -> list[str]:
         return [r["thread_id"] for r in await self._exec("SELECT thread_id FROM thread_owners WHERE owner = %s ORDER BY created_at", (owner,))]
-
-    async def owned(self) -> set[str]:
-        return {r["thread_id"] for r in await self._exec("SELECT thread_id FROM thread_owners")}
 
     async def transfer(self, source: str, target: str) -> int:
         return len(await self._exec("UPDATE thread_owners SET owner = %s WHERE owner = %s RETURNING thread_id", (target, source)))
