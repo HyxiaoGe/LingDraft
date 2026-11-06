@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
@@ -250,17 +250,27 @@ def research_list():
     return {"threads": research().list_threads()}
 
 
+def tier_of(request: Request) -> str:
+    """这个请求的人是哪一档（游客、登录用户、管理员，见 model_catalog.TIERS）。现在没有登录，都按 LINGDRAFT_TIER（默认 user）；
+    做了登录以后从登录状态取，只改这里。"""
+    return config.TIER
+
+
 @app.get("/api/models")
-def research_models():
-    """新对话能选的模型，Auto 在第一个（列表见 app/models.toml，没配 key 的不在里面）。"""
-    return {"models": research().models()}
+def research_models(request: Request):
+    """新对话能选的模型，Auto 在第一个（列表见 app/models.toml，没配 key 的不在里面）。这一档选不了的也列出来，标着 locked。"""
+    return {"models": research().models(tier_of(request))}
 
 
 @app.post("/api/research/threads")
-def research_create(body: ResearchCreateBody):
-    """新对话。选的模型没有、停用了时返回 400。"""
+def research_create(body: ResearchCreateBody, request: Request):
+    """新对话。选的模型没有、停用了时返回 400；这一档选不了的（游客选了要登录的）返回 403，不能绕过页面上的锁。
+    模型只在开新对话时选，之后每轮照对话定下的：做了登录、对话分了人以后，游客打不开登录用户的对话，这里查一次就够。"""
+    r = research()
+    if body.model and r.locked(body.model, tier_of(request)):
+        raise HTTPException(403, "登录后才能用这个模型")
     try:
-        return _sse(research().start(str(uuid.uuid4()), _text(body), body.model, body.thinking))
+        return _sse(r.start(str(uuid.uuid4()), _text(body), body.model, body.thinking))
     except UnknownModel as e:
         raise HTTPException(400, str(e)) from None
 

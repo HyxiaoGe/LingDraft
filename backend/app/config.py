@@ -73,6 +73,10 @@ RESEARCH_WORKERS = int(os.environ.get("LINGDRAFT_RESEARCH_WORKERS", "4"))  # 同
 DATABASE_URL = os.environ.get("LINGDRAFT_DATABASE_URL", "")
 # 前端构建出来的页面（frontend/dist）：部署时由后端一起出页面（镜像里配好了）；本机开发不配，页面由 Vite 出
 STATIC_DIR = os.environ.get("LINGDRAFT_STATIC_DIR", "")
+# 现在没有登录，所有请求都算这一档（guest / user / admin，见 model_catalog.TIERS）：本机想看游客看到的样子设成 guest。做了登录以后按登录状态定
+TIER = os.environ.get("LINGDRAFT_TIER", "user")
+if TIER not in ("guest", "user", "admin"):
+    raise RuntimeError(f"LINGDRAFT_TIER 只能是 guest、user、admin：{TIER!r}")
 VERSION = os.environ.get("LINGDRAFT_VERSION", "")  # 部署时的提交号（镜像构建时带进来），记进运行记录；本机为空
 
 MAX_CHECK_RETRIES = 2

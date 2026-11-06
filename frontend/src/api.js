@@ -109,7 +109,7 @@ export async function listInspirations() {
   return (await resp.json()).questions;
 }
 
-// 新对话能选的模型：[{id, name, description, thinking, model}]，Auto 在第一个。
+// 新对话能选的模型：[{id, name, description, thinking, model, locked}]，Auto 在第一个。locked 是这个人这一档选不了的（游客看到的要登录的模型）。
 // thinking 是 toggle 的显示思考开关（always、never 不显示）；model 是它用的“厂商:模型”，按它给每轮记下的模型找名字
 export async function listModels() {
   const resp = await fetch("/api/models");

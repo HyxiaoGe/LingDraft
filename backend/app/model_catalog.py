@@ -1,7 +1,7 @@
 """模型选项：用户在列表里选的选项、内部用途各用哪个模型（正本是 app/models.toml，说明也在那里）。
 
 这里只管"选哪个"：对话定下选项以后，每一轮开始时由 Catalog.plan 定这一轮主 agent、子 agent 用的模型（见 graph.research.agent 的
-TurnMiddleware），记进这一轮的记录；以后查权限、余额也加在这一处。模型怎么建在 research_llm.make_chat_model。
+TurnMiddleware），记进这一轮的记录。哪一档的人能选哪些选项看 Option.access（游客、登录用户、管理员，见 TIERS）；以后查余额也加在这一处。模型怎么建在 research_llm.make_chat_model。
 各模型的价格也在 models.toml（[prices]、[peak]），Catalog.rate 查某一刻的单价，记账在 app.costs。
 模型能做什么（窗口多大、能不能调工具、支不支持思考）看 LangChain 的 model.profile，这里不另记。
 """
@@ -19,6 +19,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 PATH = Path(__file__).with_name("models.toml")
 AUTO = "auto"
 ROLES = ("title", "suggest", "probe", "summarize", "dream", "judge")
+# 谁在用：游客（没登录也能聊）、登录用户、管理员，从低到高（2026-11-06 Sean 定，credits 的额度也按这三档）。选项的 access 是最低哪一档能选
+TIERS = ("guest", "user", "admin")
+Access = Literal["guest", "user", "admin"]
 CHINA_TZ = timezone(timedelta(hours=8))  # 峰谷按北京时间
 # 这次改动（2026-11-05）之前的轮没记模型：都是它答的，思考 high（dev 和本机的 .env 都没设过 RESEARCH_PROVIDER、RESEARCH_MODEL 这几个）
 LEGACY_MODEL = "deepseek:deepseek-v4-pro"
@@ -52,9 +55,14 @@ class Option(BaseModel):
     effort: str = ""
     subagent: Subagent | None = None
     status: Literal["", "hidden", "retired"] = ""
+    access: Access = "user"  # 不写是要登录：新加的模型默认不给游客
 
     def refs(self) -> tuple[str, str]:
         return self.model, (self.subagent.model if self.subagent else self.model)
+
+    def allows(self, tier: str) -> bool:
+        """这一档的人能不能选它。"""
+        return TIERS.index(tier) >= TIERS.index(self.access)
 
 
 class Role(BaseModel):
@@ -148,6 +156,8 @@ class Catalog(BaseModel):
             raise ValueError(f"选项 id 重复了：{sorted({i for i in ids if ids.count(i) > 1})}")
         if ids[0] != AUTO or self.options[0].status:
             raise ValueError("第一个选项要是 auto，而且不能停用")
+        if self.options[0].access != "guest":
+            raise ValueError("auto 要游客也能用（access = \"guest\"）：没选模型的、选的模型不在了的都用它")
         if set(self.roles) != set(ROLES):
             raise ValueError(f"内部用途要正好是这几样：{ROLES}，现在是 {sorted(self.roles)}")
         for ref in self.refs():
@@ -185,7 +195,8 @@ class Catalog(BaseModel):
                     subagent=ModelUse(ref=sub.model, thinking=on, effort=sub.effort if on else ""))
 
     def _auto(self, auto: Option) -> Option:
-        """Auto 的策略：现在就是 models.toml 里给它配的模型。以后按问题选模型改这里（Sean：用户多半不改默认，Auto 是降成本的地方）。"""
+        """Auto 的策略：现在就是 models.toml 里给它配的模型。以后按问题选模型改这里（Sean：用户多半不改默认，Auto 是降成本的地方）。
+        到时候要按这个人是哪一档（TIERS）选：游客也用 Auto，只能在 access 允许游客的模型里选。"""
         return auto
 
     def rate(self, ref: str, at: datetime, input_tokens: int) -> tuple[str, Rate] | None:

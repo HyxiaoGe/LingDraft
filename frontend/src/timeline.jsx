@@ -5,7 +5,7 @@
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
-import { IconArrowDown, IconArrowUp, IconBook, IconBulb, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconInsert, IconLoop, IconPage, IconPin, IconPlane, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconUndo, IconWarn, Spinner } from "./icons.jsx";
+import { IconArrowDown, IconArrowUp, IconBook, IconBulb, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconInsert, IconLock, IconLoop, IconPage, IconPin, IconPlane, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconUndo, IconWarn, Spinner } from "./icons.jsx";
 import { ImageCards, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
@@ -842,7 +842,8 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
 
 // 输入框里发送按钮左边：深度思考开关（选的模型能开关才有）和选模型。新对话随便选；对话开始后模型定下不换，
 // 点开只说明一句、列出能选的给开新对话时参考。思考开关每句话都能改，按下去不抢光标（输入框里的字和光标都留着）。
-// 菜单打开时光标在菜单里：Esc 只收起菜单，不会停掉正在跑的这一轮（见 Composer 的 Esc）
+// 菜单打开时光标在菜单里：Esc 只收起菜单，不会停掉正在跑的这一轮（见 Composer 的 Esc）。
+// 这一档选不了的（locked：游客看到的要登录的模型）照样列出来，锁着点不了
 function ModelTools({ models, current, locked, onPick, thinking, onThinking }) {
   const [open, setOpen] = useState(false);
   const box = useRef(null);
@@ -880,10 +881,10 @@ function ModelTools({ models, current, locked, onPick, thinking, onThinking }) {
         <div ref={menu} className="ws-menu ws-model-menu" role="menu" aria-label="选模型">
           {locked && <div className="ws-menu-note">对话开始后不能换模型，想换模型请开新对话</div>}
           {models.map((m) => (
-            <button key={m.id} role="menuitemradio" aria-checked={m.id === current} disabled={locked && m.id !== current}
-              onClick={() => { if (!locked) onPick(m.id); close(); }}>
+            <button key={m.id} role="menuitemradio" aria-checked={m.id === current} disabled={m.locked || (locked && m.id !== current)}
+              title={m.locked ? "登录后可用" : undefined} onClick={() => { if (!locked && !m.locked) onPick(m.id); close(); }}>
               <span className="ws-model-item"><b>{m.name}</b>{m.description && <small>{m.description}</small>}</span>
-              {m.id === current && <IconCheck size={14} />}
+              {m.id === current ? <IconCheck size={14} /> : m.locked && <span className="ws-model-lock"><IconLock size={12} />登录后可用</span>}
             </button>
           ))}
         </div>
