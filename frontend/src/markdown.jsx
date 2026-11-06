@@ -1,6 +1,6 @@
 // 正文的小 Markdown：段落、标题、列表、引用块、表格、代码块、粗体、行内代码、链接，再加上引用角标 [s3fa9c1]。
 // 只认这些常见写法，不认识的照原样显示；全部按文字渲染，不插入 HTML。
-import React from "react";
+import React, { useLayoutEffect, useRef, useState } from "react";
 import { FENCE, closesFence, isRule } from "./research.js";
 
 const INLINE = /(\*\*([^*]+)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\])/g;
@@ -43,6 +43,38 @@ function listGoesOn(lines, i, ordered, indent) {
   return !!m && (m[1].length > indent || /^\d/.test(m[2]) === ordered);
 }
 
+// 表格：放不下就在框里横着滑，页面不跟着横滑。左右还有没露出来的列，那一边淡出成纸色，看得出能滑（M7；不用阴影）。
+// 能滑的时候框能用 Tab 停上去，方向键滑
+function Table({ children }) {
+  const ref = useRef(null);
+  const [edge, setEdge] = useState("");
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const read = () => {
+      const left = el.scrollLeft > 1;
+      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setEdge((left ? " more-l" : "") + (right ? " more-r" : ""));
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    ro.observe(el.firstElementChild);
+    el.addEventListener("scroll", read, { passive: true });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener("scroll", read);
+    };
+  }, []);
+  const scrolls = edge !== "";
+  return (
+    <div className={"md-table-box" + edge}>
+      <div ref={ref} className="md-table" tabIndex={scrolls ? 0 : undefined} role={scrolls ? "region" : undefined} aria-label={scrolls ? "表格，可以左右滑动" : undefined}>
+        <table>{children}</table>
+      </div>
+    </div>
+  );
+}
+
 // cite(sid) 返回引用角标；正文还在逐字出现时，最后一段可能写到一半，照常渲染。
 // 每块的 key 用它开始的那一行：逐字出现时段落、列表往下长，key 不变，已经显示的部分不会整块重建
 export function Markdown({ text, cite }) {
@@ -75,12 +107,10 @@ export function Markdown({ text, cite }) {
       let j = i + 2;
       for (; j < lines.length && lines[j].trim().startsWith("|"); j++) rows.push(cells(lines[j]));
       blocks.push(
-        <div key={i} className="md-table">
-          <table>
-            <thead><tr>{head.map((c, k) => <th key={k}>{inline(c, cite, `t${i}h${k}`)}</th>)}</tr></thead>
-            <tbody>{rows.map((r, ri) => <tr key={ri}>{head.map((_, k) => <td key={k}>{inline(r[k] || "", cite, `t${i}r${ri}c${k}`)}</td>)}</tr>)}</tbody>
-          </table>
-        </div>,
+        <Table key={i}>
+          <thead><tr>{head.map((c, k) => <th key={k}>{inline(c, cite, `t${i}h${k}`)}</th>)}</tr></thead>
+          <tbody>{rows.map((r, ri) => <tr key={ri}>{head.map((_, k) => <td key={k}>{inline(r[k] || "", cite, `t${i}r${ri}c${k}`)}</td>)}</tr>)}</tbody>
+        </Table>,
       );
       i = j;
       continue;

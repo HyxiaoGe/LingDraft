@@ -41,7 +41,7 @@ export function WeatherCard({ fc }) {
   // 问了某一天、预报里有：只有这一天，排成一行，是哪天写在标题上
   const one = fc.days.length === 1 && fc.days[0].date === fc.requested_date;
   return (
-    <section className="ws-card ws-weather" aria-label={`${fc.location}的天气预报`}>
+    <section className="ws-card ws-wide ws-weather" aria-label={`${fc.location}的天气预报`}>
       <div className="ws-weather-head">
         <IconCloudSun size={15} />
         <span className="place">{parts.at(-1)}</span>
@@ -101,7 +101,7 @@ const barPath = (x, y, w, h) => {
 function Hourly({ hours, today }) {
   const box = useRef(null);
   const [w, setW] = useState(0);
-  const [at, setAt] = useState(null); // 悬停的那个小时
+  const [at, setAt] = useState(null); // 正在看的那个小时：鼠标悬停、手指按着拖、键盘左右键选的
   useLayoutEffect(() => {
     const el = box.current;
     const fit = () => setW(Math.floor(el.clientWidth));
@@ -124,11 +124,31 @@ function Hourly({ hours, today }) {
   const ticks = hours.map((h, i) => i === 0 || (hourOf(h.time) % 3 === 0 && i >= 2));
   const span = spanName(hours, today);
   const summary = `${span}气温 ${deg(Math.min(...temps))} 到 ${deg(Math.max(...temps))}` + (hasPop ? `，降水概率最高 ${maxPop}%` : "");
+  const last = hours.length - 1;
   const pick = (e) => {
     const r = e.currentTarget.getBoundingClientRect();
-    setAt(Math.max(0, Math.min(hours.length - 1, Math.round((e.clientX - r.left - PAD) / step))));
+    setAt(Math.max(0, Math.min(last, Math.round((e.clientX - r.left - PAD) / step))));
+  };
+  // 手指（M8）：按下就读那个小时，左右拖着读；上下划是滚页面（touch-action: pan-y），浏览器会取消这次按下，读数留着。
+  // 抬起手指读数也留着，好看清；鼠标移出图才清掉
+  const pointer = {
+    onPointerDown: (e) => {
+      if (e.pointerType === "mouse") return;
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      pick(e);
+    },
+    onPointerMove: (e) => (e.pointerType === "mouse" || e.buttons) && pick(e),
+    onPointerLeave: (e) => e.pointerType === "mouse" && setAt(null),
+  };
+  // 键盘：Tab 停到图上从第一个小时开始，左右键一小时一小时看，Home、End 到头尾，离开图清掉
+  const keys = (e) => {
+    const to = { ArrowLeft: (at ?? 0) - 1, ArrowRight: (at ?? -1) + 1, Home: 0, End: last }[e.key];
+    if (to == null) return;
+    e.preventDefault();
+    setAt(Math.max(0, Math.min(last, to)));
   };
   const h = at == null ? null : hours[at];
+  const reading = h && `${hourName(h, today)} ${h.text}，${deg(h.temp)}` + (h.pop != null ? `，降水概率 ${h.pop}%` : "") + (h.precip > 0 ? `，${h.precip} 毫米` : "");
 
   return (
     <div className="ws-hourly">
@@ -145,7 +165,8 @@ function Hourly({ hours, today }) {
       </div>
       <div ref={box}>
         {w > 0 && (
-          <svg width={w} height={HEIGHT} role="img" aria-label={summary} onMouseMove={pick} onMouseLeave={() => setAt(null)}>
+          <svg width={w} height={HEIGHT} tabIndex={0} role="slider" aria-label={`${summary}。左右方向键逐小时看`} aria-valuemin={0} aria-valuemax={last} aria-valuenow={at ?? 0}
+            aria-valuetext={reading || summary} {...pointer} onKeyDown={keys} onFocus={(e) => e.target.matches(":focus-visible") && at == null && setAt(0)} onBlur={() => setAt(null)}>
             {h && <line className="cross" x1={x(at)} x2={x(at)} y1={TEMP_TOP - 8} y2={BAR_BOTTOM} />}
             {hasPop && (
               <>

@@ -13,6 +13,7 @@ import { CreditsFoot, LoginDialog, UserFoot, useAuth } from "./login.jsx";
 import { MemoryPage } from "./memory.jsx";
 import { MOBILE, NavContext, SIDE_ARIA_KEY, SIDE_KEY, isSideKey, useMedia } from "./nav.jsx";
 import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, threadMarkdown, useNow, when } from "./research.js";
+import { useDoneAlert } from "./alert.jsx";
 import { Conversation, focusInput } from "./timeline.jsx";
 import { uploadErrorText } from "./upload.js";
 import "./workspace.css";
@@ -117,9 +118,11 @@ export default function Workspace() {
     return () => clearInterval(t);
   }, [anyActive]);
   const title = live?.title || st?.title; // 执行中起好的标题跟着事件来，库里一轮跑完才有（之前是用户的原话）
+  const done = useDoneAlert(tid, busy || ACTIVE.has(st?.status), st, title); // 用户没在看时答完了：标题前加“（答完了）”，见 alert.jsx
   useEffect(() => {
-    document.title = memory ? "灵稿 · 记忆" : title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : "灵稿 · 新对话";
-  }, [title, tid, memory]);
+    const base = memory ? "灵稿 · 记忆" : title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : "灵稿 · 新对话";
+    document.title = (done ? `（${done}）` : "") + base;
+  }, [title, tid, memory, done]);
 
   useEffect(() => { listModels().then(setModels).catch(() => setModels([])); }, []);
   // 身份定了取一次额度；每轮结束（busy 回到 false）再取：这一轮花的已经记上了
@@ -331,6 +334,7 @@ export default function Workspace() {
   // said：用户这次说的话，存下来之前先在对话里显示；extra：这次执行的其他显示信息（这句话带的图、重新回答时要藏起来的旧条目、改过的那句话）
   async function run(fn, said, extra = {}) {
     const g = gen.current;
+    const before = st?.turns?.length || 0; // 发之前对话里有几轮：服务出错时用来看这句话存没存下
     ctl.current.abort(); // 上一轮的连接可能还开着在等推荐问题：又说了话，那些推荐问题不要了
     ctl.current = new AbortController();
     const r = { done: false, sig: ctl.current.signal }; // done：收到了这一轮结束的状态，之后连接断了也不用再接
@@ -372,6 +376,27 @@ export default function Workspace() {
         setPutBack({ thread: "new", text: said, image, rejected: true });
         setError("这句话没发出去，已经放回输入框：选的模型现在用不了，换一个再发。");
         listModels().then(setModels).catch(() => {});
+        setBusy(false);
+        setLive(null);
+        return;
+      }
+      // 服务出错（5xx）：话（和图）多半没存下。先取一次状态：存下了（多了一轮、改的那句已经换上、正在跑）就按服务器的接着显示；
+      // 没存下就和图被拒一样，话和图都放回输入框（待确认第 19 条）
+      const text = said ?? extra.edit;
+      if (e.status >= 500 && text) {
+        const s = tidRef.current ? await getResearchState(tidRef.current).catch(() => null) : null;
+        if (g !== gen.current) return;
+        const kept = s && (ACTIVE.has(s.status) || s.turns.length > before || (extra.edit != null && s.turns.at(-1)?.user === extra.edit));
+        if (kept) {
+          setSt(s);
+          if (ACTIVE.has(s.status)) {
+            setLive((l) => ({ items: [], ...l, said: null, edit: undefined, sentAt: undefined, stage: "服务器还在处理，等它完成" }));
+            return await follow(tidRef.current, g, errs, r);
+          }
+        } else {
+          setPutBack({ thread: tidRef.current || "new", text, image, rejected: true });
+          setError(errorText(image ? "这句话没发出去，话和图都放回输入框了" : "这句话没发出去，已经放回输入框", e));
+        }
         setBusy(false);
         setLive(null);
         return;
