@@ -630,6 +630,9 @@ def usage_of(messages: list[BaseMessage]) -> Usage:
     只算这些消息自己的：子 agent 的另算（见 subagent_usage）。"""
     u, cost = Usage(), 0.0
     for m in messages:
+        # 工具调用的钱（做成了的按次收，见 agent.ToolChargeMiddleware）；没定价的工具没有这个键，不收
+        if isinstance(m, ToolMessage) and cost is not None and isinstance(c := m.response_metadata.get(COST), int | float):
+            cost += c
         if isinstance(m, AIMessage) and not blocked_reason(m) and not m.response_metadata.get(STOPPED):  # 系统补的消息不是一次完整的模型调用
             meta: dict[str, Any] = m.usage_metadata or {}  # type: ignore[assignment]
             c = m.response_metadata.get(COST)

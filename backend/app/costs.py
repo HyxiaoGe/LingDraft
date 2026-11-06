@@ -1,9 +1,11 @@
 """成本记账：每次调模型按这一刻的单价算多少钱，记一行账，钱数也写进这条模型消息（每轮的用量从消息里加）。
 
 2026-11-06 Sean 定：1 credit = ¥0.001 的 API 成本（CREDITS_PER_YUAN），按各模型命中缓存、没命中、输出的单价分开算，要和厂商的账单对得上。
-价格表在 app/models.toml 的 [prices]、[peak]（手动维护，查单价见 model_catalog.Catalog.rate）。v1 只记账、不扣费：扣费要先有登录。
+价格表在 app/models.toml 的 [prices]、[peak]（手动维护，查单价见 model_catalog.Catalog.rate）。额度按这里的账扣（见 app.quota）。
+工具调用也算钱（2026-11-06 Sean 定“都扣”）：画图、搜索、读页这些按次计价（models.toml 的 [tools]），只算成功的，没列的（task、recall、排行程）不收。
 
 - 记在哪：model_costs 表（和对话同一个 Postgres），每次调用一行，起标题、推荐问题、压缩、整理记忆、评测这些不算给用户的也记，对账才对得上。
+  工具调用也是一行（provider、purpose 都是 tool，model 是工具名）。每行记着对话归谁（owner，登录用户的 id 或 guest:xxx），额度按这个人算。
   删对话时不删：钱已经花了。本机跑评测记在本机的库里，对账时两边加起来。
 - 怎么记：聊天模型类混进 MeteredChatModel（research_llm 建的每个模型都有），调用结束时算钱，交给 LEDGER，后台线程写库。
   是哪段对话、哪一轮、是不是子 agent 由调用方用 within 标上（运行器、子 agent 的 task 工具、起标题，见 Scope）。
@@ -41,6 +43,7 @@ COST = "lingdraft_cost"  # 模型消息 response_metadata 里的键：这次调�
 CREDITS_PER_YUAN = 1000
 AGENT = "agent"  # 主 agent、子 agent 用的模型的用途；内部用途是 models.toml [roles] 的名字（title、suggest……）
 SUBAGENT = "subagent"
+TOOL = "tool"  # 工具调用的用途（也是它的 provider）；算给用户的就是 AGENT、SUBAGENT、TOOL 这三样（见 quota）
 OK, NO_USAGE, STOPPED, ERROR = "ok", "no_usage", "stopped", "error"  # 一行账的状态：算了钱的、接口没给用量的、流到一半停了的、断了的
 
 
@@ -55,6 +58,7 @@ class Scope:
     thread_id: str | None = None
     turn_id: str | None = None
     subagent: bool = False
+    owner: str | None = None  # 对话归谁（thread_owners 里的），额度按人算；没归谁的（登录以前的老对话、整理记忆）是 None
 
 
 SCOPE: contextvars.ContextVar[Scope] = contextvars.ContextVar("lingdraft_cost_scope", default=Scope())
@@ -90,7 +94,7 @@ def _warn_once(msg: str) -> None:
     log.warning("价格表要更新：%s", msg)
 
 
-def _now() -> datetime:
+def now() -> datetime:
     return datetime.now(UTC)
 
 
@@ -98,7 +102,7 @@ def _row(ref: str, purpose: str, started: datetime, status: str) -> dict[str, An
     scope = SCOPE.get()
     provider, _, model = ref.partition(":")
     return {"started_at": started, "provider": provider, "model": model, "purpose": SUBAGENT if purpose == AGENT and scope.subagent else purpose,
-            "thread_id": scope.thread_id, "turn_id": scope.turn_id, "status": status,
+            "thread_id": scope.thread_id, "turn_id": scope.turn_id, "owner": scope.owner, "status": status,
             "input_tokens": None, "cached_tokens": None, "output_tokens": None, "yuan": None, "rate": None, "version": config.VERSION or None}
 
 
@@ -125,9 +129,25 @@ def lost(ref: str, purpose: str, started: datetime, status: str) -> None:
     LEDGER.put(_row(ref, purpose, started, status))
 
 
+def tool_price(name: str) -> float | None:
+    """这个工具每次调用多少元（models.toml 的 [tools]）；没列的不收钱。"""
+    return _catalog().tools.get(name)
+
+
+def charge_tool(name: str, started: datetime) -> float | None:
+    """一次成功的工具调用：按次记一行，返回多少元；没定价的不记、返回 None。调用方（agent.ToolChargeMiddleware）把钱数写进工具结果，
+    这一轮的用量从消息里加（和模型调用一样，见 history.usage_of）。"""
+    if (yuan := tool_price(name)) is None:
+        return None
+    row = _row(f"{TOOL}:{name}", TOOL, started, OK)
+    row.update(yuan=yuan, rate={"kind": "per_call", "call": yuan})
+    LEDGER.put(row)
+    return yuan
+
+
 def credits(turn: Any) -> float | None:
-    """一轮算给用户的 credits：主 agent 和子 agent 的调用（起标题、推荐问题这些不算）。没调完过模型、有不知道钱数的调用（没填价格、
-    这次改动之前的轮）是 None。点了停止的那一下不知道用了多少，不算在里面（见模块说明）。"""
+    """一轮算给用户的 credits：主 agent 和子 agent 的模型调用加上工具调用（起标题、推荐问题这些不算）。没调完过模型、有不知道钱数的调用
+    （没填价格、这次改动之前的轮）是 None。点了停止的那一下不知道用了多少，不算在里面（见模块说明）。"""
     u, s = turn.usage, turn.subagent_usage
     if u.cost is None or s.cost is None or not (u.model_calls or s.model_calls):
         return None
@@ -176,7 +196,7 @@ class MeteredChatModel:
         return AGENT
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs: Any):
-        started = _now()
+        started = now()
         res = super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)  # type: ignore[misc]
         self._charge_result(res, started)
         return res
@@ -184,7 +204,7 @@ class MeteredChatModel:
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs: Any):
         if _falls_back(type(self), "_agenerate"):
             return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)  # type: ignore[misc]
-        started = _now()
+        started = now()
         try:
             res = await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)  # type: ignore[misc]
         except asyncio.CancelledError:  # 发出去了才被取消的：厂商可能照样生成完、照样收钱
@@ -198,7 +218,7 @@ class MeteredChatModel:
         _with_cost(msg, charge(self._cost_ref(), self._cost_purpose(), started, getattr(msg, "usage_metadata", None)))
 
     def _stream(self, messages, stop=None, run_manager=None, **kwargs: Any) -> Iterator:
-        started, usage, last = _now(), None, None
+        started, usage, last = now(), None, None
         try:
             for chunk in super()._stream(messages, stop=stop, run_manager=run_manager, **kwargs):  # type: ignore[misc]
                 usage, last = _add(usage, chunk), chunk
@@ -215,7 +235,7 @@ class MeteredChatModel:
             async for chunk in super()._astream(messages, stop=stop, run_manager=run_manager, **kwargs):  # type: ignore[misc]
                 yield chunk
             return
-        started, usage, last = _now(), None, None
+        started, usage, last = now(), None, None
         try:
             async for chunk in super()._astream(messages, stop=stop, run_manager=run_manager, **kwargs):  # type: ignore[misc]
                 usage, last = _add(usage, chunk), chunk
@@ -282,7 +302,7 @@ class Ledger:
 
 LEDGER = Ledger()
 
-_COLUMNS = ("started_at", "provider", "model", "purpose", "thread_id", "turn_id", "status",
+_COLUMNS = ("started_at", "provider", "model", "purpose", "thread_id", "turn_id", "owner", "status",
             "input_tokens", "cached_tokens", "output_tokens", "yuan", "rate", "version")
 _DDL = (
     """CREATE TABLE IF NOT EXISTS model_costs (
@@ -293,6 +313,7 @@ _DDL = (
         purpose TEXT NOT NULL,
         thread_id TEXT,
         turn_id TEXT,
+        owner TEXT,
         status TEXT NOT NULL,
         input_tokens INTEGER,
         cached_tokens INTEGER,
@@ -303,6 +324,8 @@ _DDL = (
     )""",
     "CREATE INDEX IF NOT EXISTS model_costs_started ON model_costs (started_at)",
     "CREATE INDEX IF NOT EXISTS model_costs_turn ON model_costs (thread_id, turn_id)",
+    "ALTER TABLE model_costs ADD COLUMN IF NOT EXISTS owner TEXT",  # 2026-11-06 加的（额度按人算），之前建好的表补上
+    "CREATE INDEX IF NOT EXISTS model_costs_owner ON model_costs (owner, started_at)",
 )
 
 

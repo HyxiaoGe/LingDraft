@@ -1,14 +1,18 @@
 import { authFetch } from "./auth.js";
 
 // 请求被拒（4xx/5xx）时抛出的错误带上状态码：页面据此区分“请求被拒”和“连接断了”
+// detail 是对象时（额度用完的 429：{code, message, guest, kind, resets_at…}）原样放在 err.detail 上，message 用它的 message
 async function httpError(resp) {
   let msg = await resp.text();
+  let detail = null;
   try {
     const d = JSON.parse(msg).detail;
-    msg = typeof d === "string" ? d : JSON.stringify(d);
+    if (d && typeof d === "object") detail = d;
+    msg = typeof d === "string" ? d : d?.message || JSON.stringify(d);
   } catch { /* 不是 JSON，用原文 */ }
   const err = new Error(msg);
   err.status = resp.status;
+  err.detail = detail;
   return err;
 }
 
@@ -114,6 +118,13 @@ export async function listInspirations() {
 
 // 新对话能选的模型：[{id, name, description, thinking, model, locked}]，Auto 在第一个。locked 是这个人这一档选不了的（游客看到的要登录的模型）。
 // thinking 是 toggle 的显示思考开关（always、never 不显示）；model 是它用的“厂商:模型”，按它给每轮记下的模型找名字
+// 额度：{unlimited, warn_at, windows: [{kind: "day"|"week"|"guests", limit, used, resets_at}]}（见后端 app.quota）
+export async function getCredits() {
+  const resp = await authFetch("/api/credits");
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
 export async function listModels() {
   const resp = await authFetch("/api/models");
   if (!resp.ok) throw await httpError(resp);

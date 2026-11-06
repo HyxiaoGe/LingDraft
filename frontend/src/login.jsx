@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { EmailLogin, checkSession, completeCallback, emailLoginAvailable, init, signIn, signOut, snapshot, subscribeAuth } from "./auth.js";
 import { IconClose, IconLock, Spinner } from "./icons.jsx";
+import { creditsText } from "./research.js";
 
 // 当前身份：{ready, login, me}（见 auth.snapshot）。回到这个标签页时和 auth 服务对一下账（别处退出了就跟着退）
 export function useAuth() {
@@ -22,7 +23,8 @@ export function useAuth() {
 }
 
 // 左栏下面：游客看到“登录”，登录了看到头像和邮箱，点开能退出
-export function UserFoot({ auth, onLogin }) {
+// credits 是额度（/api/credits），菜单里显示今天、这周还剩多少；onOpen 在打开菜单时调（重新取一次）
+export function UserFoot({ auth, onLogin, credits, onOpen }) {
   const [open, setOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const btn = useRef(null);
@@ -45,7 +47,7 @@ export function UserFoot({ auth, onLogin }) {
   const rect = open ? btn.current?.getBoundingClientRect() : null;
   return (
     <>
-      <button ref={btn} className="ws-user-btn" aria-haspopup="menu" aria-expanded={open} title={me.email} onClick={() => setOpen(!open)}>
+      <button ref={btn} className="ws-user-btn" aria-haspopup="menu" aria-expanded={open} title={me.email} onClick={() => { if (!open) onOpen?.(); setOpen(!open); }}>
         <Avatar me={me} />
         <span className="ws-user-name">{label}</span>
       </button>
@@ -56,6 +58,7 @@ export function UserFoot({ auth, onLogin }) {
             {me.name && me.email && <span>{me.email}</span>}
             {me.tier === "admin" && <span>管理员</span>}
           </div>
+          <CreditsLine credits={credits} />
           <button role="menuitem" disabled={leaving} onClick={() => { setLeaving(true); signOut().catch(() => setLeaving(false)); }}>
             {leaving ? <Spinner size={14} /> : <IconClose size={14} />}退出登录
           </button>
@@ -63,6 +66,19 @@ export function UserFoot({ auth, onLogin }) {
         </div>
       )}
     </>
+  );
+}
+
+// 今天、这周还剩多少 credits（1 credit = ¥0.001 的 API 成本）；管理员不限，没取到不显示
+function CreditsLine({ credits }) {
+  if (!credits) return null;
+  if (credits.unlimited) return <div className="ws-menu-note ws-credits-line">额度不限</div>;
+  const ws = credits.windows.filter((w) => w.kind === "day" || w.kind === "week");
+  if (!ws.length) return null;
+  return (
+    <div className="ws-menu-note ws-credits-line">
+      {ws.map((w) => <span key={w.kind}>{w.kind === "week" ? "这周" : "今天"}还剩 <b>{creditsText(Math.max(0, w.limit - w.used))}</b> / {w.limit}</span>)}
+    </div>
   );
 }
 
@@ -195,7 +211,7 @@ function EmailPanel({ onBack, onDone, setCritical }) {
       <form onSubmit={start}>
         <h2 id="ws-login-title" className="ws-dialog-title">用邮箱登录</h2>
         <p className="ws-dialog-desc">填邮箱，我们发一个验证码过去。没有账号会直接注册。</p>
-        <input ref={input} className="ws-input" type="email" autoComplete="email" placeholder="邮箱" value={addr} disabled={busy} onChange={(e) => setAddr(e.target.value)} />
+        <input ref={input} className="ws-field" type="email" autoComplete="email" placeholder="邮箱" value={addr} disabled={busy} onChange={(e) => setAddr(e.target.value)} />
         {error && <div className="ws-login-err" role="alert">{error}</div>}
         <div className="ws-dialog-actions">
           <button type="button" className="ws-btn ghost" disabled={busy} onClick={onBack}>换个方式</button>
@@ -208,7 +224,7 @@ function EmailPanel({ onBack, onDone, setCritical }) {
     <form onSubmit={verify}>
       <h2 id="ws-login-title" className="ws-dialog-title">输入验证码</h2>
       <p className="ws-dialog-desc">验证码已发到 {sent.masked}，几分钟内有效。</p>
-      <input ref={input} className="ws-input code" inputMode="numeric" autoComplete="one-time-code" placeholder={"·".repeat(sent.codeLength)} maxLength={sent.codeLength}
+      <input ref={input} className="ws-field code" inputMode="numeric" autoComplete="one-time-code" placeholder={"·".repeat(sent.codeLength)} maxLength={sent.codeLength}
         value={code} disabled={busy} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
       {error && <div className="ws-login-err" role="alert">{error}</div>}
       <div className="ws-dialog-actions">

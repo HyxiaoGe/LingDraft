@@ -159,6 +159,7 @@ _POSTGRES_DDL = (
         error_type text, error text, traceback text, version text)""",
     "CREATE INDEX IF NOT EXISTS runs_thread_idx ON runs (thread_id, seq)",
     "CREATE INDEX IF NOT EXISTS runs_status_idx ON runs (status, seq)",
+    "CREATE INDEX IF NOT EXISTS runs_turn_idx ON runs (turn_id, seq)",  # 算额度时查一轮最后一次执行的状态（见 app.quota）
     """CREATE TABLE IF NOT EXISTS pending_messages (
         thread_id text NOT NULL, mode text NOT NULL, text text NOT NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
         thinking boolean, PRIMARY KEY (thread_id, mode))""",

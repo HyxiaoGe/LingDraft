@@ -24,6 +24,7 @@ from app.api.run_store import STATUSES
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 from app.graph.research.memory import DreamSchedule
 from app.identity import ADMIN, Authenticator, AuthUnavailable, BadToken, Identity, make_authenticator
+from app.quota import Exhausted
 from app.tools.gateway import GatewayError
 
 logger = logging.getLogger(__name__)
@@ -163,6 +164,14 @@ def _mine(r: ResearchRunner, thread_id: str, who: Identity) -> dict:
     if not r.can_see(thread_id, who):
         raise HTTPException(404, "thread 不存在")
     return view
+
+
+def _admit(r: ResearchRunner, who: Identity) -> None:
+    """开始一轮之前看额度（见 app.quota）：用完了回 429，detail 是个对象（code 是 credits_exhausted，带什么时候重置、是不是游客），页面据此提示。"""
+    try:
+        r.quota.admit(who)
+    except Exhausted as e:
+        raise HTTPException(429, e.detail()) from None
 
 
 def _dir(r: GraphRunner, thread_id: str) -> Path:
@@ -333,6 +342,13 @@ def auth_claim(body: ClaimBody, who: Who):
 # ---- 对话 ----
 
 
+@app.get("/api/credits")
+def credits_view(who: Who):
+    """这个人的额度（见 app.quota）：{"unlimited": 管理员不限, "warn_at": 用了几成开始提醒, "windows": [{kind, limit, used, resets_at}]}，
+    kind 是 day（今天）、week（这周，登录用户才有）、guests（所有游客今天合计，页面不显示）。"""
+    return research().quota.view(who)
+
+
 @app.get("/api/memory")
 def memory_view(who: Who):
     """长期记忆：这个人的全部记忆和整理的时间（游客没有）。现在只能看（2026-11-03 Sean 定先展示）。"""
@@ -358,6 +374,7 @@ def research_create(body: ResearchCreateBody, who: Who):
     r = research()
     if body.model and r.locked(body.model, who.tier):
         raise HTTPException(403, "登录后才能用这个模型")
+    _admit(r, who)
     try:
         return _sse(r.start(str(uuid.uuid4()), _text(body), body.model, body.thinking, owner=who.sub))
     except UnknownModel as e:
@@ -366,9 +383,10 @@ def research_create(body: ResearchCreateBody, who: Who):
 
 @app.post("/api/research/threads/{thread_id}/messages")
 def research_say(thread_id: str, body: ResearchMessageBody, who: Who):
-    """接着说。运行中、上一轮没跑完时返回 409。"""
+    """接着说。运行中、上一轮没跑完时返回 409；额度用完了 429。"""
     r = research()
     _mine(r, thread_id, who)
+    _admit(r, who)
     text = _text(body)
     try:
         return _sse(r.say(thread_id, text, body.thinking))
@@ -380,9 +398,10 @@ def research_say(thread_id: str, body: ResearchMessageBody, who: Who):
 def research_queue(thread_id: str, body: ResearchMessageBody, who: Who):
     """正在回答时又说的话：排着，这一轮答完或停下就接着发。返回 {"queued": 排着的那句}。
     这一轮刚好答完了就直接发，返回 {"queued": null}，页面去接事件流（/events）。
-    已经有一句没发出去（排着或等着插进这一轮）、或上一轮没跑完时返回 409。"""
+    已经有一句没发出去（排着或等着插进这一轮）、或上一轮没跑完时返回 409；额度用完了 429。"""
     r = research()
     _mine(r, thread_id, who)
+    _admit(r, who)
     text = _text(body)
     try:
         return {"queued": r.queue(thread_id, text, body.thinking)}
@@ -427,9 +446,10 @@ def research_stop(thread_id: str, who: Who):
 
 @app.post("/api/research/threads/{thread_id}/regenerate")
 def research_regenerate(thread_id: str, who: Who, body: ResearchRegenerateBody | None = None):
-    """最后一轮重新回答，可以带上这次的思考开关（不带按原来的）。运行中、上一轮没跑完、还没有回答时返回 409。"""
+    """最后一轮重新回答，可以带上这次的思考开关（不带按原来的）。运行中、上一轮没跑完、还没有回答时返回 409；额度用完了 429。"""
     r = research()
     _mine(r, thread_id, who)
+    _admit(r, who)
     try:
         return _sse(r.regenerate(thread_id, thinking=body.thinking if body else None))
     except (RunConflict, NotIdle, NothingToRegenerate) as e:
@@ -438,9 +458,10 @@ def research_regenerate(thread_id: str, who: Who, body: ResearchRegenerateBody |
 
 @app.post("/api/research/threads/{thread_id}/edit")
 def research_edit(thread_id: str, body: ResearchMessageBody, who: Who):
-    """改了最后那句话，按新的话重新回答。运行中、上一轮没跑完、还没有说过话时返回 409。"""
+    """改了最后那句话，按新的话重新回答。运行中、上一轮没跑完、还没有说过话时返回 409；额度用完了 429。"""
     r = research()
     _mine(r, thread_id, who)
+    _admit(r, who)
     text = _text(body)
     try:
         return _sse(r.regenerate(thread_id, text, body.thinking))
@@ -477,9 +498,10 @@ def research_delete(thread_id: str, who: Who):
 
 @app.post("/api/research/threads/{thread_id}/retry")
 def research_retry(thread_id: str, who: Who):
-    """失败的线程从断开的那一步接着跑；没失败的返回 409。"""
+    """失败的线程从断开的那一步接着跑；没失败的返回 409；额度用完了 429。"""
     r = research()
     _mine(r, thread_id, who)
+    _admit(r, who)
     try:
         return _sse(r.retry(thread_id))
     except (RunConflict, NothingToRetry) as e:

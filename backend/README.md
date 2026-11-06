@@ -27,7 +27,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 环境变量（开关型的认 1/0、true/false、yes/no、on/off，不分大小写，写成别的值启动时直接报错）：
 
 - 通用：`LINGDRAFT_FAKE=1` 用假模型；`LINGDRAFT_DATA_DIR`、`LINGDRAFT_OUTPUT_DIR` 改数据和产出目录；`LINGDRAFT_STATIC_DIR` 由后端出前端页面（镜像里配好了）；`LINGDRAFT_VERSION` 是部署的提交号（镜像构建时带进来）。
-- 登录（见 `app/identity.py`）：`AUTH_URL`（Sean 的 auth 服务，默认 `https://auth.seanfield.org`，也是 JWT 的签发者）、`AUTH_CLIENT_ID`（灵稿在它那里登记的应用；不配就没有登录，所有人都是游客）、`AUTH_INTERNAL_URL`（后端取验签公钥走的内网地址，容器里是 `http://auth-service:8100`）、`AUTH_REDIS_URL`（auth 服务的 Redis，查别处退出登录的吊销标记；不配就等 token 自己过期）；`LINGDRAFT_GUEST_SECRET` 签游客令牌的密钥（部署必配，不配每次启动随机一个，重启后游客的对话找不回）、`LINGDRAFT_GUEST_PER_IP_DAILY` 一个地址一天最多领几个游客身份（默认 30）。登录页面跳到 auth 服务再回来（redirect URI 必须是 https 或 localhost），所以内网 http 地址只能当游客用。
+- 登录（见 `app/identity.py`）：`AUTH_URL`（Sean 的 auth 服务，默认 `https://auth.seanfield.org`，也是 JWT 的签发者）、`AUTH_CLIENT_ID`（灵稿在它那里登记的应用；不配就没有登录，所有人都是游客）、`AUTH_INTERNAL_URL`（后端取验签公钥走的内网地址，容器里是 `http://auth-service:8100`）、`AUTH_REDIS_URL`（auth 服务的 Redis，查别处退出登录的吊销标记；不配就等 token 自己过期）；`LINGDRAFT_GUEST_SECRET` 签游客令牌的密钥（部署必配，不配每次启动随机一个，重启后游客的对话找不回）、`LINGDRAFT_GUEST_PER_IP_DAILY` 一个地址一天最多领几个游客身份（默认 5，配合游客的总额度防刷）。登录页面跳到 auth 服务再回来（redirect URI 必须是 https 或 localhost），所以内网 http 地址只能当游客用。
 - 海报：`ARK_API_KEY`、`ARK_BASE_URL`、`ARK_MODEL`、`ARK_MODEL_LITE`、`ARK_IMAGE_MODEL`；`LINGDRAFT_BACKGROUND=0` 关闭背景图生成。
 - 对话的存储：`LINGDRAFT_DATABASE_URL`，必须配。
 - 对话的模型：env 里只放各家的 key 和地址，用哪些模型写在 `app/models.toml`。现在接了 DeepSeek、豆包、Kimi、Grok、千问、小米 MiMo、智谱 GLM、腾讯混元（TokenHub）、MiniMax，key 是 `DEEPSEEK_API_KEY`、`ARK_API_KEY`、`MOONSHOT_API_KEY`、`XAI_API_KEY`、`DASHSCOPE_API_KEY`、`MIMO_API_KEY`、`ZHIPUAI_API_KEY`、`HUNYUAN_API_KEY`、`MINIMAX_API_KEY`；地址默认是国内站（见 `app/config.py`），换地址设同名的 `*_BASE_URL`：
@@ -188,10 +188,16 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 - 查看：`GET /api/research/threads/{id}/runs` 看一段对话的，`GET /api/research/runs?status=error&limit=50` 看所有对话里最近的。接口不给堆栈；堆栈在库里，出错时也打进日志（Loki 能搜到）。
 - 写记录失败只打日志，不影响执行。
 
-成本（`app/costs.py`）：1 credit = ¥0.001 的 API 成本，v1 只记账、不扣费（扣费要先有登录）。
+成本（`app/costs.py`）：1 credit = ¥0.001 的 API 成本，每次调模型记一行账，额度按账扣（见下面的额度）。工具调用也算钱（2026-11-06 Sean 定“都扣”）：画图、搜索、读页这些按次计价（`models.toml` 的 `[tools]`，画图 0.2 元、搜索读页 0.005 元……），只算做成了的，没列的（task、recall、排行程）不收。
 
 - 每次调模型一行，记在 `model_costs` 表：调用开始的时间、厂商和模型、用途（主 agent、子 agent、起标题、推荐问题、压缩、整理记忆、评测的裁判……）、哪段对话哪一轮、三种 token 数、按调用开始那一刻的单价算出来的钱和用的单价。不算给用户的调用也记，对账才对得上；删对话时不删。
 - 钱数也写进那条模型消息，每轮的用量里加起来（`usage.cost`、`subagent_usage.cost`），页面在模型名后面显示这一轮的 credits（主 agent 加子 agent）。
+
+额度（`app/quota.py`，2026-11-06 Sean 定，Fusion 的做法只作参考）：北京时间的自然日、自然周（周一起）。游客每天 1000 credits；登录用户每天 10000、每周 50000（项目前期要用户量，给足）；管理员不限；所有游客合计每天 50000（约 50 元，防脚本批量领游客身份刷）。数字在 `LINGDRAFT_CREDITS_GUEST_DAILY` / `LINGDRAFT_CREDITS_USER_DAILY` / `LINGDRAFT_CREDITS_USER_WEEKLY` / `LINGDRAFT_CREDITS_GUESTS_DAILY`。
+
+- 怎么算：账上（`model_costs`，每行记着对话归谁）这个人在窗口里算给用户的三样（主 agent、子 agent 的模型调用，做成了的工具调用）加起来；出错、丢了的那一轮不算（用户没拿到回答）；点了停止的照算。游客期间花的记在游客身份上，登录并进账号后不跟过去。
+- 只在开始前查（和 Fusion 一样）：说话、排话、重新回答、改话、重试时用完了回 429（`detail` 是对象：`code` 是 `credits_exhausted`，带什么时候重置、是不是游客），正在跑的那一轮不管。`GET /api/credits` 给页面显示：账号菜单里今天、这周还剩多少，用了八成输入框上面提醒，用完了提示里带登录入口。
+- 管理员重置：`uv run python -m app.quota reset <owner>`（owner 是 `thread_owners` 里的，登录用户的 id 或 `guest:xxx`），从那一刻起重新数；`show <owner>` 看用了多少。
 - 流到一半停了、断了的调用厂商照样收钱，接口却不给用量：记一行“不知道”，钱数是空的，先不估算。还没流出东西就失败的不记。
 - 后台一个线程用自己的连接写库，写不上只打日志。服务、命令行、评测起来时开（配了库才开），单元测试不开。
 - 对账：`uv run python -m app.costs --days 7`，按北京时间的天、厂商、模型汇总，和各家后台的账单比。本机跑评测记在本机的库里（`lingdraft_local`），对账时和 dev 的加起来。

@@ -44,7 +44,7 @@ class Rows(list):
 def rows(monkeypatch) -> Rows:
     r = Rows()
     monkeypatch.setattr(costs, "LEDGER", r)
-    monkeypatch.setattr(costs, "_now", lambda: FRI_10)
+    monkeypatch.setattr(costs, "now", lambda: FRI_10)
     return r
 
 
@@ -151,14 +151,14 @@ def test_each_call_is_charged_and_the_message_carries_it(rows):
     assert len({p.id for p in parts}) == 1  # 和前面的片段是同一条消息（页面的流按 id 认）
     assert len(rows) == 3
     assert rows[0] == {"started_at": FRI_10, "provider": "deepseek", "model": "deepseek-v4-pro", "purpose": "agent",
-                       "thread_id": None, "turn_id": None, "status": "ok", "input_tokens": 10_000, "cached_tokens": 8_000,
+                       "thread_id": None, "turn_id": None, "owner": None, "status": "ok", "input_tokens": 10_000, "cached_tokens": 8_000,
                        "output_tokens": 1_000, "yuan": pytest.approx(PRO_PEAK), "rate": {"kind": "regular", "cached": 0.30, "input": 9.0,
                                                                                          "output": 27.0}, "version": config.VERSION or None}
 
 
 def test_async_stream_is_charged_with_its_scope(rows, monkeypatch):
     """异步流式（对话 agent 就是这样调的）；对话、轮、子 agent 照调用方标的记，内部用途不会被记成子 agent。"""
-    monkeypatch.setattr(costs, "_now", lambda: at("2026-11-07T10:00:00"))  # 周六：闲时价
+    monkeypatch.setattr(costs, "now", lambda: at("2026-11-07T10:00:00"))  # 周六：闲时价
 
     async def go():
         with costs.within(costs.Scope(thread_id="t1", turn_id="h1")), costs.within(subagent=True):
@@ -255,12 +255,16 @@ def test_a_turn_through_the_graph_charges_agent_and_subagents(rows):
     planner._model, planner._sub_model = MeteredFake(), MeteredFake(prefix="fake-sub", ref=FLASH)
     (turn,) = Chat(planner=planner).say("分头查一下杭州美食")["turns"]
     rec = turn["record"]
-    agent, sub = ([r for r in rows if r["purpose"] == p] for p in ("agent", "subagent"))
-    assert len(agent) == rec["usage"]["model_calls"] == 2 and len(sub) == rec["subagent_usage"]["model_calls"] == 6 and len(rows) == 8
+    agent, sub, tool = ([r for r in rows if r["purpose"] == p] for p in ("agent", "subagent", "tool"))
+    assert len(agent) == rec["usage"]["model_calls"] == 2 and len(sub) == rec["subagent_usage"]["model_calls"] == 6 and len(rows) == 8 + len(tool)
     assert {r["model"] for r in agent} == {"deepseek-v4-pro"} and {r["model"] for r in sub} == {"deepseek-flash"}
-    assert {(r["thread_id"], r["turn_id"]) for r in rows} == {("t1", turn["id"])}
+    # 子 agent 搜、读的每一次也记一行（工具按次计价，见 agent.ToolChargeMiddleware）
+    su = rec["subagent_usage"]
+    assert len(tool) == su["searches"] + su["reads"] > 0 and {(r["provider"], r["purpose"], r["yuan"]) for r in tool} == {("tool", "tool", 0.005)}
+    assert sorted(r["model"] for r in tool) == sorted(["search_web"] * su["searches"] + ["read_page"] * su["reads"])
+    assert {(r["thread_id"], r["turn_id"], r["owner"]) for r in rows} == {("t1", turn["id"], "u1")}
     assert rec["usage"]["cost"] == pytest.approx(sum(r["yuan"] for r in agent))
-    assert rec["subagent_usage"]["cost"] == pytest.approx(sum(r["yuan"] for r in sub))
+    assert rec["subagent_usage"]["cost"] == pytest.approx(sum(r["yuan"] for r in sub + tool))
     assert rec["credits"] == round(sum(r["yuan"] for r in rows) * 1000, 2)
 
 

@@ -148,6 +148,7 @@ class Catalog(BaseModel):
     roles: dict[str, Role]
     peak: Peak
     prices: dict[str, Price]
+    tools: dict[str, float] = Field(default_factory=dict, description="工具每次调用多少元（[tools]，只算成功的）；没列的不收钱")
 
     @model_validator(mode="after")
     def _check(self) -> Catalog:
@@ -167,6 +168,8 @@ class Catalog(BaseModel):
         used = {r for o in self.options if not o.status for r in o.refs()} | {r.model for r in self.roles.values()}
         if missing := sorted(used - set(self.prices)):
             raise ValueError(f"这些模型没填价格（models.toml 的 [prices]）：{missing}")
+        if bad := sorted(t for t, y in self.tools.items() if y <= 0):
+            raise ValueError(f"工具的价格要大于 0（不收钱的别列）：{bad}")
         return self
 
     def refs(self) -> set[str]:
