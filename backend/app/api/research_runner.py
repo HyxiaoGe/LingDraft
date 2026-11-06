@@ -34,6 +34,7 @@ from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, now, stop_turn
 from app.graph.research.graph import NO_POSTGRES, build_graph, make_serde, postgres_pool, thread_ids
 from app.graph.research.memory import MemoryBook, next_at
+from app.identity import ADMIN, Identity, is_guest_sub
 from app.graph.research.sources import collect_sources, subagent_messages
 from app.graph.research.state import Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
@@ -325,8 +326,9 @@ class ResearchRunner(BaseRunner):
 
     # option 是新对话选的模型（models.toml 里选项的 id，没给是 Auto），定下就不换；thinking 是这句话的思考开关（没给按选项的默认）
 
-    def start(self, thread_id: str, text: str, option: str | None = None, thinking: bool | None = None) -> AsyncIterator[str]:
-        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking, option), "new")))
+    def start(self, thread_id: str, text: str, option: str | None = None, thinking: bool | None = None, owner: str | None = None) -> AsyncIterator[str]:
+        """owner 是这段新对话归谁（见 app.identity 和 run_store 的 thread_owners）；命令行、评测不传，对话就没归谁（只有管理员看得到）。"""
+        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking, option, owner), "new")))
 
     def say(self, thread_id: str, text: str, thinking: bool | None = None) -> AsyncIterator[str]:
         return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking), "say")))
@@ -344,8 +346,8 @@ class ResearchRunner(BaseRunner):
     def guide(self, thread_id: str) -> dict | None:
         return aio.run(self._aguide(thread_id))
 
-    def accept(self, thread_id: str, text: str, thinking: bool | None = None, option: str | None = None) -> None:
-        aio.run(self._aaccept(thread_id, text, thinking, option))
+    def accept(self, thread_id: str, text: str, thinking: bool | None = None, option: str | None = None, owner: str | None = None) -> None:
+        aio.run(self._aaccept(thread_id, text, thinking, option, owner))
 
     def retry_input(self, thread_id: str) -> None:
         aio.run(self._aretry_input(thread_id))
@@ -385,8 +387,20 @@ class ResearchRunner(BaseRunner):
     def summary_view(self, thread_id: str) -> dict | None:
         return aio.run(self._asummary_view(thread_id))
 
-    def list_threads(self) -> list[dict]:
-        return aio.run(self._alist_threads())
+    def list_threads(self, who: Identity) -> list[dict]:
+        return aio.run(self._alist_threads(who))
+
+    def owner_of(self, thread_id: str) -> str | None:
+        return aio.run(self.run_store.owner_of(thread_id))
+
+    def can_see(self, thread_id: str, who: Identity) -> bool:
+        """这段对话 who 能不能看、能不能动：归 TA 的；没归谁的（登录以前的老对话）只有管理员能。"""
+        owner = self.owner_of(thread_id)
+        return owner == who.sub if owner is not None else who.tier == ADMIN
+
+    def claim(self, who: Identity, guest: Identity) -> int:
+        """游客登录了：TA 游客期间的对话全改归账号（2026-11-06 Sean 定并进去），返回改了几段。游客没有记忆，不用搬。"""
+        return aio.run(self.run_store.transfer(guest.sub, who.sub))
 
     def run_turn(self, thread_id: str, inp: Any = None, on_event: Callable[[dict], None] | None = None) -> str | None:
         """直接跑一轮、等它结束，事件交给 on_event（在事件循环里调，别在里面调这里的同步方法）：不占运行位、不记运行记录。
@@ -567,7 +581,8 @@ class ResearchRunner(BaseRunner):
         子 agent（task 工具里跑的另一个 agent）的流要开 subgraphs 才有，按命名空间认出是哪个 task 调用派的：
         它的片段、进度、阶段带上 task（调用 id），页面放进那张子任务卡；它的节点做完不发 node。它的片段 langgraph_node 也是 model，只按节点名分不开。
         做完的 step 带着工具结果（result，不发给页面），记进 done：点停止时它那一步可能还没提交，收尾时补上（见 _write_stop）。"""
-        ctx = ChatContext(take_guide=lambda: self._take_guide(thread_id), title=self._titles.get(thread_id))
+        ctx = ChatContext(take_guide=lambda: self._take_guide(thread_id), title=self._titles.get(thread_id),
+                          owner=await self.run_store.owner_of(thread_id))
         async for ns, mode, chunk in self.graph.astream(inp, self._cfg(thread_id), context=ctx, stream_mode=["messages", "updates", "custom"],
                                                         subgraphs=True, durability=self.durability):
             task = tasks.get(ns[0]) if ns else None
@@ -719,11 +734,12 @@ class ResearchRunner(BaseRunner):
 
     # ---- 一轮的输入 ----
 
-    async def _aaccept(self, thread_id: str, text: str, thinking: bool | None = None, option: str | None = None) -> None:
+    async def _aaccept(self, thread_id: str, text: str, thinking: bool | None = None, option: str | None = None, owner: str | None = None) -> None:
         """把用户的话写进检查点，agent 从这里接着跑（输入为 None）。
 
         先落盘再交出执行：排队时服务重启也查得到这句话，算没跑完，可以重试。
         option 是新对话选的模型，和第一句话一起写进去（第一轮开始时定下，见 agent.TurnMiddleware）；已经开始的对话只能给定下的那个。
+        owner 是新对话归谁：第一句话写进去之前记下（已经记过的不改）。
         """
         await self._adrop_suggestions(thread_id)
         cfg = self._cfg(thread_id)
@@ -737,6 +753,8 @@ class ResearchRunner(BaseRunner):
             if (snap.values or {}).get("messages") and snap.values.get("option") != option:
                 raise UnknownModel("对话开始后不能换模型，想换模型请开新对话")
             update["option"] = option
+        if owner is not None:
+            await self.run_store.claim(thread_id, owner)
         await self.graph.aupdate_state(cfg, update, as_node=START)
 
     async def _aretry_input(self, thread_id: str) -> None:
@@ -875,13 +893,19 @@ class ResearchRunner(BaseRunner):
 
     def dream(self) -> dict | None:
         """整理一次记忆（见 graph.research.memory）：每段对话按检查点里最新的状态。已经有一次在整理返回 None。
-        在整理记忆的后台线程里调：检查点从对话的事件循环里取，记忆的读写用 Store 的同步方法（见 graph.research.graph）。"""
-        threads = ((t, aio.run(self.graph.aget_state(self._cfg(t))).values) for t in aio.run(thread_ids(self.graph.checkpointer)))
-        return self.memory.dream(threads, self.planner.dream)
+        在整理记忆的后台线程里调：检查点从对话的事件循环里取，记忆的读写用 Store 的同步方法（见 graph.research.graph）。
+        记忆按人分：只整理归了登录用户的对话，游客的（登录后并进账号再整理）、没归谁的老对话不整理。"""
+        def threads():
+            for t in aio.run(thread_ids(self.graph.checkpointer)):
+                owner = aio.run(self.run_store.owner_of(t))
+                if owner is not None and not is_guest_sub(owner):
+                    yield t, aio.run(self.graph.aget_state(self._cfg(t))).values, owner
+        return self.memory.dream(threads(), self.planner.dream)
 
-    def memory_view(self) -> dict:
-        """记忆页：全部记忆、上次整理（没整理过为 None）、下次按时整理的时间（关了按时整理为 None）。"""
-        return {"memories": [{k: m.get(k) for k in ("id", "text", "created_at", "updated_at")} for m in self.memory.items()],
+    def memory_view(self, who: Identity) -> dict:
+        """记忆页：这个人的全部记忆（游客没有）、上次整理（没整理过为 None）、下次按时整理的时间（关了按时整理为 None）。"""
+        items = [] if who.guest else self.memory.items(who.sub)
+        return {"memories": [{k: m.get(k) for k in ("id", "text", "created_at", "updated_at")} for m in items],
                 "last_dream": self.memory.last_dream(),
                 "next_dream": next_at(datetime.now(UTC), config.DREAM_HOUR).isoformat() if config.DREAM_ENABLED else None}
 
@@ -936,9 +960,13 @@ class ResearchRunner(BaseRunner):
             "running_since": run.get("since") if run else None,
         }
 
-    async def _alist_threads(self) -> list[dict]:
-        """所有对话线程，最近有动静的在前。"""
-        rows = [x for t in await thread_ids(self.graph.checkpointer) if (x := await self._asummary_view(t))]
+    async def _alist_threads(self, who: Identity) -> list[dict]:
+        """who 的对话（管理员还有没归谁的老对话），最近有动静的在前。"""
+        tids = await self.run_store.threads_of(who.sub)
+        if who.tier == ADMIN:
+            owned = await self.run_store.owned()
+            tids += [t for t in await thread_ids(self.graph.checkpointer) if t not in owned]
+        rows = [x for t in tids if (x := await self._asummary_view(t))]
         return sorted(rows, key=lambda x: x["updated_at"] or "", reverse=True)
 
     @staticmethod

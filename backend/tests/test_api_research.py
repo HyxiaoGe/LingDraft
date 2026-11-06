@@ -15,12 +15,13 @@ from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
 from app.graph.research.graph import memory_checkpointer, thread_ids
 from tests.research_helpers import events, last, say
+from tests.auth_helpers import USER
 
 
 @pytest.fixture
 def client(tmp_path):
     api_main.set_research_runner(ResearchRunner(fake=True))
-    return TestClient(api_main.app)
+    return TestClient(api_main.app, headers=USER)
 
 
 def _new(client, text: str) -> list[tuple[str, dict]]:

@@ -42,6 +42,7 @@ from langgraph.types import Command
 from app import costs
 from app.graph.research import history, prompts
 from app.graph.research.memory import MemoryBook
+from app.identity import is_guest_sub
 from app.graph.research.sources import DOCS_TOOL, SEPARATORS, SUBAGENT_TOOL, collect_sources, parse, search_hits
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Source, Turn
 from app.model_catalog import LEGACY_MODEL, LEGACY_USE, ModelUse
@@ -74,6 +75,8 @@ class ChatContext:
     take_guide: Callable[[], Awaitable[HumanMessage | None]] = _no_guide  # 取走用户插进这一轮的话（取一次就没了）；没有是 None
     # 上一次运行已经起好、页面上已经显示了，却没写进 state 的标题（那次第一次调模型出错了，出错的线程写不了 state）：这次直接用，不再起一个不一样的
     title: str | None = None
+    # 这段对话归谁（见 app.identity）：系统提示词里放这个人的记忆。游客的、没归谁的（登录以前的老对话）没有记忆这一段
+    owner: str | None = None
 
 
 def now() -> str:
@@ -162,7 +165,7 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
             job = _TitleJob(self.planner, history.requests(request.state["messages"])[0], known=known)
         try:
             emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
-            prompt = system_prompt(turn_started(request), memory=await memory_text(self.memory))
+            prompt = system_prompt(turn_started(request), memory=await memory_text(self.memory, request.runtime))
             # 之前几轮点停止时只想了没写的半截不发（见 history.is_stopped_thought）
             resp = await handler(request.override(system_message=SystemMessage(prompt), messages=history.without_stopped_thoughts(request.messages)))
             if job is None:
@@ -533,9 +536,13 @@ def _stop(reason: str) -> AIMessage:
     return AIMessage(content="", response_metadata={history.BLOCKED: reason})
 
 
-async def memory_text(memory: MemoryBook | None) -> str:
-    """每次调主 agent 都现取：记忆只在每天整理时变，取到的一天里都一样。"""
-    return await memory.aprompt_text() if memory else ""
+async def memory_text(memory: MemoryBook | None, runtime) -> str:
+    """这段对话归的那个人的记忆（归谁从 runtime.context 来，见 ChatContext.owner）。每次调主 agent 都现取：记忆只在每天整理时变，取到的一天里都一样。
+    游客的、没归谁的没有记忆（游客的对话不整理，见 ResearchRunner.dream）。"""
+    owner = runtime.context.owner if runtime and runtime.context else None
+    if memory is None or owner is None or is_guest_sub(owner):
+        return ""
+    return await memory.aprompt_text(owner)
 
 
 def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook | None = None):

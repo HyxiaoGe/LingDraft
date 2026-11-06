@@ -194,7 +194,7 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
         order = turn_order(all_msgs)
         c = state.get("compaction") or Compaction()
         turns = turns_of(msgs)
-        base = tokens(system_prompt(turn_start(all_msgs, state), memory=await memory_text(self.memory))) + self.tools_tokens
+        base = tokens(system_prompt(turn_start(all_msgs, state), memory=await memory_text(self.memory, runtime))) + self.tools_tokens
         costs = [size_of(_form(t, order, c)) for t in turns]
         size = base + sum(costs)
         if size <= config.COMPACT_TRIGGER_TOKENS:

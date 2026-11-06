@@ -1,3 +1,5 @@
+import { authFetch } from "./auth.js";
+
 // 请求被拒（4xx/5xx）时抛出的错误带上状态码：页面据此区分“请求被拒”和“连接断了”
 async function httpError(resp) {
   let msg = await resp.text();
@@ -25,7 +27,8 @@ async function sse(url, init, onEvent, signal) {
   alive();
   try {
     if (signal?.aborted) ctl.abort();
-    return await readSse(await fetch(url, { ...init, signal: ctl.signal }), onEvent, alive);
+    const get = url.startsWith("/api/research/") ? authFetch : fetch; // 对话接口带身份（见 auth.js），海报的不带
+    return await readSse(await get(url, { ...init, signal: ctl.signal }), onEvent, alive);
   } catch (e) {
     if (signal?.aborted) throw Object.assign(new Error("已切到别的线程"), { aborted: true });
     if (ctl.signal.aborted) throw new Error("连接长时间没有数据，已断开");
@@ -90,14 +93,14 @@ export async function getState(threadId) {
 // ---- 对话 ----
 
 export async function listResearchThreads() {
-  const resp = await fetch("/api/research/threads");
+  const resp = await authFetch("/api/research/threads");
   if (!resp.ok) throw await httpError(resp);
   return (await resp.json()).threads;
 }
 
 // 长期记忆：{memories: [{id, text, created_at, updated_at}], last_dream, next_dream}（见后端 ResearchRunner.memory_view）
 export async function getMemory() {
-  const resp = await fetch("/api/memory");
+  const resp = await authFetch("/api/memory");
   if (!resp.ok) throw await httpError(resp);
   return resp.json();
 }
@@ -112,7 +115,7 @@ export async function listInspirations() {
 // 新对话能选的模型：[{id, name, description, thinking, model, locked}]，Auto 在第一个。locked 是这个人这一档选不了的（游客看到的要登录的模型）。
 // thinking 是 toggle 的显示思考开关（always、never 不显示）；model 是它用的“厂商:模型”，按它给每轮记下的模型找名字
 export async function listModels() {
-  const resp = await fetch("/api/models");
+  const resp = await authFetch("/api/models");
   if (!resp.ok) throw await httpError(resp);
   return (await resp.json()).models;
 }
@@ -129,28 +132,28 @@ export async function sayResearch(threadId, text, opts, onEvent, signal) {
 }
 
 export async function getResearchState(threadId) {
-  const resp = await fetch(`/api/research/threads/${threadId}/state`);
+  const resp = await authFetch(`/api/research/threads/${threadId}/state`);
   if (!resp.ok) throw await httpError(resp);
   return resp.json();
 }
 
 // 让正在跑（或排队）的这一轮停下：只是提出请求，真正停下以后，原来那条事件流照常收到最终状态。没在跑的返回 409
 export async function stopResearchThread(threadId) {
-  const resp = await fetch(`/api/research/threads/${threadId}/stop`, { method: "POST" });
+  const resp = await authFetch(`/api/research/threads/${threadId}/stop`, { method: "POST" });
   if (!resp.ok) throw await httpError(resp);
 }
 
 // 正在回答时又说的话：排着，这一轮答完或停下就接着发。返回排着的那句（{text, created_at, updated_at}）；
 // 这一轮刚好答完了，后端直接发出去，返回 null，页面去接事件流。已经有一句没发出去、或上一轮没跑完时返回 409
 export async function queueResearch(threadId, text, opts) {
-  const resp = await fetch(`/api/research/threads/${threadId}/queue`, postJson({ text, ...opts }));
+  const resp = await authFetch(`/api/research/threads/${threadId}/queue`, postJson({ text, ...opts }));
   if (!resp.ok) throw await httpError(resp);
   return (await resp.json()).queued;
 }
 
 // 撤回排着的话，返回原文（放回输入框）；已经发出去了或没有，返回 null
 export async function unqueueResearch(threadId) {
-  const resp = await fetch(`/api/research/threads/${threadId}/queue`, { method: "DELETE" });
+  const resp = await authFetch(`/api/research/threads/${threadId}/queue`, { method: "DELETE" });
   if (!resp.ok) throw await httpError(resp);
   return (await resp.json()).text;
 }
@@ -158,14 +161,14 @@ export async function unqueueResearch(threadId) {
 // 排着的话不等这一轮答完，插进这一轮：模型做完手上这一步、下一次调模型之前看到它。返回等着插进去的那句；
 // 已经没在跑了（排着的话已经发出去了）返回 null
 export async function guideResearch(threadId) {
-  const resp = await fetch(`/api/research/threads/${threadId}/guide`, { method: "POST" });
+  const resp = await authFetch(`/api/research/threads/${threadId}/guide`, { method: "POST" });
   if (!resp.ok) throw await httpError(resp);
   return (await resp.json()).guided;
 }
 
 // 撤回等着插进这一轮的话，返回原文（放回输入框）；已经插进去了或没有，返回 null
 export async function unguideResearch(threadId) {
-  const resp = await fetch(`/api/research/threads/${threadId}/guide`, { method: "DELETE" });
+  const resp = await authFetch(`/api/research/threads/${threadId}/guide`, { method: "DELETE" });
   if (!resp.ok) throw await httpError(resp);
   return (await resp.json()).text;
 }
@@ -182,14 +185,14 @@ export async function editResearchThread(threadId, text, opts, onEvent, signal) 
 
 // 改标题，返回列表里的这一行。运行中、上一轮没跑完时返回 409
 export async function renameResearchThread(threadId, title) {
-  const resp = await fetch(`/api/research/threads/${threadId}`, { ...postJson({ title }), method: "PATCH" });
+  const resp = await authFetch(`/api/research/threads/${threadId}`, { ...postJson({ title }), method: "PATCH" });
   if (!resp.ok) throw await httpError(resp);
   return resp.json();
 }
 
 // 删掉这段对话，找不回来。运行中返回 409
 export async function deleteResearchThread(threadId) {
-  const resp = await fetch(`/api/research/threads/${threadId}`, { method: "DELETE" });
+  const resp = await authFetch(`/api/research/threads/${threadId}`, { method: "DELETE" });
   if (!resp.ok) throw await httpError(resp);
 }
 

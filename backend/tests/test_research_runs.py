@@ -18,6 +18,7 @@ from app.api import runner as runner_mod
 from app.api.research_runner import ResearchRunner
 from app.api.runner import LocalEventLog, LocalRunRegistry
 from tests.research_helpers import SIMPLE, after_tool, events, flaky_runner, gated_runner, hold, hold_model, last, new, run_async, say, state, wait_until
+from tests.auth_helpers import USER
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ def client(rr):
 
 def _client(runner: ResearchRunner) -> TestClient:
     api_main.set_research_runner(runner)
-    return TestClient(api_main.app)
+    return TestClient(api_main.app, headers=USER)
 
 
 def _block(chunk: str) -> tuple[str | None, str | None, dict | None]:
@@ -368,6 +369,7 @@ def test_run_cut_short_is_failed_and_retryable(client, rr):
     # 进程在两步之间停了（比如重启）：检查点没走完，也没有记下错误
     cfg = {"configurable": {"thread_id": "cut00001"}}
     rr.graph.update_state(cfg, {"messages": [HumanMessage(SIMPLE)]}, as_node=START)
+    aio.run(rr.run_store.claim("cut00001", "u1"))  # 归接口测试带的那个人（tests/auth_helpers.USER）
     aio.run(rr.graph.ainvoke(None, cfg, interrupt_before=["tools"]))
     st = state(client, "cut00001")
     assert st["status"] == "failed" and "没跑完" in st["error"]

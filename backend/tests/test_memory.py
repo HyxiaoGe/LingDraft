@@ -17,15 +17,16 @@ from app.graph.research.memory import CHINA_TZ, DreamSchedule, MemoryBook, conve
 from app.graph.research.state import Turn
 from app.model_guard import ContentBlocked
 from app.research_llm import FAKE_BLOCKED, FakeResearchPlanner, FakeToolModel
-from tests.test_research import Chat
+from tests.test_research import OWNER, Chat
+from tests.auth_helpers import USER
 
 
 def _ops(*ops: dict) -> str:
     return json.dumps({"operations": list(ops)}, ensure_ascii=False)
 
 
-def _texts(r: ResearchRunner) -> list[str]:
-    return [m["text"] for m in r.memory.items()]
+def _texts(r: ResearchRunner, owner: str = OWNER) -> list[str]:
+    return [m["text"] for m in r.memory.items(owner)]
 
 
 def _dream_prompts(p: FakeResearchPlanner) -> list[str]:
@@ -69,25 +70,25 @@ def test_only_new_turns_are_dreamed_and_earlier_ones_are_context():
     prompt = _dream_prompts(chat.planner)[-1]
     earlier = prompt.split("<earlier_turns")[1].split("</earlier_turns>")[0]
     assert "用户是后端工程师" in earlier and "<assistant>" not in earlier
-    assert "[" + chat.r.memory.items()[0]["id"] + "] 用户是后端工程师" in prompt  # 现有的记忆带着 id，模型改、删用它
+    assert "[" + chat.r.memory.items(OWNER)[0]["id"] + "] 用户是后端工程师" in prompt  # 现有的记忆带着 id，模型改、删用它
 
 
 def test_update_and_delete_use_the_ids_and_bad_ones_are_skipped():
     chat = Chat()
     chat.say("直接答 记住：用户住在杭州")
     chat.r.dream()
-    mid = chat.r.memory.items()[0]["id"]
-    created = chat.r.memory.items()[0]["created_at"]
+    mid = chat.r.memory.items(OWNER)[0]["id"]
+    created = chat.r.memory.items(OWNER)[0]["created_at"]
     chat.say("直接答 我搬到上海了")
     chat.planner.dream_replies = [_ops({"action": "update", "id": mid, "text": "用户住在上海（2026-11 起）"},
                                        {"action": "update", "id": "nope", "text": "x"}, {"action": "add", "text": "  "})]
     run = chat.r.dream()
     assert (run["updated"], run["skipped"]) == (1, 2)
-    [m] = chat.r.memory.items()
+    [m] = chat.r.memory.items(OWNER)
     assert (m["id"], m["text"], m["created_at"]) == (mid, "用户住在上海（2026-11 起）", created)
     chat.say("直接答 忘掉我住哪儿")
     chat.planner.dream_replies = [_ops({"action": "delete", "id": mid})]
-    assert chat.r.dream()["deleted"] == 1 and chat.r.memory.items() == []
+    assert chat.r.dream()["deleted"] == 1 and chat.r.memory.items(OWNER) == []
 
 
 def test_a_failed_conversation_is_tried_again_next_time():
@@ -143,9 +144,9 @@ def test_later_conversations_are_dreamed_last():
 
     def conv(tid, text, ended):
         return tid, {"messages": [HumanMessage(text, id=tid + "h"), AIMessage("好")],
-                     "turns": [Turn(id=tid + "h", started_at=ended, ended_at=ended)]}
+                     "turns": [Turn(id=tid + "h", started_at=ended, ended_at=ended)]}, OWNER
 
-    order = [c.thread_id for c in book.pending([conv("late", "b", "2026-11-03T05:00:00+00:00"), conv("early", "a", "2026-11-02T05:00:00+00:00")])]
+    order = [c.thread_id for c, _ in book.pending([conv("late", "b", "2026-11-03T05:00:00+00:00"), conv("early", "a", "2026-11-02T05:00:00+00:00")])]
     assert order == ["early", "late"]
 
 
@@ -206,10 +207,10 @@ def test_memory_page_over_http(tmp_path):
     """记忆页的接口：全部记忆、上次整理、下次整理的时间。存起来的 Store（见 conftest 的 _storage）。"""
     r = ResearchRunner(fake=True)
     api_main.set_research_runner(r)
-    client = TestClient(api_main.app)
+    client = TestClient(api_main.app, headers=USER)
     body = client.get("/api/memory").json()
     assert body["memories"] == [] and body["last_dream"] is None
-    r.accept("t1", "直接答 记住：己")
+    r.accept("t1", "直接答 记住：己", owner=OWNER)
     r.run_turn("t1")
     r.dream()
     body = client.get("/api/memory").json()

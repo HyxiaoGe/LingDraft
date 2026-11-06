@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict
@@ -23,6 +23,7 @@ from app.api.research_runner import AlreadyPending, NothingToRegenerate, Nothing
 from app.api.run_store import STATUSES
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 from app.graph.research.memory import DreamSchedule
+from app.identity import ADMIN, Authenticator, AuthUnavailable, BadToken, Identity, make_authenticator
 from app.tools.gateway import GatewayError
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ _runner: GraphRunner | None = None
 _research: ResearchRunner | None = None
 _favicons: Favicons | None = None
 _inspirations: Inspirations | None = None
+_authenticator: Authenticator | None = None
 
 
 def runner() -> GraphRunner:
@@ -106,6 +108,43 @@ def set_inspirations(i: Inspirations | None) -> None:
     _inspirations = i
 
 
+def authenticator() -> Authenticator:
+    global _authenticator
+    if _authenticator is None:
+        _authenticator = make_authenticator(config.AUTH_URL, config.AUTH_CLIENT_ID, config.AUTH_INTERNAL_URL, config.AUTH_REDIS_URL,
+                                            config.GUEST_SECRET, config.GUEST_PER_IP_DAILY)
+    return _authenticator
+
+
+def set_authenticator(a: Authenticator | None) -> None:
+    global _authenticator
+    _authenticator = a
+
+
+def identity(request: Request) -> Identity:
+    """这个请求是谁（见 app.identity）：Authorization: Bearer 里是游客令牌或 auth 服务的 access token。
+    没带、不对、过期、退出了都是 401，页面收到 401 先重新领游客身份再试一次，还不行就当没登录；auth 服务的公钥取不到是 503。"""
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        raise HTTPException(401, "没有登录信息", headers={"WWW-Authenticate": "Bearer"})
+    try:
+        return authenticator().identify(header[7:].strip())
+    except BadToken as e:
+        raise HTTPException(401, str(e), headers={"WWW-Authenticate": "Bearer"}) from None
+    except AuthUnavailable as e:
+        logger.warning("验登录失败：%s", e)
+        raise HTTPException(503, "登录服务暂时不可用，稍后再试") from None
+
+
+Who = Annotated[Identity, Depends(identity)]
+
+
+def client_ip(request: Request) -> str:
+    """来源地址：经 nginx 转过来的看 X-Forwarded-For 的第一个（只用来数游客身份领了几个，见 identity.GuestTokens）。"""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    return forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "")
+
+
 def _sse(gen):
     return StreamingResponse(gen, media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -114,6 +153,14 @@ def _view(r: BaseRunner, thread_id: str) -> dict:
     """URL 里的 thread_id 格式不对、或线程不存在，一律 404。"""
     view = r.state_view(thread_id) if valid_thread_id(thread_id) else {"exists": False}
     if not view["exists"]:
+        raise HTTPException(404, "thread 不存在")
+    return view
+
+
+def _mine(r: ResearchRunner, thread_id: str, who: Identity) -> dict:
+    """对话接口都先过这里：线程不存在、或不归这个人（没归谁的只有管理员能看，见 ResearchRunner.can_see），一律 404，不透露有没有。"""
+    view = _view(r, thread_id)
+    if not r.can_see(thread_id, who):
         raise HTTPException(404, "thread 不存在")
     return view
 
@@ -238,48 +285,90 @@ def _text(body: ResearchMessageBody) -> str:
     return body.text
 
 
+# ---- 身份（见 app.identity） ----
+
+
+@app.get("/api/auth/config")
+def auth_config():
+    """页面配登录 SDK 用：auth 服务地址和灵稿的 client_id；login 为 false 是没开登录（没配 AUTH_CLIENT_ID），页面不显示登录入口。"""
+    on = authenticator().login_enabled
+    return {"login": on, "auth_url": config.AUTH_URL if on else None, "client_id": config.AUTH_CLIENT_ID if on else None}
+
+
+@app.post("/api/auth/guest")
+def auth_guest(request: Request):
+    """领一个新的游客身份：{"token", "expires_at"}。页面没有身份（第一次来、或存的令牌被拒了）时调，存在浏览器里，每个请求带上。
+    一个地址一天领太多返回 429。"""
+    got = authenticator().guests.issue(client_ip(request))
+    if got is None:
+        raise HTTPException(429, "今天领的游客身份太多了，请登录或明天再来")
+    token, exp = got
+    return {"token": token, "expires_at": exp}
+
+
+@app.get("/api/auth/me")
+def auth_me(who: Who):
+    """带的令牌是谁：{"sub", "tier", "email", "guest"}。页面启动时用它验一下存的令牌还认不认。"""
+    return {"sub": who.sub, "tier": who.tier, "email": who.email, "guest": who.guest}
+
+
+class ClaimBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    guest_token: str
+
+
+@app.post("/api/auth/claim")
+def auth_claim(body: ClaimBody, who: Who):
+    """登录以后把游客期间的对话并进账号（2026-11-06 Sean 定）：带着登录的令牌来，body 里是之前的游客令牌。返回 {"moved": 并了几段}。
+    游客令牌不对是 400（不是 401：登录的令牌是好的）；自己还是游客是 403。"""
+    if who.guest:
+        raise HTTPException(403, "登录后才能并入对话")
+    try:
+        guest = authenticator().guests.verify(body.guest_token)
+    except BadToken as e:
+        raise HTTPException(400, str(e)) from None
+    return {"moved": research().claim(who, guest)}
+
+
+# ---- 对话 ----
+
+
 @app.get("/api/memory")
-def memory_view():
-    """长期记忆：全部记忆和整理的时间。现在只能看（2026-11-03 Sean 定先展示）。"""
-    return research().memory_view()
+def memory_view(who: Who):
+    """长期记忆：这个人的全部记忆和整理的时间（游客没有）。现在只能看（2026-11-03 Sean 定先展示）。"""
+    return research().memory_view(who)
 
 
 @app.get("/api/research/threads")
-def research_list():
-    """线程列表：所有对话的标题和状态。"""
-    return {"threads": research().list_threads()}
-
-
-def tier_of(request: Request) -> str:
-    """这个请求的人是哪一档（游客、登录用户、管理员，见 model_catalog.TIERS）。现在没有登录，都按 LINGDRAFT_TIER（默认 user）；
-    做了登录以后从登录状态取，只改这里。"""
-    return config.TIER
+def research_list(who: Who):
+    """线程列表：这个人的对话的标题和状态（管理员还看到登录以前没归谁的老对话）。"""
+    return {"threads": research().list_threads(who)}
 
 
 @app.get("/api/models")
-def research_models(request: Request):
+def research_models(who: Who):
     """新对话能选的模型，Auto 在第一个（列表见 app/models.toml，没配 key 的不在里面）。这一档选不了的也列出来，标着 locked。"""
-    return {"models": research().models(tier_of(request))}
+    return {"models": research().models(who.tier)}
 
 
 @app.post("/api/research/threads")
-def research_create(body: ResearchCreateBody, request: Request):
-    """新对话。选的模型没有、停用了时返回 400；这一档选不了的（游客选了要登录的）返回 403，不能绕过页面上的锁。
-    模型只在开新对话时选，之后每轮照对话定下的：做了登录、对话分了人以后，游客打不开登录用户的对话，这里查一次就够。"""
+def research_create(body: ResearchCreateBody, who: Who):
+    """新对话，归这个人。选的模型没有、停用了时返回 400；这一档选不了的（游客选了要登录的）返回 403，不能绕过页面上的锁。
+    模型只在开新对话时选，之后每轮照对话定下的：游客打不开登录用户的对话，这里查一次就够。"""
     r = research()
-    if body.model and r.locked(body.model, tier_of(request)):
+    if body.model and r.locked(body.model, who.tier):
         raise HTTPException(403, "登录后才能用这个模型")
     try:
-        return _sse(r.start(str(uuid.uuid4()), _text(body), body.model, body.thinking))
+        return _sse(r.start(str(uuid.uuid4()), _text(body), body.model, body.thinking, owner=who.sub))
     except UnknownModel as e:
         raise HTTPException(400, str(e)) from None
 
 
 @app.post("/api/research/threads/{thread_id}/messages")
-def research_say(thread_id: str, body: ResearchMessageBody):
+def research_say(thread_id: str, body: ResearchMessageBody, who: Who):
     """接着说。运行中、上一轮没跑完时返回 409。"""
     r = research()
-    _view(r, thread_id)
+    _mine(r, thread_id, who)
     text = _text(body)
     try:
         return _sse(r.say(thread_id, text, body.thinking))
@@ -288,12 +377,12 @@ def research_say(thread_id: str, body: ResearchMessageBody):
 
 
 @app.post("/api/research/threads/{thread_id}/queue")
-def research_queue(thread_id: str, body: ResearchMessageBody):
+def research_queue(thread_id: str, body: ResearchMessageBody, who: Who):
     """正在回答时又说的话：排着，这一轮答完或停下就接着发。返回 {"queued": 排着的那句}。
     这一轮刚好答完了就直接发，返回 {"queued": null}，页面去接事件流（/events）。
     已经有一句没发出去（排着或等着插进这一轮）、或上一轮没跑完时返回 409。"""
     r = research()
-    _view(r, thread_id)
+    _mine(r, thread_id, who)
     text = _text(body)
     try:
         return {"queued": r.queue(thread_id, text, body.thinking)}
@@ -302,45 +391,45 @@ def research_queue(thread_id: str, body: ResearchMessageBody):
 
 
 @app.delete("/api/research/threads/{thread_id}/queue")
-def research_unqueue(thread_id: str):
+def research_unqueue(thread_id: str, who: Who):
     """撤回排着的话，返回 {"text": 原文}，页面放回输入框；已经发出去了或没有，text 是 null。"""
     r = research()
-    _view(r, thread_id)
+    _mine(r, thread_id, who)
     return {"text": r.unqueue(thread_id)}
 
 
 @app.post("/api/research/threads/{thread_id}/guide")
-def research_guide(thread_id: str):
+def research_guide(thread_id: str, who: Who):
     """排着的话不等这一轮答完，插进这一轮：主 agent 下一次调模型之前放进对话；这一轮没再调模型就结束了的，照常排着发。
     返回 {"guided": 等着插进去的那句}；已经没在跑了（排着的话已经发出去了）是 null。"""
     r = research()
-    _view(r, thread_id)
+    _mine(r, thread_id, who)
     return {"guided": r.guide(thread_id)}
 
 
 @app.delete("/api/research/threads/{thread_id}/guide")
-def research_unguide(thread_id: str):
+def research_unguide(thread_id: str, who: Who):
     """撤回等着插进这一轮的话，返回 {"text": 原文}，页面放回输入框；已经插进去了或没有，text 是 null。"""
     r = research()
-    _view(r, thread_id)
+    _mine(r, thread_id, who)
     return {"text": r.unguide(thread_id)}
 
 
 @app.post("/api/research/threads/{thread_id}/stop")
-def research_stop(thread_id: str):
+def research_stop(thread_id: str, who: Who):
     """让正在跑（或排队）的这一轮停下；停下的结果从事件流里来。没在跑的返回 409。"""
     r = research()
-    _view(r, thread_id)
+    _mine(r, thread_id, who)
     if not r.stop(thread_id):
         raise HTTPException(409, "这个对话没有在运行")
     return {"ok": True}
 
 
 @app.post("/api/research/threads/{thread_id}/regenerate")
-def research_regenerate(thread_id: str, body: ResearchRegenerateBody | None = None):
+def research_regenerate(thread_id: str, who: Who, body: ResearchRegenerateBody | None = None):
     """最后一轮重新回答，可以带上这次的思考开关（不带按原来的）。运行中、上一轮没跑完、还没有回答时返回 409。"""
     r = research()
-    _view(r, thread_id)
+    _mine(r, thread_id, who)
     try:
         return _sse(r.regenerate(thread_id, thinking=body.thinking if body else None))
     except (RunConflict, NotIdle, NothingToRegenerate) as e:
@@ -348,10 +437,10 @@ def research_regenerate(thread_id: str, body: ResearchRegenerateBody | None = No
 
 
 @app.post("/api/research/threads/{thread_id}/edit")
-def research_edit(thread_id: str, body: ResearchMessageBody):
+def research_edit(thread_id: str, body: ResearchMessageBody, who: Who):
     """改了最后那句话，按新的话重新回答。运行中、上一轮没跑完、还没有说过话时返回 409。"""
     r = research()
-    _view(r, thread_id)
+    _mine(r, thread_id, who)
     text = _text(body)
     try:
         return _sse(r.regenerate(thread_id, text, body.thinking))
@@ -360,10 +449,10 @@ def research_edit(thread_id: str, body: ResearchMessageBody):
 
 
 @app.patch("/api/research/threads/{thread_id}")
-def research_rename(thread_id: str, body: ResearchTitleBody):
+def research_rename(thread_id: str, body: ResearchTitleBody, who: Who):
     """改标题，返回列表里的这一行。运行中、上一轮没跑完时返回 409。"""
     r = research()
-    _view(r, thread_id)
+    _mine(r, thread_id, who)
     title = " ".join(body.title.split())
     if not title or len(title) > TITLE_MAX:
         raise HTTPException(400, "标题不能为空" if not title else f"标题最多 {TITLE_MAX} 个字")
@@ -375,10 +464,10 @@ def research_rename(thread_id: str, body: ResearchTitleBody):
 
 
 @app.delete("/api/research/threads/{thread_id}")
-def research_delete(thread_id: str):
+def research_delete(thread_id: str, who: Who):
     """删掉这段对话，找不回来。运行中返回 409。"""
     r = research()
-    _view(r, thread_id)
+    _mine(r, thread_id, who)
     try:
         r.delete(thread_id)
     except RunConflict as e:
@@ -387,10 +476,10 @@ def research_delete(thread_id: str):
 
 
 @app.post("/api/research/threads/{thread_id}/retry")
-def research_retry(thread_id: str):
+def research_retry(thread_id: str, who: Who):
     """失败的线程从断开的那一步接着跑；没失败的返回 409。"""
     r = research()
-    _view(r, thread_id)
+    _mine(r, thread_id, who)
     try:
         return _sse(r.retry(thread_id))
     except (RunConflict, NothingToRetry) as e:
@@ -398,18 +487,18 @@ def research_retry(thread_id: str):
 
 
 @app.get("/api/research/threads/{thread_id}/events")
-def research_events(thread_id: str, after: str | None = None):
+def research_events(thread_id: str, who: Who, after: str | None = None):
     """接上线程当前这次执行的事件流（after 是收到的最后一个事件 id），以 end 事件收尾；断线、刷新后用。"""
     r = research()
-    _view(r, thread_id)
+    _mine(r, thread_id, who)
     return _sse(r.follow(thread_id, after))
 
 
 @app.get("/api/research/threads/{thread_id}/runs")
-def research_thread_runs(thread_id: str):
+def research_thread_runs(thread_id: str, who: Who):
     """这段对话的每次运行（新的在前）：怎么来的、状态、时间、出错的原因。排查问题用，页面不用。"""
     r = research()
-    _view(r, thread_id)
+    _mine(r, thread_id, who)
     return {"runs": r.thread_runs(thread_id)}
 
 
@@ -417,8 +506,10 @@ RUNS_LIMIT = 200
 
 
 @app.get("/api/research/runs")
-def research_runs(status: str | None = None, limit: int = 50):
-    """所有对话里最近的运行，status 只看某个状态（比如 error）。排查问题用，页面不用。"""
+def research_runs(who: Who, status: str | None = None, limit: int = 50):
+    """所有对话里最近的运行，status 只看某个状态（比如 error）。排查问题用，页面不用；只有管理员能看（跨所有人的对话）。"""
+    if who.tier != ADMIN:
+        raise HTTPException(403, "只有管理员能看")
     if status is not None and status not in STATUSES:
         raise HTTPException(400, f"status 只能是 {'、'.join(STATUSES)}")
     if not 1 <= limit <= RUNS_LIMIT:
@@ -427,14 +518,15 @@ def research_runs(status: str | None = None, limit: int = 50):
 
 
 @app.get("/api/research/threads/{thread_id}/state")
-def research_state(thread_id: str):
-    return _view(research(), thread_id)
+def research_state(thread_id: str, who: Who):
+    return _mine(research(), thread_id, who)
 
 
 @app.get("/api/research/threads/{thread_id}/images/{image_id}")
 def research_image(thread_id: str, image_id: str):
     """对话里画的图：图存在 image-service 里，后端按编号经网关取来转给页面（不暴露服务地址）。
     这一轮还在跑时页面就来取了，所以不查图是不是这段对话的（见 ResearchRunner.image）。
+    页面用 <img src> 取，带不了登录信息，所以也不认人：知道对话 id 和图的编号（都是随机的）就能取。
     内容不会变，浏览器可以一直缓存；对话删了图也跟着删。网关、服务出问题回 502，页面显示加载失败、可以重试。"""
     try:
         got = research().image(image_id) if valid_thread_id(thread_id) else None

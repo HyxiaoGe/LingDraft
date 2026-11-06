@@ -14,6 +14,7 @@ from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
 from tests.research_helpers import events, last
 from tests.test_eval_smith import MemoryClient
+from tests.auth_helpers import USER
 
 TRACING_VARS = ("LANGSMITH_TRACING", "LANGSMITH_TRACING_V2", "LANGCHAIN_TRACING_V2", "LANGCHAIN_TRACING", "LANGSMITH_PROJECT", "LANGCHAIN_PROJECT")
 
@@ -50,7 +51,7 @@ def test_a_turn_is_one_trace_with_its_thread_and_middleware_trimmed(env):
     assert _trace_policy._DEFAULT_TRACE_POLICY is tracing.TRIMMED
 
     api_main.set_research_runner(ResearchRunner(fake=True))
-    st = last(events(TestClient(api_main.app).post("/api/research/threads", json={"text": "广州天气怎么样"})), "state")
+    st = last(events(TestClient(api_main.app, headers=USER).post("/api/research/threads", json={"text": "广州天气怎么样"})), "state")
     assert st["status"] == "idle"
     tracing.stop()
 

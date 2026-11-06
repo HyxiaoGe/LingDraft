@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getResearchState, guideResearch, listModels, listResearchThreads, queueResearch,
   regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
 import { IconDownload, IconEdit, IconMore, IconPlus, IconTrash } from "./icons.jsx";
+import { LoginDialog, UserFoot, useAuth } from "./login.jsx";
 import { MemoryPage } from "./memory.jsx";
 import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, threadMarkdown, useNow, when } from "./research.js";
 import { Conversation, focusInput } from "./timeline.jsx";
@@ -33,6 +34,8 @@ const fileName = (title) => (title || "").replace(/[\\/:*?"<>|\s]+/g, " ").trim(
 const leftover = (s) => [s.guided_message && "guided", s.queued_message && "queued"].filter(Boolean);
 
 export default function Workspace() {
+  const auth = useAuth(); // 身份：游客还是登录了（见 auth.js）。身份一变整页重载，这里不用跟着改状态
+  const [loginOpen, setLoginOpen] = useState(false);
   const [threads, setThreads] = useState(null);
   const [tid, setTid] = useState(routeId);
   const [memory, setMemoryState] = useState(onMemoryPath); // 右侧是记忆页（这时没有选中的对话）
@@ -446,13 +449,15 @@ export default function Workspace() {
   // 执行中这一轮的来源跟着事件来（库里一轮跑完才有），叠在已存的来源上：正文里的引用据此显示成编号
   const shown = st && live?.sources ? { ...st, sources: { ...st.sources, ...live.sources } } : st;
 
+  const onLogin = auth.login && !auth.me ? () => setLoginOpen(true) : null; // 游客点“登录后可用”的模型、记忆页的登录都开这个弹窗
   return (
     <div className="ws">
       <Sidebar threads={threads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={select} manage={manage}
-        memory={memory} onMemory={openMemory} />
-      {memory ? <MemoryPage />
+        memory={memory} onMemory={openMemory} auth={auth} onLogin={() => setLoginOpen(true)} />
+      {memory ? <MemoryPage auth={auth} onLogin={onLogin} />
         : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack}
-          models={models} picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking }} />}
+          models={models} picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />}
+      <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} />
     </div>
   );
 }
@@ -472,7 +477,7 @@ function rowSub(t, now) {
   return "";
 }
 
-function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memory, onMemory }) {
+function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memory, onMemory, auth, onLogin }) {
   const [menu, setMenu] = useState(null); // 打开菜单的那一行：{t, rect}
   const [renaming, setRenaming] = useState(null); // 正在改名的线程 id
   // 列表每隔几秒取一次；当前这个线程以页面手上的状态为准，刚新建、列表里还没有的先补一行
@@ -531,6 +536,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
         <a href={MEMORY_PATH} aria-current={memory ? "page" : undefined}
           onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onMemory(); }}>记忆</a>
         <a href="#poster">宣传海报</a>
+        <span className="ws-foot-user"><UserFoot auth={auth} onLogin={onLogin} /></span>
       </div>
       {menu && (
         <RowMenu key={menu.t.thread_id} t={menu.t} rect={menu.rect} onClose={() => setMenu(null)}

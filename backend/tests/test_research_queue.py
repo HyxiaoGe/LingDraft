@@ -15,6 +15,7 @@ from app.api.run_store import GUIDE, QUEUE
 from app.graph.research import history
 from app.research_llm import FAKE_BLOCKED, FakeResearchPlanner, FakeToolModel
 from tests.research_helpers import events, hold_model, last, new, say, state, wait_until
+from tests.auth_helpers import USER
 
 
 @pytest.fixture
@@ -29,7 +30,7 @@ def client(rr):
 
 def _client(runner: ResearchRunner) -> TestClient:
     api_main.set_research_runner(runner)
-    return TestClient(api_main.app)
+    return TestClient(api_main.app, headers=USER)
 
 
 def _queue(http: TestClient, tid: str, text: str):

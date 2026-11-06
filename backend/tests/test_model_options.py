@@ -17,6 +17,7 @@ from app.graph.research.state import Turn
 from app.model_catalog import AUTO, LEGACY_MODEL, Catalog, ModelUse
 from app.research_llm import FakeResearchPlanner, FakeToolModel
 from tests.research_helpers import events, last, say, state
+from tests.auth_helpers import USER, bearer, guest_token
 
 PRO, FLASH = "deepseek:deepseek-v4-pro", "deepseek:deepseek-flash"
 DOUBAO, LITE = "ark:doubao-seed-2-1-pro-260915", "ark:doubao-seed-2-1-lite-260915"
@@ -45,7 +46,7 @@ class Seeing(FakeToolModel):
 def _client(p: FakeResearchPlanner) -> tuple[TestClient, ResearchRunner]:
     rr = ResearchRunner(planner=p)
     api_main.set_research_runner(rr)
-    return TestClient(api_main.app), rr
+    return TestClient(api_main.app, headers=USER), rr
 
 
 def _create(http: TestClient, text: str, **kw) -> dict:
@@ -121,7 +122,6 @@ def test_plan_thinking_switch():
 
 def test_live_planner_builds_each_model_once(monkeypatch):
     """同样的（模型、思考开关、强度）共用一个模型；思考关了不传强度，DeepSeek 不开思考时 temperature 0。没配 key 的那家不能选。"""
-    from app import config
     from app.research_llm import LiveResearchPlanner, make_chat_model, usable
 
     for name, value in (("DEEPSEEK_API_KEY", "k"), ("AGENT_TOOLS_API_KEY", "k"), ("ARK_API_KEY", None)):
@@ -191,11 +191,11 @@ def test_bad_model_is_rejected():
     assert say(http, tid, "再说", model="deepseek-v4-pro").status_code == 422
 
 
-def test_guest_sees_locked_models_and_cannot_pick_them(monkeypatch):
+def test_guest_sees_locked_models_and_cannot_pick_them():
     """游客：要登录的模型也列出来，标着 locked；直接调接口选它开不了对话（403，不留下对话）。游客能选的、不选（Auto）照常开；
     不再提供的照常是 400。"""
     http, _ = _client(FakeResearchPlanner(catalog=_with({"kimi-k3-1-pro": "hidden"})))
-    monkeypatch.setattr(config, "TIER", "guest")
+    http.headers.update(bearer(guest_token()))  # 游客的令牌
     locked = {m["id"]: m["locked"] for m in http.get("/api/models").json()["models"]}
     assert not locked[AUTO] and not locked["deepseek-flash"] and locked["deepseek-v4-pro"] and locked["qwen3-8-max"]
     r = http.post("/api/research/threads", json={"text": "你好", "model": "deepseek-v4-pro"})
