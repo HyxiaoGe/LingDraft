@@ -752,7 +752,7 @@ function CreditsNote({ credits, onLogin }) {
 // held：已经有一句没发出去（排着或等着插进这一轮）。没发出去的话最多一句：这时还能打字，但发不出去，要先撤回那句、改好一起发
 // 每个对话没发出去的字各存各的，切走再切回来还在（刷新就没了）。
 // carry：新对话刚发出去、拿到了 id，thread 从 "new" 换成 id，还是同一个对话
-// putBack：放回输入框的话（撤回的、没发出去的），接在已经写着的字前面；不是正在看的对话，放进那个对话的草稿
+// putBack：放回输入框的话（撤回的、没发出去的），接在已经写着的字前面（被拒的那句还原样留着就换掉它）；不是正在看的对话，放进那个对话的草稿
 // onTakeBack：有没发出去的话时，光标在最前面（输入框空着也算）按 ↑ 把它们取回来。光标在最前面时 ↑ 本来什么也不做，不和挪光标抢
 function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSend, onStop, above, onTakeBack, tools }) {
   const [text, setText] = useState("");
@@ -789,9 +789,13 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread]);
   useEffect(() => { if (enabled) focus(false); }, [enabled]);
+  // 被拒（额度用完等）放回来的话记一下：下一句又被拒时，输入框里还是原样的那句就换掉，不叠加（2026-11-06 Sean 发现额度用完连点推荐问题会一句句堆起来）
+  const rejected = useRef(null);
   useEffect(() => {
     if (!putBack) return;
-    const join = (cur) => (cur ? `${putBack.text}\n${cur}` : putBack.text);
+    const prev = rejected.current; // setText 的更新函数是之后才跑的，先把上一句记下来
+    const join = (cur) => (cur && !(putBack.rejected && cur === prev) ? `${putBack.text}\n${cur}` : putBack.text);
+    rejected.current = putBack.rejected ? putBack.text : null;
     if (putBack.thread === shown.current) {
       setText(join);
       focus(true);
