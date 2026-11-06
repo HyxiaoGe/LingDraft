@@ -93,6 +93,9 @@ CREDITS_GUEST_DAILY = int(os.environ.get("LINGDRAFT_CREDITS_GUEST_DAILY", "1000"
 CREDITS_USER_DAILY = int(os.environ.get("LINGDRAFT_CREDITS_USER_DAILY", "10000"))
 CREDITS_USER_WEEKLY = int(os.environ.get("LINGDRAFT_CREDITS_USER_WEEKLY", "50000"))
 CREDITS_GUESTS_DAILY = int(os.environ.get("LINGDRAFT_CREDITS_GUESTS_DAILY", "50000"))
+# 页面上的“约可问 N 次”按一次多少 credits 换算（2026-11-07 Sean 定：固定 200，不按模型分、不按最近的花费动态算）。
+# 依据：线上 V4 Pro 38 轮每轮中位 166、平均 301（11-05～07）。游客每天 1000 ≈ 5 次，登录用户每天 10000 ≈ 50 次
+CREDITS_PER_ASK = int(os.environ.get("LINGDRAFT_CREDITS_PER_ASK", "200"))
 VERSION = os.environ.get("LINGDRAFT_VERSION", "")  # 部署时的提交号（镜像构建时带进来），记进运行记录；本机为空
 
 MAX_CHECK_RETRIES = 2

@@ -10,6 +10,8 @@
 - 只在开始前查（和 Fusion 一样）：说话、排话、重新回答、改话、重试时额度用完了就拒（429，detail 里带 code、什么时候重置），
   正在跑的那一轮不管，跑完可能略超。页面在还剩两成时提醒。
 - 管理员重置：uv run python -m app.quota reset <owner>，记一条，这个人从那一刻起重新数（窗口里只算这之后的）；show <owner> 看用了多少。
+- 页面上叫“额度”，不露 credits，带“约可问 N 次”的换算（2026-11-07 批次 E，Sean 定按 config.CREDITS_PER_ASK 固定换算）：
+  /api/credits 和 429 的 detail 都带 per_ask；游客的还带 login（登录后每天、每周多少），页面说“登录后会怎样”用它，不写死数字。
 """
 
 from __future__ import annotations
@@ -77,24 +79,31 @@ class Window:
         return {"kind": self.kind, "limit": self.limit, "used": round(self.used, 2), "resets_at": self.resets_at.isoformat()}
 
 
-class Exhausted(Exception):
-    """额度用完了：接口回 429，detail 是 self.detail()。"""
+def asks(credits: float, per_ask: int) -> int:
+    """这么多额度约可问几次（向下取整）；页面上的换算同一个算法（frontend/src/research.js 的 asks）。"""
+    return int(credits // per_ask) if per_ask > 0 else 0
 
-    def __init__(self, window: Window, guest: bool) -> None:
-        self.window, self.guest = window, guest
+
+class Exhausted(Exception):
+    """额度用完了：接口回 429，detail 是 self.detail()。login 是游客登录以后的额度（{"day", "week"}），登录用户是 None。
+    message 只进日志和接口，页面按 detail 里的字段自己写（见 frontend/src/errors.js 的 quotaText）。"""
+
+    def __init__(self, window: Window, guest: bool, per_ask: int = 0, login: dict[str, int] | None = None) -> None:
+        self.window, self.guest, self.per_ask, self.login = window, guest, per_ask, login
         super().__init__(self.message())
 
     def message(self) -> str:
         when = self.window.resets_at.astimezone(CHINA_TZ)
+        more = f"；登录后每天 {self.login['day']} 额度，约可问 {asks(self.login['day'], self.per_ask)} 次" if self.login else ""
         if self.window.kind == GUESTS:
-            return f"今天游客的总额度用完了，{when:%m-%d} 0 点重置；登录后有自己的额度"
+            return f"今天所有游客合用的额度用完了，{when:%m-%d} 0 点恢复{more or '；登录后用自己的额度'}"
         span = "这周" if self.window.kind == WEEK else "今天"
-        reset = f"{'下周一' if self.window.kind == WEEK else '明天'}（{when:%m-%d}）0 点重置"
-        more = f"；登录后每天 {config.CREDITS_USER_DAILY} credits" if self.guest else ""
-        return f"{span}的额度用完了（{self.window.limit} credits），{reset}{more}"
+        reset = f"{'下周一' if self.window.kind == WEEK else '明天'}（{when:%m-%d}）0 点恢复"
+        return f"{span}的额度用完了（共 {self.window.limit} 额度），{reset}{more}"
 
     def detail(self) -> dict[str, Any]:
-        return {"code": EXHAUSTED, "message": self.message(), "guest": self.guest, **self.window.view()}
+        d = {"code": EXHAUSTED, "message": self.message(), "guest": self.guest, "per_ask": self.per_ask, **self.window.view()}
+        return {**d, "login": self.login} if self.login else d
 
 
 # ---- 从账上算 ----
@@ -216,19 +225,26 @@ class Quota:
         return [await own(DAY, None if admin else self.limits.user_daily, day, day + timedelta(days=1)),
                 await own(WEEK, None if admin else self.limits.user_weekly, week, week + timedelta(days=7))]
 
+    def login_limits(self, who: Identity) -> dict[str, int] | None:
+        """游客登录以后每天、每周多少（页面告诉他登录后会怎样）；已经登录的是 None。"""
+        return {"day": self.limits.user_daily, "week": self.limits.user_weekly} if who.tier == GUEST else None
+
     async def check(self, who: Identity) -> None:
         for w in await self.windows(who):
             if w.exhausted:
                 log.info("额度用完：%s %s 用了 %.0f / %d", who.sub, w.kind, w.used, w.limit)
-                raise Exhausted(w, who.tier == GUEST)
+                raise Exhausted(w, who.tier == GUEST, config.CREDITS_PER_ASK, self.login_limits(who))
 
     def admit(self, who: Identity) -> None:
         aio.run(self.check(who))
 
     def view(self, who: Identity) -> dict[str, Any]:
-        """GET /api/credits：{"unlimited": 管理员, "windows": [...]}。游客总额那个窗口也在里面（kind 是 guests），页面只显示自己的；管理员的窗口 limit 是 null。"""
+        """GET /api/credits：{"unlimited": 管理员, "warn_at", "per_ask": 一次约多少, "windows": [...]}，游客多一个 "login"（登录后每天、每周多少）。
+        游客总额那个窗口也在 windows 里（kind 是 guests），页面只显示自己的；管理员的窗口 limit 是 null。"""
         windows = aio.run(self.windows(who))
-        return {"unlimited": who.tier == ADMIN, "warn_at": WARN_AT, "windows": [w.view() for w in windows]}
+        v = {"unlimited": who.tier == ADMIN, "warn_at": WARN_AT, "per_ask": config.CREDITS_PER_ASK, "windows": [w.view() for w in windows]}
+        login = self.login_limits(who)
+        return {**v, "login": login} if login else v
 
     def reset(self, owner: str, by: str) -> None:
         aio.run(self.usage.reset(owner, by, self.clock()))

@@ -122,7 +122,10 @@ def test_guest_issue_cap_is_429():
     api_main.set_authenticator(ah.Authenticator(GuestTokens("s" * 32, per_ip_daily=1), ah.validator()))
     c = _client()
     assert c.post("/api/auth/guest").status_code == 200
-    assert c.post("/api/auth/guest").status_code == 429
+    r = c.post("/api/auth/guest")
+    assert r.status_code == 429
+    assert r.json()["detail"] == {"code": "guests_per_ip", "message": "这个网络今天新领的游客身份太多了，请登录或明天再来", "per_ip": 1,
+                                  "per_ask": 200, "login": {"day": 10000, "week": 50000}}  # 页面没有身份，靠这些说清为什么、登录后会怎样
     assert c.post("/api/auth/guest", headers={"X-Forwarded-For": "9.9.9.9, 10.0.0.1"}).status_code == 200  # 经代理来的按原地址数
 
 
