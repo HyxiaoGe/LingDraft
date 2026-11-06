@@ -39,7 +39,7 @@ export function creditsText(n) {
 // 额度里最紧的那个窗口（自己的：今天、这周；所有游客合计的那个不显示），加上剩多少、是不是该提醒（用了 warn_at 以上）、是不是用完了。
 // 没取到、管理员不限是 null
 export function creditsLeft(credits) {
-  const ws = (credits?.windows || []).filter((w) => w.kind === "day" || w.kind === "week");
+  const ws = (credits?.windows || []).filter((w) => (w.kind === "day" || w.kind === "week") && w.limit != null);
   if (!ws.length) return null;
   const w = ws.reduce((a, b) => (b.limit - b.used < a.limit - a.used ? b : a));
   const remaining = Math.max(0, w.limit - w.used);
