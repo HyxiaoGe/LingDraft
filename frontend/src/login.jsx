@@ -211,7 +211,7 @@ function EmailPanel({ onBack, onDone, setCritical }) {
       <form onSubmit={start}>
         <h2 id="ws-login-title" className="ws-dialog-title">用邮箱登录</h2>
         <p className="ws-dialog-desc">填邮箱，我们发一个验证码过去。没有账号会直接注册。</p>
-        <input ref={input} className="ws-input" type="email" autoComplete="email" placeholder="邮箱" value={addr} disabled={busy} onChange={(e) => setAddr(e.target.value)} />
+        <input ref={input} className="ws-field" type="email" autoComplete="email" placeholder="邮箱" value={addr} disabled={busy} onChange={(e) => setAddr(e.target.value)} />
         {error && <div className="ws-login-err" role="alert">{error}</div>}
         <div className="ws-dialog-actions">
           <button type="button" className="ws-btn ghost" disabled={busy} onClick={onBack}>换个方式</button>
@@ -224,7 +224,7 @@ function EmailPanel({ onBack, onDone, setCritical }) {
     <form onSubmit={verify}>
       <h2 id="ws-login-title" className="ws-dialog-title">输入验证码</h2>
       <p className="ws-dialog-desc">验证码已发到 {sent.masked}，几分钟内有效。</p>
-      <input ref={input} className="ws-input code" inputMode="numeric" autoComplete="one-time-code" placeholder={"·".repeat(sent.codeLength)} maxLength={sent.codeLength}
+      <input ref={input} className="ws-field code" inputMode="numeric" autoComplete="one-time-code" placeholder={"·".repeat(sent.codeLength)} maxLength={sent.codeLength}
         value={code} disabled={busy} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
       {error && <div className="ws-login-err" role="alert">{error}</div>}
       <div className="ws-dialog-actions">

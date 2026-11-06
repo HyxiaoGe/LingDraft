@@ -129,9 +129,9 @@
 .ws-login-btn:disabled { opacity: .55; }
 .ws-login-btn svg { flex: none; }
 .ws-login-err { margin-top: 12px; color: var(--danger); font-size: 13px; line-height: 1.5; }
-.ws-input { width: 100%; height: 40px; border: 1px solid var(--line2); border-radius: var(--r); padding: 0 12px; font: inherit; font-size: 14px; color: var(--ink); background: var(--paper); outline: none; }
-.ws-input:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
-.ws-input.code { font-size: 20px; letter-spacing: .3em; text-align: center; font-variant-numeric: tabular-nums; }
+.ws-field { width: 100%; height: 40px; border: 1px solid var(--line2); border-radius: var(--r); padding: 0 12px; font: inherit; font-size: 14px; color: var(--ink); background: var(--paper); outline: none; }
+.ws-field:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
+.ws-field.code { font-size: 20px; letter-spacing: .3em; text-align: center; font-variant-numeric: tabular-nums; }
 .ws-dialog-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 16px; flex-wrap: wrap; }
 .ws-dialog-actions .ws-btn.primary .spin { color: #fff; }
 /* 登录回跳页：就一个转圈 */
