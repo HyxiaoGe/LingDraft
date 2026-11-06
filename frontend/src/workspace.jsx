@@ -7,7 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads, queueResearch,
   regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
 import { IconDownload, IconEdit, IconMore, IconPlus, IconTrash } from "./icons.jsx";
-import { LoginDialog, UserFoot, useAuth } from "./login.jsx";
+import { CreditsFoot, LoginDialog, UserFoot, useAuth } from "./login.jsx";
 import { MemoryPage } from "./memory.jsx";
 import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, threadMarkdown, useNow, when } from "./research.js";
 import { Conversation, focusInput } from "./timeline.jsx";
@@ -549,6 +549,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
         })}
       </nav>
       <div className="ws-foot">
+        <CreditsFoot credits={credits} guest={!auth.me} onLogin={auth.login ? onLogin : null} />
         <a href={MEMORY_PATH} aria-current={memory ? "page" : undefined}
           onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onMemory(); }}>记忆</a>
         <a href="#poster">宣传海报</a>
