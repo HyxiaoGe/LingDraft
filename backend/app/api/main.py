@@ -24,6 +24,7 @@ from app.api.inspiration import InspirationError, Inspirations
 from app.api.research_runner import AlreadyPending, NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner, UnknownModel
 from app.api.run_store import STATUSES
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
+from app.graph.research.memory import TEXT_MAX as MEMORY_TEXT_MAX
 from app.graph.research.memory import DreamSchedule
 from app.identity import ADMIN, Authenticator, AuthUnavailable, BadToken, Identity, make_authenticator
 from app.quota import Exhausted
@@ -291,6 +292,11 @@ class ResearchTitleBody(BaseModel):
 TITLE_MAX = 40
 
 
+class MemoryEditBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    text: str
+
+
 def _text(body: ResearchMessageBody) -> str:
     if not body.text.strip():
         raise HTTPException(400, "说点什么再发送")
@@ -410,8 +416,29 @@ def credits_view(who: Who):
 
 @app.get("/api/memory")
 def memory_view(who: Who):
-    """长期记忆：这个人的全部记忆和整理的时间（游客没有）。现在只能看（2026-11-03 Sean 定先展示）。"""
+    """长期记忆：这个人的全部记忆和整理的时间（游客没有）。每条带 thread_id（从哪段对话记下的），页面能点回去。"""
     return research().memory_view(who)
+
+
+# 记忆页能改、能删（2026-11-07 Sean 定，推翻 11-03 的“只能看”）；不做手动新增。删的撤销在页面上做：5 秒后才发删除
+@app.patch("/api/memory/{item_id}")
+def memory_edit(item_id: str, body: MemoryEditBody, who: Who):
+    """改一条记忆的文字，返回改过的这一条。空白并成一个空格（提示词里一条一行）；空的、太长 400；游客、不是这个人的、没有这一条一律 404。"""
+    text = " ".join(body.text.split())
+    if not text or len(text) > MEMORY_TEXT_MAX:
+        raise HTTPException(400, "记忆不能为空" if not text else f"一条记忆最多 {MEMORY_TEXT_MAX} 个字")
+    item = research().edit_memory(who, item_id, text)
+    if item is None:
+        raise HTTPException(404, "没有这条记忆")
+    return item
+
+
+@app.delete("/api/memory/{item_id}")
+def memory_delete(item_id: str, who: Who):
+    """删一条记忆，以后回答不再参考。游客、不是这个人的、没有这一条一律 404。"""
+    if not research().forget_memory(who, item_id):
+        raise HTTPException(404, "没有这条记忆")
+    return {"ok": True}
 
 
 @app.get("/api/research/threads")
@@ -550,6 +577,21 @@ def research_rename(thread_id: str, body: ResearchTitleBody, who: Who):
     except (RunConflict, NotIdle) as e:
         raise HTTPException(409, str(e)) from None
     return r.summary_view(thread_id)
+
+
+# 置顶（2026-11-07 批次 D）：存后端，换设备也在；运行中也能置顶。返回列表里的这一行（pinned_at 是置顶的时间，取消了是 null）
+@app.post("/api/research/threads/{thread_id}/pin")
+def research_pin(thread_id: str, who: Who):
+    r = research()
+    _mine(r, thread_id, who)
+    return r.pin(thread_id, True)
+
+
+@app.delete("/api/research/threads/{thread_id}/pin")
+def research_unpin(thread_id: str, who: Who):
+    r = research()
+    _mine(r, thread_id, who)
+    return r.pin(thread_id, False)
 
 
 @app.delete("/api/research/threads/{thread_id}")

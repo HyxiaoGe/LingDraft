@@ -25,7 +25,7 @@ from app.api.runner import RunConflict
 from app.api.runner import LocalRunRegistry
 from app.graph.research import history, prompts
 from app.graph.research import agent as agent_mod
-from app.graph.research.agent import CHINA_TZ, WEEKDAYS, system_prompt, turn_started
+from app.graph.research.agent import CHINA_TZ, WEEKDAYS, fallback_title, system_prompt, turn_started, usable_title
 from app.graph.research.graph import make_serde, memory_checkpointer
 from app.graph.research.sources import cited, collect_sources, url_key
 from app.graph.research.state import Turn
@@ -227,14 +227,49 @@ def test_title_falls_back_to_the_words():
     assert Chat(planner=p).say(text)["title"] == text[:30] + "..."
 
 
-def test_long_title_is_cut():
-    """模型没照要求写短：去掉首尾空白，超过 30 个字截掉。"""
+def test_titles_that_do_not_look_like_titles_use_the_words():
+    """批次 D（2026-11-07）：模型给的不像标题就用用户原话。太长、分行（多半是去回答了，比如拒答原句）、纯数字或符号、空的都不用；只看长相。"""
+    refusal = "抱歉，我无法提供 2026 年 10 月苹果发布会的最新信息，建议你去官网查看。"
+    for raw in (" " + "一个很长的标题" * 10 + "\n", refusal, "第一行\n第二行", "2", "？！…", "", "  "):
+        p = FakeResearchPlanner()
+
+        async def title(text, raw=raw):
+            return raw
+
+        p.title = title
+        assert Chat(planner=p).say("直接答：一句话")["title"] == "直接答：一句话", raw
+
+
+def test_a_short_title_is_kept_as_written():
+    """30 个字以内、一行、有字的照用，去掉首尾空白；带数字的也行。"""
     p = FakeResearchPlanner()
+
     async def title(text):
-        return " " + "一个很长的标题" * 10 + "\n"
+        return " 2048 小游戏的玩法 \n"
 
     p.title = title
-    assert Chat(planner=p).say("直接答：一句话")["title"] == ("一个很长的标题" * 10)[:30]
+    assert Chat(planner=p).say("直接答：2048 怎么玩")["title"] == "2048 小游戏的玩法"
+
+
+def test_fallback_title_rules():
+    assert usable_title("广州今日天气") and usable_title("长" * 30) and not usable_title("长" * 31)
+    assert usable_title("FastAPI Deployment Best Practices") and usable_title("a" * 60) and not usable_title("a" * 61)  # 字母算半个字
+    assert not usable_title("I'm sorry, but I can't provide information about the Apple event in October 2026.")
+    assert not usable_title("2") and not usable_title("1. 2.") and not usable_title("") and not usable_title("一\n二")
+    assert fallback_title("  第一行\n\n第二行 ") == "第一行 第二行"  # 原话里的换行、空白并成一个空格
+    assert fallback_title("2") == fallback_title(" 3.14 ") == fallback_title("？？") == "新对话"
+    assert fallback_title("长" * 31) == "长" * 30 + "..."
+
+
+def test_digits_only_question_is_titled_new_chat():
+    """用户只发了个数字，模型给的也不能用：叫“新对话”，不叫“2”。"""
+    p = FakeResearchPlanner()
+
+    async def title(text):
+        return text
+
+    p.title = title
+    assert Chat(planner=p).say("2")["title"] == "新对话"
 
 
 def test_slow_title_falls_back_and_the_late_one_is_dropped(monkeypatch):

@@ -46,6 +46,7 @@ USER_CHARS = 2000  # 交给模型的每条用户消息最多这么长（字符�
 REPLY_CHARS = 2000  # 每条回答最多这么长：记的是人，回答只是帮模型看懂用户在说什么
 EARLIER_TURNS = 10  # 之前整理过的几轮里，最近这么多轮用户说的话也给，帮模型看懂新的几轮
 PARSE_TRIES = 2  # 模型返回的东西解析不了，最多问几次
+TEXT_MAX = 200  # 用户在记忆页改一条，最多这么多字（2026-11-07 本机 4 条最长 100）
 
 
 class Op(BaseModel):
@@ -210,6 +211,26 @@ class MemoryBook:
         return item.value.get("turns", {}) if item else {}
 
     # ---- 写 ----
+    # 用户在记忆页改、删（2026-11-07 Sean 定放开，推翻 11-03 的“只能看”；不做手动新增）。
+    # 和整理不互斥：整理正在写同一个人的记忆时用户改、删了同一条，以后写的为准（整理一次只写一段对话的几条，窗口很短）
+
+    def edit(self, owner: str, item_id: str, text: str) -> dict | None:
+        """改一条的文字：出处对话（thread_id）不变，记下修改时间。owner 没有这一条返回 None。返回改过的这一条（带 id）。"""
+        ns = ITEMS + (owner,)
+        item = self.store.get(ns, item_id)
+        if item is None:
+            return None
+        value = item.value | {"text": text, "updated_at": _now()}
+        self.store.put(ns, item_id, value)
+        return {"id": item_id, **value}
+
+    def forget(self, owner: str, item_id: str) -> bool:
+        """删一条：以后回答不再参考。owner 没有这一条返回 False。整理过的对话不会重看，以后的对话里又提到，可能再记下来。"""
+        ns = ITEMS + (owner,)
+        if self.store.get(ns, item_id) is None:
+            return False
+        self.store.delete(ns, item_id)
+        return True
 
     def apply(self, ops: list[Op], thread_id: str, owner: str) -> dict[str, int]:
         """照模型给的增删改写进 owner 的记忆。改、删不存在的 id，或者没有文字的增、改，跳过。"""

@@ -31,7 +31,7 @@ from app import aio, config, costs, quota
 from app.api.run_store import ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, Pending, PostgresRunStore, RunStore
 from app.api.runner import BaseRunner, RunConflict, _sse_text, jsonable, log
 from app.graph.research import history
-from app.graph.research.agent import TURN_END, ChatContext, now, stop_turn
+from app.graph.research.agent import TURN_END, ChatContext, fallback_title, now, stop_turn
 from app.graph.research.graph import NO_POSTGRES, build_graph, make_serde, postgres_pool, thread_ids
 from app.graph.research.memory import MemoryBook, next_at
 from app.identity import Identity, is_guest_sub
@@ -278,6 +278,11 @@ async def open_storage(url: str) -> tuple[AsyncPostgresSaver, AsyncPostgresStore
     return saver, store, runs
 
 
+
+def _memory_row(m: dict) -> dict:
+    """记忆页上的一条：thread_id 是记下（或最后改它）的那段对话，页面拿它点回去；对话删了、整理时没记（很早的几条）就点不了。"""
+    return {k: m.get(k) for k in ("id", "text", "created_at", "updated_at", "thread_id")}
+
 class ResearchRunner(BaseRunner):
     """对话场景的运行器。执行都在对话的事件循环里（见 app.aio）：每次执行是一个任务，同时最多跑 workers 个，多出来的排队；
     点停止就取消正在跑的那一轮，正在等的模型、工具马上断开。下面这些 _ 开头的协程和占位、队列的状态都只在那个循环里用。
@@ -436,6 +441,14 @@ class ResearchRunner(BaseRunner):
 
     def list_threads(self, who: Identity) -> list[dict]:
         return aio.run(self._alist_threads(who))
+
+    def pin(self, thread_id: str, pinned: bool) -> dict | None:
+        """置顶或取消（运行中也行：不碰检查点），返回列表里的这一行。"""
+        return aio.run(self._apin(thread_id, pinned))
+
+    async def _apin(self, thread_id: str, pinned: bool) -> dict | None:
+        await self.run_store.pin(thread_id, pinned)
+        return await self._asummary_view(thread_id)
 
     def owner_of(self, thread_id: str) -> str | None:
         return aio.run(self.run_store.owner_of(thread_id))
@@ -954,9 +967,18 @@ class ResearchRunner(BaseRunner):
     def memory_view(self, who: Identity) -> dict:
         """记忆页：这个人的全部记忆（游客没有）、上次整理（没整理过为 None）、下次按时整理的时间（关了按时整理为 None）。"""
         items = [] if who.guest else self.memory.items(who.sub)
-        return {"memories": [{k: m.get(k) for k in ("id", "text", "created_at", "updated_at")} for m in items],
+        return {"memories": [_memory_row(m) for m in items],
                 "last_dream": self.memory.last_dream(),
                 "next_dream": next_at(datetime.now(UTC), config.DREAM_HOUR).isoformat() if config.DREAM_ENABLED else None}
+
+    def edit_memory(self, who: Identity, item_id: str, text: str) -> dict | None:
+        """记忆页改一条（游客没有记忆）。不是这个人的、没有这一条是 None。"""
+        item = None if who.guest else self.memory.edit(who.sub, item_id, text)
+        return _memory_row(item) if item else None
+
+    def forget_memory(self, who: Identity, item_id: str) -> bool:
+        """记忆页删一条。不是这个人的、没有这一条是 False。"""
+        return not who.guest and self.memory.forget(who.sub, item_id)
 
     # ---- 视图 ----
 
@@ -997,11 +1019,16 @@ class ResearchRunner(BaseRunner):
         return _real_error([str(t.error) for t in snap.tasks if t.error]) if snap.next else None
 
     def _title_of(self, thread_id: str, v: dict) -> str:
-        """页面上的标题：起好写进 state 的、改过的；没写进去的先看这次进程里起好过的（见 _titles），都没有用这段对话的第一句。"""
-        return v.get("title") or self._titles.get(thread_id) or history.requests(v["messages"])[0]
+        """页面上的标题：起好写进 state 的、改过的；没写进去的先看这次进程里起好过的（见 _titles），
+        都没有用这段对话的第一句，和起标题时用原话一样整理（见 agent.fallback_title：纯数字、纯符号的叫“新对话”）。"""
+        return v.get("title") or self._titles.get(thread_id) or fallback_title(history.requests(v["messages"])[0])
 
-    async def _asummary_view(self, thread_id: str) -> dict | None:
-        """线程列表里的一行：标题、状态。不存在返回 None。"""
+    async def _asummary_view(self, thread_id: str, pins: dict[str, str] | None = None) -> dict | None:
+        """线程列表里的一行：标题、状态、置顶的时间（没置顶是 None）。不存在返回 None。
+        pins 是这个人置顶的那几段（列表一次取齐）；没给就按这段对话归谁去查。"""
+        if pins is None:
+            owner = await self.run_store.owner_of(thread_id)
+            pins = await self.run_store.pins_of(owner) if owner else {}
         run = self.runs.get(self._run_key(thread_id))
         snap = await self.graph.aget_state(self._cfg(thread_id))
         v = snap.values
@@ -1014,11 +1041,13 @@ class ResearchRunner(BaseRunner):
             "status": status,
             "updated_at": snap.created_at,
             "running_since": run.get("since") if run else None,
+            "pinned_at": pins.get(thread_id),
         }
 
     async def _alist_threads(self, who: Identity) -> list[dict]:
         """who 的对话，最近有动静的在前。"""
-        rows = [x for t in await self.run_store.threads_of(who.sub) if (x := await self._asummary_view(t))]
+        pins = await self.run_store.pins_of(who.sub)
+        rows = [x for t in await self.run_store.threads_of(who.sub) if (x := await self._asummary_view(t, pins))]
         return sorted(rows, key=lambda x: x["updated_at"] or "", reverse=True)
 
     @staticmethod

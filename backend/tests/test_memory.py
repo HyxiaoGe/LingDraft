@@ -18,7 +18,7 @@ from app.graph.research.state import Turn
 from app.model_guard import ContentBlocked
 from app.research_llm import FAKE_BLOCKED, FakeResearchPlanner, FakeToolModel
 from tests.test_research import OWNER, Chat
-from tests.auth_helpers import USER
+from tests.auth_helpers import USER, bearer, guest_token, user_token
 
 
 def _ops(*ops: dict) -> str:
@@ -214,7 +214,38 @@ def test_memory_page_over_http(tmp_path):
     r.run_turn("t1")
     r.dream()
     body = client.get("/api/memory").json()
-    assert [m["text"] for m in body["memories"]] == ["己"] and set(body["memories"][0]) == {"id", "text", "created_at", "updated_at"}
+    assert [m["text"] for m in body["memories"]] == ["己"] and set(body["memories"][0]) == {"id", "text", "created_at", "updated_at", "thread_id"}
+    assert body["memories"][0]["thread_id"] == "t1"  # 从哪段对话记下的，页面点回去
     assert body["last_dream"]["threads"] == 1
     reopened = ResearchRunner(fake=True)  # 存在库里，重启还在
     assert _texts(reopened) == ["己"]
+
+
+def test_edit_and_forget_memories_over_http(tmp_path):
+    """记忆页改、删一条（批次 D，2026-11-07 Sean 定放开）。改了出处不变、回答时用改过的；删了不再参考。别人的、游客、没有的一律 404。"""
+    r = ResearchRunner(fake=True)
+    api_main.set_research_runner(r)
+    client = TestClient(api_main.app, headers=USER)
+    r.accept("t1", "直接答 记住：己", owner=OWNER)
+    r.run_turn("t1")
+    r.dream()
+    m = client.get("/api/memory").json()["memories"][0]
+    other, guest = bearer(user_token("u2")), bearer(guest_token())
+    for bad in (client.patch(f"/api/memory/{m['id']}", json={"text": "x"}, headers=other),
+                client.patch(f"/api/memory/{m['id']}", json={"text": "x"}, headers=guest),
+                client.patch("/api/memory/nope", json={"text": "x"})):
+        assert bad.status_code == 404
+    assert client.patch(f"/api/memory/{m['id']}", json={"text": " \n "}).status_code == 400
+    assert client.patch(f"/api/memory/{m['id']}", json={"text": "长" * 201}).status_code == 400
+    assert client.patch(f"/api/memory/{m['id']}", json={"text": "x", "thread_id": "t9"}).status_code == 422
+    assert _texts(r) == ["己"]
+
+    edited = client.patch(f"/api/memory/{m['id']}", json={"text": "  住在\n上海 "}).json()
+    assert edited == m | {"text": "住在 上海", "updated_at": edited["updated_at"]} and edited["updated_at"] > m["updated_at"]
+    assert client.get("/api/memory").json()["memories"] == [edited]
+    assert _texts(r) == ["住在 上海"] and "住在 上海" in r.memory.prompt_text(OWNER)
+
+    assert client.delete(f"/api/memory/{m['id']}", headers=other).status_code == 404
+    assert client.delete(f"/api/memory/{m['id']}").json() == {"ok": True}
+    assert _texts(r) == [] and r.memory.prompt_text(OWNER) == ""
+    assert client.delete(f"/api/memory/{m['id']}").status_code == 404

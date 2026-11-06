@@ -168,13 +168,14 @@ def test_logging_in_claims_the_guest_conversations():
     gtoken = guest_token()
     c.headers.update(bearer(gtoken))
     a, b = _new(c), _new(c, "直接答：第二段")
+    assert c.post(f"/api/research/threads/{a}/pin").json()["pinned_at"]  # 游客时置顶的，并进账号后还在
     c.headers.update(bearer(guest_token()))
     stranger = _new(c)  # 另一个游客的，不该被并走
     u1 = bearer(user_token("u1"))
     assert c.post("/api/auth/claim", json={"guest_token": gtoken}, headers=bearer(gtoken)).status_code == 403  # 游客自己不能并
     assert c.post("/api/auth/claim", json={"guest_token": "junk"}, headers=u1).status_code == 400
     assert c.post("/api/auth/claim", json={"guest_token": gtoken}, headers=u1).json() == {"moved": 2}
-    assert {t["thread_id"] for t in c.get("/api/research/threads", headers=u1).json()["threads"]} == {a, b}
+    assert {t["thread_id"]: bool(t["pinned_at"]) for t in c.get("/api/research/threads", headers=u1).json()["threads"]} == {a: True, b: False}
     assert c.get("/api/research/threads", headers=bearer(gtoken)).json()["threads"] == []
     assert c.get(f"/api/research/threads/{stranger}/state", headers=u1).status_code == 404
     assert c.post("/api/auth/claim", json={"guest_token": gtoken}, headers=u1).json() == {"moved": 0}  # 再并一次没东西了

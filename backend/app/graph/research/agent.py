@@ -28,6 +28,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import unicodedata
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
@@ -49,7 +50,8 @@ from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, S
 from app.model_catalog import LEGACY_MODEL, LEGACY_USE, ModelUse
 from app.model_guard import ContentBlocked, Interrupted
 
-TITLE_CHARS = 30  # 照 Fusion：标题超过这么长截掉；起标题失败时用用户原话的这么长
+TITLE_CHARS = 30  # 标题最长这么多字（汉字算一个、字母算半个，见 _width）：模型给的超过了不用（见 usable_title）；用户原话超过了截掉（照 Fusion）
+NEW_CHAT = "新对话"  # 模型给的不能用、用户原话里也没有字（纯数字、纯符号）时的标题
 TITLE_WAIT = 10  # 第一次调模型结束时标题还没起好，最多再等这么久（秒），再等不到用原话
 MAX_MODEL_CALLS = 20  # 主 agent 一轮最多调几次模型（2026-11-03 Sean 定）：只防跑飞，到 11-03 的真实对话每轮最多 2 次
 RESTART_WAIT_S = 2  # 模型生成到一半断了，等这么久再调一次（DeepSeek 资源不足时马上再发多半还是不够）
@@ -252,13 +254,35 @@ def _result_message(result) -> ToolMessage | None:
     return None
 
 
-def _fallback_title(text: str) -> str:
+def _has_words(text: str) -> bool:
+    """有没有字：汉字、字母都算（str.isalpha 认各种文字），数字、符号、表情不算。"""
+    return any(c.isalpha() for c in text)
+
+
+def _width(text: str) -> int:
+    """占几格：汉字、全角符号两格，字母、数字、半角符号一格。"""
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+
+
+def usable_title(title: str) -> bool:
+    """模型给的能不能当标题（批次 D，2026-11-07 Sean 定）：不空、一行、有字、不超过 TITLE_CHARS 个字。
+    超长或者分了行，说明它没在起标题，而是去回答了（“抱歉，我无法提供……”这种拒答原句就是这样），不用；纯数字、纯符号（比如“2”）也不用。
+    长短按格子算（30 个汉字、60 个字母）：英文标题照提示词的 15 个字符写不下，模型一般写四五个词，三四十个字母，不能当成没照做。
+    只看长相，不看说的是什么：不建拒答语的关键词表。"""
+    return bool(title) and "\n" not in title and _width(title) <= 2 * TITLE_CHARS and _has_words(title)
+
+
+def fallback_title(text: str) -> str:
+    """用用户原话当标题：空白并成一个空格，超过 TITLE_CHARS 截掉加省略号（照 Fusion）；原话里没有字的叫“新对话”。"""
+    text = " ".join(text.split())
+    if not _has_words(text):
+        return NEW_CHAT
     return text[:TITLE_CHARS] + "..." if len(text) > TITLE_CHARS else text
 
 
 class _TitleJob:
     """照 Fusion，起标题和回答同时跑，不让回答等它：起好了马上发给页面；这次调模型结束时写进 state，还没起好就再等一会儿。
-    模型返回的只去掉首尾空白（引号、书名号是标题的一部分，不删），太长截掉；出错、等不到用用户原话。先定下来的算数，之后的不再发、不再改。
+    模型返回的只去掉首尾空白（引号、书名号是标题的一部分，不删）；不像标题的（见 usable_title）、出错、等不到用用户原话（见 fallback_title）。先定下来的算数，之后的不再发、不再改。
     另起一个任务调模型，用空的上下文：不带这次运行的回调，它的字不进这次运行的流（不然页面上会当成回答）。
     往流里写要在图的上下文里（写的时候按上下文认是哪个图），所以起头时复制一份上下文，发标题时在它里面写。
     记账要知道是哪段对话、哪一轮（见 app.costs.Scope），也是起头时取下来带过去。
@@ -282,11 +306,13 @@ class _TitleJob:
     async def _run(self, planner) -> None:
         try:
             with costs.within(self._scope):
-                title = (await planner.title(self._text)).strip()[:TITLE_CHARS]
+                title = (await planner.title(self._text)).strip()
         except Exception as e:  # noqa: BLE001  起标题失败不影响回答，用原话
             log.warning("起标题失败，用原话：%s", e)
             title = ""
-        self._settle(title or _fallback_title(self._text))
+        if title and not usable_title(title):
+            log.info("模型给的标题不像标题（%d 个字），用原话", len(title))  # 不记原文：里面是用户的话或者模型的回答
+        self._settle(title if usable_title(title) else fallback_title(self._text))
 
     def _settle(self, title: str) -> None:
         if self._title is not None:  # 都在同一个事件循环里，不会同时进来
@@ -299,8 +325,8 @@ class _TitleJob:
         task = self._task
         if task is not None and not (await asyncio.wait({task}, timeout=wait))[0]:
             log.warning("起标题超过 %s 秒，先用原话", wait)
-            self._settle(_fallback_title(self._text))
-        return self._title or _fallback_title(self._text)
+            self._settle(fallback_title(self._text))
+        return self._title or fallback_title(self._text)
 
     def cancel(self) -> None:
         if self._task is not None:
