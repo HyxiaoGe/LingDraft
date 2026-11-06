@@ -7,6 +7,7 @@ import {
   cancelAuthorization, clearLocalSessionIfCurrent, completeAuthorization, configure, getAccessToken, handleCallback, login as sdkLogin,
   logout as sdkLogout, prepareAuthorization, reconcileSession, refresh, resumeSession, tokenStore,
 } from "auth-client-web";
+import { clearDrafts } from "./drafts.js";
 
 export const CALLBACK_PATH = "/auth/callback";
 const GUEST_KEY = "lingdraft.guest";
@@ -119,6 +120,7 @@ async function adopt() {
 
 function becameGuest() {
   me = null;
+  clearDrafts(); // 没发出去的字是这个账号的，别留给下一个用这台电脑的人
   notify();
   location.reload(); // 页面上是登录用户的对话，刷掉
 }
@@ -215,6 +217,7 @@ export async function completeCallback() {
 // 退出：一处退出处处退出（auth 服务的会话一起结束，Fusion 等也退了），之后回到首页当游客
 export async function signOut() {
   storage.del(GUEST_KEY); // 游客期间的对话已经并进账号了，退出后是个新游客
+  clearDrafts(); // 没发出去的字一起清掉，公用电脑上不留给下一个人
   await sdkLogout({ global: true, postLogoutRedirectUri: location.origin + CALLBACK_PATH });
 }
 
@@ -230,6 +233,7 @@ export async function checkSession() {
       await clearLocalSessionIfCurrent(tokenStore().getAccessToken()).catch(() => {});
       becameGuest();
     } else if (r.status === "switched") {
+      clearDrafts(); // 换了账号：上一个账号没发出去的字不留
       location.reload();
     }
   } catch { /* 网络不通：保持现状 */ }

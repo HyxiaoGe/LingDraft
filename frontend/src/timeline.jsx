@@ -5,14 +5,16 @@
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
-import { IconArrowDown, IconArrowUp, IconBook, IconBulb, IconCheck, IconChevron, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconInsert, IconLock, IconLoop, IconPage, IconPin, IconPlane, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconUndo, IconWarn, Spinner } from "./icons.jsx";
-import { ImageCards, imagesOf } from "./images.jsx";
+import { getDraft, setDraft } from "./drafts.js";
+import { IconArrowDown, IconArrowUp, IconBook, IconBulb, IconCheck, IconChevron, IconClose, IconCloudSun, IconCopy, IconEdit, IconFork, IconImage, IconInsert, IconLock, IconLoop, IconPage, IconPin, IconPlane, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconUndo, IconWarn, Spinner } from "./icons.jsx";
+import { ImageCards, Viewer, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
 import { Markdown } from "./markdown.jsx";
 import { HeadBar, NavContext } from "./nav.jsx";
 import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, creditsLeft, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Mark } from "./sources.jsx";
+import { IMAGE_ACCEPT, ImageError, prepareImage } from "./upload.js";
 import { WeatherCard, forecastsOf } from "./weather.jsx";
 
 // 今日灵感没取到时，新对话页显示这几个
@@ -63,9 +65,9 @@ export function Conversation({ st, live, busy, suggesting, error, now, act, tid,
   const stopping = !!(live?.stopping || st?.stopping);
   // 回答时（包括还在排队、正在停止）发的话排着，这一轮答完就发；新对话刚发出去、还没拿到 id 时排不了
   const queueing = !!tid && (mode === "busy" || mode === "queued");
-  const onSend = (text) => {
-    if (mode === "new") return act.start(text);
-    if (mode === "idle") return act.say(text);
+  const onSend = (text, image) => { // image：带的图（{file, url}），排着的话不带
+    if (mode === "new") return act.start(text, image);
+    if (mode === "idle") return act.say(text, image);
     if (queueing) return act.queue(text);
     return undefined;
   };
@@ -133,20 +135,22 @@ function Welcome() {
   );
 }
 
-// 能做的几件事：点一下把一个例子放进输入框（不直接发），改改地点、日期再发
+// 能做的几件事：点一下把一个例子放进输入框（不直接发），改改地点、日期再发；“改图”还会打开选图
 const ABILITIES = [
   [IconSearch, "查资料", "国内几款 AI 眼镜各有什么优缺点？对比一下"],
   [IconCloudSun, "看天气", "这周末北京天气怎么样？"],
   [IconRoute, "地点和路线", "从上海虹桥站到外滩，坐地铁怎么走？"],
   [IconTrain, "航班和火车", "下周五北京到上海的高铁有哪些车次？"],
   [IconImage, "画图", "画一张秋天北京胡同的插画，暖色调"],
+  [IconEdit, "改图", "把这张图的背景换成海边，其他保持不变", true], // 放好例子，再打开选图
 ];
 
 function Abilities() {
   return (
     <div className="ws-abilities" role="group" aria-label="能做的事">
-      {ABILITIES.map(([Icon, name, example]) => (
-        <button key={name} className="ws-ability" title={`放进输入框：${example}`} onClick={() => fillInput(example)}>
+      {ABILITIES.map(([Icon, name, example, pick]) => (
+        <button key={name} className="ws-ability" title={pick ? `选一张图，放进输入框：${example}` : `放进输入框：${example}`}
+          onClick={() => { fillInput(example); if (pick) pickImage(); }}>
           <Icon size={15} />{name}
         </button>
       ))}
@@ -238,7 +242,7 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models }) {
   const turns = st?.turns || [];
   const running = busy || ACTIVE.has(st?.status);
   // 刚说的话还没出现在存下来的对话里：先按页面手上的显示
-  const pending = live?.said && turns.length <= (live.turnsAtStart ?? 0) ? { id: "pending", user: live.said, items: [], record: null } : null;
+  const pending = live?.said && turns.length <= (live.turnsAtStart ?? 0) ? { id: "pending", user: live.said, items: [], record: null, local: live.image?.url } : null;
   const all = pending ? [...turns, pending] : turns;
   return (
     <>
@@ -263,7 +267,8 @@ function Turn({ t, st, live, running, suggesting, stopping, last, now, act, mode
   const replied = answer.some((i) => i.type === "text");
   return (
     <>
-      {t.user && <UserMsg text={live?.edit ?? t.user} at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && idle} onEdit={act.edit} />}
+      {t.user && <UserMsg text={live?.edit ?? t.user} image={t.image} src={userImageSrc(t, live, st?.thread_id)} at={live?.sentAt ?? t.sent_at} pinned={last} now={now}
+        editable={last && idle} onEdit={act.edit} />}
       <div className="ws-ai">
         {(running || rec) && <Process items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} />}
         {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
@@ -298,12 +303,40 @@ export const focusInput = () => setTimeout(() => dispatchEvent(new Event("ws-foc
 // 把一句话放进输入框（新对话页“能做的事”的例子），光标放在它后面
 const fillInput = (text) => dispatchEvent(new CustomEvent("ws-fill-input", { detail: text }));
 
-function UserMsg({ text, at, pinned, now, editable, onEdit }) {
+// 这句话带的图从哪儿取：刚发出去、还没存下来的用本机的；发出去的这一轮记下本机地址，之后接着用（不再从服务器取一遍）；别的从后端取
+function userImageSrc(t, live, tid) {
+  if (t.local) return t.local;
+  if (!t.image || !tid) return null;
+  if (live?.image?.url && !sentImages.has(t.image.id)) sentImages.set(t.image.id, live.image.url);
+  return sentImages.get(t.image.id) || imageUrl(tid, t.image);
+}
+
+// 用户说的话带的图：气泡上面一张缩略图（不超过 240px 见方），点开看大图；图已经不在了（删掉的）说一声
+const THUMB = 240;
+function UserImage({ img, src }) {
+  const [failed, setFailed] = useState(false);
+  const [viewing, setViewing] = useState(null);
+  const k = img?.width && img?.height ? Math.min(THUMB / img.width, THUMB / img.height, 1) : 0;
+  const box = k ? { width: Math.round(img.width * k), aspectRatio: `${img.width} / ${img.height}` } : undefined;
+  return (
+    <div className="ws-user-img" style={box}>
+      {failed ? <span className="ws-user-img-gone">图片取不到了</span> : (
+        <button className="ws-user-img-open" aria-label="看大图" onClick={(e) => setViewing(e.currentTarget)}>
+          <img src={src} alt="发的图" onError={() => setFailed(true)} />
+        </button>
+      )}
+      {viewing && <Viewer img={{ prompt: "发的图" }} src={src} onClose={() => { viewing.focus(); setViewing(null); }} />}
+    </div>
+  );
+}
+
+function UserMsg({ text, image, src, at, pinned, now, editable, onEdit }) {
   const [editing, setEditing] = useState(false);
   useEffect(() => { if (!editable) setEditing(false); }, [editable]); // 开着编辑框时这一轮又跑起来了（点了重新回答、推荐问题），编辑框就收起
   if (editing && editable) return <EditBox text={text} onCancel={() => { setEditing(false); focusInput(); }} onSend={(t) => { setEditing(false); onEdit(t); }} />;
   return (
     <div className={"ws-user" + (pinned ? " pinned" : "")}>
+      {src && <UserImage key={src} img={image} src={src} />}
       <div className="ws-bubble">{text}</div>
       <div className={"ws-user-foot" + (pinned ? " pinned" : "")}>
         <Stamp iso={at} now={now} />
@@ -749,11 +782,14 @@ const PLACEHOLDER = {
   new: "想问什么？",
   opening: "正在打开对话…",
   idle: "接着问…",
-  busy: "正在回答，现在发的话等这一轮答完就发",
+  busy: "正在回答，最多先排一句，这一轮答完就发",
   queued: QUEUED,
   failed: "这一轮没跑完，点上面的“重试”",
 };
 const HELD = "上面那句发出去以后才能再发，也可以撤回它一起改";
+const WITH_IMAGE = "说说要怎么改这张图，或照着它画什么";
+const IMAGE_WAITS = "带图的话要等这一轮答完才能发";
+const COUNT_FROM = 2000; // 超过这么多字在输入框里显示字数；不设上限（后端也没有），2026-11-06 Sean 定
 
 // 额度快用完（用了八成）或用完了时，输入框上面提醒一句（见后端 app.quota，按最紧的那个窗口）；游客带上登录入口
 function CreditsNote({ credits, onLogin }) {
@@ -769,23 +805,71 @@ function CreditsNote({ credits, onLogin }) {
   );
 }
 
-// 回答时也能打字、发出去（queueing）：话排着，这一轮答完就发；这时输入框里有字是发送键，没字是停止键。Esc 停止回答。
-// held：已经有一句没发出去（排着或等着插进这一轮）。没发出去的话最多一句：这时还能打字，但发不出去，要先撤回那句、改好一起发
-// 每个对话没发出去的字各存各的，切走再切回来还在（刷新就没了）。
+// 每个对话选好、还没发的图（{file, url}，见 upload.js）：存不进本机，只在这次打开的页面里留着——切对话、去记忆页再回来还在，刷新就没了
+const attachments = new Map();
+const keepImage = (key, att) => (att?.url ? attachments.set(key, att) : attachments.delete(key));
+// 发出去的图在本机的地址（图的编号 → blob 地址）：存下来的对话回来以后接着用它显示，不用再从服务器取一遍
+const sentImages = new Map();
+// 新对话页“改图”：放好例子，打开选图（见 Abilities）
+const pickImage = () => dispatchEvent(new Event("ws-pick-image"));
+
+// 回答时（queueing）也能打字：停止键一直在原位，不变成别的；打了字，旁边另外出一个“这一轮答完再发”，话排着，这一轮答完就发。Esc 停止回答。
+// held：已经有一句没发出去（排着或等着插进这一轮）。没发出去的话最多一句：这时还能打字，但发不出去，要先撤回那句、改好一起发。
+// 带图的话排不了（排着的话只有字），要等这一轮答完再发。
+// 图：点左下角选、粘贴、拖进来都行，一次一张（再选换掉），大图在本机先压到 4 MB 以内（见 upload.js）。
+// 没发出去的字每个对话各存一份在本机（见 drafts.js）：切走、去记忆页、刷新、登录回来都在，发出去就清掉；图只在这次打开的页面里留着（见 attachments）。
 // carry：新对话刚发出去、拿到了 id，thread 从 "new" 换成 id，还是同一个对话
-// putBack：放回输入框的话（撤回的、没发出去的），接在已经写着的字前面（被拒的那句还原样留着就换掉它）；不是正在看的对话，放进那个对话的草稿
+// putBack：放回输入框的话（撤回的、没发出去的，可能带着图）：放在已经写着的字前面、空一行，放回来的那段选中，看得出哪段是放回来的
+//   （被拒的那句还原样留着就换掉它，不叠加）；不是正在看的对话，放进那个对话的草稿
 // onTakeBack：有没发出去的话时，光标在最前面（输入框空着也算）按 ↑ 把它们取回来。光标在最前面时 ↑ 本来什么也不做，不和挪光标抢
 function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSend, onStop, above, onTakeBack, tools }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => getDraft(thread));
+  const [image, setImage] = useState(() => attachments.get(thread) || null); // {file, url}；还在处理是 {pending: true}
+  const [imageError, setImageError] = useState(null);
+  const [drag, setDrag] = useState(false);
   const ref = useRef(null);
-  const drafts = useRef(new Map());
-  const shown = useRef(thread); // text 是哪个对话的
-  const enabled = mode === "new" || mode === "idle" || (queueing && !held); // 能发
+  const fileRef = useRef(null);
+  const shown = useRef(thread); // text、image 是哪个对话的
+  const textRef = useRef(text);
+  textRef.current = text;
+  const imageRef = useRef(image);
+  imageRef.current = image;
+  const attachSeq = useRef(0); // 每选一次图、去掉一次加一：处理慢的那张回来时发现对不上，就不要了
+  const selectNext = useRef(null); // 放回来的话要选中的那段：[起, 止]，字放进去以后再选
+  const sendNow = mode === "new" || mode === "idle";
   const canStop = mode === "busy" || mode === "queued";
-  const showStop = canStop && !(queueing && text.trim());
+  const hasText = !!text.trim();
+  const canQueue = queueing && !held && !image;
+  const enabled = sendNow || (queueing && !held); // 能说话了（光标该回来了）
   const stopNow = useRef(null); // 按 Esc 时调的：能停才有
   stopNow.current = canStop && !stopping ? onStop : null;
   useAutoHeight(ref, text);
+  useLayoutEffect(() => {
+    const r = selectNext.current;
+    selectNext.current = null;
+    if (r) ref.current?.setSelectionRange(r[0], r[1]);
+  }, [text]);
+
+  // 存草稿：打字停 300ms 存一次；换对话、页面要关（pagehide）、输入框撤掉（去记忆页、海报页）时马上存
+  const saveTimer = useRef(null);
+  const save = () => {
+    clearTimeout(saveTimer.current);
+    setDraft(shown.current, textRef.current);
+  };
+  useEffect(() => {
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(save, 300);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text]);
+  useEffect(() => {
+    addEventListener("pagehide", save);
+    return () => {
+      removeEventListener("pagehide", save);
+      save();
+      keepImage(shown.current, imageRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 光标放回输入框：换了对话（包括刚打开页面）一定放；能说话了、切回这个窗口时，光标不在别处、也没选中文字才放
   const focus = (always) => {
@@ -798,14 +882,21 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
   useEffect(() => {
     const was = shown.current;
     shown.current = thread;
-    if (was !== thread && was === "new" && carry) { // 同一个对话：等回答时写的字留着，光标也不动
-      drafts.current.delete("new");
+    if (was === thread) {
+      focus(true);
       return;
     }
-    if (was !== thread) {
-      drafts.current.set(was, text);
-      setText(drafts.current.get(thread) || "");
+    clearTimeout(saveTimer.current);
+    if (was === "new" && carry) { // 同一个对话：等回答时写的字、选的图留着，光标也不动；草稿挪到这个对话名下
+      setDraft("new", "");
+      setDraft(thread, textRef.current);
+      return;
     }
+    setDraft(was, textRef.current);
+    keepImage(was, imageRef.current);
+    setText(getDraft(thread));
+    setImage(attachments.get(thread) || null);
+    setImageError(null);
     focus(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread]);
@@ -814,13 +905,24 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
   const rejected = useRef(null);
   useEffect(() => {
     if (!putBack) return;
-    const prev = rejected.current; // setText 的更新函数是之后才跑的，先把上一句记下来
-    const join = (cur) => (cur && !(putBack.rejected && cur === prev) ? `${putBack.text}\n${cur}` : putBack.text);
+    const prev = rejected.current;
     rejected.current = putBack.rejected ? putBack.text : null;
-    if (putBack.thread === shown.current) {
-      setText(join);
-      focus(true);
-    } else drafts.current.set(putBack.thread, join(drafts.current.get(putBack.thread) || ""));
+    const joined = (cur) => !!cur.trim() && !(putBack.rejected && cur === prev);
+    const join = (cur) => (joined(cur) ? `${putBack.text}\n\n${cur}` : putBack.text);
+    if (putBack.thread !== shown.current) {
+      setDraft(putBack.thread, join(getDraft(putBack.thread)));
+      if (putBack.image) attachments.set(putBack.thread, putBack.image);
+      return;
+    }
+    const cur = textRef.current;
+    const next = join(cur);
+    selectNext.current = joined(cur) ? [0, putBack.text.length] : [next.length, next.length];
+    setText(next);
+    if (putBack.image) {
+      attachSeq.current += 1;
+      setImage(putBack.image);
+    }
+    focus(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [putBack]);
   // 放进来的例子（见 fillInput）：输入框空着、或者还是上次放进来的那句，就换成这句；写着别的字时接在前面（和放回输入框的话一样）
@@ -836,8 +938,13 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
       el.focus({ preventScroll: true });
       requestAnimationFrame(() => el.setSelectionRange(t.length, t.length));
     };
+    const pick = () => fileRef.current?.click();
     addEventListener("ws-fill-input", fill);
-    return () => removeEventListener("ws-fill-input", fill);
+    addEventListener("ws-pick-image", pick);
+    return () => {
+      removeEventListener("ws-fill-input", fill);
+      removeEventListener("ws-pick-image", pick);
+    };
   }, []);
   useEffect(() => {
     const back = () => focus(false);
@@ -859,18 +966,71 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
     };
   }, []);
 
+  // 选了、粘贴了、拖进来一张图：先占上位置转圈，处理好（大图压缩）再显示；处理的时候换了对话，处理好的图归原来那个对话
+  const attach = async (file) => {
+    if (!file) return;
+    const key = shown.current;
+    const seq = ++attachSeq.current;
+    setImageError(null);
+    setImage({ pending: true });
+    try {
+      const f = await prepareImage(file);
+      if (seq !== attachSeq.current) return;
+      const att = { file: f, url: URL.createObjectURL(f) };
+      if (shown.current === key) setImage(att);
+      else attachments.set(key, att);
+    } catch (e) {
+      if (seq !== attachSeq.current || shown.current !== key) return;
+      setImage(null);
+      setImageError(e instanceof ImageError ? e.message : "这张图读不出来，换一张再试");
+    }
+  };
+  const removeImage = () => {
+    attachSeq.current += 1;
+    setImage(null);
+    setImageError(null);
+    focus(true);
+  };
+  // 粘贴：剪贴板里只有图（截图、网页上“复制图片”）才当图；带着字的（从文档里复制的常常也带一张图）照常粘贴文字
+  const onPaste = (e) => {
+    const cd = e.clipboardData;
+    if (!cd || cd.types.includes("text/plain")) return;
+    const file = [...cd.files].find((f) => f.type.startsWith("image/"));
+    if (!file) return;
+    e.preventDefault();
+    attach(file);
+  };
+  const dragging = (e) => !!e.dataTransfer?.types?.includes("Files");
+
   const send = () => {
     const t = text.trim();
-    if (!t || !enabled) return;
-    onSend(t);
+    if (!t || image?.pending) return;
+    if (sendNow) {
+      onSend(t, image);
+      setImage(null);
+    } else if (canQueue) onSend(t, null);
+    else return;
     setText("");
+    setImageError(null);
+    clearTimeout(saveTimer.current);
+    setDraft(shown.current, "");
   };
+  const note = imageError ? { text: imageError, warn: true }
+    : queueing && hasText && held ? { text: HELD }
+      : queueing && hasText && image ? { text: IMAGE_WAITS } : null;
+  const count = text.length > COUNT_FROM ? Array.from(text).length : 0;
+  const keep = (e) => e.preventDefault(); // 按下去不抢光标
   return (
     <div className="ws-composer">
       {above}
-      <div className="ws-input">
-        <textarea ref={ref} rows={1} value={text} placeholder={queueing && held ? HELD : PLACEHOLDER[mode] || PLACEHOLDER.busy} aria-label="输入"
-          onChange={(e) => setText(e.target.value)}
+      <div className={"ws-input" + (drag ? " drop" : "")}
+        onDragOver={(e) => { if (dragging(e)) { e.preventDefault(); setDrag(true); } }}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDrag(false); }}
+        onDrop={(e) => { if (!dragging(e)) return; e.preventDefault(); setDrag(false); attach(e.dataTransfer.files[0]); }}>
+        {image && <Attachment att={image} onRemove={removeImage} />}
+        <textarea ref={ref} rows={1} value={text} aria-label="输入"
+          placeholder={queueing && held ? HELD : image && sendNow ? WITH_IMAGE : PLACEHOLDER[mode] || PLACEHOLDER.busy}
+          onChange={(e) => setText(e.target.value)} onPaste={onPaste}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
             if (e.key === "Enter" && !e.shiftKey) {
@@ -882,14 +1042,22 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
               onTakeBack();
             }
           }} />
+        {note && <div className={"ws-input-note" + (note.warn ? " warn" : "")} role={note.warn ? "alert" : undefined}>{note.warn && <IconWarn size={13} />}<span>{note.text}</span></div>}
         <div className="ws-input-bar">
-          {queueing && held && text.trim() && <span className="ws-input-hint">{HELD}</span>}
+          <button className="ws-attach" aria-label="添加图片" title="添加一张图：让它改这张图，或照着画" disabled={mode === "opening"} onMouseDown={keep}
+            onClick={() => fileRef.current?.click()}><IconImage size={16} /></button>
+          <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} hidden tabIndex={-1}
+            onChange={(e) => { attach(e.target.files?.[0]); e.target.value = ""; }} />
+          {count > COUNT_FROM && <span className="ws-input-count">{count.toLocaleString("en-US")} 字</span>}
           <div className="ws-input-tools">{tools}</div>
-          {showStop
-            ? <button className="ws-send stop" aria-label={stopping ? "正在停止" : "停止"} title={stopping ? "正在停止" : "停止（Esc）"} disabled={stopping} onClick={onStop}>
+          {canStop && hasText && (
+            <button className="ws-btn sm ws-send-later" disabled={!canQueue} onMouseDown={keep} onClick={send}><IconArrowUp size={13} />这一轮答完再发</button>
+          )}
+          {canStop
+            ? <button className="ws-send stop" aria-label={stopping ? "正在停止" : "停止回答"} title={stopping ? "正在停止" : "停止回答（Esc）"} disabled={stopping} onClick={onStop}>
               {stopping ? <Spinner size={14} /> : <IconStop size={13} />}
             </button>
-            : <button className="ws-send" aria-label="发送" title={queueing ? "这一轮答完就发" : undefined} disabled={!enabled || !text.trim()} onClick={send}><IconArrowUp size={15} /></button>}
+            : <button className="ws-send" aria-label="发送" disabled={!sendNow || !hasText || !!image?.pending} onClick={send}><IconArrowUp size={15} /></button>}
         </div>
       </div>
       <div className="ws-ai-note">内容由 AI 生成，请仔细甄别</div>
@@ -897,23 +1065,47 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
   );
 }
 
+// 选好要发的图：缩略图（点开看大图）、能拿它做什么，右上角去掉。大图还在本机压缩时先转圈
+function Attachment({ att, onRemove }) {
+  const [viewing, setViewing] = useState(null);
+  return (
+    <div className="ws-attach-row">
+      <div className="ws-attach-thumb">
+        {att.url
+          ? <button className="ws-attach-open" aria-label="看大图" onClick={(e) => setViewing(e.currentTarget)}><img src={att.url} alt="要发的图" /></button>
+          : <Spinner size={16} />}
+        <button className="ws-attach-remove" aria-label="去掉这张图" onMouseDown={(e) => e.preventDefault()} onClick={onRemove}><IconClose size={12} /></button>
+      </div>
+      <span className="ws-attach-note" role="status">{att.url ? "可以让它改这张图、照着它画；它看不到图里的内容" : "正在处理图片…"}</span>
+      {viewing && <Viewer img={{ prompt: "要发的图" }} src={att.url} onClose={() => { viewing.focus(); setViewing(null); }} />}
+    </div>
+  );
+}
+
 // 输入框里发送按钮左边：深度思考开关（选的模型能开关才有）和选模型。新对话随便选；对话开始后模型定下不换，
 // 点开只说明一句、列出能选的给开新对话时参考。思考开关每句话都能改，按下去不抢光标（输入框里的字和光标都留着）。
-// 菜单打开时光标在菜单里：Esc 只收起菜单，不会停掉正在跑的这一轮（见 Composer 的 Esc）。
-// 这一档选不了的（locked：游客看到的要登录的模型）照样列出来，锁着；游客点它去登录（onLogin），登录了还锁着的是不开放的。
-// loading：模型列表还没取到、或者打开的对话状态还没回来，先放一块占位，回来时不突然冒出来（输入框照常能打字、能发，按 Auto）
+// 模型分三组：推荐（Auto，写明它现在用哪个：按接口给的 model 对出名字，不写死）、可用、登录后可用（游客锁着的，默认收起）。
+// 桌面是菜单：往放得下的那边开（新对话的输入框在页面中间，往下开），高度按那边剩下的空间，再多就在里面滚，第一项不会被切掉。
+// 窄屏是底部弹层：最高 70dvh、里面滚，深度思考的开关和说明也在里面（输入框里只放模型名，能开关思考的名字前有个灯泡，亮着是开）。
+// 菜单、弹层打开时光标在里面：Esc 只收起它们，不会停掉正在跑的这一轮（见 Composer 的 Esc）；点外面、关闭钮也能收起。
+// locked：对话开始了，模型不能换。游客看到的要登录的模型（m.locked）点了去登录（onLogin），登录了还锁着的是不开放的。
+// loading：模型列表还没取到、或者打开的对话状态还没回来，先放一块占位（输入框照常能打字、能发，按 Auto）
 function ModelTools({ models, loading, current, locked, onPick, thinking, onThinking, onLogin }) {
+  const mobile = !!useContext(NavContext)?.mobile;
   const [open, setOpen] = useState(false);
   const box = useRef(null);
-  const menu = useRef(null);
+  const btn = useRef(null);
+  // 收起：桌面光标回到输入框；手机上回到模型按钮（放回输入框会弹出键盘）
   const close = () => {
     setOpen(false);
-    document.activeElement?.blur();
-    focusInput();
+    if (mobile) btn.current?.focus({ preventScroll: true });
+    else {
+      document.activeElement?.blur();
+      focusInput();
+    }
   };
   useEffect(() => {
-    if (!open) return;
-    (menu.current?.querySelector('[aria-checked="true"]:not(:disabled)') || menu.current?.querySelector("button:not(:disabled)"))?.focus();
+    if (!open) return undefined;
     const down = (e) => !box.current?.contains(e.target) && setOpen(false);
     const key = (e) => e.key === "Escape" && close();
     addEventListener("mousedown", down);
@@ -924,29 +1116,193 @@ function ModelTools({ models, loading, current, locked, onPick, thinking, onThin
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+  useEffect(() => { setOpen(false); }, [mobile]); // 窗口拉宽、变窄：菜单和弹层不是一个东西
   const opt = models?.find((m) => m.id === current);
   if (loading) return <span className="ws-skel ws-skel-model" aria-hidden="true" />;
   if (!models?.length || !current) return null;
+  const toggle = opt?.thinking === "toggle";
+  const name = opt?.name || current;
+  const note = locked ? "对话开始后不能换模型，想换模型请开新对话" : "开始对话后不能换模型";
+  const list = (
+    <ModelList models={models} current={current} locked={locked} onLogin={onLogin}
+      onChoose={(m) => { close(); if (m.locked) onLogin?.(); else if (!locked) onPick(m.id); }} />
+  );
   return (
     <div className="ws-model" ref={box}>
-      {opt?.thinking === "toggle" && (
-        <button className={"ws-think-toggle" + (thinking ? " on" : "")} aria-pressed={thinking} onMouseDown={(e) => e.preventDefault()} onClick={() => onThinking(!thinking)}
-          title={thinking ? "深度思考已开：先想再答，慢一些" : "深度思考已关：直接回答，更快"}><IconBulb size={14} />深度思考</button>
-      )}
-      <button className="ws-model-btn" aria-haspopup="menu" aria-expanded={open} title={locked ? "这段对话用的模型" : "选模型"} onClick={() => (open ? close() : setOpen(true))}>
-        <span>{opt?.name || current}</span><IconChevron size={13} />
+      {toggle && !mobile && <ThinkToggle on={thinking} onChange={onThinking} />}
+      <button ref={btn} className="ws-model-btn" aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={open}
+        aria-label={mobile && toggle ? `${name}，深度思考${thinking ? "已开" : "已关"}` : undefined}
+        title={mobile ? undefined : locked ? "这段对话用的模型" : "选模型"} onClick={() => (open ? close() : setOpen(true))}>
+        {mobile && toggle && <IconBulb size={14} className={"bulb" + (thinking ? " on" : "")} />}
+        <span className="name">{name}</span><IconChevron size={13} className="caret" />
       </button>
-      {open && (
-        <div ref={menu} className="ws-menu ws-model-menu" role="menu" aria-label="选模型">
-          {locked && <div className="ws-menu-note">对话开始后不能换模型，想换模型请开新对话</div>}
-          {models.map((m) => (
-            <button key={m.id} role="menuitemradio" aria-checked={m.id === current} className={m.locked ? "locked" : undefined}
-              disabled={m.locked ? !onLogin : locked && m.id !== current} title={m.locked ? (onLogin ? "登录后可用，点一下去登录" : "暂不开放") : undefined}
-              onClick={() => { close(); if (m.locked) onLogin?.(); else if (!locked) onPick(m.id); }}>
-              <span className="ws-model-item"><b>{m.name}</b>{m.description && <small>{m.description}</small>}</span>
-              {m.id === current ? <IconCheck size={14} /> : m.locked && <span className="ws-model-lock"><IconLock size={12} />{onLogin ? "登录后可用" : "暂不开放"}</span>}
-            </button>
-          ))}
+      {open && !mobile && <ModelMenu anchor={box} note={note} onLeave={() => setOpen(false)}>{list}</ModelMenu>}
+      {open && mobile && (
+        <ModelSheet title={locked ? "这段对话的模型" : "选模型"} onClose={close}>
+          {toggle && <ThinkSwitch on={thinking} onChange={onThinking} />}
+          <div className="ws-menu-note">{note}</div>
+          {list}
+        </ModelSheet>
+      )}
+    </div>
+  );
+}
+
+// 深度思考：开、关各是什么样（2026-11-06 Sean 定这段话，不写具体秒数、额度）
+const THINK_ON = "开：先想清楚再答，复杂问题更稳，要多等一会儿、多花点额度";
+const THINK_OFF = "关：直接答，更快更省";
+
+// 桌面的思考开关：悬停或用键盘移到上面时，在上方说明开、关的差别（不用浏览器自带的 title：出得慢、键盘看不到）。Esc 收起说明
+function ThinkToggle({ on, onChange }) {
+  const [tip, setTip] = useState(false);
+  return (
+    <span className="ws-think-wrap" onMouseEnter={() => setTip(true)} onMouseLeave={() => setTip(false)}>
+      <button className={"ws-think-toggle" + (on ? " on" : "")} aria-pressed={on} aria-describedby="ws-think-tip" onMouseDown={(e) => e.preventDefault()} onClick={() => onChange(!on)}
+        onFocus={(e) => { if (e.currentTarget.matches(":focus-visible")) setTip(true); }} onBlur={() => setTip(false)}
+        onKeyDown={(e) => { if (e.key === "Escape" && tip) setTip(false); }}>
+        <IconBulb size={14} />深度思考
+      </button>
+      <span id="ws-think-tip" role="tooltip" className={"ws-tip" + (tip ? " show" : "")}>
+        <b>深度思考{on ? "已开" : "已关"}</b>
+        <span className={on ? "cur" : undefined}>{THINK_ON}</span>
+        <span className={on ? undefined : "cur"}>{THINK_OFF}</span>
+      </span>
+    </span>
+  );
+}
+
+// 底部弹层里的思考开关：一整行都能点，下面写明开、关的差别
+function ThinkSwitch({ on, onChange }) {
+  return (
+    <div className="ws-sheet-think">
+      <button className="ws-switch-row" role="switch" aria-checked={on} aria-describedby="ws-think-desc" onClick={() => onChange(!on)}>
+        <IconBulb size={16} /><span className="label">深度思考</span><span className={"ws-switch" + (on ? " on" : "")} aria-hidden="true" />
+      </button>
+      <p id="ws-think-desc" className="ws-think-desc"><span>{THINK_ON}</span><span>{THINK_OFF}</span></p>
+    </div>
+  );
+}
+
+// 桌面的模型菜单：上面空间够（或比下面多）往上开，不然往下开；高度不超过那边剩下的，里面滚。窗口大小变了重新算
+function ModelMenu({ anchor, note, onLeave, children }) {
+  const ref = useRef(null);
+  const [place, setPlace] = useState(null); // {up, max}
+  useLayoutEffect(() => {
+    const fit = () => {
+      const r = anchor.current.getBoundingClientRect();
+      const need = ref.current.scrollHeight;
+      const above = r.top - 16; // 离按钮 8px、离视口边 8px
+      const below = innerHeight - r.bottom - 16;
+      const up = above >= need || above >= below;
+      setPlace({ up, max: Math.floor(Math.max(120, Math.min(up ? above : below, 560))) });
+    };
+    fit();
+    addEventListener("resize", fit);
+    return () => removeEventListener("resize", fit);
+  }, [anchor]);
+  // 位置算好、看得见了再把光标放进来（还藏着的时候放不进去）
+  const placed = !!place;
+  useEffect(() => {
+    if (!placed) return;
+    const el = ref.current;
+    (el.querySelector('[aria-checked="true"]:not(:disabled)') || el.querySelector("button:not(:disabled)"))?.focus();
+  }, [placed]);
+  return (
+    <div ref={ref} className="ws-model-menu" style={place ? { [place.up ? "bottom" : "top"]: "calc(100% + 8px)", maxHeight: place.max } : { visibility: "hidden" }}
+      onBlur={(e) => { if (e.relatedTarget && !anchor.current?.contains(e.relatedTarget)) onLeave(); }}>
+      <div className="ws-menu-note">{note}</div>
+      {children}
+    </div>
+  );
+}
+
+// 手机上的底部弹层：盖一层暗底，点暗底、按 Esc（外接键盘）、点关闭都收起；打开时光标在里面、Tab 在里面转
+function ModelSheet({ title, onClose, children }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    (el.querySelector('[aria-checked="true"]:not(:disabled):not([role="switch"])') || el.querySelector(".ws-sheet-close"))?.focus();
+  }, []);
+  const trap = (e) => {
+    if (e.key !== "Tab") return;
+    const els = [...ref.current.querySelectorAll("button:not(:disabled)")];
+    const i = els.indexOf(document.activeElement);
+    if (e.shiftKey && i <= 0) {
+      e.preventDefault();
+      els.at(-1)?.focus();
+    } else if (!e.shiftKey && i === els.length - 1) {
+      e.preventDefault();
+      els[0]?.focus();
+    }
+  };
+  return (
+    <>
+      <div className="ws-sheet-scrim" onClick={onClose} aria-hidden="true" />
+      <div ref={ref} className="ws-sheet" role="dialog" aria-modal="true" aria-label={title} onKeyDown={trap}>
+        <div className="ws-sheet-head">
+          <b>{title}</b>
+          <button className="ws-icon-btn ws-sheet-close" aria-label="关闭" onClick={onClose}><IconClose size={18} /></button>
+        </div>
+        <div className="ws-sheet-body">{children}</div>
+      </div>
+    </>
+  );
+}
+
+// 模型列表（菜单和弹层共用）：推荐 / 可用 / 登录后可用（N，默认收起；正在用的在里面就展开）。↑↓ 在能点的之间挪
+function ModelList({ models, current, locked, onLogin, onChoose }) {
+  const [auto, ...rest] = models;
+  const free = rest.filter((m) => !m.locked);
+  const shut = rest.filter((m) => m.locked);
+  const [showShut, setShowShut] = useState(() => shut.some((m) => m.id === current));
+  // 点开“登录后可用”：展开的在下面、多半在菜单外，把这一组滚到菜单顶上让人看见
+  const shutRef = useRef(null);
+  const reveal = useRef(false);
+  useEffect(() => {
+    if (!reveal.current) return;
+    reveal.current = false;
+    const t = shutRef.current;
+    const box = t?.closest(".ws-model-menu, .ws-sheet-body");
+    if (!box) return;
+    const top = box.scrollTop + t.getBoundingClientRect().top - box.getBoundingClientRect().top - 4;
+    box.scrollTo({ top, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }, [showShut]);
+  const actual = auto.model ? modelName(models, auto.model) : null;
+  const autoNote = [auto.description, actual && `现在用 ${actual}`].filter(Boolean).join("，");
+  const row = (m, note) => (
+    <button key={m.id} role="menuitemradio" aria-checked={m.id === current} className={"ws-model-row" + (m.locked ? " locked" : "")}
+      disabled={m.locked ? !onLogin : locked && m.id !== current} onClick={() => onChoose(m)}>
+      <span className="ws-model-item"><b>{m.name}</b>{note && <small>{note}</small>}</span>
+      {m.id === current ? <IconCheck size={14} /> : m.locked && <IconLock size={13} className="lock" />}
+    </button>
+  );
+  const move = (e) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    const els = [...e.currentTarget.querySelectorAll("button:not(:disabled)")];
+    const i = els.indexOf(document.activeElement);
+    const n = els.length;
+    const to = e.key === "Home" ? 0 : e.key === "End" ? n - 1 : (i + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+    e.preventDefault();
+    els[to]?.focus();
+  };
+  return (
+    <div className="ws-model-list" role="menu" aria-label="选模型" onKeyDown={move}>
+      <div role="group" aria-label="推荐">
+        <div className="ws-model-group" aria-hidden="true">推荐</div>
+        {row(auto, autoNote)}
+      </div>
+      {free.length > 0 && (
+        <div role="group" aria-label="可用">
+          <div className="ws-model-group" aria-hidden="true">可用</div>
+          {free.map((m) => row(m, m.description))}
+        </div>
+      )}
+      {shut.length > 0 && (
+        <div role="group" aria-label={onLogin ? "登录后可用" : "暂不开放"}>
+          <button ref={shutRef} className="ws-model-group toggle" role="menuitem" aria-expanded={showShut} onClick={() => { reveal.current = !showShut; setShowShut(!showShut); }}>
+            <span>{onLogin ? "登录后可用" : "暂不开放"}（{shut.length}）</span><IconChevron size={13} className={"chev" + (showShut ? " up" : "")} />
+          </button>
+          {showShut && shut.map((m) => row(m, m.description))}
         </div>
       )}
     </div>

@@ -140,7 +140,7 @@ function ImageCard({ img, src, onOpen, onRegenerate }) {
 }
 
 // 看大图：盖住整个页面，点空白处、按 Esc 或点关闭都收起。光标先放到关闭按钮上，Esc 归这里，不会去停止回答
-function Viewer({ img, src, onClose }) {
+export function Viewer({ img, src, onClose }) {
   const close = useRef(null);
   useEffect(() => { close.current?.focus(); }, []);
   return (

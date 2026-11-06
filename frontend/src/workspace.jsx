@@ -7,11 +7,13 @@ import { useEffect, useRef, useState } from "react";
 import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads, queueResearch,
   regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
 import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPlus, IconTrash } from "./icons.jsx";
+import { setDraft } from "./drafts.js";
 import { CreditsFoot, LoginDialog, UserFoot, useAuth } from "./login.jsx";
 import { MemoryPage } from "./memory.jsx";
 import { MOBILE, NavContext, SIDE_ARIA_KEY, SIDE_KEY, isSideKey, useMedia } from "./nav.jsx";
 import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, threadMarkdown, useNow, when } from "./research.js";
 import { Conversation, focusInput } from "./timeline.jsx";
+import { uploadErrorText } from "./upload.js";
 import "./workspace.css";
 
 // 地址：/chat/new 是新对话，/chat/<线程 id> 是某个对话；别的地址（/、/chat）都当新对话，进来时改成 /chat/new。
@@ -50,13 +52,14 @@ export default function Workspace() {
     setMemoryState(m);
   };
   const [st, setSt] = useState(null);
-  // 这个页面发起或接上的那次执行：{said, sentAt, turnsAtStart, items, stage, phase, title, stopping, hidden, edit}
+  // 这个页面发起或接上的那次执行：{said, image, sentAt, turnsAtStart, items, stage, phase, title, stopping, hidden, edit}
+  // image：这句话带的图（{file, url}），存下来之前先按本机的显示
   // sentAt：这次说的话或改的话按本机时间记的发送时间，存下来的对话回来以前先显示它
   const [live, setLive] = useState(null);
   const [suggesting, setSuggesting] = useState(false); // 这一轮结束了，推荐问题还在起（同一条事件流里还会再来一次状态）
   const [busy, setBusyState] = useState(false);
   const [error, setError] = useState(null);
-  const [putBack, setPutBack] = useState(null); // 要放回输入框的话：{thread, text, rejected?}，每次是个新对象；rejected 是没发出去被拒的（连着被拒不叠加）
+  const [putBack, setPutBack] = useState(null); // 要放回输入框的话：{thread, text, image?, rejected?}，每次是个新对象；image 是一起没发出去的图；rejected 是没发出去被拒的（连着被拒不叠加）
   // 能选的模型（/api/models，Auto 在第一个）：没取到是 []，不显示选择，新对话按 Auto
   const [models, setModels] = useState(null);
   // 新对话选的模型：null 是 Auto；开新对话时还是上次选的，刷新页面回到 Auto。开始的对话以它定下的为准（st.model）
@@ -324,7 +327,7 @@ export default function Workspace() {
   };
 
   // 跑一次（新建、接着说、重新回答、改最后一句或重试）：边收事件边显示，停下来以后以最终状态为准。
-  // said：用户这次说的话，存下来之前先在对话里显示；extra：这次执行的其他显示信息（重新回答时要藏起来的旧条目、改过的那句话）
+  // said：用户这次说的话，存下来之前先在对话里显示；extra：这次执行的其他显示信息（这句话带的图、重新回答时要藏起来的旧条目、改过的那句话）
   async function run(fn, said, extra = {}) {
     const g = gen.current;
     ctl.current.abort(); // 上一轮的连接可能还开着在等推荐问题：又说了话，那些推荐问题不要了
@@ -344,10 +347,19 @@ export default function Workspace() {
     } catch (e) {
       if (e.aborted || g !== gen.current) return;
       if (r.done) return setSuggesting(false); // 等推荐问题时断了：不再接，下次打开线程能看到
+      const image = extra.image;
+      // 带的图没收（超过 4 MB、格式不对、传不上去，见后端 api.main 的 _upload）：这句话没发出去，对话里什么都没多，话和图都放回输入框
+      if (image && [413, 415, 502].includes(e.status)) {
+        setPutBack({ thread: tidRef.current || "new", text: said, image, rejected: true });
+        setError(`${uploadErrorText(e.status)}，话和图都放回输入框了`);
+        setBusy(false);
+        setLive(null);
+        return;
+      }
       // 额度用完了（429）：话放回输入框，提示里带上什么时候重置，游客还给登录入口；服务器上没有执行要去接
       if (e.status === 429 && e.detail?.code === "credits_exhausted") {
         const text = said ?? extra.edit;
-        if (text) setPutBack({ thread: tidRef.current || "new", text, rejected: true });
+        if (text) setPutBack({ thread: tidRef.current || "new", text, image, rejected: true });
         setError({ text: e.message, login: !!e.detail.guest });
         refreshCredits();
         setBusy(false);
@@ -356,7 +368,7 @@ export default function Workspace() {
       }
       // 新对话被拒（比如选的模型刚下架）：话放回输入框，重新取能选的模型
       if (!tidRef.current && e.status === 400 && said) {
-        setPutBack({ thread: "new", text: said, rejected: true });
+        setPutBack({ thread: "new", text: said, image, rejected: true });
         setError(`这句话没发出去，已经放回输入框（${e.message || e}）`);
         listModels().then(setModels).catch(() => {});
         setBusy(false);
@@ -367,7 +379,7 @@ export default function Workspace() {
       const recoverable = tidRef.current && (!e.status || e.status === 400 || e.status === 409);
       // 被拒的话（说的、改的）服务器没存下来：不再显示在对话里，放回输入框，和排队没排上一样
       const lost = recoverable && e.status ? said ?? extra.edit : null;
-      if (lost) setPutBack({ thread: tidRef.current, text: lost });
+      if (lost) setPutBack({ thread: tidRef.current, text: lost, image });
       if (e.status || !recoverable) setError(lost ? `这句话没发出去，已经放回输入框（${e.message || e}）` : String(e.message || e));
       if (recoverable) {
         const rejected = e.status ? { said: null, edit: undefined, sentAt: undefined } : {};
@@ -380,12 +392,13 @@ export default function Workspace() {
   }
 
   const act = {
-    // 新对话带上选的模型（没取到列表就不带，按 Auto）；之后每句话带上深度思考开关（对话定下的模型能开关才带）
-    start: (text) => run((cb, sig) => createResearchThread(text, { model: picked, ...thinkOpts() }, cb, sig), text),
-    say: (text) => {
+    // 新对话带上选的模型（没取到列表就不带，按 Auto）；之后每句话带上深度思考开关（对话定下的模型能开关才带）。
+    // image：这句话带的图（{file, url}，见 Composer），排着的话不带图
+    start: (text, image) => run((cb, sig) => createResearchThread(text, { model: picked, ...thinkOpts(), image: image?.file }, cb, sig), text, { image }),
+    say: (text, image) => {
       const id = tidRef.current;
-      const opts = thinkOpts();
-      return run((cb, sig) => sayResearch(id, text, opts, cb, sig), text);
+      const opts = { ...thinkOpts(), image: image?.file };
+      return run((cb, sig) => sayResearch(id, text, opts, cb, sig), text, { image });
     },
     retry: () => run((cb, sig) => retryResearchThread(tidRef.current, cb, sig), null),
     // 最后一轮的旧回答先藏起来，新回答在同一轮里接着出现
@@ -469,6 +482,7 @@ export default function Workspace() {
     remove: async (id) => {
       try {
         await deleteResearchThread(id);
+        setDraft(id, ""); // 对话没了，没发出去的字也不留
         setThreads((ts) => ts && ts.filter((t) => t.thread_id !== id));
         if (id === tidRef.current) select(null, "replace");
       } catch (e) {
