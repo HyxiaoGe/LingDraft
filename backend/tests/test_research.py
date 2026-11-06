@@ -29,26 +29,32 @@ from app.graph.research.agent import CHINA_TZ, WEEKDAYS, system_prompt, turn_sta
 from app.graph.research.graph import make_serde, memory_checkpointer
 from app.graph.research.sources import cited, collect_sources, url_key
 from app.graph.research.state import Turn
+from app.identity import Identity
 from app.model_guard import ModelUnavailable
 from app.research_llm import FAKE_BLOCKED, THINKING_MS, FakeResearchPlanner, FakeToolModel, LiveResearchPlanner, fake_search_server
 from app.tools.gateway import GatewayAuthError
 from app.tools.web_mcp import WebToolsMiddleware
 
 
+OWNER = "u1"  # 和 tests/auth_helpers.USER 的 sub 一样
+
+
 class Chat:
     """像页面那样一句一句说：写进检查点 → 跑到这一轮结束。不经过排队和运行记录，等这一轮跑完拿到事件。
     运行占位用自己的一份：停止靠它传话（stop_on 在收到某个事件时点停止）。会画图的要给 tmp_path，图存在那里。"""
 
-    def __init__(self, tmp_path: Path | None = None, planner: FakeResearchPlanner | None = None, saver=None, tid: str = "t1") -> None:
+    def __init__(self, tmp_path: Path | None = None, planner: FakeResearchPlanner | None = None, saver=None, tid: str = "t1",
+                 owner: str | None = OWNER) -> None:
         self.planner = planner or FakeResearchPlanner()
         self.saver = saver or memory_checkpointer()
         self.r = ResearchRunner(planner=self.planner, checkpointer=self.saver)
         self.r.runs = LocalRunRegistry()
         self.tid = tid
+        self.owner = owner  # 对话归谁（登录用户 u1，和接口测试带的令牌一致）；None 是没归谁
         self.events: list[dict] = []
 
     def say(self, text: str, stop_on=None) -> dict:
-        self.r.accept(self.tid, text)
+        self.r.accept(self.tid, text, owner=self.owner)
         return self.run(stop_on)
 
     def regenerate(self) -> dict:
@@ -644,7 +650,7 @@ def test_rename_and_delete(tmp_path):
         c.r.delete(c.tid)
     c.r.runs.release(key)
     c.r.delete(c.tid)
-    assert c.view() == {"thread_id": c.tid, "exists": False} and c.r.list_threads() == []
+    assert c.view() == {"thread_id": c.tid, "exists": False} and c.r.list_threads(Identity(OWNER, "user")) == []
     assert c.r.runs.get(key) is None
 
 

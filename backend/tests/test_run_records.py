@@ -16,11 +16,12 @@ from app.api.research_runner import open_storage as REAL_OPEN_STORAGE  # 导入�
 from app.api.run_store import LOST, QUEUE, MemoryRunStore, PostgresRunStore
 from app.graph.research.graph import postgres_pool
 from tests.research_helpers import SIMPLE, events, flaky_runner, hold_model, last, new, say, wait_until
+from tests.auth_helpers import ADMIN, USER  # 跨所有人的运行记录只有管理员能看
 
 
 def _client(runner: ResearchRunner) -> TestClient:
     api_main.set_research_runner(runner)
-    return TestClient(api_main.app)
+    return TestClient(api_main.app, headers=USER)
 
 
 @pytest.fixture
@@ -179,7 +180,7 @@ def test_failed_run_keeps_its_error_after_retry(tmp_path, caplog):
     retry, first = _runs(http, tid)
     assert retry["kind"] == "retry" and retry["status"] == "success" and retry["turn_id"] == first["turn_id"]
     assert first["status"] == "error" and first["error"] == "假模型：网络断了"
-    assert [r["id"] for r in http.get("/api/research/runs?status=error").json()["runs"]] == [first["id"]]
+    assert [r["id"] for r in http.get("/api/research/runs?status=error", headers=ADMIN).json()["runs"]] == [first["id"]]
 
 
 def test_stopped_run_is_recorded(client, rr):
@@ -188,8 +189,8 @@ def test_stopped_run_is_recorded(client, rr):
     t = threading.Thread(target=lambda: first.setdefault("resp", client.post("/api/research/threads", json={"text": SIMPLE})))
     t.start()
     try:
-        assert wait_until(lambda: any(r["status"] == "running" for r in client.get("/api/research/runs").json()["runs"]))
-        (running,) = client.get("/api/research/runs").json()["runs"]
+        assert wait_until(lambda: any(r["status"] == "running" for r in client.get("/api/research/runs", headers=ADMIN).json()["runs"]))
+        (running,) = client.get("/api/research/runs", headers=ADMIN).json()["runs"]
         assert running["started_at"] and running["ended_at"] is None
         assert client.post(f"/api/research/threads/{running['thread_id']}/stop").status_code == 200
     finally:
@@ -219,10 +220,10 @@ def test_delete_thread_deletes_its_runs(client, rr):
 
 def test_runs_api_checks_its_input(client):
     assert client.get("/api/research/threads/nope0000/runs").status_code == 404
-    assert client.get("/api/research/runs?status=weird").status_code == 400
-    assert client.get("/api/research/runs?limit=0").status_code == 400
-    assert client.get("/api/research/runs?limit=201").status_code == 400
-    assert client.get("/api/research/runs").json() == {"runs": []}
+    assert client.get("/api/research/runs?status=weird", headers=ADMIN).status_code == 400
+    assert client.get("/api/research/runs?limit=0", headers=ADMIN).status_code == 400
+    assert client.get("/api/research/runs?limit=201", headers=ADMIN).status_code == 400
+    assert client.get("/api/research/runs", headers=ADMIN).json() == {"runs": []}
 
 
 def test_record_write_failure_does_not_break_the_run(tmp_path, caplog):
@@ -257,6 +258,6 @@ def test_no_database_fails_at_startup(monkeypatch):
     monkeypatch.setattr(config, "USE_FAKE_PLANNER", True)  # CI 没有 .env：真实模型缺密钥会先报错
     monkeypatch.setattr(research_runner_mod, "open_storage", REAL_OPEN_STORAGE)  # conftest 换掉的换回来
     monkeypatch.setattr(api_main, "_research", None)
-    with pytest.raises(RuntimeError, match="没配 LINGDRAFT_DATABASE_URL"), TestClient(api_main.app):
+    with pytest.raises(RuntimeError, match="没配 LINGDRAFT_DATABASE_URL"), TestClient(api_main.app, headers=USER):
         pass
     assert api_main._research is None

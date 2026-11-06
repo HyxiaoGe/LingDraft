@@ -100,7 +100,8 @@ def research(args) -> None:
     r = ResearchRunner(fake=args.fake)
     if args.cmd == "dream":
         print(json.dumps(r.dream(), ensure_ascii=False, indent=2))
-        print("\n".join(f"[{m['id']}] {m['text']}" for m in r.memory.items()) or "（没有记忆）")
+        books = r.memory.by_owner()
+        print("\n".join(f"{owner or '（登录以前共用的）'}\n" + "\n".join(f"  [{m['id']}] {m['text']}" for m in ms) for owner, ms in books.items()) or "（没有记忆）")
         return
     tid = getattr(args, "thread_id", None) or str(uuid.uuid4())
     if args.cmd in ("new", "say"):

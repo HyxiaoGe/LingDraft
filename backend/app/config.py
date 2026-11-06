@@ -73,10 +73,19 @@ RESEARCH_WORKERS = int(os.environ.get("LINGDRAFT_RESEARCH_WORKERS", "4"))  # 同
 DATABASE_URL = os.environ.get("LINGDRAFT_DATABASE_URL", "")
 # 前端构建出来的页面（frontend/dist）：部署时由后端一起出页面（镜像里配好了）；本机开发不配，页面由 Vite 出
 STATIC_DIR = os.environ.get("LINGDRAFT_STATIC_DIR", "")
-# 现在没有登录，所有请求都算这一档（guest / user / admin，见 model_catalog.TIERS）：本机想看游客看到的样子设成 guest。做了登录以后按登录状态定
-TIER = os.environ.get("LINGDRAFT_TIER", "user")
-if TIER not in ("guest", "user", "admin"):
-    raise RuntimeError(f"LINGDRAFT_TIER 只能是 guest、user、admin：{TIER!r}")
+# 登录（见 app/identity.py）：Sean 自己的 auth 服务（auth-service，Authorization Code + PKCE，RS256 JWT）。
+# AUTH_URL 是它的公开地址，也是 JWT 的签发者（issuer），页面跳过去登录；AUTH_CLIENT_ID 是灵稿在它那里登记的应用；
+# 没配 AUTH_CLIENT_ID 就没有登录（页面不显示登录入口，所有人都是游客）。
+# AUTH_INTERNAL_URL：后端取验签公钥（JWKS）走的地址，容器内直连 http://auth-service:8100，不配就用公开地址。
+# AUTH_REDIS_URL：auth 服务登出时在它的 Redis 里记吊销标记，这里查一下，别处退出了这里马上拒绝；不配就等 token 自己过期（24 小时）。
+AUTH_URL = os.environ.get("AUTH_URL", "https://auth.seanfield.org").rstrip("/")
+AUTH_CLIENT_ID = os.environ.get("AUTH_CLIENT_ID", "")
+AUTH_INTERNAL_URL = os.environ.get("AUTH_INTERNAL_URL", "").rstrip("/")
+AUTH_REDIS_URL = os.environ.get("AUTH_REDIS_URL", "")
+# 游客：没登录也能聊，身份是灵稿自己签的令牌（HS256），对话归这个游客，登录后并进账号。密钥不配就每次启动随机一个（重启后游客要重新领身份，对话就找不回了），
+# 部署一定要配。每个来源地址一天最多领这么多个新游客身份（防爬虫、脚本刷）
+GUEST_SECRET = os.environ.get("LINGDRAFT_GUEST_SECRET", "")
+GUEST_PER_IP_DAILY = int(os.environ.get("LINGDRAFT_GUEST_PER_IP_DAILY", "30"))
 VERSION = os.environ.get("LINGDRAFT_VERSION", "")  # 部署时的提交号（镜像构建时带进来），记进运行记录；本机为空
 
 MAX_CHECK_RETRIES = 2

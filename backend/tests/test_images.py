@@ -25,6 +25,7 @@ from app.tools.gateway import GatewayAuthError
 from app.tools.image_mcp import ImageMiddleware, ImageTool, attempts_before, gateway_target, placeholder
 from tests.research_helpers import after_tool, events, gated_runner, new, say, state, wait_until
 from tests.test_research import Chat, _answered, _kinds
+from tests.auth_helpers import USER
 
 SHOWN = prompts.render("tools.generate_image.shown")
 
@@ -353,7 +354,7 @@ def test_image_of_ignores_other_tools_and_broken_records():
 def test_image_route():
     rr = ResearchRunner(fake=True)
     api_main.set_research_runner(rr)
-    client = TestClient(api_main.app)
+    client = TestClient(api_main.app, headers=USER)
     v = new(client, "画一只猫")
     tid = v["thread_id"]
     img = next(i["image"] for t in v["turns"] for i in t["items"] if i["type"] == "step" and i.get("image"))
@@ -373,7 +374,7 @@ def test_image_shows_while_the_turn_is_still_running():
     2026-11-04 上线后 dev 上踩到：页面取图回 404，显示图片加载失败。"""
     rr, gate = gated_runner(None, after_tool("generate_image"))  # 停在画完图、写回复之前
     api_main.set_research_runner(rr)
-    client = TestClient(api_main.app)
+    client = TestClient(api_main.app, headers=USER)
     tid = new(client, "直接答：先说一句")["thread_id"]
     done: dict = {}
     t = threading.Thread(target=lambda: done.setdefault("resp", say(client, tid, "画一只猫")))
@@ -393,7 +394,7 @@ def test_image_shows_while_the_turn_is_still_running():
 def test_image_route_when_the_service_is_down(monkeypatch):
     rr = ResearchRunner(fake=True)
     api_main.set_research_runner(rr)
-    client = TestClient(api_main.app)
+    client = TestClient(api_main.app, headers=USER)
     v = new(client, "画一只猫")
     img = next(i["image"] for t in v["turns"] for i in t["items"] if i["type"] == "step" and i.get("image"))
 

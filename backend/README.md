@@ -26,7 +26,8 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 
 环境变量（开关型的认 1/0、true/false、yes/no、on/off，不分大小写，写成别的值启动时直接报错）：
 
-- 通用：`LINGDRAFT_FAKE=1` 用假模型；`LINGDRAFT_DATA_DIR`、`LINGDRAFT_OUTPUT_DIR` 改数据和产出目录；`LINGDRAFT_STATIC_DIR` 由后端出前端页面（镜像里配好了）；`LINGDRAFT_VERSION` 是部署的提交号（镜像构建时带进来）。`LINGDRAFT_TIER` 是所有请求算哪一档（还没有登录，默认 `user`；本机设成 `guest` 看游客看到的样子，见 `api.main.tier_of`）。
+- 通用：`LINGDRAFT_FAKE=1` 用假模型；`LINGDRAFT_DATA_DIR`、`LINGDRAFT_OUTPUT_DIR` 改数据和产出目录；`LINGDRAFT_STATIC_DIR` 由后端出前端页面（镜像里配好了）；`LINGDRAFT_VERSION` 是部署的提交号（镜像构建时带进来）。
+- 登录（见 `app/identity.py`）：`AUTH_URL`（Sean 的 auth 服务，默认 `https://auth.seanfield.org`，也是 JWT 的签发者）、`AUTH_CLIENT_ID`（灵稿在它那里登记的应用；不配就没有登录，所有人都是游客）、`AUTH_INTERNAL_URL`（后端取验签公钥走的内网地址，容器里是 `http://auth-service:8100`）、`AUTH_REDIS_URL`（auth 服务的 Redis，查别处退出登录的吊销标记；不配就等 token 自己过期）；`LINGDRAFT_GUEST_SECRET` 签游客令牌的密钥（部署必配，不配每次启动随机一个，重启后游客的对话找不回）、`LINGDRAFT_GUEST_PER_IP_DAILY` 一个地址一天最多领几个游客身份（默认 30）。登录页面跳到 auth 服务再回来（redirect URI 必须是 https 或 localhost），所以内网 http 地址只能当游客用。
 - 海报：`ARK_API_KEY`、`ARK_BASE_URL`、`ARK_MODEL`、`ARK_MODEL_LITE`、`ARK_IMAGE_MODEL`；`LINGDRAFT_BACKGROUND=0` 关闭背景图生成。
 - 对话的存储：`LINGDRAFT_DATABASE_URL`，必须配。
 - 对话的模型：env 里只放各家的 key 和地址，用哪些模型写在 `app/models.toml`。现在接了 DeepSeek、豆包、Kimi、Grok、千问、小米 MiMo、智谱 GLM、腾讯混元（TokenHub）、MiniMax，key 是 `DEEPSEEK_API_KEY`、`ARK_API_KEY`、`MOONSHOT_API_KEY`、`XAI_API_KEY`、`DASHSCOPE_API_KEY`、`MIMO_API_KEY`、`ZHIPUAI_API_KEY`、`HUNYUAN_API_KEY`、`MINIMAX_API_KEY`；地址默认是国内站（见 `app/config.py`），换地址设同名的 `*_BASE_URL`：

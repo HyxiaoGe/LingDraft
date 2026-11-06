@@ -8,6 +8,9 @@
 每个对话、每种方式一行：排队（queue）是这一轮结束后开新的一轮发；插话（guide）是插进正在跑的这一轮，主 agent 下一次调模型前放进对话。
 又说的接在排着的那句后面，合成一句。存进库里，服务重启也不丢。
 每行还记着用户发的时候开没开思考（输入框旁边的开关，没给是空）：合成一句时按后发的那句，发出去时带上（见 ResearchRunner._aended）。
+
+还有一张 thread_owners：每段对话归谁（见 app.identity，登录用户的 id 或游客的 guest:…），开对话时记下，列表和所有对话接口按它查。
+登录以前的老对话没有这一行（没归谁）：只有管理员看得到（2026-11-06 Sean 定，都是测试数据）。游客登录后把 TA 的对话整批改归账号（transfer）。
 """
 
 from __future__ import annotations
@@ -45,7 +48,14 @@ class RunStore(Protocol):
     async def for_thread(self, thread_id: str) -> list[dict]: ...
     async def recent(self, status: str | None, limit: int) -> list[dict]: ...
     async def sweep(self) -> int: ...  # 还在排队、在跑的记成 lost，返回条数。只在服务启动时调：单进程部署，这时它们都已经没在跑了
-    async def delete_thread(self, thread_id: str) -> None: ...  # 运行记录和排着的话一起删
+    async def delete_thread(self, thread_id: str) -> None: ...  # 运行记录、排着的话、归谁一起删
+
+    # 对话归谁（见模块说明）
+    async def claim(self, thread_id: str, owner: str) -> None: ...  # 记下归谁；已经记过的不改
+    async def owner_of(self, thread_id: str) -> str | None: ...  # 没记过（登录以前的老对话）是 None
+    async def threads_of(self, owner: str) -> list[str]: ...  # 这个人的所有对话（线程 id）
+    async def owned(self) -> set[str]: ...  # 记过归谁的所有线程 id（列管理员能看的没归谁的对话时，拿全部线程减掉它）
+    async def transfer(self, source: str, target: str) -> int: ...  # source 的对话全改归 target，返回改了几段
 
     # 排着的话：{"text", "created_at", "updated_at"}
     # 接在排着的那句后面（front：放到前面，是取出来又放回去的，比排着的那句早），没有就新建
@@ -72,6 +82,7 @@ class MemoryRunStore:
     def __init__(self) -> None:
         self._rows: dict[str, dict] = {}  # 按写入的先后
         self._pending: dict[tuple[str, str], dict] = {}
+        self._owners: dict[str, str] = {}  # 线程 id → 归谁
 
     async def create(self, run_id: str, thread_id: str, kind: str, turn_id: str | None, version: str | None) -> None:
         self._rows[run_id] = dict.fromkeys(FIELDS) | {"id": run_id, "thread_id": thread_id, "kind": kind, "turn_id": turn_id,
@@ -104,6 +115,25 @@ class MemoryRunStore:
     async def delete_thread(self, thread_id: str) -> None:
         self._rows = {k: r for k, r in self._rows.items() if r["thread_id"] != thread_id}
         self._pending = {k: r for k, r in self._pending.items() if k[0] != thread_id}
+        self._owners.pop(thread_id, None)
+
+    async def claim(self, thread_id: str, owner: str) -> None:
+        self._owners.setdefault(thread_id, owner)
+
+    async def owner_of(self, thread_id: str) -> str | None:
+        return self._owners.get(thread_id)
+
+    async def threads_of(self, owner: str) -> list[str]:
+        return [t for t, o in self._owners.items() if o == owner]
+
+    async def owned(self) -> set[str]:
+        return set(self._owners)
+
+    async def transfer(self, source: str, target: str) -> int:
+        moved = [t for t, o in self._owners.items() if o == source]
+        for t in moved:
+            self._owners[t] = target
+        return len(moved)
 
     async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict:
         now = _iso(_now())
@@ -137,6 +167,8 @@ _POSTGRES_DDL = (
         thread_id text NOT NULL, mode text NOT NULL, text text NOT NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
         thinking boolean, PRIMARY KEY (thread_id, mode))""",
     "ALTER TABLE pending_messages ADD COLUMN IF NOT EXISTS thinking boolean",  # 2026-11-05 加的，之前建好的表补上
+    "CREATE TABLE IF NOT EXISTS thread_owners (thread_id text PRIMARY KEY, owner text NOT NULL, created_at timestamptz NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS thread_owners_owner_idx ON thread_owners (owner)",
 )
 
 
@@ -191,6 +223,24 @@ class PostgresRunStore:
     async def delete_thread(self, thread_id: str) -> None:
         await self._exec("DELETE FROM runs WHERE thread_id = %s", (thread_id,))
         await self._exec("DELETE FROM pending_messages WHERE thread_id = %s", (thread_id,))
+        await self._exec("DELETE FROM thread_owners WHERE thread_id = %s", (thread_id,))
+
+    async def claim(self, thread_id: str, owner: str) -> None:
+        await self._exec("INSERT INTO thread_owners (thread_id, owner, created_at) VALUES (%s, %s, %s) ON CONFLICT (thread_id) DO NOTHING",
+                         (thread_id, owner, _now()))
+
+    async def owner_of(self, thread_id: str) -> str | None:
+        rows = await self._exec("SELECT owner FROM thread_owners WHERE thread_id = %s", (thread_id,))
+        return rows[0]["owner"] if rows else None
+
+    async def threads_of(self, owner: str) -> list[str]:
+        return [r["thread_id"] for r in await self._exec("SELECT thread_id FROM thread_owners WHERE owner = %s ORDER BY created_at", (owner,))]
+
+    async def owned(self) -> set[str]:
+        return {r["thread_id"] for r in await self._exec("SELECT thread_id FROM thread_owners")}
+
+    async def transfer(self, source: str, target: str) -> int:
+        return len(await self._exec("UPDATE thread_owners SET owner = %s WHERE owner = %s RETURNING thread_id", (target, source)))
 
     async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict:
         # 思考开关按后发的那句：放到前面的（取出来又放回去的）比排着的早

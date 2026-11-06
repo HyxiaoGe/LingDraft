@@ -34,7 +34,10 @@ from app.model_guard import ContentBlocked
 log = logging.getLogger(__name__)
 CHINA_TZ = timezone(timedelta(hours=8))
 
-ITEMS = ("memory", "items")  # 一条记忆一行，键是记忆的 id：{"text", "created_at", "updated_at", "thread_id"（最后从哪段对话改的）}
+# 记忆按人分（2026-11-06 Sean 定，之前没有登录是所有人共用一份）：每个人的记忆在 ITEMS + (owner,) 下，一条一行，键是记忆的 id：
+# {"text", "created_at", "updated_at", "thread_id"（最后从哪段对话改的）}。owner 是对话归谁（见 app.identity：登录用户的 id）；
+# 游客的对话不整理（登录后并进账号再整理）。登录以前共用的那几条还留在 ITEMS 这一层，没有人的提示词里有它们
+ITEMS = ("memory", "items")
 THREADS = ("memory", "threads")  # 每段对话整理过哪几轮，键是线程 id：{"turns": {轮 id: 那一轮内容的指纹}}
 DREAMS = ("memory", "dreams")  # 键 LAST：最近一次整理（见 MemoryBook.dream 的返回值）
 LAST = "last"
@@ -173,19 +176,26 @@ class MemoryBook:
     # ---- 读 ----
     # 同步的给整理记忆的后台线程和记忆页用，a 开头的给对话的事件循环里用（agent 每次调模型都取一次，见 agent.memory_text）
 
-    def items(self) -> list[dict]:
-        """全部记忆，先记下的在前：{"id", "text", "created_at", "updated_at", "thread_id"}。"""
-        return _in_order(self.store.search(ITEMS, limit=MAX_ITEMS))
+    def items(self, owner: str) -> list[dict]:
+        """这个人的全部记忆，先记下的在前：{"id", "text", "created_at", "updated_at", "thread_id"}。"""
+        return _in_order(self.store.search(ITEMS + (owner,), limit=MAX_ITEMS))
 
-    async def aitems(self) -> list[dict]:
-        return _in_order(await self.store.asearch(ITEMS, limit=MAX_ITEMS))
+    async def aitems(self, owner: str) -> list[dict]:
+        return _in_order(await self.store.asearch(ITEMS + (owner,), limit=MAX_ITEMS))
 
-    def prompt_text(self) -> str:
+    def by_owner(self) -> dict[str, list[dict]]:
+        """所有人的记忆，按人分（命令行看用）。登录以前共用的那几条在键 "" 下。"""
+        out: dict[str, list[dict]] = {}
+        for r in self.store.search(ITEMS, limit=MAX_ITEMS * 10):
+            out.setdefault(r.namespace[len(ITEMS)] if len(r.namespace) > len(ITEMS) else "", []).append(r)
+        return {k: _in_order(v) for k, v in out.items()}
+
+    def prompt_text(self, owner: str) -> str:
         """放进系统提示词的那份：一条一行。没有记忆是空串（系统提示词里就没有这一段）。"""
-        return _prompt_lines(self.items())
+        return _prompt_lines(self.items(owner))
 
-    async def aprompt_text(self) -> str:
-        return _prompt_lines(await self.aitems())
+    async def aprompt_text(self, owner: str) -> str:
+        return _prompt_lines(await self.aitems(owner))
 
     def last_dream(self) -> dict | None:
         item = self.store.get(DREAMS, LAST)
@@ -201,22 +211,23 @@ class MemoryBook:
 
     # ---- 写 ----
 
-    def apply(self, ops: list[Op], thread_id: str) -> dict[str, int]:
-        """照模型给的增删改写进去。改、删不存在的 id，或者没有文字的增、改，跳过。"""
-        known = {m["id"]: m for m in self.items()}
+    def apply(self, ops: list[Op], thread_id: str, owner: str) -> dict[str, int]:
+        """照模型给的增删改写进 owner 的记忆。改、删不存在的 id，或者没有文字的增、改，跳过。"""
+        ns = ITEMS + (owner,)
+        known = {m["id"]: m for m in self.items(owner)}
         n = {"added": 0, "updated": 0, "deleted": 0, "skipped": 0}
         for op in ops:
             text = op.text.strip()
             at = _now()
             if op.action == "add" and text:
-                self.store.put(ITEMS, uuid.uuid4().hex[:8], {"text": text, "created_at": at, "updated_at": at, "thread_id": thread_id})
+                self.store.put(ns, uuid.uuid4().hex[:8], {"text": text, "created_at": at, "updated_at": at, "thread_id": thread_id})
                 n["added"] += 1
             elif op.action == "update" and text and op.id in known:
                 kept = {k: v for k, v in known[op.id].items() if k != "id"}
-                self.store.put(ITEMS, op.id, kept | {"text": text, "updated_at": at, "thread_id": thread_id})
+                self.store.put(ns, op.id, kept | {"text": text, "updated_at": at, "thread_id": thread_id})
                 n["updated"] += 1
             elif op.action == "delete" and op.id in known:
-                self.store.delete(ITEMS, op.id)
+                self.store.delete(ns, op.id)
                 known.pop(op.id)
                 n["deleted"] += 1
             else:
@@ -226,17 +237,18 @@ class MemoryBook:
 
     # ---- 整理 ----
 
-    def pending(self, threads: Iterable[tuple[str, dict]]) -> list[Conversation]:
-        """上次整理以后有新的几轮的对话，按新的几轮最早结束的时间排。threads 是（线程 id, 检查点里的 state）。"""
-        convs = [c for tid, values in threads if values and (c := conversation_of(tid, values, self._seen(tid)))]
-        return sorted(convs, key=lambda c: c.first or datetime.min.replace(tzinfo=UTC))
+    def pending(self, threads: Iterable[tuple[str, dict, str]]) -> list[tuple[Conversation, str]]:
+        """上次整理以后有新的几轮的对话（和各归谁），按新的几轮最早结束的时间排。threads 是（线程 id, 检查点里的 state, 归谁）。"""
+        convs = [(c, owner) for tid, values, owner in threads if values and (c := conversation_of(tid, values, self._seen(tid)))]
+        return sorted(convs, key=lambda x: x[0].first or datetime.min.replace(tzinfo=UTC))
 
-    def prompt_for(self, conv: Conversation, today: str) -> str:
-        memories = [{"id": m["id"], "text": m["text"]} for m in self.items()]
+    def prompt_for(self, conv: Conversation, today: str, owner: str) -> str:
+        memories = [{"id": m["id"], "text": m["text"]} for m in self.items(owner)]
         return prompts.render("dream.prompt", today=today, memories=memories, title=conv.title, earlier=conv.earlier, new=conv.new)
 
-    def dream(self, threads: Iterable[tuple[str, dict]], model: Callable[[str], str]) -> dict | None:
-        """整理一次：一段一段交给 model（提示词 → json 文字），照它的结果改记忆，记下这段整理过哪几轮。
+    def dream(self, threads: Iterable[tuple[str, dict, str]], model: Callable[[str], str]) -> dict | None:
+        """整理一次：一段一段交给 model（提示词 → json 文字），照它的结果改这段对话归的那个人的记忆，记下这段整理过哪几轮。
+        threads 是（线程 id, state, 归谁），没归谁的、游客的不要传进来（见 ResearchRunner.dream）。
         一段出错跳过（不记整理过，下次再来），接着整理下一段；被内容审核拦下的记成整理过，不然每天都会再拦一次。
         已经有一次在整理，返回 None。"""
         if not self._dreaming.acquire(blocking=False):
@@ -246,9 +258,9 @@ class MemoryBook:
                                    "added": 0, "updated": 0, "deleted": 0, "skipped": 0}
             self.store.put(DREAMS, LAST, run)
             today = datetime.now(CHINA_TZ).date().isoformat()
-            for conv in self.pending(threads):
+            for conv, owner in self.pending(threads):
                 try:
-                    ops = self._ask(model, self.prompt_for(conv, today))
+                    ops = self._ask(model, self.prompt_for(conv, today, owner))
                 except ContentBlocked:
                     log.warning("整理记忆：对话 %s 被内容审核拦下，记成整理过", conv.thread_id)
                     ops = []
@@ -256,7 +268,7 @@ class MemoryBook:
                     log.exception("整理记忆：对话 %s 没整理成，下次再来", conv.thread_id)
                     run["failed"] += 1
                     continue
-                for k, v in self.apply(ops, conv.thread_id).items():
+                for k, v in self.apply(ops, conv.thread_id, owner).items():
                     run[k] += v
                 self.store.put(THREADS, conv.thread_id, {"turns": conv.seen})
                 run["threads"] += 1

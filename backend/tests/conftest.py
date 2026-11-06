@@ -22,10 +22,21 @@ REQUEST = "某品牌蓝牙耳机黑五预热，5 折，11.20 到 11.27"
 # 设了 LINGDRAFT_TEST_DATABASE_URL 时存这个库，整套测试在 Postgres 上跑（每个测试前清空；别指向有用的库）
 config.DATABASE_URL = os.environ.get("LINGDRAFT_TEST_DATABASE_URL", "")
 config.DREAM_ENABLED = False  # 不开整理记忆的定时任务（它会建真实模型的运行器）
+config.AUTH_CLIENT_ID = ""  # 本机 .env 里配的登录测试不用：认人的在 _auth 里换成假 auth 的
 # 本机 .env 里配了的新几家的 key 测试不用（和 CI 一样只有 DeepSeek、豆包的设置），要哪家的测试自己设
 for _spec in COMPAT.values():
     if _spec.key_name != "ARK_API_KEY":
         setattr(config, _spec.key_name, None)
+
+
+@pytest.fixture(autouse=True)
+def _auth():
+    """每个测试一个新的认人的（见 tests/auth_helpers）：登录用假 auth 的钥匙验，游客令牌用固定密钥，领游客身份的计数也重来。"""
+    from app.api import main as api_main
+    from tests import auth_helpers
+    api_main.set_authenticator(auth_helpers.make_authenticator())
+    yield
+    api_main.set_authenticator(None)
 
 
 @pytest.fixture(autouse=True)
