@@ -549,8 +549,8 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
         })}
       </nav>
       <div className="ws-foot">
-        <CreditsFoot credits={credits} guest={!auth.me} onLogin={auth.login ? onLogin : null} />
-        <span className="ws-foot-user"><UserFoot auth={auth} onLogin={onLogin} credits={credits} onOpen={onCredits} memory={memory} onMemory={onMemory} /></span>
+        <CreditsFoot credits={credits} guest={!auth.me} onLogin={auth.login ? onLogin : null} onOpen={onCredits} />
+        <span className="ws-foot-user"><UserFoot auth={auth} onLogin={onLogin} memory={memory} onMemory={onMemory} /></span>
       </div>
       {menu && (
         <RowMenu key={menu.t.thread_id} t={menu.t} rect={menu.rect} onClose={() => setMenu(null)}
