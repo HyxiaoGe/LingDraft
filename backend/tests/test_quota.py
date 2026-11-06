@@ -107,6 +107,7 @@ def test_api_refuses_to_start_a_turn_when_exhausted_and_reports_credits():
     api_main.set_research_runner(ResearchRunner(fake=True))
     r = api_main.research()
     r.quota.limits = Limits(10, 100, 300, 50)
+    r.quota.usage = MemoryUsage()  # 这里测的是接口的行为，账直接放进内存的（Postgres 的算法见下面那个测试）
     g = guest_token()
     c = TestClient(api_main.app, headers=bearer(g))
     assert c.get("/api/credits").json() == {"unlimited": False, "warn_at": 0.8, "windows": [
@@ -172,7 +173,8 @@ def test_postgres_usage_counts_like_the_memory_one():
     assert aio.run(usage.spent_by_guests(now - timedelta(hours=1))) == pytest.approx(0.01)
     assert aio.run(usage.spent("nobody", now - timedelta(days=3))) == 0
     assert aio.run(usage.last_reset("u1")) is None
-    aio.run(usage.reset("u1", "test", now))
-    assert aio.run(usage.last_reset("u1")) == now
+    later = now + timedelta(seconds=1)  # 重置在记账之后
+    aio.run(usage.reset("u1", "test", later))
+    assert aio.run(usage.last_reset("u1")) == later
     q = Quota(usage, LIMITS, clock=lambda: now + timedelta(minutes=1))
     assert windows(q, U1)[0].used == 0  # 重置以后：重置之前的都不算了
