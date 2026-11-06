@@ -105,7 +105,7 @@ def test_read_gets_the_id_of_the_searched_url_and_failures_are_explained():
     miss = aio.run(_through(read, _call(READ_TOOL, "c3", url=gone["url"]), [found]))
     assert miss.status == "error" and miss.content.startswith("The page does not exist")
     assert miss.artifact == {"error": {"code": "page_not_found", "retryable": False, "status": 404}}
-    assert history.step_of(_call(READ_TOOL, "c3", url=gone["url"]), miss).message == "网页不存在（HTTP 404）"
+    assert history.step_of(_call(READ_TOOL, "c3", url=gone["url"]), miss).message == "网页不存在"  # 状态码（404）不上页面
 
 
 def test_service_side_errors_keep_the_service_text():
@@ -118,16 +118,44 @@ def test_service_side_errors_keep_the_service_text():
 
 
 def test_old_stored_results_still_show():
-    """11-05 以前存下的搜索、读页结果（一串条目；失败是中文 message 的 JSON）照常显示。"""
+    """11-05 以前存下的搜索、读页结果（一串条目；失败是带 kind、message 的 JSON）照常显示；原因按 kind 对表，message 里的 HTTP 状态码不上页面。"""
     old = ToolMessage(content=json.dumps([{"id": "s111111", "url": "https://a.test", "title": "A", "description": "d", "content": "c"}]),
                       name=SEARCH_TOOL, tool_call_id="c1")
     assert history.step_of(_call(SEARCH_TOOL, query="q"), old).source_ids == ["s111111"]
     failed = ToolMessage(content=json.dumps({"ok": False, "kind": "http_502", "message": "搜索服务出错：HTTP 502"}), name=SEARCH_TOOL,
                          tool_call_id="c1", status="error")
-    assert history.step_of(_call(SEARCH_TOOL, query="q"), failed).message == "搜索服务出错：HTTP 502"
+    step = history.step_of(_call(SEARCH_TOOL, query="q"), failed)
+    assert not step.ok and step.message == ""  # 页面上是“没搜成：出错了”
     unread = ToolMessage(content=json.dumps({"ok": False, "url": "https://a.test", "kind": "page_not_found", "message": "网页不存在"}),
                          name=READ_TOOL, tool_call_id="c2")
     assert history.step_of(_call(READ_TOOL, "c2", url="https://a.test"), unread).message == "网页不存在"
+
+
+@pytest.mark.parametrize("artifact,content,want", [
+    ({"error": {"code": "page_not_found", "retryable": False, "status": 404}}, "The page does not exist.", "网页不存在"),  # 表里有：中文，不带状态码
+    ({"error": {"code": "brand_new_code", "retryable": True, "status": 502}}, "Upstream said: boom", "没有读到正文"),  # 表里没有：不露码、不露英文
+    ({"error": {"code": "brand_new_code", "retryable": True}}, "Upstream said: boom", "没有读到正文"),
+    (None, "Error: Traceback ... KeyError('x')", "没有读到正文"),  # 不是结构化的结果：不露原文
+    (None, json.dumps({"ok": False, "kind": "content_blocked"}), history.BLOCKED_NOTE),  # 内容审核：我们自己的说明
+])
+def test_read_failure_shows_only_our_own_words(artifact, content, want):
+    """第 18 条（11-07 Sean 定，照 #79 的做法）：过程里没做成的原因只显示我们自己写的说法，其余换通用说法，HTTP 码和英文原文都不露。"""
+    out = ToolMessage(content=content, name=READ_TOOL, tool_call_id="c1", status="error", artifact=artifact)
+    step = history.step_of(_call(READ_TOOL, url="https://a.test"), out)
+    assert not step.ok and step.message == want
+    assert "HTTP" not in step.message and not any(w in step.message for w in ("Upstream", "Traceback", "brand_new_code"))
+
+
+def test_search_failure_with_unknown_code_or_raw_text_falls_back_to_generic():
+    call = _call(SEARCH_TOOL, query="q")
+    for out in (ToolMessage(content="Upstream exploded", name=SEARCH_TOOL, tool_call_id="c1", status="error",
+                            artifact={"error": {"code": "brand_new_code", "retryable": True, "status": 503}}),
+                ToolMessage(content="Error: something in English", name=SEARCH_TOOL, tool_call_id="c1", status="error")):
+        step = history.step_of(call, out)
+        assert not step.ok and step.message == ""  # 页面上是“没搜成：出错了”
+    limited = ToolMessage(content="Rate limited", name=SEARCH_TOOL, tool_call_id="c1", status="error",
+                          artifact={"error": {"code": "rate_limited", "retryable": True, "status": 429}})
+    assert history.step_of(call, limited).message == history.SEARCH_FAILURES["rate_limited"]
 
 
 # ---- 经网关调（HTTP） ----
