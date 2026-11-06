@@ -2,6 +2,7 @@
 // 现在只能看，不能改、删（2026-11-03 Sean 定先展示）。记忆按账号分（2026-11-06）：游客的对话不整理，登录后才有。
 import { useEffect, useState } from "react";
 import { getMemory } from "./api.js";
+import { errorText } from "./errors.js";
 import { HeadBar } from "./nav.jsx";
 import { stamp } from "./research.js";
 
@@ -21,7 +22,7 @@ export function MemoryPage({ auth, onLogin }) {
   const [error, setError] = useState(null);
   const load = () => {
     setError(null);
-    getMemory().then(setData).catch((e) => setError(e.message || String(e)));
+    getMemory().then(setData).catch((e) => setError(errorText("没取到记忆", e, "可以再试一次")));
   };
   useEffect(load, []);
   const now = Date.now();
@@ -42,7 +43,7 @@ export function MemoryPage({ auth, onLogin }) {
           )}
           {error && (
             <div className="mem-status">
-              没取到记忆：{error} <button className="ws-btn sm" onClick={load}>再试一次</button>
+              {error} <button className="ws-btn sm" onClick={load}>再试一次</button>
             </div>
           )}
           {!error && !data && <div className="mem-status">正在取记忆…</div>}

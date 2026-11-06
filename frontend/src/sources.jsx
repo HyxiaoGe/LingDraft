@@ -1,5 +1,6 @@
 // 来源的显示：正文里的引用角标（悬停看来源卡），和每条回答下面这条回答用到的来源。
-import React, { useEffect, useRef, useState } from "react";
+// 也放着能收起的内容共用的 Fold：收起来不卸掉，浏览器的查找搜得到
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { IconChevron, IconExternal } from "./icons.jsx";
 import { domain, sourceName } from "./research.js";
@@ -114,7 +115,44 @@ export function Mark({ n, s }) {
   );
 }
 
-// 这条回答用到的来源：默认收成一行（几个网站图标加条数），点开按在回答里第一次出现的先后列出，编号和正文里的角标一样
+// ---- 收起来的内容 ----
+
+// 收起时不从页面上拿掉，标 hidden="until-found"：看不见，浏览器的页内查找（Ctrl+F）还搜得到；搜到时浏览器先去掉 hidden 再发 beforematch，
+// 这里跟着记成展开（onFound）。不认 until-found 的浏览器当普通 hidden，和以前收起一样。
+// React 18 不认 hidden 的这个字符串值，每次渲染用 ref 自己设（浏览器搜到时去掉了、状态没跟上，下一次渲染也能对回来）。
+// 外面这层不带样式：hidden 时浏览器给它 content-visibility: hidden，高度收成 0，可它自己的内边距、边框还会占地方，所以样式都放在里面那层
+export function Fold({ open, onFound, children }) {
+  const ref = useRef(null);
+  const found = useRef(onFound);
+  found.current = onFound;
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (open) el.removeAttribute("hidden");
+    else if (el.getAttribute("hidden") !== "until-found") el.setAttribute("hidden", "until-found");
+  });
+  useEffect(() => {
+    const el = ref.current;
+    const on = () => found.current?.();
+    el.addEventListener("beforematch", on);
+    return () => el.removeEventListener("beforematch", on);
+  }, []);
+  return <div ref={ref} className="ws-fold">{children}</div>;
+}
+
+// 能收起的一块展开没展开。用户点过的、查找时搜到的按用户的来（chosen）；没点过的：auto（比如这一轮正在跑）就展开，
+// 这次打开页面以后跑过的（ran）跑完也不自动收；重新打开的对话里收着。
+// 记在模块里，不放组件状态：正在发的那一轮存下来以后换了 id、整块重新挂上，展开的不会自己收回去
+const chosen = new Map();
+const ran = new Set();
+export function useFoldOpen(key, auto) {
+  const [, bump] = useState(0);
+  if (auto) ran.add(key);
+  const open = chosen.has(key) ? chosen.get(key) : auto || ran.has(key);
+  const set = (v) => { chosen.set(key, v); bump((n) => n + 1); };
+  return [open, () => set(!open), () => set(true)];
+}
+
+// 这条回答用到的来源：默认收成一行（几个网站图标加条数），点开按在回答里第一次出现的先后列出，编号和正文里的角标一样；收着时列表也在页面里，查找搜得到
 export function AnswerSources({ nums, sources }) {
   const [open, setOpen] = useState(false);
   const used = Object.entries(nums).map(([sid, n]) => [n, sources?.[sid]]).filter(([, s]) => s);
@@ -127,15 +165,17 @@ export function AnswerSources({ nums, sources }) {
         {used.length} 个来源
         <IconChevron size={13} className={"chev" + (open ? " up" : "")} />
       </button>
-      {open && <ol aria-label="这条回答用到的来源">
-        {used.map(([n, s]) => (
-          <li key={s.id}>
-            <span className="lb">{n}</span>
-            <a href={s.url} target="_blank" rel="noreferrer" title={s.title ? `${s.title}\n${s.url}` : s.url}>{sourceName(s)}</a>
-            <span className="meta"><Favicon url={s.url} />{domain(s.url)}{s.published_at ? ` · ${s.published_at.slice(0, 10)}` : ""}</span>
-          </li>
-        ))}
-      </ol>}
+      <Fold open={open} onFound={() => setOpen(true)}>
+        <ol aria-label="这条回答用到的来源">
+          {used.map(([n, s]) => (
+            <li key={s.id}>
+              <span className="lb">{n}</span>
+              <a href={s.url} target="_blank" rel="noreferrer" title={s.title ? `${s.title}\n${s.url}` : s.url}>{sourceName(s)}</a>
+              <span className="meta"><Favicon url={s.url} />{domain(s.url)}{s.published_at ? ` · ${s.published_at.slice(0, 10)}` : ""}</span>
+            </li>
+          ))}
+        </ol>
+      </Fold>
     </div>
   );
 }
