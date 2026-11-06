@@ -1,9 +1,11 @@
 """画图：agent-tools 的 MCP 工具 generate_image（app.tools.image_mcp）。改图只认这段对话的图、每轮上限、失败的说法、
-经网关调（401/429/连不上）、停止、删对话和重新回答时删图、取图接口、以前的图。
+经网关调（401/429/连不上）、停止、删对话和重新回答时删图、取图接口、以前的图、用户发的图。
 服务用进程内的假 image-service（research_llm.FakeImageService）；经 HTTP 的用 ASGI 模拟网关。只用假模型。"""
 
 from __future__ import annotations
 
+import io
+import json
 import threading
 import time
 import uuid
@@ -14,6 +16,7 @@ import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from PIL import Image
 
 from app import aio
 from app.api import main as api_main
@@ -21,9 +24,9 @@ from app.api.research_runner import ResearchRunner
 from app.graph.research import history, prompts
 from app.research_llm import FAKE_IMAGE_FILTERED, FakeImageService, FakeResearchPlanner, FakeToolModel
 from app.tools import image_mcp
-from app.tools.gateway import GatewayAuthError
+from app.tools.gateway import MAX_UPLOAD_BYTES, GatewayAuthError
 from app.tools.image_mcp import ImageMiddleware, ImageTool, attempts_before, gateway_target, placeholder
-from tests.research_helpers import after_tool, events, gated_runner, new, say, state, wait_until
+from tests.research_helpers import after_tool, events, gated_runner, last, new, say, state, wait_until
 from tests.test_research import Chat, _answered, _kinds
 from tests.auth_helpers import USER
 
@@ -339,7 +342,7 @@ def test_old_images_say_they_are_gone():
                                                                                        "source_url": "http://image-service/static/images/a.png"})
     step = history.step_of(call, old)
     assert step.ok and step.image is not None and step.message == history.IMAGE_GONE and step.aspect_ratio == "16:9"
-    assert history.stored_images([old]) == [] and history.usage_of([old]).images == 1
+    assert history.owned_image_ids([old]) == [] and history.usage_of([old]).images == 1
 
 
 def test_image_of_ignores_other_tools_and_broken_records():
@@ -404,3 +407,116 @@ def test_image_route_when_the_service_is_down(monkeypatch):
     monkeypatch.setattr(rr.planner.images, "handle", down)
     rr.images = rr.planner.images.gateway_client()  # 新的客户端用换掉的处理
     assert client.get(f"/api/research/threads/{v['thread_id']}/images/{img['id']}").status_code == 502
+
+
+# ---- 用户发的图：传进服务、记在那句话上、能改、跟着对话删（2026-11-06 Sean 定只做改图、照着画） ----
+
+
+def _photo(width: int = 64, height: int = 48, fmt: str = "PNG") -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), "white").save(buf, fmt)
+    return buf.getvalue()
+
+
+def _send(client, path: str, text: str, data: bytes, **body):
+    return client.post(path, data={"body": json.dumps({"text": text, **body})}, files={"image": ("photo.png", data, "image/png")})
+
+
+def _api() -> tuple[ResearchRunner, TestClient]:
+    rr = ResearchRunner(fake=True)
+    api_main.set_research_runner(rr)
+    return rr, TestClient(api_main.app, headers=USER)
+
+
+def test_attached_image_is_kept_on_the_message_and_can_be_edited():
+    rr, client = _api()
+    service = rr.planner.images
+    data = _photo(64, 48)
+    v = last(events(_send(client, "/api/research/threads", "改图：换成水彩画", data)), "state")
+    tid, (turn,) = v["thread_id"], v["turns"]
+    (uid,) = service.uploaded
+    assert turn["user"] == "改图：换成水彩画"  # 给模型的说明不在存着的话里
+    assert turn["image"] == {"id": uid, "mime_type": "image/png", "width": 64, "height": 48}
+    (step,) = _image_steps(turn)
+    assert step["ok"] and step["edit"] and step["image"]["edited_from"] == uid
+    assert service.calls[0]["source_image_id"] == uid  # 模型从说明里拿到了编号，改图认这张
+    r = client.get(f"/api/research/threads/{tid}/images/{uid}")
+    assert r.status_code == 200 and r.content == data
+    # 接着说也能带图；没带图的那几轮 image 是 None
+    v = last(events(_send(client, f"/api/research/threads/{tid}/messages", "直接答：收到", _photo(30, 40, "JPEG"))), "state")
+    second = v["turns"][1]["image"]
+    assert second["id"] == service.uploaded[1] and (second["mime_type"], second["width"], second["height"]) == ("image/jpeg", 30, 40)
+    v = last(events(say(client, tid, "直接答：好的")), "state")
+    assert v["turns"][2]["image"] is None
+
+
+def test_edit_and_regenerate_keep_the_attached_image_and_delete_removes_it():
+    rr, client = _api()
+    service = rr.planner.images
+    tid = last(events(_send(client, "/api/research/threads", "直接答：看看", _photo())), "state")["thread_id"]
+    (uid,) = service.uploaded
+    v = last(events(client.post(f"/api/research/threads/{tid}/regenerate")), "state")
+    assert v["turns"][0]["image"]["id"] == uid
+    v = last(events(client.post(f"/api/research/threads/{tid}/edit", json={"text": "改图：加一顶帽子"})), "state")
+    (turn,) = v["turns"]
+    assert turn["user"] == "改图：加一顶帽子" and turn["image"]["id"] == uid  # 只改了字，图留着
+    drawn = _image_steps(turn)[0]["image"]
+    assert drawn["edited_from"] == uid
+    last(events(client.post(f"/api/research/threads/{tid}/regenerate")), "state")
+    assert drawn["id"] in service.deleted and uid not in service.deleted  # 重新回答：画的那张不要了，发的那张留着
+    assert client.delete(f"/api/research/threads/{tid}").status_code == 200
+    assert uid in service.deleted and service.made == {}
+
+
+def test_images_the_service_does_not_take_never_start_a_turn():
+    rr, client = _api()
+    service = rr.planner.images
+    big = _photo() + b"\0" * MAX_UPLOAD_BYTES
+    r = _send(client, "/api/research/threads", "改图", big)
+    assert (r.status_code, r.json()["detail"]) == (413, "图片不能超过 4 MB")
+    r = _send(client, "/api/research/threads", "改图", b"GIF89a" + b"\0" * 20)
+    assert (r.status_code, r.json()["detail"]) == (415, "只支持 PNG、JPEG、WebP 图片")
+    r = _send(client, "/api/research/threads", "   ", _photo())
+    assert r.status_code == 400  # 只带图不说话：不传
+    r = client.post("/api/research/threads", data={"body": "{"}, files={"image": ("a.png", _photo(), "image/png")})
+    assert r.status_code == 422
+    assert service.uploaded == [] and client.get("/api/research/threads").json()["threads"] == []
+    # 传上去了、这一轮却没开始（模型不对）：删掉
+    r = _send(client, "/api/research/threads", "改图", _photo(), model="no-such-model")
+    assert r.status_code == 400 and len(service.uploaded) == 1 and service.deleted == service.uploaded
+
+
+def test_image_sent_while_answering_is_not_kept():
+    rr, gate = gated_runner(None, lambda messages: True)
+    api_main.set_research_runner(rr)
+    client = TestClient(api_main.app, headers=USER)
+    done: dict = {}
+    t = threading.Thread(target=lambda: done.setdefault("resp", client.post("/api/research/threads", json={"text": "直接答：先说一句"})))
+    t.start()
+    try:
+        assert wait_until(lambda: (ts := client.get("/api/research/threads").json()["threads"]) and ts[0]["status"] == "running")
+        tid = client.get("/api/research/threads").json()["threads"][0]["thread_id"]
+        r = _send(client, f"/api/research/threads/{tid}/messages", "改图", _photo())
+        assert r.status_code == 409
+        service = rr.planner.images
+        assert len(service.uploaded) == 1 and service.deleted == service.uploaded
+    finally:
+        gate.set()
+        t.join(30)
+    events(done["resp"])
+
+
+def test_attachment_note_goes_to_the_model_only():
+    iid = str(uuid.uuid4())
+    m = HumanMessage(content="改成水彩", id="h1",
+                     additional_kwargs={history.ATTACHED: {"id": iid, "mime_type": "image/png", "width": 64, "height": 48}})
+    noted = image_mcp.with_attachment_note(m)
+    assert noted.content == "改成水彩\n\n" + prompts.render("tools.generate_image.attached", id=iid, width=64, height=48)
+    assert f"Image id: {iid} (64x48)" in noted.content and m.content == "改成水彩"
+    plain = HumanMessage(content="你好")
+    broken = HumanMessage(content="x", additional_kwargs={history.ATTACHED: {"id": "x"}})
+    assert image_mcp.with_attachment_note(plain) is plain and image_mcp.with_attachment_note(broken) is broken
+    drawn = {**OLD_IMAGE, "id": str(uuid.uuid4()), "file": None}
+    made = ToolMessage(content="", tool_call_id="c1", name="generate_image", artifact={"attempted": True, "image": drawn})
+    gone = ToolMessage(content="", tool_call_id="c2", name="generate_image", artifact={"attempted": True, "image": OLD_IMAGE})
+    assert history.owned_image_ids([m, made, gone, plain, broken]) == [iid, drawn["id"]]

@@ -55,6 +55,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - `GET /api/models`：新对话能选的模型（`{id, name, description, thinking, model}`，Auto 在第一个；`model` 是主 agent 用的“厂商:模型”，页面按它给每轮找名字）。
   - `POST`：开一段新对话，可以带 `model`（选项的 id，不给是 Auto），没有这个、停用了的返回 400。
   - `/{id}/messages`：接着说。
+  - 新对话和接着说可以带一张图（只拿来改图、照着画，模型看不到图，不做看图问答）：请求改成 `multipart/form-data`，`body` 字段是同样的 json，`image` 字段是图。图先传进 image-service 再开始这一轮：超过 4 MB 返回 413，不是 PNG / JPEG / WebP 返回 415，传不上去返回 502；这一轮没开始（409、模型不对）就把传上去的删掉。排着的话、插进这一轮的话不能带图。
   - `/{id}/retry`：失败的线程接着跑；没失败的返回 409。
   - `/{id}/regenerate`：最后一轮重新回答，可以带 `{"thinking"}`。
   - `/{id}/edit`：改了最后那句话，按新的话重新回答。
@@ -67,11 +68,11 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 - 管理对话：
   - `POST /{id}/stop`：停下正在跑或排队的这一轮。点了马上取消，在等的模型、搜索、画图一起断开；已经写出来的思考和正文留着。没在跑的返回 409。
   - `PATCH /{id}`（json `{"title"}`）：改标题。
-  - `DELETE /{id}`：删掉整段对话，找不回来。检查点、运行记录、画的图、整理记忆的记录一起删，从这段对话记下的记忆不删。
+  - `DELETE /{id}`：删掉整段对话，找不回来。检查点、运行记录、画的图、用户发的图、整理记忆的记录一起删，从这段对话记下的记忆不删。
 - 查看：
   - `GET /{id}/state`：当前状态。
   - `GET /{id}/events?after=<事件 id>`：断线、刷新后接上事件流。
-  - `GET /{id}/images/{image_id}`：对话里画的图，后端经网关从 image-service 取来转给页面。这一轮还在跑、图刚画好时页面就来取，那时检查点里还没有它，所以不查图是不是这段对话的（服务只给灵稿的图，编号是随机的 uuid）。编号格式不对、服务里已经没有的返回 404，网关、服务出问题返回 502。
+  - `GET /{id}/images/{image_id}`：对话里画的图、用户发的图，后端经网关从 image-service 取来转给页面。这一轮还在跑、图刚画好时页面就来取，那时检查点里还没有它，所以不查图是不是这段对话的（服务只给灵稿的图，编号是随机的 uuid）。编号格式不对、服务里已经没有的返回 404，网关、服务出问题返回 502。
   - `GET /{id}/runs` 和 `GET /api/research/runs`：运行记录，见下面的“运行记录”。
   - `GET /api/memory`：长期记忆，只能看。
 
@@ -178,7 +179,8 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 
 测试不碰这个库，默认存在内存里（同一个测试里再建一个运行器，就像服务重启）。设了 `LINGDRAFT_TEST_DATABASE_URL`，整套测试就放到那个 Postgres 库上跑，每个测试前都清空这个库，别指向有用的库。CI 两种都跑。
 
-对话里画的图存在 image-service 里、归灵稿（只有灵稿的密钥取得到、删得掉），消息里只记编号、大小这些。删对话、重新回答时按编号删掉不要的图，删不掉只记日志。2026-11-04 以前灵稿自己存在数据目录里的图没有搬过去，那些对话里的图显示“这张图已经不在了”。
+对话里画的图存在 image-service 里、归灵稿（只有灵稿的密钥取得到、删得掉），消息里只记编号、大小这些。删对话、重新回答时按编号删掉不要的图，删不掉只记日志。
+用户发的图也传进 image-service（`POST /image/v1/images`，和画的图放在同一个私有目录、同样不自动清理），编号记在那句话上（`additional_kwargs` 的 `lingdraft_image`），跟着对话删；重新回答、改那句话都留着。给模型的那份在话后面接一段英文说明（编号、看不到图、要改就当 `source_image_id`），存着的话里没有。2026-11-04 以前灵稿自己存在数据目录里的图没有搬过去，那些对话里的图显示“这张图已经不在了”。
 
 运行记录（`app/api/run_store.py`，跟 LangGraph Agent Server 的 run 学的）：
 
@@ -237,7 +239,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `research_tools.py`：agent 自己的工具（`get_current_time`），描述在 `prompts.toml` 的 `[tools.*]`。
   - `mcp.py`：MCP 工具共用的部分：经网关连、取工具、认出网关的 401/403（让这一轮失败）和 429（今天的上限到了）。
   - `web_mcp.py`：搜索、读网页。`search_web`、`read_page` 是 agent-tools 的 MCP 工具（怎么搜、怎么读、结果的样子、失败时给模型的话都在 search-service、reader-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明（什么时候搜、搜够没有、来源 id），中间件给结果带上来源 id、把失败整理成页面上的中文，没连上时用同名的占位工具。
-  - `image_mcp.py`：画图、改图。`generate_image` 是 agent-tools 的 MCP 工具（出图、存图、改图找原图、比例、给模型的说明都在 image-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明，中间件管每轮最多画 3 张、改图只认这段对话里的图，把结果整理成图片卡片要的东西，没连上时用同名的占位工具。
+  - `image_mcp.py`：画图、改图。`generate_image` 是 agent-tools 的 MCP 工具（出图、存图、改图找原图、比例、给模型的说明都在 image-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明，中间件管每轮最多画 3 张、改图只认这段对话里画的和用户发的图、给带图的话接上说明，把结果整理成图片卡片要的东西，没连上时用同名的占位工具。
   - `weather_mcp.py`：查天气。`get_weather` 是 agent-tools 的 MCP 工具（挑城市、整理预报、缓存、给模型的说明都在 weather-service 里，和 Fusion 共用），用 LangChain 的 MCP 适配器接进来；这里接上灵稿自己的一段说明，中间件把结果整理成模型看的文字，网关出问题算没查到、密钥不对让这一轮失败。
   - `maps_mcp.py`：查地点、比路线。`place_search`、`route_compare` 是 agent-tools 的 MCP 工具（先高德后腾讯、地名怎么定、重名怎么问、给模型的说明都在 maps-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明（卡片署了服务商不用重复、拿不到用户位置要问），中间件把整份结果留给地点卡、路线卡，网关今天的上限到了算额度用完，没连上时用同名的占位工具。
   - `flyai_mcp.py`：查航班、火车，排行程。`search_flights`、`search_trains` 是 agent-tools flyai 的 MCP 工具（日期定不了先问、只要高铁、飞猪认不出的地名、结果的样子都在服务里，和 Fusion 共用）；这里接上灵稿自己的一段说明（卡片上都列了、别贴预订链接、接站换乘用查到的站名和城市），中间件把整份结果留给航班卡、火车卡，每轮最多查 4 次；比路线的起终点是查到的车站时，城市没填对就不交给地图、告诉模型该填哪个。`present_itinerary` 是灵稿自己的：模型按这段对话查到的班次编号排方案，核对编号和先后后画成行程卡，一个回答最多一张。

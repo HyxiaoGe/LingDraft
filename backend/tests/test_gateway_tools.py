@@ -1,4 +1,4 @@
-"""网关客户端（按编号取图、删图）和灵稿自己的工具；搜索、读页、天气、画图是 MCP 工具，见 test_web_tools、test_weather、test_images。"""
+"""网关客户端（传图、按编号取图、删图）和灵稿自己的工具；搜索、读页、天气、画图是 MCP 工具，见 test_web_tools、test_weather、test_images。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import httpx
 import pytest
 
 from app.graph.research.state import Source, tidy_title
-from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError
+from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayError, ImageRejected
 from app.tools.research_tools import make_research_tools
 from tests.research_helpers import blocking
 
@@ -46,6 +46,35 @@ def test_image_fetch_and_delete():
         client.image("auth")
     client.delete_images([IMAGE_ID, "broken"])  # 删不掉的不抛
     assert [s[:2] for s in seen[-2:]] == [("DELETE", f"/image/v1/images/{IMAGE_ID}"), ("DELETE", "/image/v1/images/broken")]
+
+
+def test_image_upload():
+    """传用户发的图（POST /image/v1/images）：原样传字节；服务不收的（413、415）抛 ImageRejected，密钥不对、别的问题照常抛。"""
+    seen: list[tuple[str, str, bytes]] = []
+    replies = iter([
+        httpx.Response(201, json={"id": IMAGE_ID, "mime_type": "image/png", "width": 4, "height": 3, "bytes": 3, "model": "upload"}),
+        httpx.Response(413, json={"error": "image_too_large"}),
+        httpx.Response(415, json={"error": "unsupported_image"}),
+        httpx.Response(401),
+        httpx.Response(502),
+    ])
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append((req.method, req.url.path, req.content))
+        return next(replies)
+
+    client = blocking(GatewayClient("http://gw", "k1", scene="research", transport=httpx.MockTransport(handler)))
+    assert client.upload_image(b"png")["id"] == IMAGE_ID
+    assert seen == [("POST", "/image/v1/images", b"png")]
+    for kind in ("image_too_large", "unsupported_image"):
+        with pytest.raises(ImageRejected) as e:
+            client.upload_image(b"x")
+        assert e.value.kind == kind
+    with pytest.raises(GatewayAuthError):
+        client.upload_image(b"x")
+    with pytest.raises(GatewayError) as e:
+        client.upload_image(b"x")
+    assert e.value.retryable and not isinstance(e.value, ImageRejected)
 
 
 def test_missing_key():

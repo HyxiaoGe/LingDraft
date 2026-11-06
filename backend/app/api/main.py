@@ -8,12 +8,14 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
-from typing import Annotated
+from typing import Annotated, NamedTuple
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
+from starlette.datastructures import UploadFile as FormFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import config, costs, tracing
@@ -25,7 +27,8 @@ from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 from app.graph.research.memory import DreamSchedule
 from app.identity import ADMIN, Authenticator, AuthUnavailable, BadToken, Identity, make_authenticator
 from app.quota import Exhausted
-from app.tools.gateway import GatewayError
+from app.graph.research.state import AttachedImage
+from app.tools.gateway import MAX_UPLOAD_BYTES, GatewayError, ImageRejected
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +297,62 @@ def _text(body: ResearchMessageBody) -> str:
     return body.text
 
 
+class _Incoming(NamedTuple):
+    body: BaseModel
+    image: bytes | None  # 这句话带的图（没带是 None）
+
+
+def _parse(model: type[BaseModel], raw: str | bytes) -> BaseModel:
+    try:
+        return model.model_validate_json(raw)
+    except ValidationError as e:
+        raise RequestValidationError(e.errors(include_url=False)) from None
+
+
+def _incoming(model: type[BaseModel]):
+    """发消息（新对话、接着说）收两种请求：只有字的照旧是 JSON；带一张图的是 multipart/form-data，body 字段是同样的 JSON，
+    image 字段是图（2026-11-06 Sean 定只拿来改图、照着画）。这里只看大小（超过 4 MB 回 413），类型交给 image-service 认。"""
+
+    async def read(request: Request) -> _Incoming:
+        if not request.headers.get("content-type", "").startswith("multipart/form-data"):
+            return _Incoming(_parse(model, await request.body()), None)
+        form = await request.form(max_files=1, max_fields=1)
+        try:
+            raw, file = form.get("body"), form.get("image")
+            if not isinstance(raw, str) or not (file is None or isinstance(file, FormFile)):  # 表单里的是 starlette 的，不是 FastAPI 的子类
+                raise HTTPException(422, "body 要是 JSON 字段，image 要是文件")
+            body = _parse(model, raw)
+            data = await file.read(MAX_UPLOAD_BYTES + 1) if file is not None else None
+        finally:
+            await form.close()
+        if data is not None and len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "图片不能超过 4 MB")
+        return _Incoming(body, data)
+
+    return read
+
+
+def _upload(r: ResearchRunner, data: bytes | None) -> AttachedImage | None:
+    """这句话带的图传进 image-service，返回记在消息上的信息。发出去之前就传：消息里要记它的编号。"""
+    if data is None:
+        return None
+    try:
+        return r.upload_image(data)
+    except ImageRejected as e:
+        if e.kind == "image_too_large":
+            raise HTTPException(413, "图片不能超过 4 MB") from None
+        raise HTTPException(415, "只支持 PNG、JPEG、WebP 图片") from None
+    except GatewayError as e:
+        logger.warning("传图失败：%s", e)
+        raise HTTPException(502, "图片暂时传不上去") from None
+
+
+def _discard(r: ResearchRunner, image: AttachedImage | None) -> None:
+    """图传上去了，这一轮却没开始（运行中、上一轮没跑完、模型不对）：删掉。别的错不删：说不准那句话是不是已经记下了。"""
+    if image is not None:
+        r.discard_image(image.id)
+
+
 # ---- 身份（见 app.identity） ----
 
 
@@ -368,29 +427,38 @@ def research_models(who: Who):
 
 
 @app.post("/api/research/threads")
-def research_create(body: ResearchCreateBody, who: Who):
+def research_create(who: Who, msg: Annotated[_Incoming, Depends(_incoming(ResearchCreateBody))]):  # 先认人再读表单
     """新对话，归这个人。选的模型没有、停用了时返回 400；这一档选不了的（游客选了要登录的）返回 403，不能绕过页面上的锁。
-    模型只在开新对话时选，之后每轮照对话定下的：游客打不开登录用户的对话，这里查一次就够。"""
+    模型只在开新对话时选，之后每轮照对话定下的：游客打不开登录用户的对话，这里查一次就够。
+    可以带一张图（见 _incoming）：超过 4 MB 回 413，不是 PNG / JPEG / WebP 回 415，传不上去回 502。"""
+    body: ResearchCreateBody = msg.body
     r = research()
     if body.model and r.locked(body.model, who.tier):
         raise HTTPException(403, "登录后才能用这个模型")
     _admit(r, who)
+    text = _text(body)
+    image = _upload(r, msg.image)
     try:
-        return _sse(r.start(str(uuid.uuid4()), _text(body), body.model, body.thinking, owner=who.sub))
+        return _sse(r.start(str(uuid.uuid4()), text, body.model, body.thinking, owner=who.sub, image=image))
     except UnknownModel as e:
+        _discard(r, image)
         raise HTTPException(400, str(e)) from None
 
 
 @app.post("/api/research/threads/{thread_id}/messages")
-def research_say(thread_id: str, body: ResearchMessageBody, who: Who):
-    """接着说。运行中、上一轮没跑完时返回 409；额度用完了 429。"""
+def research_say(thread_id: str, who: Who, msg: Annotated[_Incoming, Depends(_incoming(ResearchMessageBody))]):
+    """接着说。运行中、上一轮没跑完时返回 409；额度用完了 429。可以带一张图，同新对话。
+    排着的话、插进这一轮的话不能带图（/queue 只收 JSON）：图要在这一轮开始时就在。"""
+    body: ResearchMessageBody = msg.body
     r = research()
     _mine(r, thread_id, who)
     _admit(r, who)
     text = _text(body)
+    image = _upload(r, msg.image)
     try:
-        return _sse(r.say(thread_id, text, body.thinking))
+        return _sse(r.say(thread_id, text, body.thinking, image))
     except (RunConflict, NotIdle) as e:
+        _discard(r, image)
         raise HTTPException(409, str(e)) from None
 
 

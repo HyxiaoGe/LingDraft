@@ -44,7 +44,7 @@ from app.model_guard import ContentBlocked, GuardedChatModel, Interrupted, Model
 from app.tools import docs_mcp, flyai_mcp, image_mcp, maps_mcp, web_mcp, weather_mcp
 from app.tools.docs_mcp import LIBRARY_TOOL, docs_tools
 from app.tools.flyai_mcp import FLIGHT_TOOL, ITINERARY_TOOL, TRAIN_TOOL, TravelTool
-from app.tools.gateway import GatewayClient
+from app.tools.gateway import IMAGE_MIME_TYPES, MAX_UPLOAD_BYTES, GatewayClient
 from app.tools.image_mcp import ImageTool
 from app.tools.maps_mcp import PLACE_TOOL, ROUTE_TOOL, MapsTool
 from app.tools.research_tools import TIME_TOOL, make_research_tools
@@ -826,7 +826,7 @@ def _closest(width: int, height: int) -> str:
 
 class FakeImageService:
     """进程内的假 image-service：MCP 的 generate_image（照 /v2/mcp：图存在服务里，结果里只有编号）出图、存在这里，
-    取图、删图走假网关（GET / DELETE /image/v1/images/{id}，见 gateway_client）。离线模式、测试、评测用。
+    传图、取图、删图走假网关（POST /image/v1/images、GET / DELETE /image/v1/images/{id}，见 gateway_client）。离线模式、测试、评测用。
     calls 记下每次画图的参数；描述里有 FAKE_IMAGE_FILTERED 按内容审核没过拒绝，有 FAKE_IMAGE_SLOW 过几秒才出图。
     测试可以设 fail（下一次起都按这个错误回）、block（出图前等它）、reference_status（找参考图的结果）。"""
 
@@ -834,6 +834,7 @@ class FakeImageService:
         self.made: dict[str, tuple[bytes, int, int]] = {}
         self.calls: list[dict] = []
         self.deleted: list[str] = []
+        self.uploaded: list[str] = []
         self.fail: dict | None = None
         self.block: threading.Event | None = None
         self.reference_status = "found"
@@ -884,7 +885,9 @@ class FakeImageService:
             "reference_search": {"status": self.reference_status} if subject else None})
 
     async def handle(self, req: httpx.Request) -> httpx.Response:
-        """假网关：取图、删图。"""
+        """假网关：传图、取图、删图。传图照服务：PNG / JPEG / WebP、不超过 4 MB，传上来的和画的一样能改。"""
+        if req.method == "POST" and req.url.path == "/image/v1/images":
+            return self._upload(req.content)
         iid = req.url.path.removeprefix("/image/v1/images/")
         if iid == req.url.path:
             return httpx.Response(404, json={"error": "not_found"})
@@ -894,6 +897,22 @@ class FakeImageService:
             return httpx.Response(204)
         got = self.made.get(iid)
         return httpx.Response(200, content=got[0], headers={"content-type": "image/png"}) if got else httpx.Response(404)
+
+    def _upload(self, data: bytes) -> httpx.Response:
+        if len(data) > MAX_UPLOAD_BYTES:
+            return httpx.Response(413, json={"error": "image_too_large"})
+        try:
+            with Image.open(io.BytesIO(data)) as im:
+                mime, (width, height) = Image.MIME.get(im.format or ""), im.size
+        except (OSError, SyntaxError):
+            mime = None
+        if mime not in IMAGE_MIME_TYPES:
+            return httpx.Response(415, json={"error": "unsupported_image"})
+        iid = str(uuid4())
+        self.made[iid] = (data, width, height)
+        self.uploaded.append(iid)
+        return httpx.Response(201, json={"id": iid, "mime_type": mime, "width": width, "height": height, "bytes": len(data),
+                                         "model": "upload", "edited_from": None, "created_at": "2026-11-06T00:00:00+00:00"})
 
     def gateway_client(self) -> GatewayClient:
         return GatewayClient("http://fake-gw", "fake-key", scene="research", transport=httpx.MockTransport(self.handle))
@@ -926,7 +945,7 @@ class FakeToolModel(BaseChatModel):
       “路线”：比虹桥火车站到外滩的驾车和公交，起点改成“从……到”里的地名，算完直接回复，不搜。
     - “航班”：查北京到上海明天的航班；“高铁”：查北京到上海明天的高铁；“行程”：去程查航班、回程查高铁，查完用 present_itinerary
       排成一个方案；“接站”：查完高铁，从查到的第一趟的到达站比路线到外滩。地名在“从……到……”里给就用那两个。都不搜。
-    - “画”：画一张图（描述就是用户的话，“横”的是 16:9），画完直接回复，不搜；“改图”：改这段对话里最近画的那张；
+    - “画”：画一张图（描述就是用户的话，“横”的是 16:9），画完直接回复，不搜；“改图”：改这段对话里最近画的（或用户发的）那张；
       “再画”“再生成”：用上一次的参数再画一张（regenerate）。
     - “子任务”：派一个子 agent（task），拿到报告后回复，引用报告里的来源；“分头”：一次派两个，并行。“派N个”：一次派 N 个。
     - “一直搜”：每次并行搜两个，不管预算，直到请求末尾的预算提醒说搜索用完了（子 agent 才有这条提醒）。
@@ -1065,7 +1084,9 @@ class FakeToolModel(BaseChatModel):
         if done := next((m for m in reversed(turn) if isinstance(m, ToolMessage) and m.name == "generate_image"), None):
             return ("没画成。" if done.status == "error" else "画好了，看看要不要调整。"), []
         prompt = text.splitlines()[0][:200]
-        ids = _FAKE_IMAGE_ID.findall("\n".join(str(m.content) for m in messages if isinstance(m, ToolMessage) and m.name == "generate_image"))
+        # 画的图在生图结果里，用户发的图在那句话后面接的说明里（见 image_mcp.with_attachment_note），都写着 Image id
+        ids = _FAKE_IMAGE_ID.findall("\n".join(str(m.content) for m in messages
+                                                if isinstance(m, HumanMessage) or (isinstance(m, ToolMessage) and m.name == "generate_image")))
         if "改图" in text and ids:
             return call("generate_image", prompt=prompt, source_image_id=ids[-1])
         before = [tc["args"] for m in messages if isinstance(m, AIMessage) for tc in m.tool_calls if tc["name"] == "generate_image"]

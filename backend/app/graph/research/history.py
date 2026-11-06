@@ -15,6 +15,7 @@ from app.costs import COST
 from app.graph.research import prompts
 from app.graph.research.sources import DOCS_TOOL, LIBRARY_TOOL, SUBAGENT_TOOL, collect_sources, doc_snippets, parse, search_hits, subagent_messages
 from app.graph.research.state import (
+    AttachedImage,
     Forecast,
     GeneratedImage,
     Itinerary,
@@ -36,6 +37,7 @@ from app.graph.research.state import (
 BLOCKED = "lingdraft_blocked"  # 一轮因内容审核停下时，系统补的那条模型消息 response_metadata 里的键，值是原因（见 agent.ContentGuard）
 STOPPED = "lingdraft_stopped"  # 用户点了停止时，已经流出来的那部分正文存成的模型消息 response_metadata 里的键
 GUIDE = "lingdraft_guide"  # 用户插进正在跑的这一轮的话：这条用户消息 additional_kwargs 里的键（见 agent.TurnMiddleware.abefore_model）
+ATTACHED = "lingdraft_image"  # 用户这句话带的图（AttachedImage）：用户消息 additional_kwargs 里的键（不会发给模型，给模型的说明见 image_mcp）
 IMAGE_TOOL = "generate_image"
 PLACE_TOOL, ROUTE_TOOL = "place_search", "route_compare"  # 地图的两个工具（见 app.tools.maps_mcp）
 FLIGHT_TOOL, TRAIN_TOOL = "search_flights", "search_trains"  # flyai 的两个工具（见 app.tools.flyai_mcp）
@@ -599,9 +601,26 @@ def image_of(m: BaseMessage) -> GeneratedImage | None:
         return None
 
 
-def stored_images(messages: list[BaseMessage]) -> list[GeneratedImage]:
-    """这些消息里画好、还在 image-service 里的图（删对话、重新回答时删掉它们；改图只认它们）。"""
-    return [img for m in messages if (img := image_of(m)) and img.stored]
+def attached_image(m: BaseMessage) -> AttachedImage | None:
+    """用户这句话带的图；没带是 None。"""
+    raw = m.additional_kwargs.get(ATTACHED) if isinstance(m, HumanMessage) else None
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return AttachedImage.model_validate(raw)
+    except ValidationError:
+        return None
+
+
+def owned_image_ids(messages: list[BaseMessage]) -> list[str]:
+    """这些消息里存在 image-service 里的图的编号：用户发的、画好的，按先后。删对话、重新回答时删掉它们；改图只认它们。"""
+    ids = []
+    for m in messages:
+        if att := attached_image(m):
+            ids.append(att.id)
+        elif (img := image_of(m)) and img.stored:
+            ids.append(img.id)
+    return ids
 
 
 def _image_step(cid: str, text: str, extra: dict, result: ToolMessage) -> ToolStep:
