@@ -24,8 +24,9 @@ const listeners = new Set();
 // ---- 页面用 ----
 
 // 当前身份的快照：ready 是初始化做完了（这之前不显示登录入口）；login 是有没有登录功能；me 见上
-// crowded 是领游客身份被拒了（同一地址一天领得太多）：页面弹登录框提示人多、请先登录
-export const snapshot = () => ({ ready: done, login: !!cfg?.login, me, crowded: crowded && !me });
+// crowded 是领游客身份被拒了（同一网络一天领得太多）：页面弹登录框说清为什么、登录后会怎样。
+// 是后端 429 的 detail（{per_ip, per_ask, login}，见后端 api.main 的 auth_guest），老后端只给一句话时是 {}；没被拒是 false
+export const snapshot = () => ({ ready: done, login: !!cfg?.login, me, crowded: !me && crowded });
 let crowded = false;
 export function subscribeAuth(fn) {
   listeners.add(fn);
@@ -79,6 +80,7 @@ async function doInit() {
   }
   done = true;
   notify();
+  if (cfg.login && !me) emailLoginAvailable(); // 邮箱验证码能不能用先问好，打开登录框时邮箱那栏直接在（第 29 条）
 }
 
 async function loadMe() {
@@ -138,8 +140,9 @@ function newGuest() {
     newGuestInFlight = (async () => {
       const resp = await fetch("/api/auth/guest", { method: "POST" });
       if (!resp.ok) {
-        if (resp.status === 429 && !crowded) { crowded = true; notify(); }
-        throw Object.assign(new Error(await detail(resp)), { status: resp.status });
+        const d = await detail(resp);
+        if (resp.status === 429 && !crowded) { crowded = d && typeof d === "object" ? d : {}; notify(); }
+        throw Object.assign(new Error("没领到游客身份"), { status: resp.status }); // 页面按状态码说，不显示这句
       }
       const { token } = await resp.json();
       storage.set(GUEST_KEY, token);
@@ -151,7 +154,7 @@ function newGuest() {
 }
 
 async function detail(resp) {
-  try { return JSON.parse(await resp.text()).detail || `请求失败（${resp.status}）`; } catch { return `请求失败（${resp.status}）`; }
+  try { return JSON.parse(await resp.text()).detail ?? null; } catch { return null; }
 }
 
 // 现在该带的令牌：登录了带 access token（到期 SDK 自己刷新；刷新被定论拒绝了会清掉本地会话，就落回游客）；没登录带游客令牌
@@ -242,13 +245,24 @@ export async function checkSession() {
 // ---- 邮箱验证码登录（auth 服务的 headless 流程：和跳转登录一样是 PKCE，只是不离开页面） ----
 // 要求页面和 auth 服务是同一个站（都在 seanfield.org 下、https），本机开发没有这一项
 
-export async function emailLoginAvailable() {
+// 页面起来时就问（见 doInit），问到的记住：打开登录框时已经知道，邮箱那栏不会晚一步才冒出来。没问到（网络不通）不记，下次打开再问
+let emailOk = null;
+let emailAsking = null;
+export const emailLoginKnown = () => emailOk;
+export function emailLoginAvailable() {
+  if (emailOk !== null) return Promise.resolve(emailOk);
+  if (!emailAsking) emailAsking = askEmail().finally(() => { emailAsking = null; });
+  return emailAsking;
+}
+
+async function askEmail() {
   await loadConfig();
-  if (!cfg.login || location.protocol !== "https:") return false;
+  if (!cfg.login || location.protocol !== "https:") return (emailOk = false);
   try {
     const q = new URLSearchParams({ client_id: cfg.client_id, redirect_uri: location.origin + CALLBACK_PATH });
     const resp = await fetch(`${cfg.auth_url}/auth/capabilities?${q}`, { cache: "no-store" });
-    return resp.ok && (await resp.json()).email_headless_login === true;
+    if (!resp.ok) return false;
+    return (emailOk = (await resp.json()).email_headless_login === true);
   } catch {
     return false;
   }
@@ -284,7 +298,12 @@ async function authJson(path, init, csrf) {
 export class EmailLogin {
   async start(email, signal) {
     await loadConfig();
-    const auth = await prepareAuthorization({ redirectPath: location.pathname + location.search });
+    let auth;
+    try {
+      auth = await prepareAuthorization({ redirectPath: location.pathname + location.search });
+    } catch { // SDK 的报错是英文，不直出
+      throw Object.assign(new Error("登录服务出错了，稍后再试"), { code: "server_error" });
+    }
     this.auth = auth;
     try {
       const s = await authJson("/auth/email/headless/start", {

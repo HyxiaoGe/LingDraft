@@ -16,7 +16,7 @@ import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx
 import { Markdown } from "./markdown.jsx";
 import { ActionMenu } from "./menu.jsx";
 import { HeadBar, NavContext } from "./nav.jsx";
-import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, creditsLeft, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping } from "./research.js";
+import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, creditsLeft, creditsLine, creditsText, cutPartialCite, domain, elapsed, loginLine, mergeItems, modelName, splitTurn, stamp, tidyTyping } from "./research.js";
 import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
 import { TurnIndex, TurnIndexButton, turnEntries } from "./turns.jsx";
 import { IMAGE_ACCEPT, ImageError, prepareImage } from "./upload.js";
@@ -255,7 +255,8 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
       <div className="ws-sr" role="status" aria-live="polite">{said}</div>
       {mobile && starters}
       <div className="ws-dock">
-        <CreditsNote credits={credits} onLogin={picker.onLogin} />
+        {/* 刚被额度拦住、报错里已经说了用完了和登录后会怎样：输入框上面不再重复一遍（第 27 条：同一句别在最烦的时候说好几遍） */}
+        {!error?.quota && <CreditsNote credits={credits} onLogin={picker.onLogin} />}
         {/* 按下去不抢光标：输入框里写着的字和光标都留着 */}
         {away && <button className={"ws-jump" + (more ? " more" : "")} aria-label={more ? "有新内容，回到底部" : "回到底部"} title="回到底部"
           onMouseDown={(e) => e.preventDefault()} onClick={toBottom}><IconArrowDown size={16} />{more && <span>有新内容</span>}</button>}
@@ -957,16 +958,16 @@ const WITH_IMAGE = "说说要怎么改这张图，或照着它画什么";
 const IMAGE_WAITS = "带图的话要等这一轮答完才能发";
 const COUNT_FROM = 2000; // 超过这么多字在输入框里显示字数；不设上限（后端也没有），2026-11-06 Sean 定
 
-// 额度快用完（用了八成）或用完了时，输入框上面提醒一句（见后端 app.quota，按最紧的那个窗口）；游客带上登录入口
+// 额度快用完（用了八成）或用完了时，输入框上面提醒一句（见后端 app.quota，按最紧的那个额度）：和左下角额度面板同一种说法（creditsLine）；
+// 游客再带上登录入口和登录后会怎样（loginLine）
 function CreditsNote({ credits, onLogin }) {
   const left = creditsLeft(credits);
   if (!left?.warn) return null;
-  const more = onLogin ? <>，<button className="ws-link" onClick={onLogin}>登录</button>后每天 10000</> : null;
+  const after = onLogin && loginLine(credits, false);
   return (
     <div className={"ws-credits-note" + (left.exhausted ? " out" : "")} role="status">
       <IconWarn size={13} />
-      <span>{left.exhausted ? <>{left.span}的额度用完了（共 {left.limit}），{left.resetText}{more}</>
-        : <>{left.span}的额度快用完了：还剩 {creditsText(left.remaining)}（共 {left.limit}），{left.resetText}{more}</>}</span>
+      <span>{left.exhausted ? "" : "额度快用完了："}{creditsLine(left)}{after && <>。<button className="ws-link" onClick={onLogin}>登录</button>{after}</>}</span>
     </div>
   );
 }
@@ -1254,7 +1255,7 @@ function Attachment({ att, onRemove }) {
 // 桌面是菜单：往放得下的那边开（新对话的输入框在页面中间，往下开），高度按那边剩下的空间，再多就在里面滚，第一项不会被切掉。
 // 窄屏是底部弹层：最高 70dvh、里面滚，深度思考的开关和说明也在里面（输入框里只放模型名，能开关思考的名字前有个灯泡，亮着是开）。
 // 菜单、弹层打开时光标在里面：Esc 只收起它们，不会停掉正在跑的这一轮（见 Composer 的 Esc）；点外面、关闭钮也能收起。
-// locked：对话开始了，模型不能换。游客看到的要登录的模型（m.locked）点了去登录（onLogin），登录了还锁着的是不开放的。
+// locked：对话开始了，模型不能换。游客看到的要登录的模型（m.locked）点了去登录（onLogin），登录了还锁着的（只给管理员的）不列，见 ModelList。
 // loading：模型列表还没取到、或者打开的对话状态还没回来，先放一块占位（输入框照常能打字、能发，按 Auto）
 function ModelTools({ models, loading, current, locked, onPick, thinking, onThinking, onLogin }) {
   const mobile = !!useContext(NavContext)?.mobile;
@@ -1291,7 +1292,7 @@ function ModelTools({ models, loading, current, locked, onPick, thinking, onThin
   const note = locked ? "对话开始后不能换模型，想换模型请开新对话" : "开始对话后不能换模型";
   const list = (
     <ModelList models={models} current={current} locked={locked} onLogin={onLogin}
-      onChoose={(m) => { close(); if (m.locked) onLogin?.(); else if (!locked) onPick(m.id); }} />
+      onChoose={(m) => { close(); if (m.locked) onLogin?.(m); else if (!locked) onPick(m.id); }} />
   );
   return (
     <div className="ws-model" ref={box}>
@@ -1415,11 +1416,12 @@ function ModelSheet({ title, onClose, children }) {
   );
 }
 
-// 模型列表（菜单和弹层共用）：推荐 / 可用 / 登录后可用（N，默认收起；正在用的在里面就展开）。↑↓ 在能点的之间挪
+// 模型列表（菜单和弹层共用）：推荐 / 可用 / 登录后可用（N，默认收起；正在用的在里面就展开）。↑↓ 在能点的之间挪。
+// 锁着的只给能登录的游客看（点了开登录弹窗，说登录后就能用它）；登录了、或者没有登录功能，锁着的就是怎么都选不了，不列（第 28 条：原来列成“暂不开放”）
 function ModelList({ models, current, locked, onLogin, onChoose }) {
   const [auto, ...rest] = models;
   const free = rest.filter((m) => !m.locked);
-  const shut = rest.filter((m) => m.locked);
+  const shut = onLogin ? rest.filter((m) => m.locked) : [];
   const [showShut, setShowShut] = useState(() => shut.some((m) => m.id === current));
   // 点开“登录后可用”：展开的在下面、多半在菜单外，把这一组滚到菜单顶上让人看见
   const shutRef = useRef(null);
@@ -1464,9 +1466,9 @@ function ModelList({ models, current, locked, onLogin, onChoose }) {
         </div>
       )}
       {shut.length > 0 && (
-        <div role="group" aria-label={onLogin ? "登录后可用" : "暂不开放"}>
+        <div role="group" aria-label="登录后可用">
           <button ref={shutRef} className="ws-model-group toggle" role="menuitem" aria-expanded={showShut} onClick={() => { reveal.current = !showShut; setShowShut(!showShut); }}>
-            <span>{onLogin ? "登录后可用" : "暂不开放"}（{shut.length}）</span><IconChevron size={13} className={"chev" + (showShut ? " up" : "")} />
+            <span>登录后可用（{shut.length}）</span><IconChevron size={13} className={"chev" + (showShut ? " up" : "")} />
           </button>
           {showShut && shut.map((m) => row(m, m.description))}
         </div>

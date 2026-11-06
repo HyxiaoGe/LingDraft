@@ -80,7 +80,7 @@ class Window:
 
 
 def asks(credits: float, per_ask: int) -> int:
-    """这么多额度约可问几次（向下取整）；页面上的换算同一个算法（frontend/src/research.js 的 asks）。"""
+    """这么多额度约可问几次（向下取整）；页面上的换算同一个算法（frontend/src/research.js 的 asksOf）。"""
     return int(credits // per_ask) if per_ask > 0 else 0
 
 

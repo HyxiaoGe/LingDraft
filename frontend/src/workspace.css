@@ -86,6 +86,13 @@
   font-size: 13px; transition: border-color .15s var(--ease); }
 .ws-new:hover { border-color: var(--faint); }
 .ws-new[aria-current] { border-color: var(--ink); box-shadow: inset 0 0 0 .5px var(--ink); }
+/* 新对话下面一行“记忆”（第 30 条）：和左栏的对话行一样安静，在记忆页时底色标出来 */
+.ws-side-top { display: flex; flex-direction: column; gap: 4px; }
+.ws-nav-row { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 0; border-radius: var(--r); background: none; font-size: 13px; color: var(--ink2);
+  text-align: left; transition: background .12s; }
+.ws-nav-row svg { flex: none; color: var(--muted); }
+.ws-nav-row:hover { background: var(--hover); }
+.ws-nav-row[aria-current] { background: var(--sel); color: var(--ink); font-weight: 500; }
 .ws-groups { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; margin: 0 -4px; padding: 0 4px; }
 .ws-group { display: flex; flex-direction: column; gap: 1px; }
 .ws-group-name { font-size: 12px; font-weight: 500; color: var(--muted); padding: 0 8px 4px; display: flex; gap: 6px; }
@@ -174,22 +181,28 @@
 .ws-toast-act:hover { background: var(--ink2); }
 .ws-toast-act:focus-visible { outline: 2px solid var(--paper); outline-offset: -4px; }
 .ws-foot { display: flex; align-items: center; gap: 12px; padding: 8px 8px 2px; border-top: 1px solid var(--line); }
-/* 左栏最下面的额度按钮：小圆环（剩余比例）+ 剩余数字，和头像并排；点开是额度面板 */
+/* 左栏最下面的额度按钮：小圆环（剩余比例）+“约可问 N 次”，和头像并排；点开是额度面板 */
 .ws-credits-btn { display: inline-flex; align-items: center; gap: 6px; height: 24px; margin: -4px 0; padding: 0 9px 0 6px; border: 1px solid var(--line2); border-radius: 999px;
   background: var(--paper); font: inherit; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; cursor: pointer; transition: border-color .15s, color .15s; }
-.ws-credits-btn small { font-size: 11px; margin-right: 4px; opacity: .8; }
 .ws-credits-btn .ws-ring { color: var(--accent); flex: none; }
 .ws-credits-btn:hover, .ws-credits-btn[aria-expanded="true"] { color: var(--ink); border-color: var(--ink); }
 .ws-credits-btn.warn, .ws-credits-btn.warn .ws-ring { color: var(--warn); }
 .ws-credits-btn.warn { border-color: var(--warn-line); background: var(--warn-soft); }
 .ws-credits-btn.out, .ws-credits-btn.out .ws-ring { color: var(--danger); }
 .ws-credits-btn.out { border-color: var(--danger-line); background: var(--danger-soft); }
-/* 额度面板：来源 / 每个窗口一行（左标签右剩余） / 余额 / 重置时间 */
-.ws-usage-rows { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 2px 0; padding: 4px 0; }
-.ws-usage-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; height: 30px; padding: 0 10px; font-size: 13px; color: var(--ink2); }
-.ws-usage-row b { font-weight: 500; color: var(--ink); font-variant-numeric: tabular-nums; }
-.ws-usage-row.warn b { color: var(--warn); }
-.ws-usage-row.out b { color: var(--danger); }
+/* 额度面板（第 27 条）：完整的一句在最上面，下面小字是哪来的额度、怎么估的；游客最下面是去登录的按钮（写着登录后会怎样，可能折行） */
+.ws-usage-main { padding: 8px 10px 4px; font-size: 14px; line-height: 1.5; color: var(--ink); font-variant-numeric: tabular-nums; }
+.ws-usage-main.warn { color: var(--warn); }
+.ws-usage-main.out { color: var(--danger); }
+.ws-usage-when { display: block; font-size: 13px; color: var(--muted); }
+.ws-usage-when .sep { display: none; }
+.ws-keep { white-space: nowrap; }
+.ws-usage .ws-usage-login { height: auto; min-height: 32px; padding: 4px 10px; line-height: 1.5; color: var(--accent); }
+.ws-usage .ws-usage-login svg, .ws-usage-sheet .ws-usage-login svg { color: var(--accent); }
+.ws-usage-sheet .ws-usage-login { color: var(--accent); }
+.ws-usage-sheet .ws-usage-main { padding: 8px 12px 4px; font-size: 16px; }
+.ws-usage-sheet .ws-usage-when { font-size: 14px; }
+.ws-usage-sheet .ws-menu-note, .ws-act-sheet .ws-menu-note { padding-left: 12px; padding-right: 12px; }
 /* 左栏最下面一行的右边：游客是“登录”，登录了是头像和名字（点开菜单能退出） */
 .ws-foot-user { margin-left: auto; display: flex; align-items: center; min-width: 0; }
 .ws-login-link { border: 0; background: none; padding: 0; font-size: 12px; color: var(--accent); }
@@ -205,21 +218,37 @@
 
 /* ---------- 登录弹窗 ---------- */
 .ws-overlay { position: fixed; inset: 0; z-index: 80; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 16px; animation: ws-in .12s var(--ease); }
-.ws-dialog { position: relative; width: 100%; max-width: 380px; background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r-lg); box-shadow: var(--lift); padding: 26px 26px 22px; }
-.ws-dialog-close { position: absolute; top: 10px; right: 10px; width: 30px; height: 30px; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); display: flex; align-items: center; justify-content: center; }
+/* 批次 E 整个弹窗收拾了一遍：内边距 24、标题 20（原来 26/22、18 不在刻度上），手机上按钮、输入框、关闭键都到 44（见窄屏那段）。
+   弹窗本身能拿焦点（触屏打开时焦点落在它上面，不自己弹键盘）；它不是按钮，焦点不画外圈（外圈套在边框外像两层边），换成边框染上强调色 */
+.ws-dialog { position: relative; width: 100%; max-width: 380px; max-height: calc(100dvh - 32px); overflow-y: auto; background: var(--paper); border: 1px solid var(--line2);
+  border-radius: var(--r-lg); box-shadow: var(--lift); padding: 24px; }
+.ws .ws-dialog:focus-visible { outline: none; border-color: var(--accent-line); }
+.ws-dialog-close { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); display: flex; align-items: center; justify-content: center; }
 .ws-dialog-close:hover { background: var(--hover); color: var(--ink); }
-.ws-dialog-title { margin: 0 0 6px; font: 600 18px/1.3 var(--serif); letter-spacing: .02em; }
-.ws-dialog-desc { margin: 0 0 18px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+.ws-dialog-title { margin: 0 16px 8px 0; font: 600 20px/1.3 var(--serif); letter-spacing: .02em; } /* 右边让开关闭键 */
+.ws-dialog-desc { margin: 0 0 16px; color: var(--muted); font-size: 13px; line-height: 1.6; text-wrap: pretty; }
+/* 邮箱在最上面（第 29 条）：看得见的标签（第 33 条）、框、发送按钮占满一行；下面“或者”一条线，再下面 GitHub、Google */
+.ws-field-label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 4px; font-size: 13px; font-weight: 500; color: var(--ink2); }
+.ws-field-label span { font-size: 12px; font-weight: 400; color: var(--muted); }
+.ws-login-email { display: flex; flex-direction: column; }
+.ws-login-send { width: 100%; height: 40px; justify-content: center; margin-top: 12px; font-size: 14px; }
+.ws-login-tip { margin-top: 8px; font-size: 12px; color: var(--muted); text-align: center; }
+/* 邮箱还没问到时转圈占着邮箱那栏的高（标签 + 框 + 发送 + 小字：桌面 144、手机 152，见窄屏那段），问到了弹窗不跳 */
+.ws-login-wait { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 144px; font-size: 13px; color: var(--muted); }
+.ws-login-or { display: flex; align-items: center; gap: 12px; margin: 16px 0; font-size: 12px; color: var(--muted); }
+.ws-login-or::before, .ws-login-or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
 .ws-login-methods { display: flex; flex-direction: column; gap: 8px; }
-.ws-login-btn { display: flex; align-items: center; justify-content: center; gap: 10px; height: 40px; border: 1px solid var(--line2); border-radius: var(--r); background: var(--paper); font-size: 14px; }
+.ws-login-btn { display: flex; align-items: center; justify-content: center; gap: 8px; height: 40px; border: 1px solid var(--line2); border-radius: var(--r); background: var(--paper); font-size: 14px; }
 .ws-login-btn:hover:not(:disabled) { background: var(--hover); border-color: var(--faint); }
 .ws-login-btn:disabled { opacity: .55; }
 .ws-login-btn svg { flex: none; }
-.ws-login-err { margin-top: 12px; color: var(--danger); font-size: 13px; line-height: 1.5; }
+.ws-login-btn small { font-size: 12px; color: var(--muted); }
+.ws-login-err { margin-top: 8px; color: var(--danger); font-size: 13px; line-height: 1.5; }
 .ws-field { width: 100%; height: 40px; border: 1px solid var(--line2); border-radius: var(--r); padding: 0 12px; font: inherit; font-size: 14px; color: var(--ink); background: var(--paper); outline: none; }
 .ws-field:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
+.ws-field[aria-invalid] { border-color: var(--danger-line); }
 .ws-field.code { font-size: 20px; letter-spacing: .3em; text-align: center; font-variant-numeric: tabular-nums; }
-.ws-dialog-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 16px; flex-wrap: wrap; }
+.ws-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 .ws-dialog-actions .ws-btn.primary .spin { color: #fff; }
 /* 登录回跳页：就一个转圈 */
 .ws-callback { display: flex; align-items: center; justify-content: center; }
@@ -832,6 +861,11 @@ button.ws-proc-head:hover { color: var(--ink); }
   .ws-credits-btn::after { content: ""; position: absolute; inset: -8px 0; }
   .ws-user-btn { height: 44px; margin: 0; }
   .ws-login-link { min-width: 44px; min-height: 44px; padding: 0 8px; }
+  .ws-nav-row { height: 44px; font-size: 14px; }
+  .ws-login-btn, .ws-login-send, .ws-field, .ws-dialog-actions .ws-btn { height: 44px; }
+  .ws-dialog-close { top: 4px; right: 4px; width: 44px; height: 44px; }
+  .ws-dialog-title { margin-right: 24px; }
+  .ws-login-wait { min-height: 152px; }
 
   .ws-head { height: 48px; padding: 0 4px; gap: 4px; grid-template-columns: 1fr minmax(0, max-content) 1fr; }
   .ws-head-title { text-align: center; }
