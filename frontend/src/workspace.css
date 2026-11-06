@@ -189,7 +189,13 @@
 .ws-scroll { flex: 1; overflow-y: auto; }
 .ws-flow { max-width: 680px; margin: 0 auto; padding: 28px 28px 32px; } /* 正文一行四十来个字 */
 /* 用户的话：下面一行是时间、复制、编辑，悬停时浮出，最后一句的一直在（浮在下一行右边的空处，不占高度） */
-.ws-user { position: relative; display: flex; justify-content: flex-end; margin: 0 0 22px; }
+.ws-user { position: relative; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin: 0 0 22px; }
+/* 这句话带的图：气泡上面一张缩略图，知道宽高的先按比例占好位置；刚发出去的用本机的，按图本身的比例 */
+.ws-user-img { max-width: 80%; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--side); overflow: hidden; }
+.ws-user-img-open { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
+.ws-user-img img { display: block; max-width: 240px; max-height: 240px; }
+.ws-user-img[style] img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: cover; }
+.ws-user-img-gone { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; min-height: 48px; padding: 8px 12px; font-size: 12px; color: var(--muted); }
 .ws-user.pinned { margin-bottom: 36px; } /* 最后一句下面那行一直在，给它留出位置 */
 .ws-user-foot { position: absolute; top: 100%; right: -8px; margin-top: 1px; display: flex; gap: 2px; opacity: 0; transition: opacity .15s; }
 .ws-user:hover .ws-user-foot, .ws-user-foot:focus-within, .ws-user-foot.pinned { opacity: 1; }
@@ -465,6 +471,7 @@ button.ws-proc-head:hover { color: var(--ink); }
 /* 新对话：欢迎语、输入框、例子一起放在中间偏上（上面空的和下面空的按 1 : 1.4 分）；“内容由 AI 生成”放到最底下。标题用宋体 */
 .ws-main.fresh .ws-scroll { display: flex; flex-direction: column; }
 .ws-main.fresh .ws-flow { margin-top: auto; width: 100%; padding-bottom: 12px; }
+.ws-main.fresh .ws-error { margin: 12px 0 0; } /* 新对话发出去被拒（图不收、额度用完）：和上面的说明隔开，紧挨着下面的输入框 */
 .ws-main.fresh .ws-dock { position: static; } /* 下面这行贴着整个右栏的底，不是贴着输入框 */
 .ws-main.fresh .ws-ai-note { position: absolute; left: 0; right: 0; bottom: 12px; }
 .ws-welcome { text-align: center; }
@@ -514,31 +521,101 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-input:focus-within { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft), 0 2px 12px rgba(20, 24, 31, .06); }
 .ws-input textarea { width: 100%; border: 0; outline: none; resize: none; font: inherit; background: transparent; line-height: 1.6; max-height: 160px; padding: 0; color: var(--ink); }
 .ws-input textarea::placeholder { color: var(--faint); }
-.ws-input-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
-.ws-input-hint { font-size: 12px; color: var(--faint); }
-.ws-input-tools { margin-left: auto; display: flex; align-items: center; }
-/* 发送左边：深度思考开关、选模型（菜单往上开） */
-.ws-model { position: relative; display: flex; align-items: center; gap: 4px; }
+.ws-input.drop { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); } /* 拖着图进来 */
+.ws-input-note { display: flex; align-items: flex-start; gap: 4px; margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.ws-input-note svg { flex: none; margin-top: 2px; }
+.ws-input-note.warn { color: var(--warn); }
+.ws-input-bar { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+.ws-input-count { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ws-input-tools { margin-left: auto; min-width: 0; display: flex; align-items: center; }
+/* 左下角加图；选好的图在输入框顶上：缩略图、能拿它做什么，右上角去掉 */
+.ws-attach { position: relative; flex: none; width: 32px; height: 32px; margin-left: -8px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--muted); transition: background .15s var(--ease), color .15s var(--ease); }
+.ws-attach:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+.ws-attach:disabled { opacity: .45; }
+.ws-attach-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.ws-attach-thumb { position: relative; flex: none; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--side); color: var(--muted); }
+.ws-attach-open { display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: var(--r-sm); background: none; overflow: hidden; cursor: zoom-in; }
+.ws-attach-open img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.ws-attach-remove { position: absolute; top: -8px; right: -8px; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: 50%; background: var(--ink); color: var(--paper); transition: background .15s var(--ease); }
+.ws-attach-remove:hover { background: var(--accent); }
+.ws-attach-note { min-width: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+/* 回答时打了字：停止键旁边另外一个“这一轮答完再发” */
+.ws-send-later { flex: none; margin-left: 4px; }
+.ws-send-later svg { color: var(--muted); }
+/* 发送左边：深度思考开关、选模型（菜单往放得下的那边开） */
+.ws-model { position: relative; min-width: 0; display: flex; align-items: center; gap: 4px; }
 .ws-think-toggle { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border: 1px solid var(--line2); border-radius: 999px; background: var(--paper);
   color: var(--muted); font-size: 12.5px; white-space: nowrap; transition: background .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease); }
 .ws-think-toggle:hover { background: var(--hover); color: var(--ink2); }
 .ws-think-toggle.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
-.ws-model-btn { display: inline-flex; align-items: center; gap: 3px; height: 28px; padding: 0 6px 0 9px; border: 0; border-radius: var(--r-sm); background: none;
+.ws-model-btn { position: relative; min-width: 0; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px 0 8px; border: 0; border-radius: var(--r-sm); background: none;
   color: var(--ink2); font-size: 13px; white-space: nowrap; transition: background .15s var(--ease); }
 .ws-model-btn:hover, .ws-model-btn[aria-expanded="true"] { background: var(--hover); }
-.ws-model-btn svg { color: var(--muted); transform: rotate(180deg); transition: transform .2s var(--ease); }
-.ws-model-btn[aria-expanded="true"] svg { transform: none; }
-.ws-model-menu { position: absolute; bottom: calc(100% + 8px); right: 0; width: 290px; max-height: min(520px, calc(100vh - 160px)); overflow-y: auto; }
-.ws-model-menu > * { flex: none; } /* 选项多了在菜单里滚动，不压扁 */
-.ws-model-menu > button { height: auto; min-height: 32px; padding: 7px 10px; justify-content: space-between; }
-.ws-model-menu > button svg { flex: none; color: var(--accent); }
+.ws-model-btn .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ws-model-btn svg { flex: none; }
+.ws-model-btn .caret { color: var(--muted); transform: rotate(180deg); transition: transform .2s var(--ease); }
+.ws-model-btn[aria-expanded="true"] .caret { transform: none; }
+.ws-model-btn .bulb { color: var(--faint); }
+.ws-model-btn .bulb.on { color: var(--accent); }
+/* 思考开关的说明：悬停一会儿、或用键盘移到开关上时出来，在开关上方 */
+.ws-think-wrap { position: relative; display: inline-flex; }
+.ws-tip { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 61; width: 280px; padding: 8px 12px; display: flex; flex-direction: column; gap: 4px;
+  border: 1px solid var(--line2); border-radius: var(--r); background: var(--paper); box-shadow: var(--lift); font-size: 12.5px; line-height: 1.5; color: var(--muted); white-space: normal;
+  pointer-events: none; visibility: hidden; opacity: 0; transform: translateY(4px); transition: opacity .15s var(--ease), transform .15s var(--ease), visibility 0s linear .15s; }
+.ws-tip.show { visibility: visible; opacity: 1; transform: none; transition: opacity .15s var(--ease) .2s, transform .15s var(--ease) .2s, visibility 0s linear .2s; }
+.ws-tip b { font-size: 13px; font-weight: 500; color: var(--ink); }
+.ws-tip .cur { color: var(--ink2); }
+/* 选模型的菜单（桌面）：位置和最高多高由页面按剩下的空间算（见 ModelMenu），里面滚 */
+.ws-model-menu { position: absolute; right: 0; z-index: 60; width: 300px; overflow-y: auto; overscroll-behavior: contain; padding: 4px;
+  background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r); box-shadow: var(--lift); animation: ws-in .12s var(--ease); }
+.ws-model-menu > .ws-menu-note { padding: 4px 8px; }
+.ws-model-list { display: flex; flex-direction: column; }
+.ws-model-group { display: flex; align-items: center; gap: 4px; padding: 8px 8px 4px; font-size: 12px; color: var(--faint); }
+.ws-model-group.toggle { width: 100%; min-height: 32px; border: 0; border-radius: var(--r-sm); background: none; text-align: left; color: var(--muted); }
+.ws-model-group.toggle:hover { background: var(--hover); color: var(--ink2); }
+.ws-model-group.toggle svg { color: var(--faint); }
+.ws-model-row { display: flex; width: 100%; min-height: 32px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border: 0; border-radius: var(--r-sm);
+  background: none; text-align: left; font-size: 13px; color: var(--ink); }
+.ws-model-row:hover:not(:disabled) { background: var(--hover); }
+.ws-model-row:disabled { color: var(--faint); }
+.ws-model-row svg { flex: none; color: var(--accent); }
+.ws-model-row .lock { color: var(--faint); }
+.ws-model-row.locked:not(:disabled) .ws-model-item b { color: var(--muted); } /* 游客能点去登录的锁着的模型：不像能选的那么黑 */
 .ws-model-item { display: flex; flex-direction: column; min-width: 0; }
 .ws-model-item b { font-weight: 500; }
-.ws-model-item small { font-size: 12px; line-height: 1.45; color: var(--muted); }
-.ws-model-menu > button:disabled small { color: var(--faint); }
-.ws-model-lock { display: inline-flex; flex: none; align-items: center; gap: 3px; margin-left: 8px; font-size: 11.5px; color: var(--faint); white-space: nowrap; }
-.ws-model-menu .ws-model-lock svg { color: inherit; }
-.ws-model-menu > button.locked:not(:disabled) .ws-model-item b { color: var(--muted); } /* 游客能点去登录的锁着的模型：不像能选的那么黑 */
+.ws-model-item small { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.ws-model-row:disabled small { color: var(--faint); }
+/* 选模型的底部弹层（手机）：最高 70dvh，里面滚；每行至少 52px；底下让出安全区 */
+.ws-sheet-scrim { position: fixed; inset: 0; z-index: 70; background: var(--scrim); animation: ws-fade .2s var(--ease); }
+.ws-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 71; max-height: 70vh; max-height: 70dvh; display: flex; flex-direction: column;
+  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: var(--paper); border-radius: var(--r-lg) var(--r-lg) 0 0; box-shadow: var(--lift);
+  animation: ws-sheet-up .2s var(--ease); }
+@keyframes ws-sheet-up { from { transform: translateY(100%); } }
+.ws-sheet-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 4px 16px; border-bottom: 1px solid var(--line); }
+.ws-sheet-head b { font-size: 16px; font-weight: 600; }
+.ws-sheet-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px 8px 16px; }
+.ws-sheet .ws-menu-note { padding: 8px 12px 4px; font-size: 13px; }
+.ws-sheet .ws-model-group { padding: 12px 12px 4px; font-size: 13px; }
+.ws-sheet .ws-model-group.toggle { min-height: 52px; padding: 8px 12px; }
+.ws-sheet .ws-model-row { min-height: 52px; padding: 8px 12px; font-size: 16px; }
+.ws-sheet .ws-model-item small { font-size: 13px; }
+.ws-sheet-think { margin-bottom: 4px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.ws-switch-row { display: flex; width: 100%; min-height: 52px; align-items: center; gap: 12px; padding: 8px 12px; border: 0; border-radius: var(--r-sm); background: none;
+  text-align: left; font-size: 16px; color: var(--ink); }
+.ws-switch-row .label { flex: 1; }
+.ws-switch { position: relative; flex: none; width: 40px; height: 24px; border-radius: 999px; background: var(--line2); transition: background .15s var(--ease); }
+.ws-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: var(--paper); transition: transform .15s var(--ease); }
+.ws-switch.on { background: var(--accent); }
+.ws-switch.on::after { transform: translateX(16px); }
+.ws-think-desc { margin: 0; padding: 0 12px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+/* 触屏没有悬停：点完手指还“停”在那儿，不留灰底；按下去的那一下给灰底 */
+@media (hover: none) {
+  .ws-sheet .ws-model-row:hover:not(:disabled), .ws-sheet .ws-model-group.toggle:hover, .ws-attach:hover:not(:disabled) { background: none; }
+  .ws-sheet .ws-model-row:active:not(:disabled), .ws-sheet .ws-model-group.toggle:active, .ws-switch-row:active, .ws-attach:active:not(:disabled) { background: var(--hover); }
+}
 
 
 /* ---------- 来源：正文里的角标、来源卡、回答下面的来源 ---------- */
@@ -611,6 +688,15 @@ button.ws-proc-head:hover { color: var(--ink); }
   .ws-head-title { text-align: center; }
   .ws-flow { padding: 20px 16px 24px; }
   .ws-composer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); }
+  /* 输入框 16px：iOS 上聚焦不自动放大页面（M3）。输入框下面一排：看得见的不变，透明点按区补到 44px，相邻的不重叠 */
+  .ws-input textarea, .ws-edit textarea, .ws-rename, .ws-field:not(.code) { font-size: 16px; }
+  .ws-input-bar { gap: 8px; }
+  .ws-send { position: relative; }
+  .ws-attach::after, .ws-send::after { content: ""; position: absolute; inset: -6px; }
+  .ws-model-btn::after, .ws-send-later::after { content: ""; position: absolute; inset: -8px 0; }
+  .ws-send-later { position: relative; margin-left: 0; }
+  .ws-attach-remove::after { content: ""; position: absolute; inset: -12px; }
+  .ws-attach-row { margin-top: 4px; }
   /* 新对话：欢迎语在中间，能做的事和今日灵感在输入框上面，输入框贴底，不在中间浮着 */
   .ws-main.fresh .ws-flow { margin: auto 0; padding-bottom: 24px; }
   .ws-main.fresh .ws-examples { flex: none; padding: 0 16px 8px; }
@@ -629,7 +715,7 @@ button.ws-proc-head:hover { color: var(--ink); }
 }
 /* 系统要求减少动效：只留转圈，其他动画和过渡都关掉 */
 @media (prefers-reduced-motion: reduce) {
-  .ws *:not(.spin), .ws *::before { animation: none !important; transition: none !important; }
+  .ws *:not(.spin), .ws *::before, .ws *::after { animation: none !important; transition: none !important; }
 }
 
 /* ---------- 记忆页 ---------- */
