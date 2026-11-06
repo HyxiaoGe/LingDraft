@@ -51,7 +51,7 @@ export default function Workspace() {
   const [suggesting, setSuggesting] = useState(false); // 这一轮结束了，推荐问题还在起（同一条事件流里还会再来一次状态）
   const [busy, setBusyState] = useState(false);
   const [error, setError] = useState(null);
-  const [putBack, setPutBack] = useState(null); // 要放回输入框的话：{thread, text}，每次是个新对象
+  const [putBack, setPutBack] = useState(null); // 要放回输入框的话：{thread, text, rejected?}，每次是个新对象；rejected 是没发出去被拒的（连着被拒不叠加）
   // 能选的模型（/api/models，Auto 在第一个）：没取到是 []，不显示选择，新对话按 Auto
   const [models, setModels] = useState(null);
   // 新对话选的模型：null 是 Auto；开新对话时还是上次选的，刷新页面回到 Auto。开始的对话以它定下的为准（st.model）
@@ -331,7 +331,7 @@ export default function Workspace() {
       // 额度用完了（429）：话放回输入框，提示里带上什么时候重置，游客还给登录入口；服务器上没有执行要去接
       if (e.status === 429 && e.detail?.code === "credits_exhausted") {
         const text = said ?? extra.edit;
-        if (text) setPutBack({ thread: tidRef.current || "new", text });
+        if (text) setPutBack({ thread: tidRef.current || "new", text, rejected: true });
         setError({ text: e.message, login: !!e.detail.guest });
         refreshCredits();
         setBusy(false);
@@ -340,7 +340,7 @@ export default function Workspace() {
       }
       // 新对话被拒（比如选的模型刚下架）：话放回输入框，重新取能选的模型
       if (!tidRef.current && e.status === 400 && said) {
-        setPutBack({ thread: "new", text: said });
+        setPutBack({ thread: "new", text: said, rejected: true });
         setError(`这句话没发出去，已经放回输入框（${e.message || e}）`);
         listModels().then(setModels).catch(() => {});
         setBusy(false);
@@ -396,7 +396,7 @@ export default function Workspace() {
         else run((cb, sig) => followResearchThread(id, null, cb, sig), null);
       } catch (e) {
         if (g !== gen.current) return;
-        setPutBack({ thread: id, text }); // 没排上：话放回输入框
+        setPutBack({ thread: id, text, rejected: true }); // 没排上：话放回输入框
         setError(`这句话没能排上，已经放回输入框，可以再发一次（${e.message || e}）`);
       }
     },
