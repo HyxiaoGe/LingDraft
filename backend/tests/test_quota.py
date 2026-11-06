@@ -12,7 +12,7 @@ from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
 from app.api.run_store import ERROR, SUCCESS, MemoryRunStore
 from app.identity import ADMIN, GUEST, USER, Identity
-from app.quota import CHINA_TZ, DAY, GUESTS, WEEK, Exhausted, Limits, MemoryUsage, PostgresUsage, Quota
+from app.quota import CHINA_TZ, DAY, GUESTS, WEEK, Exhausted, Limits, MemoryUsage, PostgresUsage, Quota, asks
 from tests.auth_helpers import bearer, guest_token, user_token
 from tests.research_helpers import events, last
 
@@ -52,7 +52,8 @@ def test_windows_follow_the_beijing_day_and_week():
     assert (rd.kind, rd.limit, rd.used, rd.remaining, rd.exhausted) == (DAY, None, 9000, float("inf"), False) and (rw.kind, rw.limit) == (WEEK, None)
     aio.run(q.check(Identity("root", ADMIN)))
     assert q.view(U1)["windows"][0] == {"kind": DAY, "limit": 100, "used": 20, "resets_at": "2026-11-05T00:00:00+08:00"}
-    assert q.view(Identity("root", ADMIN)) == {"unlimited": True, "warn_at": 0.8, "windows": [
+    assert "login" not in q.view(U1)  # 登录了的不用告诉他登录后会怎样
+    assert q.view(Identity("root", ADMIN)) == {"unlimited": True, "warn_at": 0.8, "per_ask": 200, "windows": [
         {"kind": DAY, "limit": None, "used": 9000, "resets_at": "2026-11-05T00:00:00+08:00"},
         {"kind": WEEK, "limit": None, "used": 9000, "resets_at": "2026-11-09T00:00:00+08:00"}]}
 
@@ -68,14 +69,19 @@ def test_guests_have_their_own_day_and_share_a_pool():
     u.put(row("guest:a", 0.006))
     with pytest.raises(Exhausted) as e:
         q.admit(g1)
-    assert e.value.window.kind == DAY and e.value.guest and "登录后每天 10000 credits" in str(e.value)
-    assert e.value.detail() == {"code": "credits_exhausted", "message": str(e.value), "guest": True, "kind": DAY, "limit": 10, "used": 10,
-                                "resets_at": "2026-11-05T00:00:00+08:00"}
+    assert e.value.window.kind == DAY and e.value.guest and "登录后每天 100 额度，约可问 0 次" in str(e.value) and "credits" not in str(e.value)
+    assert e.value.detail() == {"code": "credits_exhausted", "message": str(e.value), "guest": True, "per_ask": 200, "kind": DAY, "limit": 10,
+                                "used": 10, "resets_at": "2026-11-05T00:00:00+08:00", "login": {"day": 100, "week": 300}}  # 登录后的按这里的 LIMITS
+    assert q.view(g1)["login"] == {"day": 100, "week": 300} and q.view(g1)["per_ask"] == 200
     u.put(row("guest:c", 0.04))  # 所有游客合起来到 53 了：别的游客自己没用多少也进不来
     with pytest.raises(Exhausted) as e:
         q.admit(g2)
-    assert e.value.window.kind == GUESTS and "游客的总额度" in str(e.value)
+    assert e.value.window.kind == GUESTS and "所有游客合用的额度" in str(e.value) and e.value.detail()["login"] == {"day": 100, "week": 300}
     aio.run(q.check(U1))  # 登录用户不受游客总额影响
+    u.put(row("u1", 0.1))
+    with pytest.raises(Exhausted) as e:
+        q.admit(U1)
+    assert "login" not in e.value.detail() and "登录" not in str(e.value) and "共 100 额度" in str(e.value)
 
 
 def test_failed_turns_are_not_charged_and_reset_starts_over():
@@ -115,7 +121,7 @@ def test_api_refuses_to_start_a_turn_when_exhausted_and_reports_credits():
     r.quota.usage = MemoryUsage()  # 这里测的是接口的行为，账直接放进内存的（Postgres 的算法见下面那个测试）
     g = guest_token()
     c = TestClient(api_main.app, headers=bearer(g))
-    assert c.get("/api/credits").json() == {"unlimited": False, "warn_at": 0.8, "windows": [
+    assert c.get("/api/credits").json() == {"unlimited": False, "warn_at": 0.8, "per_ask": 200, "login": {"day": 100, "week": 300}, "windows": [
         {"kind": DAY, "limit": 10, "used": 0, "resets_at": c.get("/api/credits").json()["windows"][0]["resets_at"]},
         {"kind": GUESTS, "limit": 50, "used": 0, "resets_at": c.get("/api/credits").json()["windows"][1]["resets_at"]}]}
     tid = _new(c)
@@ -132,6 +138,7 @@ def test_api_refuses_to_start_a_turn_when_exhausted_and_reports_credits():
         assert resp.status_code == 429, resp.text
         d = resp.json()["detail"]
         assert d["code"] == "credits_exhausted" and d["kind"] == DAY and d["guest"] and "登录后每天" in d["message"]
+        assert d["per_ask"] == 200 and d["login"] == {"day": 100, "week": 300}
     assert c.get(f"/api/research/threads/{tid}/state").status_code == 200  # 看还是能看
     u = TestClient(api_main.app, headers=bearer(user_token("u1")))  # 登录用户不受影响
     assert [w["kind"] for w in u.get("/api/credits").json()["windows"]] == [DAY, WEEK]
@@ -145,6 +152,19 @@ def test_limits_come_from_config():
     assert Limits.from_config() == Limits(1000, 10000, 50000, 50000) == Limits(config.CREDITS_GUEST_DAILY, config.CREDITS_USER_DAILY,
                                                                                  config.CREDITS_USER_WEEKLY, config.CREDITS_GUESTS_DAILY)
     assert config.GUEST_PER_IP_DAILY == 5
+    assert config.CREDITS_PER_ASK == 200
+
+
+def test_asks_and_per_ask_follow_config(monkeypatch):
+    assert (asks(1000, 200), asks(10000, 200), asks(199.9, 200), asks(0, 200), asks(500, 0)) == (5, 50, 0, 0, 0)
+    q, _, _ = make()
+    monkeypatch.setattr(config, "CREDITS_PER_ASK", 120)  # 环境变量改了：接口和 429 都跟着
+    assert q.view(U1)["per_ask"] == 120
+    g = Identity("guest:a", GUEST)
+    q.usage.put(row("guest:a", 0.01))
+    with pytest.raises(Exhausted) as e:
+        q.admit(g)
+    assert e.value.detail()["per_ask"] == 120 and "约可问 0 次" in str(e.value)  # LIMITS 里登录后每天 100：不到一次
 
 
 # ---- Postgres ----

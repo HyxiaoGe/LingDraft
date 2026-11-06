@@ -409,8 +409,9 @@ def auth_claim(body: ClaimBody, who: Who):
 
 @app.get("/api/credits")
 def credits_view(who: Who):
-    """这个人的额度（见 app.quota）：{"unlimited": 管理员不限, "warn_at": 用了几成开始提醒, "windows": [{kind, limit, used, resets_at}]}，
-    kind 是 day（今天）、week（这周，登录用户才有）、guests（所有游客今天合计，页面不显示）。"""
+    """这个人的额度（见 app.quota）：{"unlimited": 管理员不限, "warn_at": 用了几成开始提醒, "per_ask": “约可问 N 次”按一次多少换算,
+    "windows": [{kind, limit, used, resets_at}]}，kind 是 day（今天）、week（这周，登录用户才有）、guests（所有游客今天合计，页面不显示）；
+    游客多一个 "login": {"day", "week"}（登录后每天、每周多少）。"""
     return research().quota.view(who)
 
 
