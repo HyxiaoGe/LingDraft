@@ -662,10 +662,11 @@ function ProcText({ it, cite }) {
 // 还在写的，最后一行半截的 Markdown 先收拾一下（见 tidyTyping）；写完的只去掉末尾半个引用
 const mdText = (it) => (it.live ? tidyTyping(it.text) : cutPartialCite(it.text));
 
-// 思考：收到就显示。这一轮在跑时展开，想完的那段、跑完以后都不自动收（收起来页面会往回缩、跳一下）；重新打开的对话里收成一行，点开看原文
+// 思考：收到就显示。这一轮在跑时展开，想完的那段不收（跑着的时候收起来页面会往回缩、跳一下）；这一轮跑完就收成一行（过程不收）：
+// 思考往往很长，开着把回答推远。重新打开的对话里也收着，点开看原文
 function Thinking({ it, running, thinking }) {
   const text = it.text;
-  const [shown, toggle, found] = useFoldOpen(`thinking:${it.id}`, running);
+  const [shown, toggle, found] = useFoldOpen(`thinking:${it.id}`, running, false);
   const box = useRef(null);
   useLayoutEffect(() => { // 正在想的时候框里跟着最新的字
     if (thinking && box.current) box.current.scrollTop = box.current.scrollHeight;
