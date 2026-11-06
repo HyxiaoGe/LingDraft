@@ -13,9 +13,12 @@
   --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", "STSong", "SimSun", serif;
   --r-sm: 6px; --r: 10px; --r-lg: 14px;
   --lift: 0 1px 2px rgba(20, 24, 31, .06), 0 12px 32px rgba(20, 24, 31, .14); /* 浮层：来源卡 */
+  --scrim: rgba(20, 24, 31, .32); /* 弹窗、抽屉后面压暗的那层 */
   --ease: cubic-bezier(.2, .7, .2, 1);
   display: grid; grid-template-columns: 248px minmax(0, 1fr);
-  height: 100vh; background: var(--paper); color: var(--ink); font: 14px/1.6 var(--sans);
+  /* 手机上地址栏伸缩时跟着可视区变（dvh），不认 dvh 的按 100vh；横屏刘海那侧让开 */
+  height: 100vh; height: 100dvh; padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left);
+  background: var(--paper); color: var(--ink); font: 14px/1.6 var(--sans);
 }
 /* 用 :where 把基础样式的优先级压到最低，各组件自己的颜色才不会被盖掉 */
 :where(.ws) button { font: inherit; color: inherit; cursor: pointer; }
@@ -27,6 +30,7 @@
 .ws .spin { animation: ws-spin .9s linear infinite; flex: none; }
 @keyframes ws-spin { to { transform: rotate(360deg); } }
 @keyframes ws-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes ws-fade { from { opacity: 0; } }
 .ws-muted { color: var(--muted); font-size: 13px; }
 
 /* ---------- 按钮 ---------- */
@@ -48,6 +52,22 @@
 /* 停止：运行中替换发送键，墨色底白方块 */
 .ws-send.stop:hover:not(:disabled) { background: #343a42; }
 .ws-send.stop:disabled { background: var(--ink2); opacity: .7; }
+/* 只有图标的按钮：顶栏的展开左栏、抽屉钮、新对话，左栏的收起、关闭 */
+.ws-icon-btn { flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-sm);
+  background: none; color: var(--muted); transition: background .15s var(--ease), color .15s var(--ease); }
+.ws-icon-btn:hover { background: var(--hover); color: var(--ink); }
+
+/* 占位（骨架）：东西还没取回来时先占好位置，不动 */
+.ws-skel { display: block; background: var(--hover); border-radius: var(--r-sm); }
+.ws-skel-title { width: 40%; max-width: 240px; height: 16px; }
+.ws-skel-model { display: inline-block; width: 120px; height: 28px; border-radius: 999px; }
+.ws-side-skel { display: flex; flex-direction: column; gap: 16px; padding: 8px; }
+.ws-skel-row { height: 16px; }
+.ws-skel-thread { display: flex; flex-direction: column; gap: 12px; }
+.ws-skel-bubble { align-self: flex-end; width: 44%; height: 40px; margin-bottom: 12px; border-radius: var(--r-lg); }
+.ws-skel-bubble.short { width: 28%; margin-top: 24px; }
+.ws-skel-line { height: 16px; }
+.ws-skel-chip { flex: none; height: 32px; border-radius: var(--r); }
 
 /* ---------- 左栏：索引 ---------- */
 .ws-side { background: var(--side); border-right: 1px solid var(--line); padding: 18px 12px 10px; display: flex; flex-direction: column; gap: 16px; min-height: 0; }
@@ -56,6 +76,12 @@
 .ws-brand .name { font: 600 17px/1 var(--serif); letter-spacing: .04em; }
 .ws-brand .tag { font-size: 12px; color: var(--muted); }
 .ws-brand .tag::before { content: ""; display: inline-block; width: 1px; height: 11px; background: var(--line2); margin: 0 8px 0 2px; vertical-align: -1px; }
+.ws-side-toggle { margin: -4px -4px -4px auto; } /* 收起（桌面）、关闭（抽屉）：贴在品牌这行右边，不把这行撑高 */
+/* 桌面上收起左栏：整栏藏掉，顶栏左边出展开钮（窄屏不管这个，左栏是抽屉） */
+@media (min-width: 721px) {
+  .ws.side-off { grid-template-columns: minmax(0, 1fr); }
+  .ws.side-off .ws-side { display: none; }
+}
 .ws-new { height: 38px; border-radius: var(--r); border: 1px solid var(--line2); background: var(--paper); display: flex; align-items: center; gap: 8px; padding: 0 12px;
   font-size: 13px; transition: border-color .15s var(--ease); }
 .ws-new:hover { border-color: var(--faint); }
@@ -131,7 +157,7 @@
 .ws-user-note span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- 登录弹窗 ---------- */
-.ws-overlay { position: fixed; inset: 0; z-index: 80; background: rgba(20, 24, 31, .32); display: flex; align-items: center; justify-content: center; padding: 16px; animation: ws-in .12s var(--ease); }
+.ws-overlay { position: fixed; inset: 0; z-index: 80; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 16px; animation: ws-in .12s var(--ease); }
 .ws-dialog { position: relative; width: 100%; max-width: 380px; background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r-lg); box-shadow: var(--lift); padding: 26px 26px 22px; }
 .ws-dialog-close { position: absolute; top: 10px; right: 10px; width: 30px; height: 30px; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); display: flex; align-items: center; justify-content: center; }
 .ws-dialog-close:hover { background: var(--hover); color: var(--ink); }
@@ -155,8 +181,11 @@
 
 /* ---------- 对话 ---------- */
 .ws-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
-.ws-head { padding: 0 28px; border-bottom: 1px solid var(--line); height: 58px; flex: none; display: flex; flex-direction: column; justify-content: center; }
-.ws-head-title { width: 100%; max-width: 624px; margin: 0 auto; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } /* 和对话正文对齐 */
+/* 顶栏：左边导航按钮、中间标题、右边（窄屏的新对话）。标题那栏和对话正文同宽、居中 */
+.ws-head { padding: 0 12px; border-bottom: 1px solid var(--line); height: 58px; flex: none; display: grid; grid-template-columns: 1fr minmax(0, 624px) 1fr; align-items: center; gap: 8px; }
+.ws-head-side { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.ws-head-side.end { justify-content: flex-end; }
+.ws-head-title { min-width: 0; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-scroll { flex: 1; overflow-y: auto; }
 .ws-flow { max-width: 680px; margin: 0 auto; padding: 28px 28px 32px; } /* 正文一行四十来个字 */
 /* 用户的话：下面一行是时间、复制、编辑，悬停时浮出，最后一句的一直在（浮在下一行右边的空处，不占高度） */
@@ -439,17 +468,29 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-main.fresh .ws-dock { position: static; } /* 下面这行贴着整个右栏的底，不是贴着输入框 */
 .ws-main.fresh .ws-ai-note { position: absolute; left: 0; right: 0; bottom: 12px; }
 .ws-welcome { text-align: center; }
-.ws-welcome h2 { font: 600 30px/1.35 var(--serif); letter-spacing: .02em; margin: 0 0 12px; }
+.ws-welcome h2 { font: 600 28px/1.35 var(--serif); letter-spacing: .02em; margin: 0 0 12px; }
 .ws-welcome p { color: var(--ink2); margin: 0 auto; }
 .ws-examples { flex: 1.4 1 0; width: 100%; max-width: 756px; margin: 0 auto; padding: 18px 28px 40px; position: relative; }
-/* 今日灵感：小标题，下面固定两行高；翻的时候一个接一个绕横轴转过去（时长、错开见 timeline.jsx 的 Inspirations） */
-.ws-inspire-label { height: 18px; margin-bottom: 8px; display: flex; align-items: center; justify-content: center; gap: 5px; font-size: 12px; color: var(--muted); }
-.ws-inspire { height: 72px; display: flex; flex-wrap: wrap; justify-content: center; align-content: flex-start; gap: 8px; overflow: hidden; }
+/* 能做的几件事：一排带图标的小签，点了把例子放进输入框 */
+.ws-abilities { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-bottom: 24px; }
+.ws-ability { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid var(--line2); border-radius: 999px; background: var(--paper);
+  font-size: 13px; color: var(--ink2); white-space: nowrap; transition: border-color .15s var(--ease), color .15s var(--ease); }
+.ws-ability svg { flex: none; color: var(--muted); transition: color .15s var(--ease); }
+.ws-ability:hover, .ws-ability:hover svg { border-color: var(--accent-line); color: var(--accent); }
+/* 今日灵感：小标题（说明是什么、换一批），下面两行题，不自己翻；放不下一行的题折成两行 */
+.ws-inspire-label { min-height: 24px; margin-bottom: 8px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0 4px; font-size: 12px; color: var(--muted); }
+.ws-inspire-label > * { white-space: nowrap; } /* 窄了整块换行，不在词中间断 */
+.ws-inspire-label svg { flex: none; }
+.ws-inspire-label b { font-weight: 500; color: var(--ink2); }
+.ws-inspire-label .hint { color: var(--faint); }
+.ws-inspire-label .hint::before { content: "·"; margin: 0 4px; }
+.ws-inspire-more { display: inline-flex; align-items: center; gap: 4px; height: 24px; margin-left: 8px; padding: 0 8px; border: 0; border-radius: var(--r-sm); background: none;
+  font-size: 12px; color: var(--muted); }
+.ws-inspire-more:hover { background: var(--hover); color: var(--ink); }
+.ws-inspire { min-height: 72px; display: flex; flex-wrap: wrap; justify-content: center; align-content: flex-start; gap: 8px; }
 .ws-inspire-ruler { position: absolute; top: 0; left: 0; right: 0; height: 0; overflow: hidden; visibility: hidden; display: flex; } /* 一排放不下的剪掉，不把页面撑宽；量的宽度不受影响 */
-.ws-inspire .ws-suggest-item, .ws-inspire-ruler .ws-suggest-item { flex: none; height: 32px; padding: 0 12px; line-height: 30px; white-space: nowrap; }
-.ws-inspire .ws-suggest-item { max-width: 100%; overflow: hidden; text-overflow: ellipsis; backface-visibility: hidden;
-  transition-property: opacity, transform, border-color, color; transition-duration: .3s, .3s, .15s, .15s; }
-.ws-inspire.flip .ws-suggest-item { opacity: 0; transform: rotateX(90deg); }
+.ws-inspire-ruler .ws-suggest-item { flex: none; height: 32px; padding: 0 12px; line-height: 30px; white-space: nowrap; }
+.ws-inspire .ws-suggest-item { flex: none; max-width: 100%; min-height: 32px; padding: 4px 12px; line-height: 1.5; text-align: left; }
 
 /* 输入框；往上翻着看时，上面浮一个“回到底部” */
 .ws-dock { position: relative; flex: none; }
@@ -539,19 +580,52 @@ button.ws-proc-head:hover { color: var(--ink); }
 .ws-cited a:hover { color: var(--accent) !important; }
 .ws-cited .meta { flex: none; color: var(--faint); font-size: 11.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
-/* 窄屏：左栏收窄，再放到上面 */
+/* 窄屏：左栏收窄；再窄（手机）左栏改成抽屉 */
 @media (max-width: 1100px) {
   .ws { grid-template-columns: 220px minmax(0, 1fr); }
   .ws-flow { padding: 24px 22px 28px; }
 }
+/* 手机：顶栏是“抽屉钮 + 标题 + 新对话”，对话列表、额度、账号都在左边滑出的抽屉里；输入框贴底，留出底部安全区。
+   能点的都至少 44px 见方（看得见的部分不一定这么大，用透明的点按区补） */
 @media (max-width: 720px) {
-  .ws { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
-  .ws-side { flex-direction: row; flex-wrap: wrap; align-items: center; border-right: 0; border-bottom: 1px solid var(--line); padding: 12px 16px; }
-  .ws-groups { display: none; }
-  .ws-foot { border-top: 0; margin-left: auto; padding: 0; }
-  .ws-credits-btn { display: none; }
+  .ws { grid-template-columns: minmax(0, 1fr); }
+  .ws-side { position: fixed; z-index: 40; top: 0; bottom: 0; left: 0; width: min(320px, calc(100vw - 48px)); height: 100vh; height: 100dvh;
+    padding: 12px 12px calc(8px + env(safe-area-inset-bottom)); gap: 12px; transform: translateX(-100%); visibility: hidden;
+    transition: transform .2s var(--ease), visibility 0s linear .2s; }
+  .ws.drawer .ws-side { transform: none; visibility: visible; box-shadow: var(--lift); transition: transform .2s var(--ease); }
+  .ws-scrim { position: fixed; inset: 0; z-index: 40; background: var(--scrim); animation: ws-fade .2s var(--ease); }
+  .ws-brand { min-height: 44px; }
+  .ws-icon-btn { width: 44px; height: 44px; }
+  .ws-side-toggle { margin: 0 -8px 0 auto; }
+  .ws-new { height: 44px; }
+  .ws-side .ws-task-link { padding: 12px 48px 12px 8px; }
+  .ws-side .ws-task .more { top: 0; right: 0; width: 44px; height: 44px; background: none; opacity: 1; } /* 没有悬停：一直在，不盖时间 */
+  .ws-side .ws-task:hover .time, .ws-side .ws-task.menu .time, .ws-side .ws-task:focus-within .time { visibility: visible; }
+  .ws-foot { min-height: 44px; padding: 4px 4px 0; }
+  .ws-credits-btn { position: relative; height: 28px; margin: 0; }
+  .ws-credits-btn::after { content: ""; position: absolute; inset: -8px 0; }
+  .ws-user-btn { height: 44px; margin: 0; }
+  .ws-login-link { min-width: 44px; min-height: 44px; padding: 0 8px; }
+
+  .ws-head { height: 48px; padding: 0 4px; gap: 4px; grid-template-columns: 1fr minmax(0, max-content) 1fr; }
+  .ws-head-title { text-align: center; }
   .ws-flow { padding: 20px 16px 24px; }
-  .ws-composer { padding: 8px 16px 14px; }
+  .ws-composer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); }
+  /* 新对话：欢迎语在中间，能做的事和今日灵感在输入框上面，输入框贴底，不在中间浮着 */
+  .ws-main.fresh .ws-flow { margin: auto 0; padding-bottom: 24px; }
+  .ws-main.fresh .ws-examples { flex: none; padding: 0 16px 8px; }
+  .ws-main.fresh .ws-ai-note { position: static; }
+  /* 能做的事、今日灵感：看得见的 36px，透明点按区上下各补 4px 到 44px（两行之间隔 8px，点按区正好挨着不重叠） */
+  .ws-abilities { margin-bottom: 16px; }
+  .ws-ability, .ws-inspire .ws-suggest-item, .ws-inspire-more { position: relative; }
+  .ws-ability { height: 36px; }
+  .ws-inspire .ws-suggest-item { min-height: 36px; }
+  .ws-ability::after, .ws-inspire .ws-suggest-item::after { content: ""; position: absolute; inset: -4px 0; }
+  .ws-inspire { min-height: 80px; }
+  .ws-skel-chip { height: 36px; }
+  .ws-inspire-label { margin-bottom: 12px; }
+  .ws-inspire-more { height: 28px; }
+  .ws-inspire-more::after { content: ""; position: absolute; inset: -8px 0; } /* 往下补的 8px 加上题的 4px 正好是中间那 12px */
 }
 /* 系统要求减少动效：只留转圈，其他动画和过渡都关掉 */
 @media (prefers-reduced-motion: reduce) {
