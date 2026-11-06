@@ -3,7 +3,7 @@
 // 也能插进这一轮：模型做完手上这一步就看到它，插进去以后排在过程里。过程正在跑时展开，跑完不自动收起（用户自己收）；重新打开的对话里收成一行
 // “已完成 25 秒 · 搜了 6 次 · 读了 4 页”，点开看每一步。收起的内容还留在页面里，浏览器的查找搜得到（见 Fold）。
 // 每一轮是一个 section（.ws-turn），回答开头有“灵稿”的标识；三轮起右边（宽屏）或顶栏（窄屏）有轮次目录，见 TurnIndex。
-// 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。最后一轮的这些一直显示，之前的悬停才出现。
+// 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。这些一直显示，之前各轮的淡一档。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
@@ -20,6 +20,7 @@ import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
 import { TurnIndex, TurnIndexButton, turnEntries } from "./turns.jsx";
 import { IMAGE_ACCEPT, ImageError, prepareImage } from "./upload.js";
 import { WeatherCard, forecastsOf } from "./weather.jsx";
+import { NotifyToggle } from "./alert.jsx";
 
 // 今日灵感没取到时，新对话页显示这几个
 const EXAMPLES = [
@@ -116,7 +117,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   return (
     <section className={"ws-main" + (fresh ? " fresh" : "")} aria-label="对话">
       <HeadBar title={fresh ? "新对话" : title} end={index && !wide && <TurnIndexButton entries={entries} scroller={scrollRef} onJump={jumpTo} />} />
-      <div className="ws-scroll" ref={scrollRef}
+      <div className={"ws-scroll" + (index && wide ? " rail" : "")} ref={scrollRef}
         onScroll={(e) => {
           // 往上滚了：离底部远了就不再跟着到底。没往上滚（内容长高了、往下滚）不算离开：跳到底以后内容马上长高，滚动事件晚一帧到，
           // 这时离底已经远了，但用户没动
@@ -128,6 +129,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
           if (stick.current) setMore(false);
         }}>
         <div className="ws-flow">
+          {!fresh && !opening && <h1 className="ws-print-title">{title}</h1>/* 只在打印时出现：屏幕上标题在顶栏，打印不印顶栏（第 49 条） */}
           {fresh ? <Welcome /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} />}
           {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error.text ?? error}</span>
             {error.login && picker.onLogin && <button className="ws-btn ws-error-act" onClick={picker.onLogin}>登录</button>}</div>}
@@ -357,7 +359,7 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
         {itinerariesOf(items).map((card) => <ItineraryCard key={card.key} card={card} />)}
         <ImageCards steps={imagesOf(items)} tid={st?.thread_id} running={running} onRegenerate={last && idle ? act.say : null} />
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
-        {running && <LiveLine live={live} items={items} stopping={stopping} now={now} />}
+        {running && <LiveLine live={live} items={items} stopping={stopping} now={now} since={Date.parse(st?.running_since || rec?.started_at || "") || null} />}
         {!running && <AnswerSources nums={nums} sources={st?.sources} />}
         {!running && rec?.ended_at && rec.outcome === "no_reply" && <p className="ws-muted">这一轮没有给出文字回复。</p>}
         {failed && <Failed st={st} act={act} />}
@@ -377,7 +379,7 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
   );
 }
 
-// 用户说的话：下面是发送时间和“复制”，最后一句在空闲时还有“编辑”。pinned（最后一轮）一直显示，其他的悬停才出现
+// 用户说的话：下面是发送时间和“复制”，最后一句在空闲时还有“编辑”。都一直显示，pinned（最后一轮）以外的淡一档
 // 临时的输入框（改这句话、左栏改名）关掉以后，光标回到对话的输入框（等它从页面上撤掉再放）
 export const focusInput = () => setTimeout(() => dispatchEvent(new Event("ws-focus-input")));
 // 把一句话放进输入框（新对话页“能做的事”的例子），光标放在它后面
@@ -556,7 +558,7 @@ function didText(items) {
 // 过程里的一条条：思考、中途说的话、工具步骤，子任务是一张卡片。子任务卡里是它的子 agent 的这些，排法一样。
 // hideUnknown：子 agent 还在跑，它查到的来源要等它做完才进这一轮的来源表，还对不上的引用先不显示（不然先冒一个问号）
 function ProcItems({ items, st, nums, running, hideUnknown = false }) {
-  const cite = (sid) => (hideUnknown && !st?.sources?.[sid] ? null : <Mark n={nums[sid]} s={st?.sources?.[sid]} />);
+  const cite = (sid) => (hideUnknown && !st?.sources?.[sid] ? null : <Mark n={nums[sid]} s={st?.sources?.[sid]} nums={nums} sources={st?.sources} />);
   return items.map((it) => (it.type === "step" ? (it.kind === "task" ? <TaskCard key={`step:${it.id}`} s={it} st={st} nums={nums} running={running} />
     : <ToolRow key={`step:${it.id}`} s={it} running={running} />)
     : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} running={running} thinking={running && it.live && it.ms == null} />
@@ -642,7 +644,7 @@ function Item({ it, st, nums, running, lastItem }) {
       </div>
     );
   }
-  return <Reply it={it} cite={(sid) => <Mark n={nums[sid]} s={st?.sources?.[sid]} />} caret={running && lastItem} />;
+  return <Reply it={it} cite={(sid) => <Mark n={nums[sid]} s={st?.sources?.[sid]} nums={nums} sources={st?.sources} />} caret={running && lastItem} />;
 }
 
 // 正文：收到多少显示多少（后端约每 80ms 来一批），不再人为地一个个字往外放；正在写的时候末尾有光标
@@ -767,7 +769,8 @@ const SLOW = 30000; // 同一步这么久没有新进展：说一声比平常慢
 
 // 正在跑的这一轮最下面一行：在等什么、等了几秒（思考、正文在出字时这一行空着，它们自己在动）。
 // 不是读屏的活区：阶段一变就播会打断，开始、答完由 useAnnounce 说
-function LiveLine({ live, items, stopping, now }) {
+function LiveLine({ live, items, stopping, now, since }) {
+  const born = useRef(Date.now()); // 取不到这一轮的开始时间（刚发出去、状态还没回来）就从这行出现算
   const lastItem = items.at(-1);
   const pending = items.filter((i) => i.type === "step" && i.pending);
   const streaming = lastItem?.live && (lastItem.type === "text" || (lastItem.type === "thinking" && lastItem.ms == null));
@@ -783,6 +786,7 @@ function LiveLine({ live, items, stopping, now }) {
       {stage && <><Spinner size={14} /><span className="stage">{stage}</span></>}
       {secs > 0 && <span className="secs">{secs} 秒</span>}
       {secs * 1000 >= SLOW && <span className="slow">这一步比平常慢，可以接着等，也可以停止</span>}
+      {!stopping && <NotifyToggle since={since ?? born.current} now={now} />}
     </div>
   );
 }

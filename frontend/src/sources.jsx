@@ -1,8 +1,10 @@
-// 来源的显示：正文里的引用角标（悬停看来源卡），和每条回答下面这条回答用到的来源。
+// 来源的显示：正文里的引用角标（桌面悬停预览、点了钉住；手机点了从底部弹出），和每条回答下面这条回答用到的来源。
 // 也放着能收起的内容共用的 Fold：收起来不卸掉，浏览器的查找搜得到
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { IconChevron, IconExternal } from "./icons.jsx";
+import { IconChevron, IconClose, IconExternal } from "./icons.jsx";
+import { NavContext } from "./nav.jsx";
+import { Sheet } from "./sheet.jsx";
 import { domain, sourceName } from "./research.js";
 
 // 来源网站的图标，后端代取（/api/favicon/域名）；取不到显示域名首字母。取不到的域名记下来，这个页面里不再请求
@@ -21,56 +23,90 @@ function Favicon({ url }) {
   return <img className="ws-fav" src={`/api/favicon/${host}`} alt="" loading="lazy" onError={() => { noIcon.add(host); setFailed(host); }} />;
 }
 
-// 一个角标的来源卡：悬停或聚焦打开，移开收起；键盘按回车把焦点移进卡里，Esc 收起回到角标
-function usePop() {
-  const [rect, setRect] = useState(null);
+// 一个角标的来源卡（桌面）：悬停或键盘移上去是预览，移开就收；点一下钉住：滚动时跟着角标走（评审第 21 条：查来源常在滚动着读的时候），
+// 角标滚出看得见的地方、点外面、Esc、点卡上的关闭、Tab 到别处才收。键盘按回车钉住并把焦点移进卡里（落在“打开原文”），Esc 收起回到角标。
+// 触屏（iPad 这类宽屏也一样）只认点：手指按下去浏览器也会当成“移上去”，不拿它当悬停。手机上点开的是底部弹层（SourceSheet），这里只记开没开
+function usePop(mobile) {
+  const [pop, setPop] = useState(null); // {rect, pinned}；手机上 {sheet: true}
   const mark = useRef(null);
   const box = useRef(null);
   const timer = useRef(null);
-  const show = () => {
+  const quiet = useRef(false); // 收起以后把焦点还给角标：这次聚焦不再打开预览
+  const show = (pinned) => {
     clearTimeout(timer.current);
-    if (mark.current) setRect(mark.current.getBoundingClientRect());
+    const el = mark.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setPop((o) => ({ rect, pinned: pinned || !!o?.pinned }));
   };
   const hide = () => {
     clearTimeout(timer.current);
-    timer.current = setTimeout(() => setRect(null), 220);
+    timer.current = setTimeout(() => setPop((o) => (o?.pinned ? o : null)), 220);
   };
   const close = () => {
     clearTimeout(timer.current);
-    setRect(null);
+    setPop(null);
   };
   const back = () => {
     close();
+    quiet.current = true;
     mark.current?.focus();
+    quiet.current = false;
   };
   useEffect(() => () => clearTimeout(timer.current), []);
+  const open = !!pop;
   useEffect(() => {
-    if (!rect) return undefined;
+    if (!open || mobile) return undefined;
     const down = (e) => !box.current?.contains(e.target) && !mark.current?.contains(e.target) && close(); // 点别处就收起
-    const moved = (e) => !box.current?.contains(e.target) && close(); // 滚动、窗口变化时卡跟不上角标，收起
-    addEventListener("mousedown", down);
-    addEventListener("scroll", moved, true);
-    addEventListener("resize", close);
-    return () => { removeEventListener("mousedown", down); removeEventListener("scroll", moved, true); removeEventListener("resize", close); };
-  }, [rect]);
+    const follow = () => { // 滚动、窗口变了：卡跟着角标挪；角标滚出了对话区看得见的地方就收起
+      const el = mark.current;
+      if (!el?.isConnected) return close();
+      const r = el.getBoundingClientRect();
+      const view = el.closest(".ws-scroll")?.getBoundingClientRect() || { top: 0, bottom: innerHeight };
+      if (r.bottom < view.top || r.top > view.bottom) return close();
+      setPop((o) => (o ? { ...o, rect: r } : o));
+    };
+    const esc = (e) => e.key === "Escape" && !e.defaultPrevented && close(); // 焦点在别处（比如输入框）时按 Esc 也收，光标不动
+    const moved = (e) => !box.current?.contains(e.target) && !mark.current?.contains(e.target) && close(); // Tab 到了卡和角标以外：钉住的也收
+    addEventListener("pointerdown", down);
+    addEventListener("scroll", follow, true);
+    addEventListener("resize", follow);
+    addEventListener("keydown", esc);
+    addEventListener("focusin", moved);
+    return () => {
+      removeEventListener("pointerdown", down);
+      removeEventListener("scroll", follow, true);
+      removeEventListener("resize", follow);
+      removeEventListener("keydown", esc);
+      removeEventListener("focusin", moved);
+    };
+  }, [open, mobile]);
+  const mouse = (e) => e.pointerType === "mouse" && !mobile;
   return {
-    open: !!rect,
+    open,
+    close,
     trigger: {
       ref: mark,
-      onMouseEnter: show,
-      onMouseLeave: hide,
-      onFocus: show,
-      onBlur: hide,
-      onKeyDown: (e) => e.key === "Escape" && rect && back(),
+      onPointerEnter: (e) => mouse(e) && show(false),
+      onPointerLeave: (e) => mouse(e) && hide(),
+      onFocus: (e) => !mobile && !quiet.current && e.target.matches(":focus-visible") && show(false),
+      onBlur: () => !mobile && hide(),
+      onKeyDown: (e) => {
+        if (e.key === "Escape" && pop && !mobile) {
+          e.preventDefault();
+          back();
+        }
+      },
       onClick: (e) => {
-        if (e.detail === 0) { // 键盘按的回车或空格：把焦点移进卡里，“打开原文”才按得到
-          show();
-          requestAnimationFrame(() => box.current?.querySelector("a, button")?.focus());
-        } else if (rect) close();
-        else show();
+        if (mobile) return setPop({ sheet: true });
+        if (e.detail === 0) { // 键盘按的回车或空格：钉住，把焦点移进卡里，“打开原文”才按得到
+          show(true);
+          requestAnimationFrame(() => box.current?.querySelector(".ws-pop-actions a")?.focus());
+        } else if (pop?.pinned) close();
+        else show(true);
       },
     },
-    box: { boxRef: box, rect, onEnter: () => clearTimeout(timer.current), onLeave: hide, onClose: back },
+    box: { boxRef: box, rect: pop?.rect, onEnter: () => clearTimeout(timer.current), onLeave: hide, onClose: back },
   };
 }
 
@@ -82,35 +118,99 @@ function floatStyle(rect, width, height) {
 }
 const layer = (node) => createPortal(node, document.querySelector(".ws") || document.body);
 
-// 来源卡上那段开头是从哪来的：读到的正文、查文档（Context7）查到的文档、搜索摘要
-const EXCERPT_BADGES = { body: "读到正文", docs: "文档摘录", summary: "只读到搜索摘要" };
+// 来源卡上那段开头是从哪来的：读到的全文、查文档（Context7）查到的文档、只有搜索摘要。说法照术语表（已读全文 / 仅摘要）
+const EXCERPT_BADGES = { body: "已读全文", docs: "文档摘录", summary: "仅摘要" };
 
-function SourcePop({ boxRef, rect, s, n, onEnter, onLeave, onClose }) {
-  return layer(
-    <div ref={boxRef} className="ws-pop" style={floatStyle(rect, 340, 220)} role="dialog" aria-label={`来源 ${n}`}
-      onMouseEnter={onEnter} onMouseLeave={onLeave} onFocus={onEnter} onBlur={onLeave} onKeyDown={(e) => e.key === "Escape" && onClose()}>
+// 网址写成“域名 + 路径的开头”：同一个网站的几篇靠它分得清
+export function where(url) {
+  try {
+    const u = new URL(url);
+    const path = decodeURI(u.pathname).replace(/\/$/, "");
+    return domain(url) + (path ? (path.length > 28 ? path.slice(0, 28) + "…" : path) : "");
+  } catch {
+    return domain(url);
+  }
+}
+
+// 一条来源：编号和徽标、标题、网址和发布日期、开头一段、打开原文。桌面的来源卡和手机的底部弹层共用
+function SourceBody({ s, n, onClose }) {
+  return (
+    <>
       <div className="ws-pop-top">
         <span className="lb">{n}</span>
         <span className={"ws-badge " + (s.excerpt_kind === "summary" ? "summary" : "body")}>{EXCERPT_BADGES[s.excerpt_kind] || EXCERPT_BADGES.summary}</span>
+        {onClose && <button className="ws-icon-btn ws-pop-close" aria-label="关闭" onClick={onClose}><IconClose size={14} /></button>}
       </div>
       <div className="ws-pop-title">{sourceName(s)}</div>
-      <div className="ws-pop-meta"><Favicon url={s.url} />{domain(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""}</div>
+      <div className="ws-pop-meta"><Favicon url={s.url} />{where(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""}</div>
       {s.excerpt && <div className="ws-pop-excerpt">{s.excerpt.length > 180 ? s.excerpt.slice(0, 180) + "…" : s.excerpt}</div>}
       <div className="ws-pop-actions">
         <a href={s.url} target="_blank" rel="noreferrer" className="ws-btn ghost sm"><IconExternal size={13} />打开原文</a>
       </div>
+    </>
+  );
+}
+
+function SourcePop({ boxRef, rect, s, n, onEnter, onLeave, onClose }) {
+  return layer(
+    <div ref={boxRef} className="ws-pop" style={floatStyle(rect, 340, 220)} role="dialog" aria-label={`来源 ${n}`}
+      onMouseEnter={onEnter} onMouseLeave={onLeave} onFocus={onEnter} onBlur={onLeave} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } }}>
+      <SourceBody s={s} n={n} onClose={onClose} />
     </div>,
   );
 }
 
-// 正文里的引用角标：编号是这条回答里的，悬停看来源。不在这条对话来源里的 id 标成问号
-export function Mark({ n, s }) {
-  const pop = usePop();
+// 手机上点角标：底部弹出这条来源（M5）。下面能切到这一轮的全部来源，点一条看那一条
+function SourceSheet({ n, nums, sources, onClose }) {
+  const all = Object.entries(nums || {}).map(([sid, k]) => [k, sources?.[sid]]).filter(([, x]) => x).sort((a, b) => a[0] - b[0]);
+  const [cur, setCur] = useState(n);
+  const [list, setList] = useState(false);
+  const body = useRef(null);
+  const first = useRef(true);
+  const s = all.find(([k]) => k === cur)?.[1];
+  useEffect(() => { // 打开时光标在关闭钮上（Sheet 管）；切换以后落在新内容上：列表落在刚才看的那条，卡落在“打开原文”
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    if (!body.current) return;
+    (list ? body.current.querySelector('[aria-current="true"]') : body.current.querySelector(".ws-pop-actions a"))?.focus();
+  }, [list, cur]);
+  return layer(
+    <Sheet title={list ? `这一轮的全部 ${all.length} 个来源` : `来源 ${cur}`} onClose={onClose} className="ws-src-sheet">
+      <div ref={body}>
+        {list ? (
+          <ol className="ws-src-list">
+            {all.map(([k, x]) => (
+              <li key={x.id}>
+                <button aria-current={k === cur ? "true" : undefined} onClick={() => { setCur(k); setList(false); }}>
+                  <span className="lb">{k}</span>
+                  <span className="txt"><span className="t">{sourceName(x)}</span><span className="meta">{where(x.url)}{x.published_at ? ` · ${x.published_at.slice(0, 10)}` : ""}</span></span>
+                </button>
+              </li>
+            ))}
+          </ol>
+        ) : s && (
+          <>
+            <SourceBody s={s} n={cur} />
+            {all.length > 1 && <button className="ws-btn ghost ws-src-all" onClick={() => setList(true)}>这一轮的全部 {all.length} 个来源</button>}
+          </>
+        )}
+      </div>
+    </Sheet>,
+  );
+}
+
+// 正文里的引用角标：编号是这条回答里的。桌面悬停预览、点了钉住；手机点了从底部弹出。不在这条对话来源里的 id 标成问号。
+// nums、sources：这一轮所有角标的编号和来源，手机弹层里列全部来源用
+export function Mark({ n, s, nums, sources }) {
+  const mobile = !!useContext(NavContext)?.mobile;
+  const pop = usePop(mobile);
   if (!s) return <span className="ws-mark off" title="这个来源不在搜索、读页的结果里">?</span>;
   return (
     <>
-      <button className={"ws-mark" + (pop.open ? " on" : "")} aria-label={`来源 ${n}`} {...pop.trigger}>{n}</button>
-      {pop.open && <SourcePop {...pop.box} s={s} n={n} />}
+      <button className={"ws-mark" + (pop.open ? " on" : "")} aria-label={`来源 ${n}`} aria-haspopup="dialog" {...pop.trigger}>{n}</button>
+      {pop.open && (mobile ? <SourceSheet n={n} nums={nums || { [s.id]: n }} sources={sources || { [s.id]: s }} onClose={pop.close} /> : <SourcePop {...pop.box} s={s} n={n} />)}
     </>
   );
 }
@@ -152,7 +252,8 @@ export function useFoldOpen(key, auto, keep = true) {
   return [open, () => set(!open), () => set(true)];
 }
 
-// 这条回答用到的来源：默认收成一行（几个网站图标加条数），点开按在回答里第一次出现的先后列出，编号和正文里的角标一样；收着时列表也在页面里，查找搜得到
+// 这条回答用到的来源：默认收成一行（几个网站图标加条数），点开按在回答里第一次出现的先后列出，编号和正文里的角标一样；收着时列表也在页面里，查找搜得到。
+// 每条：标题最多两行，下面一行是“域名 + 路径的开头”和发布日期，同一个网站的几篇分得清（评审第 21 条）
 export function AnswerSources({ nums, sources }) {
   const [open, setOpen] = useState(false);
   const used = Object.entries(nums).map(([sid, n]) => [n, sources?.[sid]]).filter(([, s]) => s);
@@ -170,8 +271,11 @@ export function AnswerSources({ nums, sources }) {
           {used.map(([n, s]) => (
             <li key={s.id}>
               <span className="lb">{n}</span>
-              <a href={s.url} target="_blank" rel="noreferrer" title={s.title ? `${s.title}\n${s.url}` : s.url}>{sourceName(s)}</a>
-              <span className="meta"><Favicon url={s.url} />{domain(s.url)}{s.published_at ? ` · ${s.published_at.slice(0, 10)}` : ""}</span>
+              <span className="txt">
+                <a href={s.url} target="_blank" rel="noreferrer" title={s.title ? `${s.title}\n${s.url}` : s.url}>{sourceName(s)}</a>
+                <span className="meta"><Favicon url={s.url} />{where(s.url)}{s.published_at ? ` · ${s.published_at.slice(0, 10)}` : ""}</span>
+                <span className="url">{s.url}</span>{/* 只在打印时出现：纸上点不了链接，印出网址 */}
+              </span>
             </li>
           ))}
         </ol>
