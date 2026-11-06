@@ -303,16 +303,16 @@ def tool_error(result: ToolMessage) -> dict | None:
 
 
 def _failure(data: Any, result: ToolMessage, failures: dict[str, str]) -> str:
-    """没做成的原因（页面上显示）。给模型的说明是英文的，页面上按错误码换成中文的；内容审核去掉的结果也一样。
-    11-05 以前存下的结果没有错误码，原因是结果里的 message（中文）。"""
+    """没做成的原因（页面上显示）：只给表里我们自己写的说法，内容审核去掉的也一样。给模型的说明是服务给的英文，不上页面。
+    表里没有的错误码、HTTP 状态码、不是结构化的结果（比如替没回来的调用补的英文说明）都不显示，给空，页面上用通用说法（“没搜成：出错了”）。
+    11-05 以前存下的结果没有错误码，按结果里的 kind 对表；那时的 message 里带着 HTTP 状态码（“搜索服务出错：HTTP 502”），也不显示。"""
     if isinstance(data, dict) and data.get("kind") == "content_blocked":
         return BLOCKED_NOTE
     if err := tool_error(result):
-        text = failures.get(err["code"], err["code"])
-        return f"{text}（HTTP {err['status']}）" if isinstance(err.get("status"), int) else text
-    if not isinstance(data, dict):
-        return text_of(result)
-    return str(data.get("message") or data.get("kind") or "")
+        return failures.get(err["code"], "")
+    if isinstance(data, dict):
+        return failures.get(str(data.get("kind") or ""), "")
+    return ""
 
 
 # weather-service 的错误码（见 agent-tools 的 services/weather/README.md）→ 页面上的说法；给模型的说明是服务给的英文
@@ -378,7 +378,7 @@ def _old_weather_step(cid: str, text: str, data: Any, result: ToolMessage) -> To
             return ToolStep(id=cid, kind="weather", text=text, title=fc.location, weather=fc)
         except ValidationError:
             return ToolStep(id=cid, kind="weather", text=text, ok=False, message="天气结果的格式不对")
-    return ToolStep(id=cid, kind="weather", text=text, ok=False, message=_failure(data, result, {}) or "没查到")
+    return ToolStep(id=cid, kind="weather", text=text, ok=False, message=_failure(data, result, WEATHER_FAILURES) or "没查到")
 
 
 # ---- 地图（maps-service 的 place_search、route_compare，见 app.tools.maps_mcp）----

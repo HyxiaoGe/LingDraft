@@ -213,7 +213,7 @@ def test_old_weather_results_still_show():
     assert step.ok and step.weather.location == "广东省·广州" and step.weather.requested_date is None
     gone = ToolMessage(content=json.dumps({"ok": False, "kind": "ambiguous_location", "message": "“朝阳”对得上好几个地方，没有查"}),
                        name=WEATHER_TOOL, tool_call_id="c1", status="error")
-    assert history.step_of(call, gone).message == "“朝阳”对得上好几个地方，没有查"
+    assert history.step_of(call, gone).message == history.WEATHER_FAILURES["ambiguous_location"]  # 原因按 kind 对表（第 18 条：只显示表里的说法）
 
 
 # ---- 整轮、起服务 ----
