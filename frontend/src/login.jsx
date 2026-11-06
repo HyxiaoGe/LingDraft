@@ -309,7 +309,7 @@ function EmailPanel({ onBack, onDone, setCritical }) {
   return (
     <form onSubmit={verify}>
       <h2 id="ws-login-title" className="ws-dialog-title">输入验证码</h2>
-      <p className="ws-dialog-desc">验证码已发到 {sent.masked}，几分钟内有效。</p>
+      <p className="ws-dialog-desc">验证码已发到 {sent.masked}{sent.expiresIn > 0 && `，${Math.max(1, Math.round(sent.expiresIn / 60))} 分钟内有效`}。</p>
       <input ref={input} className="ws-field code" inputMode="numeric" autoComplete="one-time-code" placeholder={"·".repeat(sent.codeLength)} maxLength={sent.codeLength}
         value={code} disabled={busy} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
       {error && <div className="ws-login-err" role="alert">{error}</div>}

@@ -276,7 +276,7 @@ async function authJson(path, init, csrf) {
   return body;
 }
 
-// 一次邮箱登录：start 发验证码（返回 {masked, resendAfter, codeLength}），resend 再发，verify 用验证码换 token（成功后并入游客的对话），cancel 作废
+// 一次邮箱登录：start 发验证码（返回 {masked, resendAfter, expiresIn, codeLength}），resend 再发，verify 用验证码换 token（成功后并入游客的对话），cancel 作废
 export class EmailLogin {
   async start(email, signal) {
     await loadConfig();
@@ -301,7 +301,7 @@ export class EmailLogin {
 
   async send(signal) {
     const r = await authJson("/auth/email/headless/send", { method: "POST", signal, body: JSON.stringify({ flow_id: this.flow, email: this.email }) }, this.csrf);
-    return { masked: r.masked_destination, resendAfter: r.resend_after || 0, codeLength: this.codeLength };
+    return { masked: r.masked_destination, resendAfter: r.resend_after || 0, expiresIn: r.expires_in || 0, codeLength: this.codeLength };
   }
 
   resend(signal) {
