@@ -94,7 +94,11 @@ async function resumeIfSignedInCentrally() {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 4000);
     const r = await resumeSession({ signal: ctl.signal }).finally(() => clearTimeout(t));
-    if (r.status === "resumed") await adopt();
+    if (r.status !== "resumed") return;
+    await adopt();
+    // 页面等不及：对话列表、模型已经按游客取过了（2026-11-06 dev 上看到列表空、模型锁着）。本地会话存好了就整页重载，按登录用户重取；
+    // 存不下（隐私模式等）就不重载，不然每次都 resume、每次都重载
+    if (tokenStore().getSessionSnapshot()) location.reload();
   } catch { /* 探测不到就算了 */ }
 }
 
