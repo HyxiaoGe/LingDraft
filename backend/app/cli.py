@@ -118,7 +118,8 @@ def research(args) -> None:
     r.run_turn(tid, None, _Printer())
     print()
     v = r.state_view(tid)
-    print(f"== {v['status']}" + (f"：{v['error']}" if v.get("error") else ""))
+    error = r.failure_detail(tid) or v.get("error")  # 命令行给开发看：异常原文
+    print(f"== {v['status']}" + (f"：{error}" if error else ""))
 
 
 def main() -> None:

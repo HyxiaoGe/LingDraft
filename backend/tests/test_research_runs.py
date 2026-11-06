@@ -15,6 +15,7 @@ from langgraph.constants import START
 from app import aio
 from app.api import main as api_main
 from app.api import runner as runner_mod
+from app.api import research_runner
 from app.api.research_runner import ResearchRunner
 from app.api.runner import LocalEventLog, LocalRunRegistry
 from tests.research_helpers import SIMPLE, after_tool, events, flaky_runner, gated_runner, hold, hold_model, last, new, run_async, say, state, wait_until
@@ -290,8 +291,13 @@ def test_failed_turn_keeps_content_and_can_retry(tmp_path):
     st = new(http, SIMPLE)
     assert st["status"] == "idle"
     calls["turn2"] = True
-    failed = last(events(say(http, st["thread_id"], "直接答：为什么")), "state")
-    assert failed["status"] == "failed" and "网络断了" in failed["error"]
+    ev = events(say(http, st["thread_id"], "直接答：为什么"))
+    failed = last(ev, "state")
+    # 假模型抛的是 RuntimeError：原文不给页面，状态和事件流里都是通用说法（原文在运行记录里，见 test_run_records）
+    generic = research_runner.FAILURE_TEXT["internal"]
+    assert failed["status"] == "failed" and failed["error_kind"] == "internal" and failed["error"] == generic
+    assert last(ev, "error") == {"message": generic, "kind": "internal"}
+    assert "网络断了" in rr.failure_detail(st["thread_id"])  # 评测、命令行看得到原文
     assert failed["sources"] == st["sources"] and failed["turns"][0] == st["turns"][0]
     assert len(failed["turns"]) == 2 and failed["turns"][1]["user"] == "直接答：为什么"  # 用户的话留着
     assert state(http, st["thread_id"])["status"] == "failed"  # 刷新回来也一样
@@ -360,7 +366,7 @@ def test_accepted_thread_survives_restart_before_running(tmp_path):
     fresh = ResearchRunner(fake=True)
     fresh.events, fresh.runs = LocalEventLog(), LocalRunRegistry()
     v = fresh.state_view("acc00001")
-    assert v["exists"] and v["status"] == "failed" and v["error"] == "上次运行没跑完就停了" and v["turns"][0]["user"] == SIMPLE
+    assert v["exists"] and v["status"] == "failed" and v["error"] == "上次运行没跑完就停了" and v["error_kind"] == "cut_short" and v["turns"][0]["user"] == SIMPLE
     end = last([(e, d) for _, e, d in run_async(_drain(fresh.retry("acc00001")))], "state")
     assert end["status"] == "idle" and end["turns"][0]["record"]["outcome"] == "ok"
 
@@ -372,7 +378,8 @@ def test_run_cut_short_is_failed_and_retryable(client, rr):
     aio.run(rr.run_store.claim("cut00001", "u1"))  # 归接口测试带的那个人（tests/auth_helpers.USER）
     aio.run(rr.graph.ainvoke(None, cfg, interrupt_before=["tools"]))
     st = state(client, "cut00001")
-    assert st["status"] == "failed" and "没跑完" in st["error"]
+    assert st["status"] == "failed" and "没跑完" in st["error"] and st["error_kind"] == "cut_short"
+    assert rr.failure_detail("cut00001") is None  # 半路停了，没有异常原文
     end = last(events(_retry(client, "cut00001")), "state")
     assert end["status"] == "idle" and end["turns"][0]["record"]["outcome"] == "ok"
 

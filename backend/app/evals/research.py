@@ -229,7 +229,7 @@ def play(runner, tid: str, turn: CaseTurn, option: str | None = None) -> dict:
     # 每次调模型的输入和其中命中缓存的，看前缀缓存接没接上（上一轮发过的这一轮第一次调用就该命中）
     calls = [{"input": m.usage_metadata["input_tokens"], "cached": (m.usage_metadata.get("input_token_details") or {}).get("cache_read", 0)}
              for m in ais if m.usage_metadata]
-    return {"say": turn.say, "events": len(events), "status": view["status"], "error": view.get("error"),
+    return {"say": turn.say, "events": len(events), "status": view["status"], "error": runner.failure_detail(tid) or view.get("error"),
             "reply": history.final_text(msgs[history.last_human(msgs) + 1:]), "items": t["items"],
             "suggestions": rec_turn.get("suggestions", []), "usage": rec_turn.get("usage"), "outcome": rec_turn.get("outcome"),
             "model": rec_turn.get("model"),  # 这一轮实际用的（Auto 以后会按问题选）

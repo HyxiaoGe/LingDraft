@@ -119,7 +119,7 @@ def _answered(msgs: list) -> bool:
 
 def test_first_turn_searches_reads_and_replies(chat):
     v = chat.say("查一下 AI 海报工具的局部修改")
-    assert v["status"] == "idle" and v["title"] == "标题：查一下 AI 海" and v["error"] is None
+    assert v["status"] == "idle" and v["title"] == "标题：查一下 AI 海" and v["error"] is None and v["error_kind"] is None
     (turn,) = v["turns"]
     assert turn["user"] == "查一下 AI 海报工具的局部修改"
     # 思考、步骤、正文按发生的先后穿插
@@ -385,12 +385,13 @@ def test_search_auth_error_fails_the_run():
     with pytest.raises(GatewayAuthError):
         c.say("比较两款笔记软件")
     v = c.view()
-    assert v["status"] == "failed" and "401" in v["error"]
+    assert v["status"] == "failed" and v["error_kind"] == "tool" and "401" not in v["error"]  # 原文（HTTP 401）只在日志和运行记录里
+    assert "HTTP 401" in c.r.failure_detail(c.tid)  # 评测、命令行看得到原文
 
 
 def test_failed_parallel_search_shows_the_real_error():
     """同时搜两个，一个密钥出错：LangGraph 把还在等的另一个取消，也给它记一条 CancelledError。
-    页面上说的是真正出错的原因（401），不是被连带取消的那条。"""
+    页面上说的是真正出错的那条（工具服务出错），不是被连带取消的那条（那样会说成半路停了）。"""
     async def fail(query: str) -> str:
         if query.endswith("a"):  # 第一个还在等，第二个出错时被取消
             await asyncio.sleep(5)
@@ -407,15 +408,41 @@ def test_failed_parallel_search_shows_the_real_error():
     errors = [str(t.error) for t in c.r.graph.get_state({"configurable": {"thread_id": c.tid}}).tasks if t.error]
     assert len(errors) == 2 and errors[0] == "CancelledError()"  # 被取消的排在前面：以前页面上显示的就是它
     v = c.view()
-    assert v["status"] == "failed" and "401" in v["error"] and "Cancelled" not in v["error"]
+    assert v["status"] == "failed" and v["error_kind"] == "tool"
 
 
-def test_failure_text_skips_cancelled_tasks():
+def test_failure_skips_cancelled_tasks():
     """只有被取消的（进程退出时整轮被掐断）：就是半路停了，和没有错误记录时一样说。"""
     auth = "GatewayAuthError('搜索失败：HTTP 401')"
-    assert research_runner._failure_text(["CancelledError()", auth]) == "搜索失败：HTTP 401"
-    assert research_runner._failure_text(["CancelledError()"]) == research_runner._failure_text([]) == research_runner.CUT_SHORT
-    assert research_runner._failure_text(["RuntimeError('x')", auth]) == "x"  # 都是真出错的，照旧给第一条
+    f = research_runner._failure_of
+    assert f(["CancelledError()", auth]) == ("tool", research_runner.FAILURE_TEXT["tool"])
+    assert f(["CancelledError()"]) == f([]) == ("cut_short", research_runner.CUT_SHORT)
+    assert f(["RuntimeError('x')", auth]) == ("internal", research_runner.FAILURE_TEXT["internal"])  # 都是真出错的，看第一条
+
+
+def test_failure_shows_only_our_own_messages():
+    """页面上的原因：我们写给用户看的提示（模型服务不可用、内容审核）原样给；别的异常原文不给，换成这一类的通用说法。"""
+    f = research_runner._failure_of
+    down = "模型服务暂时不可用（超时），约 3 分钟后再试"
+    assert f([f"ModelUnavailable('{down}')"]) == ("model", down)
+    assert f([f"Interrupted('{down}')"]) == ("model", down)
+    assert f(["ContentBlocked('请求里的内容没通过内容审核')"]) == ("blocked", "请求里的内容没通过内容审核")
+    # 网关和它的子类（密钥、日上限、传图被拒）：原文里有 HTTP 状态码，换成通用说法
+    for name in ("GatewayError", "GatewayAuthError", "GatewayLimitError", "ImageRejected"):
+        assert f([f"{name}('搜索失败：HTTP 401')"]) == ("tool", research_runner.FAILURE_TEXT["tool"])
+    # 库的英文、解不开的 repr、提示是空的：都不给原文
+    for raw in ("KeyError('messages')", "ValueError('Invalid tool call: missing id')", "ModelUnavailable('a', 1)", "ModelUnavailable('')", "garbled"):
+        kind, text = f([raw])
+        assert kind == "internal" and text == research_runner.FAILURE_TEXT["internal"], raw
+
+
+def test_error_event_is_classified_like_the_state():
+    """事件流里的 error 事件和状态里的原因一样转写。"""
+    from app.model_guard import ModelUnavailable
+    assert research_runner._error_event(ModelUnavailable("模型服务暂时不可用（连接失败），稍后再试")) == {
+        "message": "模型服务暂时不可用（连接失败），稍后再试", "kind": "model"}
+    assert research_runner._error_event(RuntimeError("connection reset by peer")) == {
+        "message": research_runner.FAILURE_TEXT["internal"], "kind": "internal"}
 
 
 # ---- 停止 ----
@@ -752,7 +779,7 @@ def test_model_unavailable_fails_the_turn_and_retry_continues():
     with pytest.raises(ModelUnavailable):
         c.say("直接答")
     v = c.view()
-    assert v["status"] == "failed" and v["error"].startswith("模型服务暂时不可用（服务端出错）")
+    assert v["status"] == "failed" and v["error"].startswith("模型服务暂时不可用（服务端出错）") and v["error_kind"] == "model"
     c.r.retry_input(c.tid)
     v = c.run()
     assert v["status"] == "idle" and v["turns"][0]["items"][-1]["text"] == "直接回答：这个问题不用查。"
@@ -849,7 +876,7 @@ def test_model_breaking_again_fails_the_turn_like_before(chat, monkeypatch):
     with pytest.raises(ModelUnavailable):
         chat.say("一直断：比较两款笔记软件")
     v = chat.view()
-    assert v["status"] == "failed" and v["error"].startswith("模型服务暂时不可用（连接失败）")
+    assert v["status"] == "failed" and v["error"].startswith("模型服务暂时不可用（连接失败）") and v["error_kind"] == "model"
     assert len([e for e in chat.events if e["event"] == "restart"]) == 1  # 每再调一次发一条
 
 
