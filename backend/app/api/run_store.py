@@ -11,6 +11,7 @@
 
 还有一张 thread_owners：每段对话归谁（见 app.identity，登录用户的 id 或游客的 guest:…），开对话时记下，列表和所有对话接口按它查。
 登录以前的老对话没有这一行（没归谁）：页面上谁都看不到，相当于归档了，库里还在（2026-11-06 Sean 定，都是测试数据）。游客登录后把 TA 的对话整批改归账号（transfer）。
+这张表还记着置顶（pinned_at，2026-11-07 批次 D Sean 定存后端，换设备也在）：置顶跟着对话走，并进账号后还在，删对话一起删。
 """
 
 from __future__ import annotations
@@ -55,6 +56,8 @@ class RunStore(Protocol):
     async def owner_of(self, thread_id: str) -> str | None: ...  # 没记过（登录以前的老对话）是 None
     async def threads_of(self, owner: str) -> list[str]: ...  # 这个人的所有对话（线程 id）
     async def transfer(self, source: str, target: str) -> int: ...  # source 的对话全改归 target，返回改了几段
+    async def pin(self, thread_id: str, pinned: bool) -> str | None: ...  # 置顶（记下时间，置顶过的不改）或取消，返回置顶的时间；没归谁的不动、返回 None
+    async def pins_of(self, owner: str) -> dict[str, str]: ...  # 这个人置顶的对话：线程 id → 置顶的时间
 
     # 排着的话：{"text", "created_at", "updated_at"}
     # 接在排着的那句后面（front：放到前面，是取出来又放回去的，比排着的那句早），没有就新建
@@ -82,6 +85,7 @@ class MemoryRunStore:
         self._rows: dict[str, dict] = {}  # 按写入的先后
         self._pending: dict[tuple[str, str], dict] = {}
         self._owners: dict[str, str] = {}  # 线程 id → 归谁
+        self._pins: dict[str, str] = {}  # 线程 id → 置顶的时间
 
     async def create(self, run_id: str, thread_id: str, kind: str, turn_id: str | None, version: str | None) -> None:
         self._rows[run_id] = dict.fromkeys(FIELDS) | {"id": run_id, "thread_id": thread_id, "kind": kind, "turn_id": turn_id,
@@ -115,6 +119,7 @@ class MemoryRunStore:
         self._rows = {k: r for k, r in self._rows.items() if r["thread_id"] != thread_id}
         self._pending = {k: r for k, r in self._pending.items() if k[0] != thread_id}
         self._owners.pop(thread_id, None)
+        self._pins.pop(thread_id, None)
 
     async def claim(self, thread_id: str, owner: str) -> None:
         self._owners.setdefault(thread_id, owner)
@@ -130,6 +135,15 @@ class MemoryRunStore:
         for t in moved:
             self._owners[t] = target
         return len(moved)
+
+    async def pin(self, thread_id: str, pinned: bool) -> str | None:
+        if thread_id not in self._owners or not pinned:
+            self._pins.pop(thread_id, None)
+            return None
+        return self._pins.setdefault(thread_id, _iso(_now()))
+
+    async def pins_of(self, owner: str) -> dict[str, str]:
+        return {t: at for t, at in self._pins.items() if self._owners.get(t) == owner}
 
     async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict:
         now = _iso(_now())
@@ -166,6 +180,7 @@ _POSTGRES_DDL = (
     "ALTER TABLE pending_messages ADD COLUMN IF NOT EXISTS thinking boolean",  # 2026-11-05 加的，之前建好的表补上
     "CREATE TABLE IF NOT EXISTS thread_owners (thread_id text PRIMARY KEY, owner text NOT NULL, created_at timestamptz NOT NULL)",
     "CREATE INDEX IF NOT EXISTS thread_owners_owner_idx ON thread_owners (owner)",
+    "ALTER TABLE thread_owners ADD COLUMN IF NOT EXISTS pinned_at timestamptz",  # 2026-11-07 加的置顶，之前建好的表补上
 )
 
 
@@ -235,6 +250,15 @@ class PostgresRunStore:
 
     async def transfer(self, source: str, target: str) -> int:
         return len(await self._exec("UPDATE thread_owners SET owner = %s WHERE owner = %s RETURNING thread_id", (target, source)))
+
+    async def pin(self, thread_id: str, pinned: bool) -> str | None:
+        rows = await self._rows("UPDATE thread_owners SET pinned_at = CASE WHEN %s THEN COALESCE(pinned_at, %s) END WHERE thread_id = %s "
+                                "RETURNING pinned_at", (pinned, _now(), thread_id))
+        return rows[0]["pinned_at"] if rows else None
+
+    async def pins_of(self, owner: str) -> dict[str, str]:
+        rows = await self._rows("SELECT thread_id, pinned_at FROM thread_owners WHERE owner = %s AND pinned_at IS NOT NULL", (owner,))
+        return {r["thread_id"]: r["pinned_at"] for r in rows}
 
     async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict:
         # 思考开关按后发的那句：放到前面的（取出来又放回去的）比排着的早

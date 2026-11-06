@@ -15,7 +15,7 @@ from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
 from app.graph.research.graph import memory_checkpointer, thread_ids
 from tests.research_helpers import events, last, say
-from tests.auth_helpers import USER
+from tests.auth_helpers import USER, bearer, user_token
 
 
 @pytest.fixture
@@ -72,8 +72,29 @@ def test_list_threads_with_status(client):
     assert set(by_id) == {first["thread_id"], done["thread_id"]}
     assert rows[0]["thread_id"] == done["thread_id"]  # 最近有动静的在前
     d = by_id[done["thread_id"]]
-    assert d == {"thread_id": done["thread_id"], "title": done["title"], "status": "idle", "updated_at": d["updated_at"], "running_since": None}
+    assert d == {"thread_id": done["thread_id"], "title": done["title"], "status": "idle", "updated_at": d["updated_at"], "running_since": None,
+                 "pinned_at": None}
     assert d["updated_at"]
+
+
+def test_pin_threads(client):
+    """置顶存后端（批次 D）：再置顶一次不改时间；列表里每行带 pinned_at；取消置顶；别人的、没有的 404；删了对话置顶一起没。"""
+    a = last(_new(client, "直接答：好"), "state")["thread_id"]
+    b = last(_new(client, "直接答：再来"), "state")["thread_id"]
+    row = client.post(f"/api/research/threads/{a}/pin").json()
+    assert row["thread_id"] == a and row["title"] and row["pinned_at"]
+    assert client.post(f"/api/research/threads/{a}/pin").json()["pinned_at"] == row["pinned_at"]
+    by_id = {t["thread_id"]: t for t in client.get("/api/research/threads").json()["threads"]}
+    assert by_id[a]["pinned_at"] == row["pinned_at"] and by_id[b]["pinned_at"] is None
+    other = bearer(user_token("u2"))
+    assert client.post(f"/api/research/threads/{a}/pin", headers=other).status_code == 404
+    assert client.delete(f"/api/research/threads/{a}/pin", headers=other).status_code == 404
+    assert client.post("/api/research/threads/nope0000/pin").status_code == 404
+    assert client.delete(f"/api/research/threads/{a}/pin").json()["pinned_at"] is None
+    assert [t["pinned_at"] for t in client.get("/api/research/threads").json()["threads"]] == [None, None]
+    client.post(f"/api/research/threads/{b}/pin")
+    assert client.delete(f"/api/research/threads/{b}").status_code == 200
+    assert aio.run(api_main.research().run_store.pins_of("u1")) == {}
 
 
 def test_thread_ids_without_reading_checkpoints(tmp_path):
