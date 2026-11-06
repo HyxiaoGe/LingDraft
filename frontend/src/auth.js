@@ -23,7 +23,9 @@ const listeners = new Set();
 // ---- 页面用 ----
 
 // 当前身份的快照：ready 是初始化做完了（这之前不显示登录入口）；login 是有没有登录功能；me 见上
-export const snapshot = () => ({ ready: done, login: !!cfg?.login, me });
+// crowded 是领游客身份被拒了（同一地址一天领得太多）：页面弹登录框提示人多、请先登录
+export const snapshot = () => ({ ready: done, login: !!cfg?.login, me, crowded: crowded && !me });
+let crowded = false;
 export function subscribeAuth(fn) {
   listeners.add(fn);
   return () => listeners.delete(fn);
@@ -133,9 +135,13 @@ function newGuest() {
   if (!newGuestInFlight) {
     newGuestInFlight = (async () => {
       const resp = await fetch("/api/auth/guest", { method: "POST" });
-      if (!resp.ok) throw Object.assign(new Error(await detail(resp)), { status: resp.status });
+      if (!resp.ok) {
+        if (resp.status === 429 && !crowded) { crowded = true; notify(); }
+        throw Object.assign(new Error(await detail(resp)), { status: resp.status });
+      }
       const { token } = await resp.json();
       storage.set(GUEST_KEY, token);
+      if (crowded) { crowded = false; notify(); }
       return token;
     })().finally(() => { newGuestInFlight = null; });
   }
