@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { EmailLogin, checkSession, completeCallback, emailLoginAvailable, init, signIn, signOut, snapshot, subscribeAuth } from "./auth.js";
 import { IconClose, IconLock, Spinner } from "./icons.jsx";
-import { creditsText } from "./research.js";
+import { creditsLeft, creditsNum, creditsText } from "./research.js";
 
 // 当前身份：{ready, login, me}（见 auth.snapshot）。回到这个标签页时和 auth 服务对一下账（别处退出了就跟着退）
 export function useAuth() {
@@ -67,6 +67,19 @@ export function UserFoot({ auth, onLogin, credits, onOpen }) {
       )}
     </>
   );
+}
+
+// 左栏最下面常驻的一行（2026-11-06 Sean 定）：游客“试用额度 今天还剩 980 / 1000”（点了去登录），登录了“今天还剩 9800 / 10000”；
+// 显示最紧的那个窗口，用到八成变黄、用完变红；管理员“额度不限”，没取到不显示
+export function CreditsFoot({ credits, guest, onLogin }) {
+  if (!credits) return null;
+  if (credits.unlimited) return <span className="ws-foot-credits">额度不限</span>;
+  const left = creditsLeft(credits);
+  if (!left) return null;
+  const text = <>{guest && "试用额度 "}{left.span}还剩 <b>{creditsNum(left.remaining)}</b> / {left.limit}</>;
+  const cls = "ws-foot-credits" + (left.exhausted ? " out" : left.warn ? " warn" : "");
+  if (guest && onLogin) return <button className={cls} title="登录后额度更多" onClick={onLogin}>{text}</button>;
+  return <span className={cls}>{text}</span>;
 }
 
 // 今天、这周还剩多少 credits（1 credit = ¥0.001 的 API 成本）；管理员不限，没取到不显示

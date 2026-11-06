@@ -30,9 +30,13 @@ export function modelName(models, ref) {
 }
 
 // 这一轮用了多少 credits（后端按各模型的单价算好的，1 credit = ¥0.001 成本）：10 以上取整，以下留一位小数
+export function creditsNum(n) {
+  return n >= 10 ? Math.round(n) : n >= 0.1 ? n.toFixed(1) : "<0.1";
+}
+
 export function creditsText(n) {
   if (n == null) return null;
-  return `${n >= 10 ? Math.round(n) : n >= 0.1 ? n.toFixed(1) : "<0.1"} credits`;
+  return `${creditsNum(n)} credits`;
 }
 
 // 额度里最紧的那个窗口（自己的：今天、这周；所有游客合计的那个不显示），加上剩多少、是不是该提醒（用了 warn_at 以上）、是不是用完了。
