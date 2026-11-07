@@ -5,7 +5,7 @@ import { EmailLogin, checkSession, completeCallback, emailLoginAvailable, emailL
 import { IconClose, IconLock, IconLogin, IconSliders, Spinner } from "./icons.jsx";
 import { opener, useLayer } from "./layers.js";
 import { touch } from "./nav.jsx";
-import { creditsLeft, creditsLine, creditsShort, loginLine, num } from "./research.js";
+import { creditsLeft, creditsLine, loginLine, num } from "./research.js";
 import { Sheet } from "./sheet.jsx";
 import dialog from "./dialog.module.css";
 import styles from "./login.module.css";
@@ -109,8 +109,13 @@ function usePopClose(on, box, btn, close) {
 // 弹层挂到 .ws 里：颜色等变量定义在 .ws 上；手机上左栏是带 transform 的抽屉，挂在里面 fixed 会跟着抽屉走
 const onWs = (node) => createPortal(node, document.querySelector(".ws") || document.body);
 
-// 左栏最下面常驻的额度按钮：小圆环画剩余比例，旁边写剩多少（2026-11-07 Sean 定：不换算成次数）；管理员写“额度不限”。
-// 显示最紧的那个额度，用到八成变黄、用完变红；没取到不显示。点开是额度面板（UsagePanel，手机上是底部弹层），完整那句在面板里
+// 左栏最下面常驻的额度按钮：小圆环 +“额度”两个字，外面不写数（2026-11-07 Sean 定），按最紧的那个额度剩多少画圆环、上颜色：
+// 剩一半以上绿，一半以下黄，快用完（到了提醒线，和输入框上面的提醒同时）、用完红，按钮也染红；管理员不限是满的绿环。
+// 没取到不显示。具体剩多少、多久重置在点开的额度面板里（UsagePanel，手机上是底部弹层）
+function creditsTone(credits, left, frac) {
+  if (credits.unlimited) return "ok";
+  return left.exhausted ? "out" : left.warn ? "low" : frac <= 0.5 ? "mid" : "ok";
+}
 export function CreditsFoot({ credits, guest, onLogin, onOpen, mobile }) {
   const [open, setOpen] = useState(false);
   const btn = useRef(null);
@@ -120,17 +125,17 @@ export function CreditsFoot({ credits, guest, onLogin, onOpen, mobile }) {
   const left = credits.unlimited ? null : creditsLeft(credits);
   if (!credits.unlimited && !left) return null;
   const frac = left ? Math.max(0, Math.min(1, left.remaining / left.limit)) : 1;
-  const cls = side.credits + (left?.exhausted ? " " + side.out : left?.warn ? " " + side.warn : "");
+  const cls = side.credits + " " + side[creditsTone(credits, left, frac)];
   const line = credits.unlimited ? `额度不限，今天用了 ${num(usedBy(credits).day)} 额度` : creditsLine(left);
   const close = () => setOpen(false);
   const panel = <UsagePanel credits={credits} left={left} guest={guest} mobile={mobile} onLogin={onLogin && (() => { close(); onLogin(); })} />;
   const rect = open && !mobile ? btn.current?.getBoundingClientRect() : null;
   return (
     <>
-      <button ref={btn} className={cls} title={mobile ? undefined : line} aria-label={"额度：" + line} aria-haspopup="dialog" aria-expanded={open}
+      <button ref={btn} className={cls} aria-label={"额度：" + line} aria-haspopup="dialog" aria-expanded={open}
         onClick={() => { if (!open) onOpen?.(); setOpen(!open); }}>
         <Ring frac={frac} />
-        <span>{credits.unlimited ? "额度不限" : creditsShort(left)}</span>
+        <span>额度</span>
       </button>
       {open && mobile && onWs(<Sheet title="额度" onClose={close} className={styles.usageSheet}>{panel}</Sheet>)}
       {rect && (
