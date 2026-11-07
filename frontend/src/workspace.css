@@ -628,22 +628,6 @@
 .ws-welcome h2 { font: 600 28px/1.35 var(--serif); letter-spacing: .02em; margin: 0 0 12px; }
 .ws-welcome p { color: var(--ink2); margin: 0 auto; }
 .ws-examples { flex: 1.4 1 0; width: 100%; max-width: 756px; margin: 0 auto; padding: 18px 28px 40px; position: relative; }
-/* 能做的几件事：一排带图标的小签，点了把例子放进输入框 */
-.ws-abilities { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-bottom: 24px; }
-.ws-ability { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid var(--line2); border-radius: 999px; background: var(--paper);
-  font-size: 13px; color: var(--ink2); white-space: nowrap; transition: border-color .15s var(--ease), color .15s var(--ease); }
-.ws-ability svg { flex: none; color: var(--muted); transition: color .15s var(--ease); }
-@media (hover: hover) { .ws-ability:hover, .ws-ability:hover svg { border-color: var(--accent-line); color: var(--accent); } }
-/* 今日灵感：小标题（说明是什么、换一批），下面两行题，不自己翻；放不下一行的题折成两行 */
-.ws-inspire-label { min-height: 24px; margin-bottom: 8px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0 4px; font-size: 12px; color: var(--muted); }
-.ws-inspire-label > * { white-space: nowrap; } /* 窄了整块换行，不在词中间断 */
-.ws-inspire-label svg { flex: none; }
-.ws-inspire-label b { font-weight: 500; color: var(--ink2); }
-.ws-inspire-label .hint { color: var(--faint); }
-.ws-inspire-label .hint::before { content: "·"; margin: 0 4px; }
-.ws-inspire-more { display: inline-flex; align-items: center; gap: 4px; height: 24px; margin-left: 8px; padding: 0 8px; border: 0; border-radius: var(--r-sm); background: none;
-  font-size: 12px; color: var(--muted); }
-@media (hover: hover) { .ws-inspire-more:hover { background: var(--hover); color: var(--ink); } }
 .ws-inspire { min-height: 72px; display: flex; flex-wrap: wrap; justify-content: center; align-content: flex-start; gap: 8px; }
 .ws-inspire-ruler { position: absolute; top: 0; left: 0; right: 0; height: 0; overflow: hidden; visibility: hidden; display: flex; } /* 一排放不下的剪掉，不把页面撑宽；量的宽度不受影响 */
 .ws-inspire-ruler .ws-suggest-item { flex: none; height: 32px; padding: 0 12px; line-height: 30px; white-space: nowrap; }
@@ -915,24 +899,19 @@
   .ws-tool:has(.main a) { line-height: 44px; } /* 读的那页：这一行 44 高，链接上下撑满 */
   .ws-tool .main a { padding: 15px 0; } /* 字高各家不同（Chromium 16、WebKit 15），往大里给；超出这一行的部分被裁掉，点按区就是整行 44 */
   .ws-cited a { padding: 12px 0; }
-  /* 新对话：欢迎语在中间，能做的事和今日灵感在输入框上面，输入框贴底，不在中间浮着 */
+  /* 新对话：欢迎语在中间，今日灵感在输入框上面，输入框贴底，不在中间浮着 */
   .ws-main.fresh .ws-flow { margin: auto 0; padding-bottom: 24px; }
   .ws-main.fresh .ws-examples { flex: none; padding: 0 16px 8px; }
   .ws-main.fresh .ws-ai-note { position: static; }
-  /* 能做的事、今日灵感：看得见的 36px，透明点按区上下各补 4px 到 44px（两行之间隔 8px，点按区正好挨着不重叠） */
-  .ws-abilities { margin-bottom: 16px; }
-  .ws-ability, .ws-inspire .ws-suggest-item, .ws-suggest-list .ws-suggest-item, .ws-inspire-more { position: relative; }
-  .ws-ability { height: 36px; }
+  /* 今日灵感：看得见的 36px，透明点按区上下各补 4px 到 44px（两行之间隔 8px，点按区正好挨着不重叠） */
+  .ws-inspire .ws-suggest-item, .ws-suggest-list .ws-suggest-item { position: relative; }
   .ws-inspire .ws-suggest-item, .ws-suggest-list .ws-suggest-item { min-height: 36px; }
-  .ws-ability::after, .ws-inspire .ws-suggest-item::after, .ws-suggest-list .ws-suggest-item::after { content: ""; position: absolute; inset: -4px 0; }
+  .ws-inspire .ws-suggest-item::after, .ws-suggest-list .ws-suggest-item::after { content: ""; position: absolute; inset: -4px 0; }
   .ws-index-btn { width: 44px; padding: 0; }
   .ws-index-sheet .ws-index-turn { min-height: 48px; align-items: center; padding: 8px 12px; font-size: 16px; line-height: 24px; }
   .ws-index-sheet .ws-index-turn .n { min-width: 16px; }
   .ws-inspire { min-height: 80px; }
   .ws-skel-chip { height: 36px; }
-  .ws-inspire-label { margin-bottom: 12px; }
-  .ws-inspire-more { height: 28px; }
-  .ws-inspire-more::after { content: ""; position: absolute; inset: -8px 0; } /* 往下补的 8px 加上题的 4px 正好是中间那 12px */
   .ws-mark::after { inset: calc(50% - 22px); }
   .ws-notify { height: 32px; }
   .ws-notify::after { content: ""; position: absolute; inset: -6px 0; }

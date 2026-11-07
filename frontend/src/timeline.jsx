@@ -9,7 +9,7 @@ import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { listInspirations } from "./api.js";
 import { getDraft, setDraft } from "./drafts.js";
 import { failureText } from "./errors.js";
-import { IconArrowDown, IconArrowUp, IconBook, IconBulb, IconCheck, IconChevron, IconClose, IconCloudSun, IconCopy, IconDownload, IconEdit, IconFork, IconImage, IconInsert, IconList, IconLock, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconTrash, IconUndo, IconWarn, Spinner } from "./icons.jsx";
+import { IconArrowDown, IconArrowUp, IconBook, IconBulb, IconCheck, IconChevron, IconClose, IconCloudSun, IconCopy, IconDownload, IconEdit, IconFork, IconImage, IconInsert, IconLock, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconStop, IconTicket, IconTrain, IconTrash, IconUndo, IconWarn, Spinner } from "./icons.jsx";
 import { ImageCards, Viewer, drawn, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
@@ -155,7 +155,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
       return r;
     };
   }
-  // 新对话的“能做的事 + 今日灵感”：桌面在输入框下面，窄屏输入框贴底、它们在输入框上面。按看到的顺序放，Tab 和读屏的先后和眼睛看的一致
+  // 新对话的今日灵感：桌面在输入框下面，窄屏输入框贴底、它们在输入框上面。按看到的顺序放，Tab 和读屏的先后和眼睛看的一致
   const starters = fresh && <Inspirations onPick={act.start} />;
 
   const mode = fresh ? "new" : opening ? "opening" : st?.status === "queued" ? "queued" : busy || ACTIVE.has(st?.status) ? "busy" : st?.status || "busy";
@@ -318,7 +318,7 @@ function ThreadSkeleton() {
   );
 }
 
-// 新对话：欢迎语在输入框上面，下面是能做的几件事和今日灵感，三样一起放在中间偏上（窄屏输入框贴底，这些在它上面）
+// 新对话：欢迎语在输入框上面，下面是今日灵感，一起放在中间偏上（窄屏输入框贴底，这些在它上面）
 function Welcome() {
   return (
     <div className="ws-welcome">
@@ -328,33 +328,10 @@ function Welcome() {
   );
 }
 
-// 能做的几件事：点一下把一个例子放进输入框（不直接发），改改地点、日期再发；“改图”还会打开选图
-const ABILITIES = [
-  [IconSearch, "查资料", "国内几款 AI 眼镜各有什么优缺点？对比一下"],
-  [IconCloudSun, "看天气", "这周末北京天气怎么样？"],
-  [IconRoute, "地点和路线", "从上海虹桥站到外滩，坐地铁怎么走？"],
-  [IconTrain, "航班和火车", "下周五北京到上海的高铁有哪些车次？"],
-  [IconImage, "画图", "画一张秋天北京胡同的插画，暖色调"],
-  [IconEdit, "改图", "把这张图的背景换成海边，其他保持不变", true], // 放好例子，再打开选图
-];
-
-function Abilities() {
-  return (
-    <div className="ws-abilities" role="group" aria-label="能做的事">
-      {ABILITIES.map(([Icon, name, example, pick]) => (
-        <button key={name} className="ws-ability" title={pick ? `选一张图，放进输入框：${example}` : `放进输入框：${example}`}
-          onClick={() => { fillInput(example); if (pick) pickImage(); }}>
-          <Icon size={15} />{name}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 // 今日灵感：Fusion 每天出的题（后端代取，只留新闻、调研、常识、天气、生图），大家看到的一样，每次打开新对话打乱顺序。
-// 排两行，放得下几个放几个；每 15 秒一个接一个翻过去换下一批（批次 A 停过，2026-11-07 Sean 定恢复、改成 15 秒），
-// 鼠标放在上面、键盘停在上面时不翻；“换一批”马上翻，翻完重新数 15 秒。系统设了减少动态效果：直接换，不翻。
-// 一行放不下的题折成两行，不截断。点一下直接发。取不到就显示固定的几个例子，不写“今日灵感”。取回来之前先放占位，出来时页面不跳
+// 只有两行题，上面不放小标题、说明和“换一批”，也不放“能做的事”（2026-11-07 Sean 定）。放得下几个放几个；
+// 每 15 秒一个接一个翻过去换下一批（批次 A 停过，2026-11-07 Sean 定恢复、改成 15 秒），鼠标放在上面、键盘停在上面时不翻。
+// 系统设了减少动态效果：直接换，不翻。一行放不下的题折成两行，不截断。点一下直接发。取不到就显示固定的几个例子。取回来之前先放占位，出来时页面不跳
 const ROTATE_MS = 15000;
 const FLIP_MS = 300; // 和 .ws-inspire 里翻的过渡时长一致
 const FLIP_STAGGER = 80;
@@ -435,20 +412,15 @@ function Inspirations({ onPick }) {
   const paused = hover || focused;
   useEffect(() => {
     if (paused || !more) return undefined;
-    const t = setTimeout(() => next.current(), ROTATE_MS); // 换了一批（自己翻的、点“换一批”的）都重新数
+    const t = setTimeout(() => next.current(), ROTATE_MS); // 换了一批重新数
     return () => clearTimeout(t);
   }, [paused, more, start]);
 
   return (
     <section className="ws-examples" aria-label="新对话的起点">
-      <Abilities />
-      {/* 停翻只看小标题和两行题：外面这块往下撑满了页面，鼠标放在下面的空白处不算 */}
+      {/* 停翻只看两行题：外面这块往下撑满了页面，鼠标放在下面的空白处不算 */}
       <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
         onFocus={() => setFocused(true)} onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setFocused(false)}>
-      <div className="ws-inspire-label">
-        {pool?.today && <><IconSparkle size={13} /><b>今日灵感</b><span className="hint">每日更新，与你的对话无关</span></>}
-        {more && <button className="ws-inspire-more" onClick={() => next.current()}><IconLoop size={12} />换一批</button>}
-      </div>
       <div className="ws-inspire-ruler" ref={ruler} aria-hidden="true">
         {pool?.questions.map((q) => <span key={q} className="ws-suggest-item">{q}</span>)}
       </div>
@@ -538,8 +510,6 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
 // 用户说的话：下面是发送时间和“复制”，最后一句在空闲时还有“编辑”。都一直显示，pinned（最后一轮）以外的淡一档
 // 临时的输入框（改这句话、左栏改名）关掉以后，光标回到对话的输入框（等它从页面上撤掉再放）
 export const focusInput = () => setTimeout(() => dispatchEvent(new Event("ws-focus-input")));
-// 把一句话放进输入框（新对话页“能做的事”的例子），光标放在它后面
-const fillInput = (text) => dispatchEvent(new CustomEvent("ws-fill-input", { detail: text }));
 
 // 这句话带的图从哪儿取：刚发出去、还没存下来的用本机的；发出去的这一轮记下本机地址，之后接着用（不再从服务器取一遍）；别的从后端取
 function userImageSrc(t, live, tid) {
@@ -1017,8 +987,6 @@ const attachments = new Map();
 const keepImage = (key, att) => (att?.url ? attachments.set(key, att) : attachments.delete(key));
 // 发出去的图在本机的地址（图的编号 → blob 地址）：存下来的对话回来以后接着用它显示，不用再从服务器取一遍
 const sentImages = new Map();
-// 新对话页“改图”：放好例子，打开选图（见 Abilities）
-const pickImage = () => dispatchEvent(new Event("ws-pick-image"));
 
 // 回答时（queueing）也能打字：停止键一直在原位，不变成别的；打了字，旁边另外出一个“这一轮答完再发”，话排着，这一轮答完就发。Esc 停止回答。
 // held：已经有一句没发出去（排着或等着插进这一轮）。没发出去的话最多一句：这时还能打字，但发不出去，要先撤回那句、改好一起发。
@@ -1136,32 +1104,15 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
     focus(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [putBack]);
-  // 放进来的例子（见 fillInput）：输入框空着、或者还是上次放进来的那句，就换成这句；写着别的字时接在前面（和放回输入框的话一样）
-  const filled = useRef(null);
   useEffect(() => {
-    const fill = (e) => {
-      const t = e.detail;
-      const prev = filled.current; // setText 的更新函数是之后才跑的，先把上一句记下来
-      setText((cur) => (!cur.trim() || cur === prev ? t : `${t}\n${cur}`));
-      filled.current = t;
-      const el = ref.current;
-      if (!el || touch()) return; // 触屏上只把字放进去，不弹键盘
-      el.focus({ preventScroll: true });
-      requestAnimationFrame(() => el.setSelectionRange(t.length, t.length));
-    };
-    const pick = () => fileRef.current?.click();
     // 图上点了“改这张”（见 images.jsx）：当成选了这张图，桌面上光标进输入框好接着说
     const take = (e) => {
       if (!e.detail) return setImageError("没取到这张图，再点一次“改这张”");
       attachRef.current(e.detail);
       focus(true);
     };
-    addEventListener("ws-fill-input", fill);
-    addEventListener("ws-pick-image", pick);
     addEventListener("ws-attach-image", take);
     return () => {
-      removeEventListener("ws-fill-input", fill);
-      removeEventListener("ws-pick-image", pick);
       removeEventListener("ws-attach-image", take);
     };
   }, []);
