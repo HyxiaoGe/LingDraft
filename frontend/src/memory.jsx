@@ -20,8 +20,9 @@ function lastText(d, now) {
   return d.ended_at ? `${at} 整理过。` : `${at} 开始的那次整理没有做完，下次接着整理。`;
 }
 
-// undo：对话页的撤销（同一条提示，见 undo.jsx）；threads：对话列表（对出每条记忆是从哪段对话记下的）；onOpen(id)：打开那段对话
-export function MemoryPage({ auth, onLogin, undo, threads, onOpen }) {
+// undo：对话页的撤销（同一条提示，见 undo.jsx）；threads：对话列表（对出每条记忆是从哪段对话记下的）；onOpen(id)：打开那段对话；
+// onBack：回设置页（2026-11-07 Sean 定记忆只从设置页进，左栏、头像菜单里都不放）
+export function MemoryPage({ auth, onLogin, undo, threads, onOpen, onBack }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(null); // 正在改的那一条的 id
@@ -60,7 +61,7 @@ export function MemoryPage({ auth, onLogin, undo, threads, onOpen }) {
 
   return (
     <section className="ws-main" aria-label="记忆">
-      <HeadBar title="记忆" />
+      <HeadBar title="记忆" back={onBack && { label: "设置", onClick: onBack }} />
       <div className="ws-scroll">
         <div className="ws-flow mem">
           <p className="mem-intro">

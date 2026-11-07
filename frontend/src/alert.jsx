@@ -4,20 +4,20 @@
 import { useEffect, useRef, useState } from "react";
 import { IconBell } from "./icons.jsx";
 
-// ---- 要不要发系统通知：点了“答完通知我”记在本机（存不了就只记在这个页面里） ----
+// ---- 要不要发系统通知：点了“答完通知我”、或在设置页打开，记在本机（存不了就只记在这个页面里）。设置页（settings.jsx）也用这几个 ----
 const PREF = "ws-notify-done";
 let wanted = null;
-function wants() {
+export function wants() {
   if (wanted == null) {
     try { wanted = localStorage.getItem(PREF) === "1"; } catch { wanted = false; }
   }
   return wanted;
 }
-function setWants(v) {
+export function setWants(v) {
   wanted = v;
   try { if (v) localStorage.setItem(PREF, "1"); else localStorage.removeItem(PREF); } catch { /* 存不了：这个页面里照样算数 */ }
 }
-const permission = () => (typeof Notification === "undefined" ? "unsupported" : Notification.permission);
+export const permission = () => (typeof Notification === "undefined" ? "unsupported" : Notification.permission);
 
 // 用户没在看这个页面：切去了别的标签页，或者在别的应用里
 const away = () => document.hidden || !document.hasFocus();

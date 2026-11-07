@@ -1,8 +1,8 @@
-// 登录：左栏下面的登录入口和账号菜单、额度按钮和面板、登录弹窗（邮箱验证码、GitHub、Google）、/auth/callback 页。身份本身见 auth.js。
+// 登录：左栏下面的账号菜单（游客的有登录、设置）、额度按钮和面板、登录弹窗（邮箱验证码、GitHub、Google）、/auth/callback 页。身份本身见 auth.js。
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { EmailLogin, checkSession, completeCallback, emailLoginAvailable, emailLoginKnown, init, signIn, signOut, snapshot, subscribeAuth } from "./auth.js";
-import { IconClose, IconLock, Spinner } from "./icons.jsx";
+import { IconClose, IconLock, IconLogin, IconSliders, Spinner } from "./icons.jsx";
 import { opener, useLayer } from "./layers.js";
 import { touch } from "./nav.jsx";
 import { asksOf, creditsLeft, creditsLine, creditsParts, creditsShort, loginLine, num } from "./research.js";
@@ -26,49 +26,57 @@ export function useAuth() {
   return s;
 }
 
-// 左栏下面：游客看到“登录”，登录了看到头像和名字，点开是账号菜单（谁、退出登录）。手机上是底部弹层（规范：菜单用 bottom sheet）。
-// 记忆不在这里：2026-11-07 Sean 定放回左栏“新对话”下面一行，游客也看得见（推翻 11-06 收进这里的做法，评审第 30 条）
-export function UserFoot({ auth, onLogin, mobile }) {
+// 左栏下面：头像和名字，点开是账号菜单。手机上是底部弹层（规范：菜单用 bottom sheet）。
+// 设置（2026-11-07 Sean 定）：登录了是“谁、设置、退出登录”；游客也有一个“游客”头像，菜单里是“登录、设置”。
+// 记忆只从设置页进，这里和左栏都不放。没有登录功能的部署没有账号，只留一个“设置”
+export function UserFoot({ auth, onLogin, onSettings, mobile }) {
   const [open, setOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const btn = useRef(null);
   const box = useRef(null);
   usePopClose(open && !mobile, box, btn, () => setOpen(false));
-  if (!auth.ready || !auth.login) return null;
-  if (!auth.me) return <button className="ws-login-link" onClick={onLogin}>登录</button>;
+  if (!auth.ready) return null;
+  if (!auth.login) return <button className="ws-login-link" onClick={onSettings}>设置</button>;
   const { me } = auth;
-  const label = me.name || me.email || "已登录";
+  const label = me ? me.name || me.email || "已登录" : "游客";
   const close = () => setOpen(false);
+  const pick = (fn) => () => { close(); fn?.(); };
   const leave = () => { setLeaving(true); signOut().catch(() => setLeaving(false)); };
   const note = "退出后在 Fusion 等其他应用也会退出。";
-  const who = (
+  const who = me && (
     <div className="ws-menu-note ws-user-note">
       <b>{me.name || me.email}</b>
       {me.name && me.email && <span>{me.email}</span>}
       {me.tier === "admin" && <span>管理员</span>}
     </div>
   );
+  // 每一项：[图标, 字, 点了做什么, 正在退出时转圈]
+  const items = me
+    ? [[IconSliders, "设置", pick(onSettings)], [IconClose, "退出登录", leave, leaving]]
+    : [[IconLogin, "登录", pick(onLogin)], [IconSliders, "设置", pick(onSettings)]];
   const rect = open && !mobile ? btn.current?.getBoundingClientRect() : null;
   return (
     <>
-      <button ref={btn} className="ws-user-btn" aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={open} title={mobile ? undefined : me.email} onClick={() => setOpen(!open)}>
-        <Avatar me={me} />
+      <button ref={btn} className="ws-user-btn" aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={open} title={mobile || !me ? undefined : me.email} onClick={() => setOpen(!open)}>
+        {me ? <Avatar me={me} /> : <span className="ws-avatar guest" aria-hidden="true">游</span>}
         <span className="ws-user-name">{label}</span>
       </button>
       {open && mobile && onWs(
         <Sheet title="账号" onClose={close} className="ws-act-sheet">
           {who}
-          <button className="ws-sheet-act" disabled={leaving} onClick={leave}>{leaving ? <Spinner size={18} /> : <IconClose size={18} />}退出登录</button>
-          <div className="ws-menu-note">{note}</div>
+          {items.map(([Icon, text, fn, busy]) => (
+            <button key={text} className="ws-sheet-act" disabled={leaving} onClick={fn}>{busy ? <Spinner size={18} /> : <Icon size={18} />}{text}</button>
+          ))}
+          {me && <div className="ws-menu-note">{note}</div>}
         </Sheet>,
       )}
       {rect && (
-        <div ref={box} className="ws-menu ws-user-menu" role="menu" aria-label="账号" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: 232 }}>
+        <div ref={box} className="ws-menu ws-user-menu" role="menu" aria-label="账号" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: me ? 232 : 160 }}>
           {who}
-          <button role="menuitem" disabled={leaving} onClick={leave}>
-            {leaving ? <Spinner size={14} /> : <IconClose size={14} />}退出登录
-          </button>
-          <div className="ws-menu-note">{note}</div>
+          {items.map(([Icon, text, fn, busy]) => (
+            <button key={text} role="menuitem" disabled={leaving} onClick={fn}>{busy ? <Spinner size={14} /> : <Icon size={14} />}{text}</button>
+          ))}
+          {me && <div className="ws-menu-note">{note}</div>}
         </div>
       )}
     </>
