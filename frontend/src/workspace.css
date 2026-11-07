@@ -202,11 +202,6 @@
 
 /* ---------- 对话 ---------- */
 .ws-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
-/* 顶栏：左边导航按钮、中间标题、右边（窄屏的新对话）。标题那栏和对话正文同宽、居中 */
-.ws-head { padding: 0 12px; border-bottom: 1px solid var(--line); height: 58px; flex: none; display: grid; grid-template-columns: 1fr minmax(0, 624px) 1fr; align-items: center; gap: 8px; }
-.ws-head-side { display: flex; align-items: center; gap: 4px; } /* 至少放得下自己的按钮：正文区窄、标题长时中间一栏让出来，按钮不被挤出去 */
-.ws-head-side.end { justify-content: flex-end; }
-.ws-head-title { min-width: 0; font-weight: 600; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-scroll { flex: 1; overflow-y: auto; container-type: inline-size; }
 /* 正文宽 832（2026-11-07 照 Fusion 的 52rem，原来 624 太挤），居中。--pad 是两边留白。
    代码块、表格和天气、地图、行程卡都和正文一样宽、左右对齐，太宽的在框里横着滑（2026-11-07 Sean 定，不再往两边放宽） */
@@ -727,8 +722,7 @@
 @media (max-width: 1100px) {
   .ws { grid-template-columns: 220px minmax(0, 1fr); }
   .ws-flow { --pad: 22px; padding: 24px var(--pad) 28px; }
-  /* 顶栏标题和正文左边对齐：正文边距 22，顶栏是内边距 + 8 的间隔，所以 14（刻度外，2026-11-07 Sean 批的例外，待确认第 22 条）。手机的顶栏在下面另算 */
-  .ws-head { padding-left: 14px; }
+  /* 顶栏的左内边距跟着改成 14（在 nav.jsx 的 HeadBar 上），和这里正文的 22 对齐 */
 }
 /* 手机：顶栏是“抽屉钮 + 标题 + 新对话”，对话列表、额度、账号都在左边滑出的抽屉里；输入框贴底，留出底部安全区。
    能点的都至少 44px 见方（看得见的部分不一定这么大，用透明的点按区补） */
@@ -743,8 +737,6 @@
   .ws-dialog-title { margin-right: 24px; }
   .ws-login-wait { min-height: 152px; }
 
-  .ws-head { height: 48px; padding: 0 4px; gap: 4px; grid-template-columns: 1fr minmax(0, max-content) 1fr; }
-  .ws-head-title { text-align: center; }
   .ws-flow { --pad: 16px; padding: 20px var(--pad) 24px; }
   .ws-composer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); }
   /* 输入框 16px：iOS 上聚焦不自动放大页面（M3）。输入框下面一排：看得见的不变，透明点按区补到 44px，相邻的不重叠 */
@@ -813,7 +805,7 @@
   .ws { display: block; height: auto; padding: 0; }
   .ws-main, .ws-scroll { display: block; overflow: visible; height: auto; }
   .ws-flow { max-width: none; padding: 0; }
-  .ws-head, .ws-dock, .ws-rail, .ws-jump, .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-live, .ws-error,
+  .ws-dock, .ws-rail, .ws-jump, .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-live, .ws-error,
   .ws-user-foot, .ws-ai-foot, .ws-pop, .ws-menu, .ws-toast-host, .ws-sheet, .ws-sheet-scrim, .ws-btn, .ws-icon-btn, .ws-svc-tools, .ws-svc .fare a,
   .chev { display: none !important; }
   .ws-print-title { display: block; margin: 0 0 24px; font: 600 20px/1.4 var(--serif); }

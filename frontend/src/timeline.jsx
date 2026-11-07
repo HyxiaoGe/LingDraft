@@ -179,7 +179,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   const manageable = !!(manage && tid && st && !opening);
   const status = running ? "running" : st?.status;
   const headMenu = manageable && (
-    <button className="ws-icon-btn ws-head-more" aria-label="这段对话的更多操作" title="更多操作" aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={!!menuAt}
+    <button className="ws-icon-btn" data-head-more aria-label="这段对话的更多操作" title="更多操作" aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={!!menuAt}
       onClick={(e) => setMenuAt(menuAt ? null : e.currentTarget)}>
       <IconMore size={18} />
     </button>
@@ -206,7 +206,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
     onDone: (t, how) => {
       setRenaming(false);
       if (t && t !== title) manage.rename(tid, t);
-      if (how !== "blur") requestAnimationFrame(() => document.querySelector(".ws-head-more")?.focus());
+      if (how !== "blur") requestAnimationFrame(() => document.querySelector("[data-head-more]")?.focus());
     },
   } : null;
   runningRef.current = running;

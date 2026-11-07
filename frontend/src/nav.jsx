@@ -39,7 +39,8 @@ export const SEARCH_KEY = MAC ? "⌘K" : "Ctrl+K";
 export const SEARCH_ARIA_KEY = MAC ? "Meta+K" : "Control+K";
 export const isSearchKey = (e) => (MAC ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && e.code === "KeyK";
 
-// 顶栏：左边是导航按钮，中间标题（和正文同宽、居中），右边窄屏时是新对话。title 为 null 是还不知道标题（打开中），显示一条占位。
+// 顶栏：左边是导航按钮，中间标题（和正文同宽 832、居中，左边和正文对齐；两边的按钮放不下时标题那栏让出来），右边窄屏时是新对话。手机上标题居中。
+// ≤1100 时正文左右边距是 22，顶栏左内边距 14 + 8 的间隔正好对上（2026-11-07 Sean 批的刻度外例外）title 为 null 是还不知道标题（打开中），显示一条占位。
 // end：右边再放的（对话页三轮起的轮次目录按钮，见 turns.jsx；这个对话的“⋯”菜单，见 timeline.jsx）。
 // edit：在顶栏上改标题时是 {value, onDone}，标题换成输入框
 export function HeadBar({ title, end, edit }) {
@@ -60,14 +61,15 @@ export function HeadBar({ title, end, edit }) {
     </>
   ) : null;
   return (
-    <header className="ws-head">
-      <div className="ws-head-side">{side}</div>
+    <header className={"grid h-[58px] flex-none grid-cols-[1fr_minmax(0,832px)_1fr] items-center gap-2 border-b border-line px-3 narrow:pl-3.5 print:hidden!"
+      + " phone:h-12 phone:grid-cols-[1fr_minmax(0,max-content)_1fr] phone:gap-1 phone:px-1"}>
+      <div className="flex items-center gap-1">{side}</div>
       {edit ? <TitleInput value={edit.value} className="head" onDone={edit.onDone} /> : (
-        <div className="ws-head-title" title={title || undefined}>
+        <div className="min-w-0 truncate text-[16px] font-semibold phone:text-center" title={title || undefined}>
           {title ?? <span className="ws-skel ws-skel-title" aria-label="正在打开对话" role="status" />}
         </div>
       )}
-      <div className="ws-head-side end">
+      <div className="flex items-center justify-end gap-1">
         {end}
         {nav?.mobile && <button className="ws-icon-btn" aria-label="新对话" onClick={nav.newChat}><IconPlus size={18} /></button>}
       </div>
