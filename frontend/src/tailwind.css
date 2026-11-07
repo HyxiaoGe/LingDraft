@@ -1,10 +1,15 @@
 /* Tailwind（2026-11-07 Sean 定：前端从手写 CSS 一块一块迁到 Tailwind + CSS modules，照 Fusion 的做法）。
-   先不引它的样式重置（preflight）：还没迁的地方靠 workspace.css 自己的重置，整页迁完再换。
-   颜色名指向 workspace.css 的变量，深色主题跟着换：text-ink、bg-side、border-line…… */
-@layer theme, base, components, utilities;
+   层的先后：theme → legacy（还没迁的 workspace.css，和全站的 style.css，两个照原来的先后）→ utilities。Tailwind 的类排在 legacy 后面，迁过来的组件写的类不会被旧的全局样式盖掉；
+   CSS modules 不在层里，比所有层都优先（同名属性 module 说了算）。
+   先不引 Tailwind 的样式重置（preflight）：还没迁的地方靠 workspace.css 自己的重置，整页迁完再换。
+   所以按钮这类元素要自己写清楚边框、底色、内边距（浏览器默认的都还在）。 */
+@layer theme, base, legacy, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
+@import "./workspace.css" layer(legacy);
+@import "./style.css" layer(legacy);
 @import "tailwindcss/utilities.css" layer(utilities);
 
+/* 颜色、字体、圆角、缓动指向 workspace.css 里 .ws 上的变量，深色主题跟着换：text-ink、bg-side、border-line、rounded-md…… */
 @theme inline {
   --color-paper: var(--paper);
   --color-side: var(--side);
@@ -25,4 +30,16 @@
   --font-sans: var(--sans);
   --font-serif: var(--serif);
   --font-mono: var(--mono);
+  /* 灵稿的三档圆角（6 / 10 / 14），占用 Tailwind 的 sm / md / lg 这三个名字 */
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r);
+  --radius-lg: var(--r-lg);
+  --ease-ws: var(--ease);
+  --shadow-lift: var(--lift);
 }
+
+/* 灵稿的断点（和 workspace.css 一致）：narrow 是 ≤1100 左栏收窄，phone 是 ≤720 手机（左栏变抽屉），desktop 是 >720。
+   phone 写在 narrow 后面，两个都满足时 phone 说了算 */
+@custom-variant narrow (@media (max-width: 1100px));
+@custom-variant phone (@media (max-width: 720px));
+@custom-variant desktop (@media (min-width: 721px));

@@ -7,6 +7,7 @@ import { opener, useLayer } from "./layers.js";
 import { touch } from "./nav.jsx";
 import { asksOf, creditsLeft, creditsLine, creditsParts, creditsShort, loginLine, num } from "./research.js";
 import { Sheet } from "./sheet.jsx";
+import side from "./sidebar.module.css";
 
 // 当前身份：{ready, login, me}（见 auth.snapshot）。回到这个标签页时和 auth 服务对一下账（别处退出了就跟着退）
 export function useAuth() {
@@ -36,7 +37,10 @@ export function UserFoot({ auth, onLogin, onSettings, mobile }) {
   const box = useRef(null);
   usePopClose(open && !mobile, box, btn, () => setOpen(false));
   if (!auth.ready) return null;
-  if (!auth.login) return <button className="ws-login-link" onClick={onSettings}>设置</button>;
+  if (!auth.login) {
+    return <button className="min-h-6 border-0 bg-transparent p-0 text-[12px] text-accent hover:underline hover:underline-offset-3 phone:min-h-11 phone:min-w-11 phone:px-2"
+      onClick={onSettings}>设置</button>;
+  }
   const { me } = auth;
   const label = me ? me.name || me.email || "已登录" : "游客";
   const close = () => setOpen(false);
@@ -58,9 +62,11 @@ export function UserFoot({ auth, onLogin, onSettings, mobile }) {
   const rect = open && !mobile ? btn.current?.getBoundingClientRect() : null;
   return (
     <>
-      <button ref={btn} className="ws-user-btn" aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={open} title={mobile || !me ? undefined : me.email} onClick={() => setOpen(!open)}>
+      <button ref={btn} className={"-my-1 -mr-1 ml-0 flex h-6 max-w-[120px] min-w-0 items-center gap-1.5 rounded-sm border-0 bg-transparent px-1 py-0 text-[12px] text-muted"
+        + " hover:bg-hover hover:text-ink aria-expanded:bg-hover aria-expanded:text-ink phone:m-0 phone:h-11"}
+        aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={open} title={mobile || !me ? undefined : me.email} onClick={() => setOpen(!open)}>
         {me ? <Avatar me={me} /> : <span className="ws-avatar guest" aria-hidden="true">游</span>}
-        <span className="ws-user-name">{label}</span>
+        <span className="min-w-0 truncate">{label}</span>
       </button>
       {open && mobile && onWs(
         <Sheet title="账号" onClose={close} className="ws-act-sheet">
@@ -111,7 +117,7 @@ export function CreditsFoot({ credits, guest, onLogin, onOpen, mobile }) {
   const left = credits.unlimited ? null : creditsLeft(credits);
   if (!credits.unlimited && !left) return null;
   const frac = left ? Math.max(0, Math.min(1, left.remaining / left.limit)) : 1;
-  const cls = "ws-credits-btn" + (left?.exhausted ? " out" : left?.warn ? " warn" : "");
+  const cls = side.credits + (left?.exhausted ? " " + side.out : left?.warn ? " " + side.warn : "");
   const line = credits.unlimited ? `额度不限，今天用了 ${num(usedBy(credits).day)} 额度` : creditsLine(left);
   const close = () => setOpen(false);
   const panel = <UsagePanel credits={credits} left={left} guest={guest} mobile={mobile} onLogin={onLogin && (() => { close(); onLogin(); })} />;
@@ -144,7 +150,7 @@ function Ring({ frac, size = 16 }) {
   const r = (size - 3) / 2;
   const c = 2 * Math.PI * r;
   return (
-    <svg className="ws-ring" width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
+    <svg className={side.ring} width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="currentColor" strokeOpacity=".18" strokeWidth="2.5" />
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
         strokeDasharray={c} strokeDashoffset={c * (1 - frac)} transform={`rotate(-90 ${size / 2} ${size / 2})`} />

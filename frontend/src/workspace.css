@@ -93,7 +93,6 @@
 .ws-skel { display: block; background: var(--hover); border-radius: var(--r-sm); }
 .ws-skel-title { width: 40%; max-width: 240px; height: 16px; }
 .ws-skel-model { display: inline-block; width: 120px; height: 28px; border-radius: 999px; }
-.ws-side-skel { display: flex; flex-direction: column; gap: 16px; padding: 8px; }
 .ws-skel-row { height: 16px; }
 .ws-skel-thread { display: flex; flex-direction: column; gap: 12px; }
 .ws-skel-bubble { align-self: flex-end; width: 44%; height: 40px; margin-bottom: 12px; border-radius: var(--r-lg); }
@@ -101,62 +100,9 @@
 .ws-skel-line { height: 16px; }
 .ws-skel-chip { flex: none; height: 32px; border-radius: var(--r); }
 
-/* ---------- 左栏：索引 ---------- */
-.ws-side { background: var(--side); border-right: 1px solid var(--line); padding: 18px 12px 10px; display: flex; flex-direction: column; gap: 16px; min-height: 0; }
-.ws-brand { display: flex; align-items: center; gap: 9px; padding: 0 6px; }
-.ws-brand .logo { width: 28px; height: 28px; border-radius: 7px; background: var(--ink); color: var(--paper); font: 600 16px/1 var(--serif); display: flex; align-items: center; justify-content: center; }
-.ws-brand .name { font: 600 17px/1 var(--serif); letter-spacing: .04em; }
-.ws-brand .tag { font-size: 12px; color: var(--muted); }
-.ws-brand .tag::before { content: ""; display: inline-block; width: 1px; height: 11px; background: var(--line2); margin: 0 8px 0 2px; vertical-align: -1px; }
-.ws-side-search { margin: -4px 0 -4px auto; } /* 搜对话（照豆包放在品牌这行右边）、收起（桌面）、关闭（抽屉）：贴在这行右边，不把这行撑高 */
-.ws-side-toggle { margin: -4px -4px -4px 0; }
-/* 桌面上收起左栏：整栏藏掉，顶栏左边出展开钮（窄屏不管这个，左栏是抽屉） */
-@media (min-width: 721px) {
-  .ws.side-off { grid-template-columns: minmax(0, 1fr); }
-  .ws.side-off .ws-side { display: none; }
-}
-.ws-new { height: 38px; border-radius: var(--r); border: 1px solid var(--line2); background: var(--paper); display: flex; align-items: center; gap: 8px; padding: 0 12px;
-  font-size: 13px; transition: border-color .15s var(--ease); }
-@media (hover: hover) { .ws-new:hover { border-color: var(--faint); } }
-.ws-new[aria-current] { border-color: var(--ink); box-shadow: inset 0 0 0 .5px var(--ink); }
-.ws-side-top { display: flex; flex-direction: column; gap: 4px; }
-.ws-groups { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; margin: 0 -4px; padding: 0 4px; }
-.ws-group { display: flex; flex-direction: column; gap: 1px; }
-.ws-group-name { font-size: 12px; font-weight: 500; color: var(--muted); padding: 0 8px 4px; display: flex; gap: 6px; }
-.ws-group-name span { color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
-/* 左栏的一行（第 13 条）：圆点和小字标状态，右边是时间，再右边“⋯”自己占一格，不盖时间。
-   和过程里的子任务卡同名（.ws-task，在后面），这里限定在 .ws-side 下把卡片的边框、底色、出现动画去掉：以前左栏每行被那条规则画成了白底带框的卡片 */
-.ws-side .ws-task { position: relative; display: flex; align-items: flex-start; border: 0; margin: 0; background: none; border-radius: var(--r-sm); transition: background .12s; animation: none; }
-/* 一行里排成两层：上面圆点、标题、时间，下面的小字（进行中用了多久、重名的日期）从标题下面一直铺到时间下面，不挤在标题那一栏里折行 */
-.ws-task-link { flex: 1; min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; padding: 7px 4px 7px 8px;
-  color: var(--ink) !important; text-decoration: none !important; }
-.ws-task-link .body { display: contents; }
-.ws-task-link .title { grid-column: 2; grid-row: 1; }
-.ws-task-link .sub { grid-column: 2 / 4; grid-row: 2; }
-.ws-task-link .time { grid-column: 3; grid-row: 1; margin-left: 8px; }
-.ws-side .ws-task.menu { background: var(--hover); }
-@media (hover: hover) { .ws-side .ws-task:hover { background: var(--hover); } }
-.ws-side .ws-task.sel { background: var(--sel); }
-.ws-task .dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 8px; flex: none; background: var(--faint); }
-.ws-task-link .dot { grid-column: 1; grid-row: 1; margin-right: 9px; }
-.ws-task .dot.active { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); animation: ws-pulse 1.6s ease-in-out infinite; }
-.ws-task .dot.failed { background: var(--danger); }
-.ws-task .dot.idle { display: none; } /* 只有进行中、没跑完才标点 */
-@keyframes ws-pulse { 50% { box-shadow: 0 0 0 5px var(--pulse); } }
-.ws-task .body { min-width: 0; flex: 1; }
-.ws-task .title { display: block; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ws-task.sel .title { font-weight: 500; }
-.ws-task.sel .time { color: var(--muted); } /* 选中底上 faint 只有 4.24:1（第 32 条） */
-.ws-task .sub { display: block; font-size: 12px; color: var(--muted); }
-.ws-task .time { font-size: 12px; color: var(--faint); margin-top: 1px; flex: none; font-variant-numeric: tabular-nums; }
-/* “⋯”：悬停、键盘聚焦、选中、菜单开着时出现；没有悬停的设备（触屏）一直在 */
-.ws-task .more { flex: none; width: 26px; height: 26px; margin: 4px 4px 0 0; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted);
-  display: inline-flex; align-items: center; justify-content: center; opacity: 0; }
-@media (hover: hover) { .ws-task .more:hover { color: var(--ink); background: var(--line); } }
-.ws-task:focus-within .more, .ws-task.sel .more, .ws-task.menu .more { opacity: 1; }
-@media (hover: hover) { .ws-task:hover .more { opacity: 1; } }
-@media (hover: none) { .ws-task .more { opacity: 1; } }
-.ws-side .ws-task.renaming { display: block; padding: 4px; }
+/* ---------- 左栏：索引（左栏本身迁到了 sidebar.jsx / sidebar.module.css，这里只剩整页的分栏和别处也用的改名框、菜单、底部弹层、提示条） ---------- */
+/* 桌面上收起左栏：整页只剩右边一栏（左栏藏掉在 sidebar.module.css），顶栏左边出展开钮 */
+@media (min-width: 721px) { .ws.side-off { grid-template-columns: minmax(0, 1fr); } }
 .ws-kbd { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 4px; margin-right: 4px; border: 1px solid var(--line2); border-radius: var(--r-sm);
   font: 12px/1 var(--sans); color: var(--faint); }
 /* 改标题的框：右边写着几个字、最多几个 */
@@ -180,7 +126,6 @@
 .ws-menu > button.danger:not(:disabled), .ws-menu > button.danger:not(:disabled) svg { color: var(--danger); }
 .ws-menu-note { font-size: 12px; color: var(--muted); padding: 8px 12px; line-height: 1.5; }
 .ws-menu-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 4px 8px 8px; }
-.ws-side-empty { color: var(--muted); font-size: 13px; padding: 8px; line-height: 1.6; }
 /* 手机上的“⋯”菜单：底部弹层里一行一项 */
 .ws-sheet-act { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 0 12px; border: 0; border-radius: var(--r-sm); background: none;
   font: inherit; font-size: 16px; color: var(--ink); text-align: left; }
@@ -198,17 +143,6 @@
   color: var(--paper); font: inherit; font-weight: 600; }
 @media (hover: hover) { .ws-toast-act:hover { background: var(--ink2); } }
 .ws-toast-act:focus-visible { outline: 2px solid var(--paper); outline-offset: -4px; }
-.ws-foot { display: flex; align-items: center; gap: 12px; padding: 8px 8px 2px; border-top: 1px solid var(--line); }
-/* 左栏最下面的额度按钮：小圆环（剩余比例）+“约可问 N 次”，和头像并排；点开是额度面板 */
-.ws-credits-btn { display: inline-flex; align-items: center; gap: 6px; height: 24px; margin: -4px 0; padding: 0 9px 0 6px; border: 1px solid var(--line2); border-radius: 999px;
-  background: var(--paper); font: inherit; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; cursor: pointer; transition: border-color .15s, color .15s; }
-.ws-credits-btn .ws-ring { color: var(--accent); flex: none; }
-.ws-credits-btn[aria-expanded="true"] { color: var(--ink); border-color: var(--ink); }
-@media (hover: hover) { .ws-credits-btn:hover { color: var(--ink); border-color: var(--ink); } }
-.ws-credits-btn.warn, .ws-credits-btn.warn .ws-ring { color: var(--warn); }
-.ws-credits-btn.warn { border-color: var(--warn-line); background: var(--warn-soft); }
-.ws-credits-btn.out, .ws-credits-btn.out .ws-ring { color: var(--danger); }
-.ws-credits-btn.out { border-color: var(--danger-line); background: var(--danger-soft); }
 /* 额度面板（第 27 条）：完整的一句在最上面，下面小字是哪来的额度、怎么估的；游客最下面是去登录的按钮（写着登录后会怎样，可能折行） */
 .ws-usage-main { padding: 8px 12px 4px; font-size: 14px; line-height: 1.5; color: var(--ink); font-variant-numeric: tabular-nums; }
 .ws-usage-main.warn { color: var(--warn); }
@@ -221,15 +155,6 @@
 .ws-usage-sheet .ws-usage-login { color: var(--accent); }
 .ws-usage-sheet .ws-usage-main { padding: 8px 12px 4px; font-size: 16px; }
 .ws-usage-sheet .ws-usage-when { font-size: 14px; }
-/* 左栏最下面一行的右边：游客是“登录”，登录了是头像和名字（点开菜单能退出） */
-.ws-foot-user { margin-left: auto; display: flex; align-items: center; min-width: 0; }
-.ws-login-link { min-height: 24px; border: 0; background: none; padding: 0; font-size: 12px; color: var(--accent); }
-@media (hover: hover) { .ws-login-link:hover { text-decoration: underline; text-underline-offset: 3px; } }
-.ws-user-btn { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 120px; height: 24px; margin: -4px -4px -4px 0; padding: 0 4px; border: 0; border-radius: var(--r-sm);
-  background: none; font-size: 12px; color: var(--muted); }
-.ws-user-btn[aria-expanded="true"] { background: var(--hover); color: var(--ink); }
-@media (hover: hover) { .ws-user-btn:hover { background: var(--hover); color: var(--ink); } }
-.ws-user-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-avatar { flex: none; width: 18px; height: 18px; border-radius: 50%; object-fit: cover; background: var(--ink); color: var(--paper); font: 600 10px/18px var(--sans); text-align: center; display: inline-block; }
 .ws-avatar.guest { background: var(--line2); color: var(--ink2); } /* 游客：浅一档，和登录了的头像分得开 */
 .ws-user-note { display: flex; flex-direction: column; gap: 1px; }
@@ -809,26 +734,10 @@
    能点的都至少 44px 见方（看得见的部分不一定这么大，用透明的点按区补） */
 @media (max-width: 720px) {
   .ws { grid-template-columns: minmax(0, 1fr); }
-  .ws-side { position: fixed; z-index: 40; top: 0; bottom: 0; left: 0; width: min(320px, calc(100vw - 48px)); height: 100vh; height: 100dvh;
-    padding: 12px 12px calc(8px + env(safe-area-inset-bottom)); gap: 12px; transform: translateX(-100%); visibility: hidden;
-    transition: transform .2s var(--ease), visibility 0s linear .2s; }
-  .ws.drawer .ws-side { transform: none; visibility: visible; box-shadow: var(--lift); transition: transform .2s var(--ease); }
-  .ws-scrim { position: fixed; inset: 0; z-index: 40; background: var(--scrim); animation: ws-fade .2s var(--ease); }
-  .ws-brand { min-height: 44px; }
   .ws-icon-btn { width: 44px; height: 44px; }
-  .ws-side-search { margin: 0 0 0 auto; }
-  .ws-side-toggle { margin: 0 -8px 0 0; }
-  .ws-new { height: 44px; }
-  .ws-side .ws-task-link { padding: 12px 4px 12px 8px; }
-  .ws-side .ws-task .more { width: 44px; height: 44px; margin: 0; opacity: 1; } /* 没有悬停：一直在 */
   .ws-toast-host { right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); }
   .ws-toast { max-width: none; }
   .ws-toast-act { height: 44px; }
-  .ws-foot { min-height: 44px; padding: 4px 4px 0; }
-  .ws-credits-btn { position: relative; height: 28px; margin: 0; }
-  .ws-credits-btn::after { content: ""; position: absolute; inset: -8px 0; }
-  .ws-user-btn { height: 44px; margin: 0; }
-  .ws-login-link { min-width: 44px; min-height: 44px; padding: 0 8px; }
   .ws-login-btn, .ws-login-send, .ws-field, .ws-dialog-actions .ws-btn { height: 44px; }
   .ws-dialog-close { top: 4px; right: 4px; width: 44px; height: 44px; }
   .ws-dialog-title { margin-right: 24px; }
@@ -904,7 +813,7 @@
   .ws { display: block; height: auto; padding: 0; }
   .ws-main, .ws-scroll { display: block; overflow: visible; height: auto; }
   .ws-flow { max-width: none; padding: 0; }
-  .ws-side, .ws-scrim, .ws-head, .ws-dock, .ws-rail, .ws-jump, .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-live, .ws-error,
+  .ws-head, .ws-dock, .ws-rail, .ws-jump, .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-live, .ws-error,
   .ws-user-foot, .ws-ai-foot, .ws-pop, .ws-menu, .ws-toast-host, .ws-sheet, .ws-sheet-scrim, .ws-btn, .ws-icon-btn, .ws-svc-tools, .ws-svc .fare a,
   .chev { display: none !important; }
   .ws-print-title { display: block; margin: 0 0 24px; font: 600 20px/1.4 var(--serif); }
