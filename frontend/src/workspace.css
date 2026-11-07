@@ -1020,12 +1020,14 @@
 }
 
 /* ---------- 记忆列表（在设置窗口里） ---------- */
-.mem-intro { color: var(--ink2); margin: 0 0 12px; }
-.mem-intro.sub { color: var(--muted); font-size: 13px; line-height: 1.6; margin-bottom: 16px; }
-.mem-status { color: var(--muted); font-size: 13px; margin: 0 0 20px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.mem-empty { color: var(--muted); padding: 24px 0; border-top: 1px solid var(--line); }
-.mem-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
-.mem-list li { display: flex; flex-direction: column; gap: 4px; padding: 12px 0 8px; border-bottom: 1px solid var(--line); }
+.mem-head { padding: 16px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.mem-head b { display: block; margin-bottom: 4px; font-weight: 500; }
+.mem-head p { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
+.mem-head .ws-btn { margin-top: 12px; }
+.mem-status { color: var(--muted); font-size: 13px; margin: 16px 16px 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mem-list { list-style: none; margin: 16px 0 0; padding: 0; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+.mem-list li { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px 8px; }
+.mem-list li + li { border-top: 1px solid var(--line); }
 .mem-list li.editing { padding-bottom: 12px; }
 .mem-list .text { min-width: 0; line-height: 1.65; overflow-wrap: anywhere; }
 .mem-list .meta { flex: none; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
@@ -1043,13 +1045,13 @@
 .mem-edit-bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .mem-edit-bar .ws-count { margin-right: auto; }
 .mem-edit-error { color: var(--danger); font-size: 13px; margin-top: 8px; }
-.mem .ws-error { margin: 0 0 16px; }
+.mem .ws-error { margin: 16px 0 0; }
 /* ---------- 设置窗口（2026-11-07 Sean 定） ---------- */
-/* 照豆包的设置窗口：大的两栏窗口，宽 800、高 720（矮屏是屏高的八成），居中，换哪一类大小都不变。
+/* 照豆包的设置窗口：大的两栏窗口，宽 960、高是屏高减去上下各 48（最高 880），居中，换哪一类大小都不变（11-07 Sean 嫌 800×720 还小）。
    左边是“设置”、谁、几类（一类一项设置）；右边是那一类的标题和一组组的行：组名小字在上，几行在圆角框里（一行 48 高），说明写在框下面 */
-.set-overlay { padding: 24px; }
-.set-dialog { display: flex; max-width: 800px; background: var(--side); height: min(720px, 80vh); height: min(720px, 80dvh); max-height: none; padding: 0; overflow: hidden; }
-.set-nav { flex: none; width: 220px; display: flex; flex-direction: column; overflow-y: auto; border-right: 1px solid var(--line); }
+.set-overlay { padding: 48px 24px; }
+.set-dialog { display: flex; max-width: 960px; background: var(--side); height: min(880px, 100vh - 96px); height: min(880px, 100dvh - 96px); max-height: none; padding: 0; overflow: hidden; }
+.set-nav { flex: none; width: 240px; display: flex; flex-direction: column; overflow-y: auto; border-right: 1px solid var(--line); }
 .set-head { flex: none; display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 12px 0 24px; }
 .set-pane .set-head { display: grid; grid-template-columns: 1fr auto 1fr; padding: 0 12px; } /* 标题居中，左边手机上放返回，右边关闭 */
 .set-title { min-width: 0; margin: 0; font-size: 16px; font-weight: 600; }
@@ -1086,17 +1088,11 @@
 .set-row:disabled .ws-switch::after { background: var(--side); }
 .set-foot { margin: 8px 16px 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
 .set-body .mem { padding-top: 8px; }
-/* 记忆列表在设置窗口里也是一张圆角白框，和别的几类一样 */
-.set-body .mem-list, .set-body .mem-empty { background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); }
-.set-body .mem-list { overflow: hidden; }
-.set-body .mem-list li { padding: 12px 16px 8px; }
-.set-body .mem-list li:last-child { border-bottom: 0; }
-.set-body .mem-empty { padding: 24px 16px; }
 @media (max-width: 720px) {
   .mem-edit textarea { font-size: 16px; }
   .mem-edit-bar .ws-btn { height: 44px; padding: 0 16px; font-size: 14px; }
   .mem-foot { min-height: 44px; }
-  .mem-status .ws-btn { height: 44px; padding: 0 16px; font-size: 14px; } /* 游客的登录、没取到时的再试一次 */
+  .mem-status .ws-btn, .mem-head .ws-btn { height: 44px; padding: 0 16px; font-size: 14px; } /* 游客的登录、没取到时的再试一次 */
   .mem-from { padding: 12px 0; line-height: 20px; } /* 点按区 44 高 */
   /* 设置窗口：从底部升起，占九成高。先是分类列表（一类一行，48 高），点进去换成那一类，左上角“设置”回来 */
   .set-overlay { align-items: flex-end; padding: 0; }
