@@ -810,43 +810,55 @@ function Item({ it, st, nums, running, lastItem }) {
 }
 
 // ---------------- 逐字出现（打字机） ----------------
-// 后端约每 80ms 发来一批字，直接显示是一跳一跳的。这里按帧把收到的字匀着放出来：每秒放“还没显示的字数 / LAG_S”这么多、最少 MIN_CPS 个，
-// 收得快就放得快，只比收到的晚零点几秒。这一段已经收完（这一轮答完、停了）就换成短得多的 DONE_LAG_S，剩下的一下子放完，不在答完以后还慢慢吐。
-// 显示到第几个字按条目记在 typed 里：条目在过程和正文之间挪动、重新挂载时接着往下显示，不从头再来。
+// 后端约每 80ms 发来一批字：正文每批五六个字、很匀，思考每批几个到七十多个不等（2026-11-07 本机量的）。直接显示是一跳一跳的；
+// 按“攒了多少放多快”放，批大批小速度就忽快忽慢，看着还是一阵一阵。这里按来字的速度匀速放：
+// - 来字速度取最近一秒左右（RATE_S）的平均；手里留大约 BUFFER_S 秒的字，两批之间一直有字可放
+// - 留的比该留的多了或少了，按平滑过的存量（HELD_S）在 FIX_S 秒左右里慢慢追平，来一大批也不会突然加速；攒了一秒以上的多出来那部分很快放掉，不越落越远
+// - 这一段收完了（答完、停了），剩下的在 DONE_S 秒左右放完，不在答完以后还慢慢吐
+// 放到哪、来字速度按条目记在 typed 里：条目在过程和正文之间挪动、重新挂载时接着往下放，不从头再来。
 // 打开时就已经有一大段的（存下来的对话、中途打开正在跑的对话）整段显示，不从头打一遍；系统设了减少动效的收到就显示。
 // md：是 Markdown（正文、中途说的话）。看不见的符号、引用、链接网址整块跳过（见 typingUnit）；每次显示都要把整段重新解析一遍
 // （几千字要好几毫秒），长了就隔几帧才显示一次，最慢一秒 15 次
-const LAG_S = 0.2;
-const DONE_LAG_S = 0.06;
+const RATE_S = 1;
+const BUFFER_S = 0.3;
+const HELD_S = 0.3;
+const FIX_S = 1;
+const DONE_S = 0.25;
 const MIN_CPS = 30;
 const typed = new Map();
 const STILL = matchMedia("(prefers-reduced-motion: reduce)");
+const fresh = (pos) => ({ pos, seen: pos, rate: 60, held: 0, at: performance.now() });
 
 function useTyped(key, text, live, md) {
-  const pos = useRef(null);
-  pos.current ??= !live || STILL.matches ? text.length : typed.has(key) ? Math.min(typed.get(key), text.length) : text.length < 200 ? 0 : text.length;
+  const s = useRef(null);
+  s.current ??= !live || STILL.matches ? fresh(text.length) : typed.get(key) ?? fresh(text.length < 200 ? 0 : text.length);
   const [, setShown] = useState(0);
   useEffect(() => {
-    if (STILL.matches) pos.current = text.length;
-    if (pos.current >= text.length) {
+    const st = s.current;
+    if (STILL.matches) st.pos = text.length;
+    if (live) typed.set(key, st);
+    if (st.pos >= text.length) {
       if (!live) typed.delete(key);
       return undefined;
     }
-    const lag = live ? LAG_S : DONE_LAG_S;
     const gap = md ? Math.min(66, Math.max(0, (text.length - 1500) / 60)) : 0;
     let raf = 0;
-    let last = performance.now();
-    let drawn = last;
+    let drawn = 0;
     const frame = (t) => {
-      const left = text.length - pos.current;
-      pos.current = Math.min(text.length, pos.current + (Math.max(MIN_CPS, left / lag) * Math.max(0, t - last)) / 1000);
-      if (md) pos.current = Math.max(pos.current, typingUnit(text, Math.floor(pos.current)));
-      last = t;
-      const end = pos.current >= text.length;
-      typed.set(key, pos.current);
+      const dt = Math.max(0.001, (t - st.at) / 1000);
+      st.at = t;
+      st.rate += ((text.length - st.seen) / dt - st.rate) * (1 - Math.exp(-dt / RATE_S));
+      st.seen = text.length;
+      const left = text.length - st.pos;
+      st.held += (left - st.held) * (1 - Math.exp(-dt / HELD_S));
+      const fix = 1 + (st.held - st.rate * BUFFER_S) / Math.max(1, st.rate * FIX_S);
+      const v = Math.max(MIN_CPS, st.rate * Math.min(3, Math.max(0.5, fix)), (left - Math.max(80, st.rate)) / 0.3, live ? 0 : left / DONE_S);
+      st.pos = Math.min(text.length, st.pos + v * dt);
+      if (md) st.pos = Math.max(st.pos, typingUnit(text, Math.floor(st.pos)));
+      const end = st.pos >= text.length;
       if (end || t - drawn >= gap) {
         drawn = t;
-        setShown(Math.floor(pos.current)); // 整数没变就不重新渲染
+        setShown(Math.floor(st.pos)); // 整数没变就不重新渲染
       }
       if (!end) raf = requestAnimationFrame(frame);
       else if (!live) typed.delete(key);
@@ -854,7 +866,7 @@ function useTyped(key, text, live, md) {
     raf = requestAnimationFrame(frame);
     return () => cancelAnimationFrame(raf);
   }, [key, text, live, md]);
-  let n = Math.floor(pos.current);
+  let n = Math.floor(s.current.pos);
   if (n >= text.length) return text;
   if (/[\uD800-\uDBFF]/.test(text[n - 1] || "")) n++; // 不把占两个码元的字（emoji 之类）切成两半
   return text.slice(0, n);
