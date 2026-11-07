@@ -92,7 +92,7 @@ export function UndoToast({ undo }) {
   useLayoutEffect(() => {
     if (!it || !nav?.mobile || nav.drawer) return setLift(null);
     const place = () => {
-      const dock = document.querySelector(".ws-dock");
+      const dock = document.querySelector("[data-dock]");
       setLift(dock ? Math.max(0, innerHeight - dock.getBoundingClientRect().top) : null);
     };
     place();

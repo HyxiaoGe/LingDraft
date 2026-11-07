@@ -77,13 +77,6 @@
 .ws-btn.ghost { background: transparent; border-color: transparent; color: var(--ink2); }
 @media (hover: hover) { .ws-btn.ghost:hover:not(:disabled) { background: var(--hover); } }
 .ws-btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
-.ws-send { width: 32px; height: 32px; flex: none; border-radius: 50%; border: 0; background: var(--ink); color: var(--paper);
-  display: inline-flex; align-items: center; justify-content: center; transition: background .15s var(--ease); }
-@media (hover: hover) { .ws-send:hover:not(:disabled) { background: var(--accent); } }
-.ws-send:disabled { background: var(--line2); }
-/* 停止：运行中替换发送键，墨色底白方块 */
-@media (hover: hover) { .ws-send.stop:hover:not(:disabled) { background: var(--ink-hover); } }
-.ws-send.stop:disabled { background: var(--ink2); opacity: .7; }
 /* 只有图标的按钮：顶栏的展开左栏、抽屉钮、新对话，左栏的收起、关闭 */
 .ws-icon-btn { flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-sm);
   background: none; color: var(--muted); transition: background .15s var(--ease), color .15s var(--ease); }
@@ -92,7 +85,6 @@
 /* 占位（骨架）：东西还没取回来时先占好位置，不动 */
 .ws-skel { display: block; background: var(--hover); border-radius: var(--r-sm); }
 .ws-skel-title { width: 40%; max-width: 240px; height: 16px; }
-.ws-skel-model { display: inline-block; width: 120px; height: 28px; border-radius: 999px; }
 .ws-skel-row { height: 16px; }
 .ws-skel-thread { display: flex; flex-direction: column; gap: 12px; }
 .ws-skel-bubble { align-self: flex-end; width: 44%; height: 40px; margin-bottom: 12px; border-radius: var(--r-lg); }
@@ -203,7 +195,8 @@
 
 /* ---------- 对话 ---------- */
 .ws-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
-.ws-scroll { flex: 1; overflow-y: auto; container-type: inline-size; }
+/* 两边都留出滚动条的位置（Windows、Mac 接了鼠标时滚动条占地方）：正文按整栏居中，和顶栏标题、输入框的中线对齐（2026-11-07 Sean 定） */
+.ws-scroll { flex: 1; overflow-y: auto; scrollbar-gutter: stable both-edges; container-type: inline-size; }
 /* 正文宽 832（2026-11-07 照 Fusion 的 52rem，原来 624 太挤），居中。--pad 是两边留白。
    代码块、表格和天气、地图、行程卡都和正文一样宽、左右对齐，太宽的在框里横着滑（2026-11-07 Sean 定，不再往两边放宽） */
 .ws-flow { --pad: 28px; max-width: 888px; margin: 0 auto; padding: 28px var(--pad) 32px; }
@@ -225,10 +218,13 @@
 /* 排着的话：这一轮答完就发，虚线框、淡一些 */
 /* 改最后一句 */
 .ws-edit { margin: 0 0 22px; border: 1px solid var(--accent-line); border-radius: var(--r-lg); background: var(--paper); padding: 10px 12px 8px; box-shadow: 0 0 0 3px var(--accent-soft); }
-.ws-edit textarea { width: 100%; border: 0; outline: none; resize: none; font: inherit; background: transparent; line-height: 1.6; padding: 0; color: var(--ink); }
+/* 字和输入框、自己说的话一样 16px；最高和输入框一样（见 composer.module.css），再多在框里滚 */
+.ws-edit textarea { width: 100%; border: 0; outline: none; resize: none; font: inherit; font-size: 16px; background: transparent; line-height: 1.6; padding: 0; color: var(--ink);
+  max-height: max(160px, 40vh); max-height: max(160px, 40dvh); }
 .ws-edit-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
 .ws-edit-bar .hint { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); }
-.ws-bubble { background: var(--side); border: 1px solid var(--line); border-radius: var(--r-lg) var(--r-lg) 4px var(--r-lg); padding: 9px 14px; max-width: 80%; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 自己说的话：字和回答、输入框一样 16px（2026-11-07 Sean 定，原来 14），写的和发出去看到的一样大 */
+.ws-bubble { background: var(--side); border: 1px solid var(--line); border-radius: var(--r-lg) var(--r-lg) 4px var(--r-lg); padding: 9px 14px; font-size: 16px; max-width: 80%; white-space: pre-wrap; overflow-wrap: anywhere; }
 .ws-ai { margin: 0 0 26px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 /* 一轮一个 section：轮与轮之间一道细线；轮次目录跳过来时顶上留一点空，键盘跳过来的有焦点框 */
 .ws-turn, .ws-reply .md > :is(h3, h4, h5, h6) { scroll-margin-top: 16px; }
@@ -315,12 +311,6 @@
 .ws-error svg { flex: none; margin-top: 2px; }
 .ws-error span { flex: 1; }
 .ws-error-act { height: 26px; padding: 0 10px; font-size: 12.5px; color: var(--danger); border-color: var(--danger-line); background: var(--paper); flex: none; }
-/* 输入框上面：额度快用完、用完了的提醒 */
-.ws-credits-note { width: calc(100% - 56px); max-width: 800px; margin: 0 auto 4px; display: flex; gap: 6px; align-items: center; font-size: 12px; line-height: 1.5;
-  color: var(--warn); }
-.ws-credits-note svg { flex: none; }
-.ws-credits-note.out { color: var(--danger); }
-.ws-link { background: none; border: 0; padding: 0; font: inherit; color: var(--accent, var(--ink)); text-decoration: underline; cursor: pointer; }
 .ws-credits-line { display: flex; flex-direction: column; gap: 2px; border-top: 1px solid var(--line); margin-top: 2px; padding-top: 8px; }
 .ws-credits-line b { color: var(--ink); font-weight: 500; }
 
@@ -502,8 +492,6 @@
 .ws-main.fresh .ws-scroll { display: flex; flex-direction: column; }
 .ws-main.fresh .ws-flow { margin-top: auto; width: 100%; padding-bottom: 12px; }
 .ws-main.fresh .ws-error { margin: 12px 0 0; } /* 新对话发出去被拒（图不收、额度用完）：和上面的说明隔开，紧挨着下面的输入框 */
-.ws-main.fresh .ws-dock { position: static; } /* 下面这行贴着整个右栏的底，不是贴着输入框 */
-.ws-main.fresh .ws-ai-note { position: absolute; left: 0; right: 0; bottom: 12px; }
 .ws-welcome { text-align: center; }
 .ws-welcome h2 { font: 600 28px/1.35 var(--serif); letter-spacing: .02em; margin: 0; text-wrap: balance; }
 .ws-examples { flex: 1.4 1 0; width: 100%; max-width: 756px; margin: 0 auto; padding: 18px 28px 40px; position: relative; }
@@ -514,106 +502,13 @@
 .ws-inspire .ws-suggest-item { backface-visibility: hidden; transition-property: opacity, transform, border-color, color; transition-duration: .3s, .3s, .15s, .15s; }
 .ws-inspire.flip .ws-suggest-item { opacity: 0; transform: rotateX(90deg); } /* 换一批：一个接一个翻过去（错开见 Inspirations） */
 
-/* 输入框；往上翻着看时，上面浮一个“回到底部” */
-.ws-dock { position: relative; flex: none; }
-.ws-jump { position: absolute; left: 50%; bottom: calc(100% + 4px); transform: translateX(-50%); z-index: 2; width: 32px; height: 32px; border-radius: 50%;
-  border: 1px solid var(--line2); background: var(--paper); color: var(--ink2); box-shadow: 0 2px 10px rgba(20, 24, 31, .1);
-  display: inline-flex; align-items: center; justify-content: center; transition: color .15s, border-color .15s; }
-@media (hover: hover) { .ws-jump:hover { color: var(--ink); border-color: var(--muted); } }
-/* 离开底部以后下面又有了新内容：写上字，变成一枚胶囊 */
-.ws-jump.more { width: auto; padding: 0 12px; gap: 4px; border-radius: var(--r); font-size: 12.5px; color: var(--accent); border-color: var(--accent-line); }
-@media (hover: hover) { .ws-jump.more:hover { color: var(--accent); border-color: var(--accent); } }
 /* 只给读屏的：看不见，读屏会读（开始回答、答完了、停下了……见 timeline.jsx 的 useAnnounce） */
 .ws-sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-.ws-composer { padding: 10px 28px 10px; }
-.ws-ai-note { max-width: 832px; margin: 6px auto 0; text-align: center; font-size: 11.5px; color: var(--faint); }
-/* 还没发出去的话（最多一句）：一条窄一点的托盘贴在输入框上沿；文字只显示一行，悬停看全文 */
-.ws-pending { width: calc(100% - 32px); max-width: 800px; margin: 0 auto; border: 1px solid var(--line2); border-bottom: 0; border-radius: var(--r) var(--r) 0 0;
-  background: var(--side); animation: ws-in .2s var(--ease); }
-.ws-pending-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 12px; }
-.ws-pending-main { flex: 1; min-width: 0; }
-.ws-pending-note { font-size: 12px; line-height: 1.5; color: var(--faint); }
 /* 藏着的快捷键在能用的那一刻写出来（批次 G 第 34 条）：排着的话旁边写 ↑ 撤回，回答在跑写 Esc 停止，撤销提示里写 ⌘Z。触屏上不写 */
-.ws-pending-note .ws-kbd, .ws-live .key .ws-kbd { height: 16px; margin: 0 4px; font-size: 12px; vertical-align: 1px; }
+.ws-live .key .ws-kbd { height: 16px; margin: 0 4px; font-size: 12px; vertical-align: 1px; }
 .ws-live .key { color: var(--faint); }
 .ws-toast .ws-kbd { margin: 0 0 0 4px; border-color: var(--muted); color: var(--line2); font-weight: 400; }
-.ws-pending-text { font-size: 13px; line-height: 1.5; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ws-pending-acts { flex: none; display: flex; gap: 2px; }
-.ws-pending-acts .ws-btn { color: var(--muted); }
-@media (hover: hover) { .ws-pending-acts .ws-btn:hover { color: var(--ink); } }
-.ws-input { max-width: 832px; margin: 0 auto; border: 1px solid var(--line2); border-radius: var(--r-lg); padding: 10px 12px 8px 14px; background: var(--paper); box-shadow: 0 2px 12px rgba(20, 24, 31, .06); transition: border-color .15s, box-shadow .15s; }
-.ws-input:focus-within { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft), 0 2px 12px rgba(20, 24, 31, .06); }
-.ws-input textarea { width: 100%; border: 0; outline: none; resize: none; font: inherit; background: transparent; line-height: 1.6; max-height: 160px; padding: 0; color: var(--ink); }
-.ws-input textarea::placeholder { color: var(--faint); }
-.ws-input.drop { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); } /* 拖着图进来 */
-.ws-input-note { display: flex; align-items: flex-start; gap: 4px; margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--muted); }
-.ws-input-note svg { flex: none; margin-top: 2px; }
-.ws-input-note.warn { color: var(--warn); }
-.ws-input-bar { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
-.ws-input-count { flex: none; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.ws-input-tools { margin-left: auto; min-width: 0; display: flex; align-items: center; }
-/* 左下角加图；选好的图在输入框顶上：缩略图、能拿它做什么，右上角去掉 */
-.ws-attach { position: relative; flex: none; width: 32px; height: 32px; margin-left: -8px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-sm);
-  background: none; color: var(--muted); transition: background .15s var(--ease), color .15s var(--ease); }
-@media (hover: hover) { .ws-attach:hover:not(:disabled) { background: var(--hover); color: var(--ink); } }
-.ws-attach:disabled { opacity: .45; }
-.ws-attach-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
-.ws-attach-thumb { position: relative; flex: none; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center;
-  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--side); color: var(--muted); }
-.ws-attach-open { display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: var(--r-sm); background: none; overflow: hidden; cursor: zoom-in; }
-.ws-attach-open img { display: block; width: 100%; height: 100%; object-fit: cover; }
-.ws-attach-remove { position: absolute; top: -8px; right: -8px; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center;
-  border: 0; border-radius: 50%; background: var(--ink); color: var(--paper); transition: background .15s var(--ease); }
-@media (hover: hover) { .ws-attach-remove:hover { background: var(--accent); } }
-.ws-attach-note { min-width: 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
-/* 回答时打了字：停止键旁边另外一个“这一轮答完再发” */
-.ws-send-later { flex: none; margin-left: 4px; }
-.ws-send-later svg { color: var(--muted); }
-/* 发送左边：深度思考开关、选模型（菜单往放得下的那边开） */
-.ws-model { position: relative; min-width: 0; display: flex; align-items: center; gap: 4px; }
-.ws-think-toggle { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border: 1px solid var(--line2); border-radius: 999px; background: var(--paper);
-  color: var(--muted); font-size: 12.5px; white-space: nowrap; transition: background .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease); }
-@media (hover: hover) { .ws-think-toggle:hover { background: var(--hover); color: var(--ink2); } }
-.ws-think-toggle.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
-.ws-model-btn { position: relative; min-width: 0; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px 0 8px; border: 0; border-radius: var(--r-sm); background: none;
-  color: var(--ink2); font-size: 13px; white-space: nowrap; transition: background .15s var(--ease); }
-.ws-model-btn[aria-expanded="true"] { background: var(--hover); }
-@media (hover: hover) { .ws-model-btn:hover { background: var(--hover); } }
-.ws-model-btn .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.ws-model-btn svg { flex: none; }
-.ws-model-btn .caret { color: var(--muted); transform: rotate(180deg); transition: transform .2s var(--ease); }
-.ws-model-btn[aria-expanded="true"] .caret { transform: none; }
-.ws-model-btn .bulb { color: var(--faint); }
-.ws-model-btn .bulb.on { color: var(--accent); }
-/* 思考开关的说明：悬停一会儿、或用键盘移到开关上时出来，在开关上方 */
-.ws-think-wrap { position: relative; display: inline-flex; }
-.ws-tip { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 61; width: 280px; padding: 8px 12px; display: flex; flex-direction: column; gap: 4px;
-  border: 1px solid var(--line2); border-radius: var(--r); background: var(--paper); box-shadow: var(--lift); font-size: 12.5px; line-height: 1.5; color: var(--muted); white-space: normal;
-  pointer-events: none; visibility: hidden; opacity: 0; transform: translateY(4px); transition: opacity .15s var(--ease), transform .15s var(--ease), visibility 0s linear .15s; }
-.ws-tip.show { visibility: visible; opacity: 1; transform: none; transition: opacity .15s var(--ease) .2s, transform .15s var(--ease) .2s, visibility 0s linear .2s; }
-.ws-tip b { font-size: 13px; font-weight: 500; color: var(--ink); }
-.ws-tip .cur { color: var(--ink2); }
-/* 选模型的菜单（桌面）：位置和最高多高由页面按剩下的空间算（见 ModelMenu），里面滚 */
-.ws-model-menu { position: absolute; right: 0; z-index: 60; width: 300px; overflow-y: auto; overscroll-behavior: contain; padding: 4px;
-  background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r); box-shadow: var(--lift); animation: ws-in .12s var(--ease); }
-.ws-model-menu > .ws-menu-note { padding: 4px 8px; }
-.ws-model-list { display: flex; flex-direction: column; }
-.ws-model-group { display: flex; align-items: center; gap: 4px; padding: 8px 8px 4px; font-size: 12px; color: var(--faint); }
-.ws-model-group.toggle { width: 100%; min-height: 32px; border: 0; border-radius: var(--r-sm); background: none; text-align: left; color: var(--muted); }
-@media (hover: hover) { .ws-model-group.toggle:hover { background: var(--hover); color: var(--ink2); } }
-.ws-model-group.toggle svg { color: var(--faint); }
-.ws-model-row { display: flex; width: 100%; min-height: 32px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border: 0; border-radius: var(--r-sm);
-  background: none; text-align: left; font-size: 13px; color: var(--ink); }
-@media (hover: hover) { .ws-model-row:hover:not(:disabled) { background: var(--hover); } }
-.ws-model-row:disabled { color: var(--faint); }
-.ws-model-row svg { flex: none; color: var(--accent); }
-.ws-model-row .lock { color: var(--faint); }
-.ws-model-row.locked:not(:disabled) .ws-model-item b { color: var(--muted); } /* 游客能点去登录的锁着的模型：不像能选的那么黑 */
-.ws-model-item { display: flex; flex-direction: column; min-width: 0; }
-.ws-model-item b { font-weight: 500; }
-.ws-model-item small { font-size: 12px; line-height: 1.5; color: var(--muted); }
-.ws-model-row:disabled small { color: var(--faint); }
 /* 选模型的底部弹层（手机）：最高 70dvh，里面滚；每行至少 52px；底下让出安全区 */
 .ws-sheet-scrim { position: fixed; inset: 0; z-index: 70; background: var(--scrim); animation: ws-fade .2s var(--ease); }
 .ws-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 71; max-height: 70vh; max-height: 70dvh; display: flex; flex-direction: column;
@@ -624,23 +519,10 @@
 .ws-sheet-head b { font-size: 16px; font-weight: 600; }
 .ws-sheet-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px 8px 16px; }
 .ws-sheet .ws-menu-note { padding: 8px 12px 4px; font-size: 13px; }
-.ws-sheet .ws-model-group { padding: 12px 12px 4px; font-size: 13px; }
-.ws-sheet .ws-model-group.toggle { min-height: 52px; padding: 8px 12px; }
-.ws-sheet .ws-model-row { min-height: 52px; padding: 8px 12px; font-size: 16px; }
-.ws-sheet .ws-model-item small { font-size: 13px; }
-.ws-sheet-think { margin-bottom: 4px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
-.ws-switch-row { display: flex; width: 100%; min-height: 52px; align-items: center; gap: 12px; padding: 8px 12px; border: 0; border-radius: var(--r-sm); background: none;
-  text-align: left; font-size: 16px; color: var(--ink); }
-.ws-switch-row .label { flex: 1; }
 .ws-switch { position: relative; flex: none; width: 40px; height: 24px; border-radius: 999px; background: var(--line2); transition: background .15s var(--ease); }
 .ws-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: var(--paper); transition: transform .15s var(--ease); }
 .ws-switch.on { background: var(--accent); }
 .ws-switch.on::after { transform: translateX(16px); }
-.ws-think-desc { margin: 0; padding: 0 12px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; line-height: 1.6; color: var(--muted); }
-/* 触屏没有悬停（悬停的灰底都包在 hover: hover 里，待确认第 16 条）；按下去的那一下给灰底 */
-@media (hover: none) {
-  .ws-sheet .ws-model-row:active:not(:disabled), .ws-sheet .ws-model-group.toggle:active, .ws-switch-row:active, .ws-attach:active:not(:disabled) { background: var(--hover); }
-}
 
 
 /* ---------- 来源：正文里的角标、来源卡、回答下面的来源 ---------- */
@@ -721,22 +603,13 @@
   .ws-login-wait { min-height: 152px; }
 
   .ws-flow { --pad: 16px; padding: 20px var(--pad) 24px; }
-  .ws-composer { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); }
-  /* 输入框 16px：iOS 上聚焦不自动放大页面（M3）。输入框下面一排：看得见的不变，透明点按区补到 44px，相邻的不重叠 */
-  .ws-input textarea, .ws-edit textarea, .ws-rename, .ws-field:not(.code) { font-size: 16px; }
-  .ws-input-bar { gap: 8px; }
-  .ws-send { position: relative; }
-  .ws-attach::after, .ws-send::after { content: ""; position: absolute; inset: -6px; }
-  .ws-model-btn::after, .ws-send-later::after { content: ""; position: absolute; inset: -8px 0; }
-  .ws-send-later { position: relative; margin-left: 0; }
-  .ws-attach-remove::after { content: ""; position: absolute; inset: -12px; }
-  .ws-attach-row { margin-top: 4px; }
+  /* 输入框 16px：iOS 上聚焦不自动放大页面（M3）。对话的输入框、改这句话的框不分宽窄都是 16（见 composer.module.css 和上面的 .ws-edit） */
+  .ws-rename, .ws-field:not(.code) { font-size: 16px; }
   /* 第 31 条：剩下不到 44px 的几处。看得见的大小不变，透明点按区补够 */
   .ws-user-foot .ws-btn, .ws-ai-foot .ws-btn, .ws-cited-head { position: relative; }
   .ws-user-foot .ws-btn::after, .ws-ai-foot .ws-btn::after, .ws-cited-head::after { content: ""; position: absolute; inset: -8px 0; } /* 看得见 28 */
   button.ws-proc-head { position: relative; }
   button.ws-proc-head::after { content: ""; position: absolute; inset: -12px 0; } /* 看得见 25 */
-  .ws-jump::after { content: ""; position: absolute; inset: -6px; } /* 看得见 32 */
   .ws-card-actions .ws-btn { height: 44px; }
   .ws-tool:has(.main a) { line-height: 44px; } /* 读的那页：这一行 44 高，链接上下撑满 */
   .ws-tool .main a { padding: 15px 0; } /* 字高各家不同（Chromium 16、WebKit 15），往大里给；超出这一行的部分被裁掉，点按区就是整行 44 */
@@ -744,7 +617,6 @@
   /* 新对话：欢迎语在中间，今日灵感在输入框上面，输入框贴底，不在中间浮着 */
   .ws-main.fresh .ws-flow { margin: auto 0; padding-bottom: 24px; }
   .ws-main.fresh .ws-examples { flex: none; padding: 0 16px 8px; }
-  .ws-main.fresh .ws-ai-note { position: static; }
   /* 今日灵感：看得见的 36px，透明点按区上下各补 4px 到 44px（两行之间隔 8px，点按区正好挨着不重叠） */
   .ws-inspire .ws-suggest-item, .ws-suggest-list .ws-suggest-item { position: relative; }
   .ws-inspire .ws-suggest-item, .ws-suggest-list .ws-suggest-item { min-height: 36px; }
@@ -785,7 +657,7 @@
   .ws { display: block; height: auto; padding: 0; }
   .ws-main, .ws-scroll { display: block; overflow: visible; height: auto; }
   .ws-flow { max-width: none; padding: 0; }
-  .ws-dock, .ws-jump, .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-live, .ws-error,
+  .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-live, .ws-error,
   .ws-user-foot, .ws-ai-foot, .ws-pop, .ws-menu, .ws-toast-host, .ws-sheet, .ws-sheet-scrim, .ws-btn, .ws-icon-btn, .ws-svc-tools, .ws-svc .fare a,
   .chev { display: none !important; }
   .ws-print-title { display: block; margin: 0 0 24px; font: 600 20px/1.4 var(--serif); }

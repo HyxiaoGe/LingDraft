@@ -55,7 +55,7 @@ export function imageAlt(prompt) {
 }
 
 // 改这张：把这张图取回来放进输入框当附件（和自己传的图走同一条路，大图在本机压一下，见 upload.js），接着说要怎么改、或照它画什么。
-// 输入框收到 ws-attach-image（见 timeline.jsx 的 Composer）；没取到时 detail 是 null，输入框下面说一声
+// 输入框收到 ws-attach-image（见 composer.jsx 的 Composer）；没取到时 detail 是 null，输入框下面说一声
 async function editThis(src, name) {
   let file = null;
   try {
