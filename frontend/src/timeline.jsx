@@ -30,8 +30,8 @@ const EXAMPLES = [
   "珠穆朗玛峰现在的官方高度是多少？",
 ];
 
-// 正文 680 居中，右边空出来的那块放得下 184 宽的目录加两边各 16 的空：滚动区至少这么宽才放右栏
-const RAIL_MIN = 1120;
+// 正文 832 宽居中（两边各留 28），右边空出来的那块放得下 184 宽的目录、离右边 16、离正文 24：滚动区至少这么宽才放右栏
+const RAIL_MIN = 1280;
 
 // 阅读位置（第 45 条）：每个对话看到哪儿了记在这个标签页里（sessionStorage），离开（换对话、去海报页、登录后整页重载、刷新）
 // 再回来，回到原处。记的是“第几轮，视口上沿在这一轮顶上往下多少”；在底部就记“底部”，回来还在底部、接着跟。从没记过的照旧到底（最新一轮）
@@ -812,7 +812,7 @@ function Item({ it, st, nums, running, lastItem }) {
 function Reply({ it, cite, caret }) {
   return (
     <div className={"ws-reply" + (caret ? " typing" : "")}>
-      <Markdown text={mdText(it)} cite={cite} />
+      <Markdown text={mdText(it)} cite={cite} run ready={!caret} />
     </div>
   );
 }

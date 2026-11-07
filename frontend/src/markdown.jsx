@@ -1,26 +1,18 @@
-// 正文的 Markdown（2026-11-07 Sean 定：不再手写，用现成的库）：react-markdown 解析，remark-gfm 管表格、删除线、任务列表、裸链接，
-// remark-breaks 让单个换行照样换行（中文回答靠它分行），remark-math + KaTeX 显示公式（有公式才去取 KaTeX，见 math.js），
-// highlight.js 给代码上色（见 code-colors.js；有标了语言的代码块才去取）。直接出 React 元素，不插入 HTML；模型写的 HTML 照字面显示（<br> 例外，换行：表格格子里换行只能这么写）。
-// 自己加的：引用角标 [s3fa9c1]（连同前面一个字、后面的标点不断行）、代码块上面一条写语言和“复制”、表格放不下横着滑、
-// 标题比页面标题小一档、图片只给链接（模型写的图片地址多半打不开，也不替用户去别的网站取东西）
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+// 正文的 Markdown（2026-11-07 Sean 定：不再手写，用现成的库；样式照搬 Fusion，见 markdown.module.css）：react-markdown 解析，
+// remark-gfm 管表格、删除线、任务列表、裸链接，remark-breaks 让单个换行照样换行（中文回答靠它分行），remark-math + KaTeX 显示公式（有公式才去取 KaTeX，见 math.js）。
+// 直接出 React 元素，不插入 HTML；模型写的 HTML 照字面显示（<br> 例外，换行：表格格子里换行只能这么写）。
+// 代码块见 code-block.jsx、表格见 md-table.jsx（都照搬 Fusion）。自己加的：引用角标 [s3fa9c1]（连同前面一个字、后面的标点不断行）、
+// 标题比页面标题小几档、图片只给链接（模型写的图片地址多半打不开，也不替用户去别的网站取东西）
+import { createContext, useContext } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { IconCheck, IconCopy } from "./icons.jsx";
-import { FENCE, closesFence, copyText } from "./research.js";
-
-
-// 代码块上面写的语言名：模型写的是小写缩写，换成常见写法；不认识的照写，没写就不写
-const LANG_NAMES = {
-  js: "JavaScript", javascript: "JavaScript", jsx: "JSX", ts: "TypeScript", typescript: "TypeScript", tsx: "TSX",
-  py: "Python", python: "Python", sh: "Shell", shell: "Shell", bash: "Bash", zsh: "Zsh", console: "Shell",
-  json: "JSON", html: "HTML", xml: "XML", svg: "SVG", css: "CSS", scss: "SCSS", sql: "SQL", java: "Java", go: "Go",
-  rust: "Rust", rs: "Rust", c: "C", cpp: "C++", "c++": "C++", cs: "C#", csharp: "C#", yaml: "YAML", yml: "YAML",
-  md: "Markdown", markdown: "Markdown", diff: "Diff", dockerfile: "Dockerfile", docker: "Dockerfile", php: "PHP",
-  rb: "Ruby", ruby: "Ruby", swift: "Swift", kt: "Kotlin", kotlin: "Kotlin", text: "", txt: "", plaintext: "",
-};
+import { CodeBlock } from "./code-block.jsx";
+import { useLazy } from "./lazy.js";
+import { MdTable } from "./md-table.jsx";
+import { FENCE, closesFence } from "./research.js";
+import styles from "./markdown.module.css";
 
 // ---------- 交给解析之前：公式的几种写法、表格里代码的竖线 ----------
 // 代码块、行内代码、$$ 公式块里面不动。
@@ -171,108 +163,31 @@ function rehypeCites() {
   return walk;
 }
 
-// ---------- 公式、代码上色：要用时才去取 ----------
-// KaTeX（math.js）和 highlight.js（code-colors.js）都不小，回答里有公式、有标了语言的代码块才取；取回来之前公式和代码先原样显示
-const LAZY = { math: () => import("./math.js"), code: () => import("./code-colors.js") };
-const lazyGot = {};
-const lazyLoading = {};
-function useLazy(name, need) {
-  const [, loaded] = useState(0);
-  useEffect(() => {
-    if (!need || lazyGot[name]) return undefined;
-    let on = true;
-    lazyLoading[name] ||= LAZY[name]().then((m) => { lazyGot[name] = m.default; }).catch(() => { lazyLoading[name] = null; });
-    lazyLoading[name].then(() => on && loaded((n) => n + 1));
-    return () => { on = false; };
-  }, [name, need]);
-  return need ? lazyGot[name] : null;
-}
-const CODE_LANG = /^[ \t]*(`{3,}|~{3,})[ \t]*[A-Za-z]/m; // 有标了语言的代码块
-
 // ---------- 自己画的几样 ----------
 const hastText = (node) => (node.type === "text" ? node.value : (node.children || []).map(hastText).join(""));
 
-// 代码块：上面一条，左边语言，右边“复制”（复制的是原文，不带上色）。公式块在 KaTeX 来之前也是代码块的样子，不加这一条
-function CodeBlock({ node, children }) {
+// cite：引用角标；run：HTML 代码块能不能运行（过程里的话不给）；ready：回答写完了（写完才能运行、下载）
+const MdContext = createContext({ cite: () => null, run: false, ready: false });
+
+// 代码块：语言取自 language-xxx；公式块（KaTeX 还没取回来时）原样显示
+function Pre({ node, children }) {
+  const { run, ready } = useContext(MdContext);
   const code = node?.children?.find((x) => x.tagName === "code");
   const cls = (code?.properties?.className || []).map(String);
   const lang = (cls.find((x) => x.startsWith("language-")) || "").slice(9).toLowerCase();
-  if (lang === "math") return <pre>{children}</pre>;
-  const name = lang in LANG_NAMES ? LANG_NAMES[lang] : lang;
-  return (
-    <div className="md-code">
-      <div className="md-code-head">
-        <span className="md-code-lang">{name}</span>
-        <CodeCopy text={() => hastText(code || { type: "text", value: "" }).replace(/\n$/, "")} />
-      </div>
-      <pre>{children}</pre>
-    </div>
-  );
+  if (!code || lang === "math") return <pre>{children}</pre>;
+  return <CodeBlock lang={lang} text={hastText(code).replace(/\n$/, "")} run={run} ready={ready} />;
 }
 
-function CodeCopy({ text }) {
-  const [done, setDone] = useState(null); // null / "ok" / "fail"
-  const timer = useRef(null);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  const copy = async () => {
-    try {
-      await copyText(text());
-      setDone("ok");
-    } catch {
-      setDone("fail");
-    }
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => setDone(null), 1500);
-  };
-  return (
-    <button className="md-code-copy" onClick={copy} aria-live="polite">
-      {done === "ok" ? <IconCheck size={13} /> : <IconCopy size={13} />}
-      {done === "ok" ? "已复制" : done === "fail" ? "没复制成" : "复制"}
-    </button>
-  );
-}
-
-// 表格：放不下就在框里横着滑，页面不跟着横滑。左右还有没露出来的列，那一边淡出成纸色，看得出能滑（M7；不用阴影）。
-// 能滑的时候框能用 Tab 停上去，方向键滑
-function Table({ children }) {
-  const ref = useRef(null);
-  const [edge, setEdge] = useState("");
-  useLayoutEffect(() => {
-    const el = ref.current;
-    const read = () => {
-      const left = el.scrollLeft > 1;
-      const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
-      setEdge((left ? " more-l" : "") + (right ? " more-r" : ""));
-    };
-    read();
-    const ro = new ResizeObserver(read);
-    ro.observe(el);
-    ro.observe(el.firstElementChild);
-    el.addEventListener("scroll", read, { passive: true });
-    return () => {
-      ro.disconnect();
-      el.removeEventListener("scroll", read);
-    };
-  }, []);
-  const scrolls = edge !== "";
-  return (
-    <div className={"md-table-box" + edge}>
-      <div ref={ref} className="md-table" tabIndex={scrolls ? 0 : undefined} role={scrolls ? "region" : undefined} aria-label={scrolls ? "表格，可以左右滑动" : undefined}>
-        <table>{children}</table>
-      </div>
-    </div>
-  );
-}
-
-// 引用角标经 context 拿 cite：组件要定在模块里，写在 components 里的箭头函数每次渲染都是新组件，角标会被卸掉重挂（新字一到就一次）
-const CiteContext = createContext(() => null);
-const CiteMark = ({ node }) => useContext(CiteContext)(node.properties.sid);
+// 组件要定在模块里：写在 components 里的箭头函数每次渲染都是新组件，角标、代码块会被卸掉重挂（新字一到就一次）
+const CiteMark = ({ node }) => useContext(MdContext).cite(node.properties.sid);
+const Table = ({ children }) => <MdTable>{children}</MdTable>;
 
 const heading = (Tag) => function Heading({ node, ...props }) { return <Tag {...props} />; };
 const COMPONENTS = {
   h1: heading("h3"), h2: heading("h4"), h3: heading("h5"), h4: heading("h6"), h5: heading("h6"), h6: heading("h6"), // 正文里的标题比页面标题小
-  pre: CodeBlock,
-  table: ({ children }) => <Table>{children}</Table>,
+  pre: Pre,
+  table: Table,
   a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
   "cite-mark": CiteMark,
   img: ({ src, alt }) => (src ? <a href={src} target="_blank" rel="noreferrer">{alt || src}</a> : alt || null),
@@ -282,20 +197,19 @@ const COMPONENTS = {
 const GFM = [remarkGfm, { singleTilde: false }];
 
 // cite(sid) 返回引用角标；正文还在逐字出现时，最后一段可能写到一半，照常渲染（写到一半的符号见 research.tidyTyping）
-export function Markdown({ text, cite }) {
+export function Markdown({ text, cite, run = false, ready = false }) {
   const { text: src, math } = prep(text.replace(/\r\n/g, "\n"));
   const tex = useLazy("math", math);
-  const colors = useLazy("code", CODE_LANG.test(src));
   return (
-    <div className="md">
-      <CiteContext.Provider value={cite}>
+    <div className={"md " + styles.content}>
+      <MdContext.Provider value={{ cite, run, ready }}>
         <ReactMarkdown
           remarkPlugins={[GFM, remarkBreaks, remarkMath, remarkLinks]}
-          rehypePlugins={[rehypeCites, ...(tex ? [tex] : []), ...(colors ? [colors] : [])]}
+          rehypePlugins={[rehypeCites, ...(tex ? [tex] : [])]}
           components={COMPONENTS}>
           {src}
         </ReactMarkdown>
-      </CiteContext.Provider>
+      </MdContext.Provider>
     </div>
   );
 }

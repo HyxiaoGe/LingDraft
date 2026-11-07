@@ -1,0 +1,194 @@
+/* 代码块（照搬 Fusion 的 CodeBlock.module.css，颜色换成灵稿的变量；上色配色也照 Fusion：浅色 GitHub、深色 Monokai） */
+.box { margin-block: 1.25rem; }
+
+.block {
+  --code-line-height: 1.5rem;
+  --code-padding: 1rem;
+  --code-surface: var(--side);
+  --code-gutter: var(--paper);
+  --code-edge: var(--line);
+  --code-fg: var(--ink2);
+  --code-muted: var(--muted);
+  --hl-comment: #998; --hl-keyword: #333; --hl-number: #008080; --hl-string: #d14; --hl-title: #900; --hl-type: #458;
+  --hl-tag: #000080; --hl-regexp: #009926; --hl-symbol: #990073; --hl-built-in: #0086b3; --hl-meta: #999;
+  --hl-add: #dfd; --hl-del: #fdd;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--code-edge);
+  border-radius: 16px;
+  background: var(--code-surface);
+  color: var(--code-fg);
+  box-shadow: inset 0 1px 0 var(--paper);
+  font-size: 14px;
+  line-height: 1.6;
+}
+@media screen {
+  :global(.ws[data-theme="dark"]) .block {
+    --hl-comment: #75715e; --hl-keyword: #f92672; --hl-number: #ae81ff; --hl-string: #e6db74; --hl-title: #a6e22e; --hl-type: #66d9ef;
+    --hl-tag: #f92672; --hl-regexp: #e6db74; --hl-symbol: #ae81ff; --hl-built-in: #a6e22e; --hl-meta: #75715e;
+    --hl-add: var(--ok-soft); --hl-del: var(--danger-soft);
+  }
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--code-edge);
+  background: linear-gradient(135deg, var(--paper), var(--side));
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 20px;
+}
+.meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.language { font-weight: 500; overflow-wrap: anywhere; }
+.count { display: inline-flex; align-items: center; gap: 4px; color: var(--code-muted); white-space: nowrap; }
+.meta > svg { width: 14px; height: 14px; flex-shrink: 0; color: var(--code-muted); }
+.count > svg { width: 12px; height: 12px; }
+
+.iconButton,
+.button,
+.expandButton {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--code-edge);
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--paper), var(--accent-soft));
+  color: var(--code-muted);
+  font: inherit;
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.iconButton { width: 32px; height: 32px; padding: 0; flex-shrink: 0; }
+.button { height: 32px; padding-inline: 10px; gap: 6px; flex-shrink: 0; font-size: 12px; }
+.iconButton > svg,
+.button > svg,
+.expandButton > svg { width: 14px; height: 14px; }
+@media (hover: hover) {
+  .iconButton:hover,
+  .button:hover:not(:disabled),
+  .expandButton:hover { border-color: var(--accent-line); color: var(--code-fg); }
+}
+.iconButton:focus-visible,
+.button:focus-visible,
+.expandButton:focus-visible,
+.scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+.button:disabled { cursor: not-allowed; opacity: .55; }
+.button[aria-label="复制代码"]:disabled { cursor: wait; opacity: 1; }
+.button.success { color: var(--ok); }
+.actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+.scroll { overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: var(--line2) transparent; }
+.row { display: flex; min-width: 100%; }
+.gutter {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: var(--code-padding) 10px;
+  border-right: 1px solid var(--code-edge);
+  background: var(--code-gutter);
+  color: var(--code-muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: var(--code-line-height);
+  text-align: right;
+  white-space: pre;
+  user-select: none;
+}
+.column { flex: 1; min-width: 0; }
+.code {
+  margin: 0;
+  padding: var(--code-padding);
+  border: 0;
+  background: transparent;
+  color: var(--code-fg);
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: var(--code-line-height);
+  white-space: pre;
+  overflow: visible;
+}
+.code > code {
+  display: block;
+  min-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: inherit;
+}
+.expand { padding: 0 16px 12px; }
+.expand > div { display: flex; justify-content: center; padding-top: 12px; border-top: 1px solid var(--code-edge); }
+.expandButton { height: 34px; padding-inline: 12px; gap: 6px; color: var(--code-fg); font-size: 12px; }
+.block .error { margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--code-edge); color: var(--danger); font-size: 12px; }
+
+/* 上色 */
+.code :global(.hljs-comment), .code :global(.hljs-quote) { color: var(--hl-comment); font-style: italic; }
+.code :global(.hljs-keyword), .code :global(.hljs-selector-tag) { color: var(--hl-keyword); font-weight: 600; }
+.code :global(.hljs-subst) { color: var(--hl-keyword); }
+.code :global(.hljs-number), .code :global(.hljs-literal), .code :global(.hljs-variable), .code :global(.hljs-template-variable),
+.code :global(.hljs-tag) :global(.hljs-attr) { color: var(--hl-number); }
+.code :global(.hljs-string), .code :global(.hljs-doctag) { color: var(--hl-string); }
+.code :global(.hljs-title), .code :global(.hljs-section), .code :global(.hljs-selector-id) { color: var(--hl-title); font-weight: 600; }
+.code :global(.hljs-type), .code :global(.hljs-class) :global(.hljs-title) { color: var(--hl-type); font-weight: 600; }
+.code :global(.hljs-tag), .code :global(.hljs-name), .code :global(.hljs-attribute) { color: var(--hl-tag); font-weight: normal; }
+.code :global(.hljs-regexp), .code :global(.hljs-link) { color: var(--hl-regexp); }
+.code :global(.hljs-symbol), .code :global(.hljs-bullet) { color: var(--hl-symbol); }
+.code :global(.hljs-built_in) { color: var(--hl-built-in); }
+.code :global(.hljs-meta) { color: var(--hl-meta); font-weight: 600; }
+.code :global(.hljs-deletion) { background: var(--hl-del); }
+.code :global(.hljs-addition) { background: var(--hl-add); }
+.code :global(.hljs-emphasis) { font-style: italic; }
+.code :global(.hljs-strong) { font-weight: 600; }
+
+/* 运行 HTML 的结果 */
+.preview { border-top: 1px solid var(--code-edge); background: var(--paper); }
+.previewBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px 4px 12px;
+  border-bottom: 1px solid var(--code-edge);
+  color: var(--code-muted);
+  font-size: 12px;
+}
+.previewActions { display: flex; gap: 4px; }
+.previewButton {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--code-muted);
+  cursor: pointer;
+  transition: color .15s, background-color .15s;
+}
+@media (hover: hover) { .previewButton:hover { background: var(--side); color: var(--code-fg); } }
+.previewButton:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.previewButton > svg { width: 14px; height: 14px; }
+/* 运行结果固定白底：示例页面大多按白底写，跟着深色会看不清。高度按页面报上来的内容高度 */
+.previewFrame { display: block; width: 100%; height: var(--preview-height, 320px); max-height: 80vh; border: 0; background: #fff; }
+
+/* 手机：按钮看着还是 32px，点按区往外扩到 44px */
+@media (max-width: 720px) {
+  .iconButton::after, .button::after { content: ""; position: absolute; inset: -6px -3px; }
+  .expandButton { height: 44px; }
+  .previewButton::after { content: ""; position: absolute; inset: -8px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .iconButton, .button, .expandButton, .previewButton { transition: none; }
+}
+@media print {
+  .actions, .iconButton, .expand, .preview { display: none; }
+  .box { break-inside: avoid; }
+}

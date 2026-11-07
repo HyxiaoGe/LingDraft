@@ -1,0 +1,28 @@
+/* Tailwind（2026-11-07 Sean 定：前端从手写 CSS 一块一块迁到 Tailwind + CSS modules，照 Fusion 的做法）。
+   先不引它的样式重置（preflight）：还没迁的地方靠 workspace.css 自己的重置，整页迁完再换。
+   颜色名指向 workspace.css 的变量，深色主题跟着换：text-ink、bg-side、border-line…… */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-side: var(--side);
+  --color-hover: var(--hover);
+  --color-sel: var(--sel);
+  --color-line: var(--line);
+  --color-line2: var(--line2);
+  --color-ink: var(--ink);
+  --color-ink2: var(--ink2);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-line: var(--accent-line);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --font-sans: var(--sans);
+  --font-serif: var(--serif);
+  --font-mono: var(--mono);
+}

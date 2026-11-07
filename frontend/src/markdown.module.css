@@ -1,0 +1,47 @@
+/* 正文排版（照搬 Fusion 的 MarkdownRenderer.module.css，颜色换成灵稿的变量）。
+   字号跟着外面走（回答 16px、过程里的话 13px，见 workspace.css），这里的间距用 em 跟着缩放。
+   正文的标题比页面标题低三档（markdown.jsx 里 # 写成 h3、## 写成 h4……），字号照 Fusion 的 # / ## / ### / #### */
+.content { overflow-wrap: anywhere; font-variant-numeric: normal; }
+
+.content :where(p) { margin: 0 0 1em; }
+.content :where(h3, h4, h5, h6) { font-weight: 600; line-height: 1.4; text-wrap: pretty; color: var(--ink); }
+.content :where(h3) { margin: 1.1667em 0 .6667em; font-size: 1.5em; letter-spacing: -0.02em; }
+.content :where(h4) { margin: 1.4em 0 .6em; font-size: 1.25em; letter-spacing: -0.015em; }
+.content :where(h5) { margin: 1.3333em 0 .5556em; font-size: 1.125em; }
+.content :where(h6) { margin: 1.25em 0 .5em; font-size: 1em; }
+.content :where(ul, ol) { margin: 0 0 1em; padding-left: 1.5em; }
+.content :where(ul) { list-style-type: disc; }
+.content :where(ul ul) { list-style-type: circle; }
+.content :where(ul ul ul) { list-style-type: square; }
+.content :where(ol) { list-style-type: decimal; }
+.content :where(li) { padding-left: .25em; }
+.content :where(li + li) { margin-top: .375em; }
+.content :where(li > p) { margin: .375em 0; }
+.content :where(li > ul, li > ol) { margin: .375em 0 0; }
+.content :where(li)::marker { color: var(--muted); }
+.content :where(strong) { font-weight: 600; }
+.content :where(blockquote) { margin: 1.25em 0; border-left: 3px solid var(--accent-line); padding: .25em 0 .25em 1em; color: var(--ink2); }
+.content :where(blockquote > :last-child) { margin-bottom: 0; }
+.content :where(hr) { margin: 1.75em 0; border: 0; border-top: 1px solid var(--line); }
+.content :where(a) { color: var(--accent); text-decoration: underline; text-decoration-color: var(--accent-line); text-underline-offset: 3px; }
+@media (hover: hover) { .content :where(a):hover { text-decoration-color: currentColor; } }
+.content :where(:not(pre) > code) { border: 1px solid var(--line); border-radius: 5px; background: var(--side); padding: .1em .35em; font-family: var(--mono); font-size: .875em; }
+
+/* 任务列表 */
+.content :where(:global(.contains-task-list)) { list-style: none; padding-left: 0; }
+.content :where(:global(.task-list-item) input) { margin: 0 8px 0 0; vertical-align: -1px; accent-color: var(--accent); }
+
+/* 公式 */
+.content :where(:global(.katex)) { font-size: 1.1em; }
+.content :where(:global(.katex-display)) { margin: 0 0 1em; overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+.content :where(:global(.katex-display) > :global(.katex)) { font-size: 1.15em; }
+/* 公式块在 KaTeX 取回来之前：原样显示（只管直接放在正文里的，代码块里的 pre 不碰） */
+.content > :where(pre) { margin: 0 0 1em; padding: 12px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--side); overflow-x: auto; font: 13px/1.6 var(--mono); }
+
+.content > :first-child { margin-top: 0; }
+.content > :last-child { margin-bottom: 0; }
+
+@media print {
+  .content :where(h3, h4, h5, h6) { break-after: avoid; }
+  .content :where(blockquote), .content > :where(pre) { break-inside: avoid; }
+}

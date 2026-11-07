@@ -12,7 +12,7 @@
     "auth-client-web": "^0.4.2",
     "highlight.js": "^11.12.0",
     "katex": "^0.16.47",
-    "lowlight": "^3.3.0",
+    "lucide-react": "^1.70.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-markdown": "^10.1.0",
@@ -22,7 +22,9 @@
     "remark-math": "^6.0.0"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.5",
     "@vitejs/plugin-react": "4.3.4",
+    "tailwindcss": "^4.3.5",
     "vite": "6.0.11"
   }
 }
