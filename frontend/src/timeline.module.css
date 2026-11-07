@@ -20,6 +20,13 @@
 /* 自己说的话：字和回答、输入框一样 16px（2026-11-07 Sean 定，原来 14），写的和发出去看到的一样大 */
 .bubble { background: var(--side); border: 1px solid var(--line); border-radius: var(--r-lg) var(--r-lg) 4px var(--r-lg); padding: 9px 14px; font-size: 16px; max-width: 80%;
   white-space: pre-wrap; overflow-wrap: anywhere; }
+.said { line-height: 1.6; }
+/* 太长的收起来（timeline.jsx 的 Bubble）：只露 --fold 行，最下面一行半渐隐；下面居中“展开全部”，展开后是“收起” */
+.bubble[data-fold="closed"] .said { max-height: calc(var(--fold) * 1lh); overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5lh), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5lh), transparent); }
+.fold { display: block; position: relative; height: 28px; margin: 2px auto -4px; padding: 0 12px; border-radius: var(--r-sm); font-size: 13px; color: var(--muted);
+  white-space: nowrap; transition: color .15s, background .15s; }
+@media (hover: hover) { .fold:hover { color: var(--ink); background: var(--hover); } }
 .userFoot { position: absolute; top: 100%; right: -8px; margin-top: 1px; display: flex; gap: 2px; }
 /* 时间：和小按钮一样高、一样的左右留白，跟按钮排在一行 */
 .time { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; font-size: 12px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -98,7 +105,7 @@
   .flow { --pad: 16px; padding: 20px var(--pad) 24px; }
   /* 第 31 条：看得见的大小不变，透明点按区补够 44 */
   .userFoot :global(.ws-btn), .aiFoot :global(.ws-btn) { position: relative; }
-  .userFoot :global(.ws-btn)::after, .aiFoot :global(.ws-btn)::after { content: ""; position: absolute; inset: -8px 0; } /* 看得见 28 */
+  .userFoot :global(.ws-btn)::after, .aiFoot :global(.ws-btn)::after, .fold::after { content: ""; position: absolute; inset: -8px 0; } /* 看得见 28 */
   /* 新对话：欢迎语在中间，今日灵感在输入框上面，输入框贴底，不在中间浮着 */
   .main[data-fresh] .flow { margin: auto 0; padding-bottom: 24px; }
   .main[data-fresh] .examples { flex: none; padding: 0 16px 8px; }
@@ -115,5 +122,7 @@
   .examples, .suggest, .suggestWait, .userFoot, .aiFoot { display: none !important; }
   .printTitle { display: block; margin: 0 0 24px; font: 600 20px/1.4 var(--serif); }
   .user { margin-bottom: 16px; }
+  .bubble[data-fold="closed"] .said { max-height: none; -webkit-mask-image: none; mask-image: none; } /* 打印时长的也印全 */
+  .fold { display: none; }
   .reply.typing :global(.md) > :last-child::after { display: none; }
 }

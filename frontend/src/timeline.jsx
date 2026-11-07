@@ -589,7 +589,7 @@ function UserMsg({ text, image, src, at, pinned, now, editable, onEdit }) {
   return (
     <div className={styles.user}>
       {src && <UserImage key={src} img={image} src={src} />}
-      <div className={styles.bubble}>{text}</div>
+      <Bubble text={text} />
       <div className={styles.userFoot + (pinned ? " " + styles.pinned : "")}>
         <Stamp iso={at} now={now} />
         <CopyButton text={() => text} />
@@ -623,6 +623,36 @@ function EditBox({ text, onCancel, onSend }) {
         <button className="ws-btn ghost sm" onClick={onCancel}>取消</button>
         <button className="ws-btn primary sm" disabled={!changed} onClick={send}>发送</button>
       </div>
+    </div>
+  );
+}
+
+// 自己说的话：太长（超过 FOLD_OVER 行）就收起来，只露前 FOLD_SHOW 行、最后一行渐隐，下面居中“展开全部”；展开后最下面是“收起”
+// （照豆包，2026-11-07 Sean 要的）。气泡变宽变窄（拖窗口、开合左栏）重新量；收起时这句话的开头跑到上面去了就滚回来
+const FOLD_OVER = 6;
+const FOLD_SHOW = 4;
+function Bubble({ text }) {
+  const box = useRef(null);
+  const body = useRef(null);
+  const [long, setLong] = useState(false);
+  const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    const el = body.current;
+    const check = () => setLong(el.scrollHeight > parseFloat(getComputedStyle(el).lineHeight) * FOLD_OVER + 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [text]);
+  const fold = long ? (open ? "open" : "closed") : undefined;
+  const toggle = () => {
+    setOpen(!open);
+    if (open) requestAnimationFrame(() => box.current?.scrollIntoView({ block: "nearest" }));
+  };
+  return (
+    <div ref={box} className={styles.bubble} data-fold={fold} style={{ "--fold": FOLD_SHOW }}>
+      <div ref={body} className={styles.said}>{text}</div>
+      {long && <button className={styles.fold} aria-expanded={open} onClick={toggle}>{open ? "收起" : "展开全部"}</button>}
     </div>
   );
 }
