@@ -1,4 +1,4 @@
-// 对话的“⋯”菜单（左栏每一行、顶栏都用）：桌面上是贴着按钮的小浮层，手机上是底部弹层（规范：手机上菜单用 bottom sheet）。
+// 对话的“⋯”菜单（左栏每一行、顶栏都用）：桌面上是贴着按钮的小浮层，手机上是底部弹层。
 // 还有改标题的输入框：左栏的行里、顶栏标题处都用，右边写着字数和上限（第 14 条之外顺带的“重命名显示字数上限”）
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -7,7 +7,7 @@ import styles from "./menu.module.css";
 import { Sheet } from "./sheet.jsx";
 import sheet from "./sheet.module.css";
 
-export const TITLE_MAX = 40; // 后端 TITLE_MAX：超过了 400
+const TITLE_MAX = 40; // 后端 TITLE_MAX：超过了 400
 
 // items：[{key, icon, text, onClick, disabled, danger}]；note：菜单下面的一句说明（为什么有的点不了）。
 // anchor：打开它的按钮（桌面上按它的位置摆，Esc 收起时焦点回到它；点它自己由它切换开关）

@@ -1,4 +1,4 @@
-/* 设置窗口（settings.jsx，2026-11-07 Sean 定），同一天从 workspace.css 迁过来；外壳（大窗口、手机上从底部升起）见 dialog.module.css。
+/* 设置窗口（settings.jsx，2026-11-07 Sean 定）；外壳（大窗口、手机上从底部升起）见 dialog.module.css。
    照豆包的设置窗口：大的两栏窗口，换哪一类大小都不变（11-07 Sean 嫌 800×720 还小）。
    左边是“设置”、谁、几类（一类一项设置）；右边是那一类的标题和一组组的行：组名小字在上，几行在圆角框里（一行 48 高），说明写在框下面 */
 .nav { flex: none; width: 240px; display: flex; flex-direction: column; overflow-y: auto; border-right: 1px solid var(--line); }

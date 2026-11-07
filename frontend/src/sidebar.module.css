@@ -1,4 +1,4 @@
-/* 左栏（2026-11-07 从 workspace.css 迁过来，长相不变）。简单的排版直接写在组件上（Tailwind），
+/* 左栏（sidebar.jsx）。简单的排版直接写在组件上（Tailwind），
    这里放有状态、伪元素、动画和手机抽屉的部分 */
 
 .side { min-height: 0; display: flex; flex-direction: column; gap: 16px; padding: 18px 12px 10px; background: var(--side); border-right: 1px solid var(--line); }

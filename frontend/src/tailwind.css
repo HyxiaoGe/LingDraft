@@ -1,4 +1,4 @@
-/* Tailwind（2026-11-07 Sean 定：前端从手写 CSS 迁到 Tailwind + CSS modules，照 Fusion 的做法；workspace.css 2026-11-07 迁完删掉）。
+/* Tailwind（2026-11-07 Sean 定：前端用 Tailwind + CSS modules，照 Fusion 的做法）。
    层的先后：theme → base（Tailwind 的样式重置 preflight，全站的 style.css，后面是对话页的变量、深色、焦点框、打印）→ components（各处共用的按钮、图标按钮、开关、报错条……）→ utilities。
    CSS modules 不在层里，比所有层都优先（同名属性 module 说了算），所以 module 里改共用类（:global(.ws-btn) 之类）一定改得动。
    preflight 把浏览器的默认样式清掉了（2026-11-07 起）：外边距、内边距、边框都是 0，按钮和输入框没有底色、字跟着外面，列表没有圆点，图片和图标是块；

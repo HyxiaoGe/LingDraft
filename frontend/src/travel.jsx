@@ -39,13 +39,13 @@ export function itinerariesOf(items) {
 // "2026-11-20T08:05" → "08:05"；时刻是当地时间，不换时区
 const hm = (t) => t.slice(11, 16);
 
-export function dayText(date) {
+function dayText(date) {
   const [y, m, d] = date.slice(0, 10).split("-").map(Number);
   if (!y || !m || !d) return date;
   return `${m}月${d}日 周${WEEKDAYS[new Date(y, m - 1, d).getDay()]}`;
 }
 
-export function mins(m) {
+function mins(m) {
   if (m < 60) return `${m} 分钟`;
   return `${Math.floor(m / 60)} 小时${m % 60 ? ` ${m % 60} 分` : ""}`;
 }

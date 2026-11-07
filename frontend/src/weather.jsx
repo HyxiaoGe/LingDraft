@@ -17,7 +17,7 @@ export function forecastsOf(items) {
 }
 
 // 和风的天气现象是一套固定的说法（晴、多云、晴间多云、阴、小雨、雷阵雨、雨夹雪、雾、霾、扬沙……），按字挑图标
-export function skyIcon(text = "") {
+function skyIcon(text = "") {
   if (text.includes("雷")) return IconThunder;
   if (text.includes("雪") || text.includes("冰雹")) return IconSnow;
   if (text.includes("雨")) return IconRain;

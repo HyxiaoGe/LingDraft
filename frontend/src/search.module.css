@@ -1,4 +1,4 @@
-/* 搜对话的窗口（search.jsx，2026-11-07 Sean 定，照豆包），同一天从 workspace.css 迁过来；外壳（大窗口、手机上从底部升起）见 dialog.module.css。
+/* 搜对话的窗口（search.jsx，2026-11-07 Sean 定，照豆包）；外壳（大窗口、手机上从底部升起）见 dialog.module.css。
    上面搜索框，下面一行一条对话：标题、（进行中、没跑完的点）、右边时间 */
 .head { flex: none; display: flex; align-items: center; gap: 12px; padding: 24px 16px 16px 24px; }
 /* 边框用内阴影画：输入框撑满整个框的 44 高（手机上的热区就是输入框本身）；点框里的图标、空白处也把光标放进去 */

@@ -1,4 +1,4 @@
-// 输入框那一块（2026-11-07 从 timeline.jsx 拆出来，样式从 workspace.css 迁到 composer.module.css + Tailwind）：
+// 输入框那一块（样式在 composer.module.css 和元素上的 Tailwind 类）：
 // 输入框本身（写字、加图、发送 / 停止、这一轮答完再发），右下角的深度思考和选模型，贴在上沿的“还没发出去的话”，
 // 上面的额度提醒和“回到底部”，还有拖图进来时盖在对话区上的那层。
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";

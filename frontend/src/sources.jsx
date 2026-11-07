@@ -121,7 +121,7 @@ const layer = (node) => createPortal(node, document.querySelector(".ws") || docu
 const EXCERPT_BADGES = { body: "已读全文", docs: "文档摘录", summary: "仅摘要" };
 
 // 网址写成“域名 + 路径的开头”：同一个网站的几篇靠它分得清
-export function where(url) {
+function where(url) {
   try {
     const u = new URL(url);
     const path = decodeURI(u.pathname).replace(/\/$/, "");

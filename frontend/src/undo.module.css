@@ -1,4 +1,4 @@
-/* 删了能撤销的提示（第 44 条，undo.jsx），2026-11-07 从 workspace.css 迁过来：桌面在左下角，手机在输入框上面（位置见 undo.jsx） */
+/* 删了能撤销的提示（第 44 条，undo.jsx）：桌面在左下角，手机在输入框上面（位置见 undo.jsx） */
 .host { position: fixed; z-index: 80; left: 16px; bottom: 16px; max-width: calc(100vw - 32px); pointer-events: none; }
 .toast { pointer-events: auto; display: flex; align-items: center; gap: 12px; max-width: 400px; min-height: 44px; padding: 4px 4px 4px 16px; border-radius: var(--r);
   background: var(--ink); color: var(--paper); box-shadow: var(--lift); font-size: 13px; animation: rise .2s var(--ease); }
@@ -6,7 +6,7 @@
 .act { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 36px; padding: 0 12px; border-radius: var(--r-sm);
   color: var(--paper); font-weight: 600; }
 @media (hover: hover) { .act:hover { background: var(--ink2); } }
-/* 深色底上焦点外圈用纸色、画在按钮里面（原来这条被全局的焦点外圈盖住了，迁过来以后才生效） */
+/* 深色底上焦点外圈用纸色、画在按钮里面 */
 .act:focus-visible { outline: 2px solid var(--paper); outline-offset: -4px; }
 .act :global(.ws-kbd) { margin: 0 0 0 4px; border-color: var(--muted); color: var(--line2); font-weight: 400; }
 @keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }

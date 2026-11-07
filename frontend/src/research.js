@@ -27,7 +27,7 @@ export function modelName(models, ref, gone = "已不再提供的模型") {
   return models.slice(1).find((m) => m.model === ref)?.name || gone;
 }
 
-// 多少额度（后端按各模型的单价算好的 credits，1 credit = ¥0.001 成本；页面上叫“额度”，不露 credits，见规范术语表）：
+// 多少额度（后端按各模型的单价算好的 credits，1 credit = ¥0.001 成本；页面上叫“额度”，不露 credits）：
 // 一律取整、千位加逗号，不到 1 写“不到 1 额度”，不换算成次数（2026-11-07 Sean 定，批次 G 第 39 条）
 export function creditsText(n) {
   if (n == null) return null;
@@ -126,7 +126,7 @@ export const CITE = /\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\]/g;
 export const cutPartialCite = (text) => text.replace(/\[(s[0-9a-f]{0,9})?$/, "");
 
 // 表格表头下面的分隔行：| --- | :---: |
-export const isRule = (line) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line);
+const isRule = (line) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(line);
 // 代码块的围栏行：``` 或 ~~~（三个起），后面可以跟语言名；反引号围栏的语言名里不能有反引号
 export const FENCE = /^(\s*)(`{3,}|~{3,})([^`]*)$/;
 // 收尾的围栏：和开头同一种符号、不比开头短，后面没有别的字

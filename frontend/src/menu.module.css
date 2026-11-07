@@ -1,4 +1,4 @@
-/* 小浮层菜单（桌面）：对话的“⋯”菜单（menu.jsx）、左栏下面的账号菜单和额度面板（login.jsx），2026-11-07 从 workspace.css 迁过来。
+/* 小浮层菜单（桌面）：对话的“⋯”菜单（menu.jsx）、左栏下面的账号菜单和额度面板（login.jsx）。
    一项一行 32 高；手机上换成底部弹层（sheet.module.css）。
    .note 是菜单里的一句小字说明（为什么有的点不了、额度怎么算），选模型的菜单、底部弹层里也用；弹层里大一号 */
 .menu { position: fixed; z-index: 60; background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r); box-shadow: var(--lift); padding: 4px;

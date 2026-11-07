@@ -1,4 +1,4 @@
-/* 天气卡（weather.jsx），2026-11-07 从 workspace.css 迁过来；卡片外壳见 card.module.css。
+/* 天气卡（weather.jsx）；卡片外壳见 card.module.css。
    逐日几列（问了某一天时只有一行），下面是逐小时（接下来 24 小时，或者问的那天）的气温（靛青折线）和降水概率（蓝色柱子） */
 .head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .head > svg { flex: none; color: var(--accent); }

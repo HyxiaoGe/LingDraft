@@ -935,7 +935,7 @@ function SuggestWait() {
   return <div className={styles.suggestWait}><Spinner size={12} /><span>正在想接着问什么…</span></div>;
 }
 
-// 接着问：和新对话页的今日灵感同一种胶囊（横排、放不下换行），名字分开（规范术语表，2026-11-06 Sean 定）
+// 接着问：和新对话页的今日灵感同一种胶囊（横排、放不下换行），名字分开（2026-11-06 Sean 定）
 function Suggestions({ items, onPick }) {
   return (
     <div className={styles.suggest} role="group" aria-labelledby="ws-suggest-label">

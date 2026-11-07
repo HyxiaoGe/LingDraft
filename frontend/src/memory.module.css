@@ -1,4 +1,4 @@
-/* 记忆列表（memory.jsx，放在设置窗口里），2026-11-07 从 workspace.css 迁过来。
+/* 记忆列表（memory.jsx，放在设置窗口里）。
    上面一张卡：记了几条和一句说明；下面一张卡是记忆列表，一条一行 */
 .mem { padding-top: 8px; }
 .mem > :global(.ws-error) { margin: 16px 0 0; }

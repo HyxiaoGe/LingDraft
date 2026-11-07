@@ -1,4 +1,4 @@
-/* 对话这一栏（timeline.jsx），2026-11-07 从 workspace.css 迁过来：滚动区和正文宽度、每一轮（用户的话、改这句话、回答的开头和下面一行、正文、接着问）、
+/* 对话这一栏（timeline.jsx）：滚动区和正文宽度、每一轮（用户的话、改这句话、回答的开头和下面一行、正文、接着问）、
    新对话页（欢迎语、今日灵感）。过程见 process.module.css，卡片见 card.module.css 和各自的 module */
 
 .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }

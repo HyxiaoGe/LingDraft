@@ -1,7 +1,6 @@
 // 左栏：对话列表。最上面品牌、搜对话、收起（手机上是关闭抽屉），下面“新对话”，再下面按时间分组的对话，最下面额度和账号。
-// 手机上是左边滑出的抽屉（遮罩也在这里）。2026-11-07 从 workspace.jsx 拆出来，样式迁到 Tailwind + CSS modules：
-// 简单的排版写在元素上，悬停、选中、伪元素、动画和手机抽屉在 sidebar.module.css。
-// 2026-11-07 Sean 嫌单调，照 Fusion 美化：每行前面一个对话图标（正在回答换成转圈、没跑完换成感叹号），选中的那行是白底浮起来的一块，“新对话”用写字的图标
+// 手机上是左边滑出的抽屉（遮罩也在这里）。简单的排版写在元素上（Tailwind），悬停、选中、伪元素、动画和手机抽屉在 sidebar.module.css。
+// 照 Fusion 的样子（2026-11-07 Sean 嫌单调）：每行前面一个对话图标（正在回答换成转圈、没跑完换成感叹号），选中的那行是白底浮起来的一块，“新对话”用写字的图标
 import { CircleAlert, MessageSquare, MessagesSquare, SquarePen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconSearch, IconTrash, Spinner } from "./icons.jsx";
@@ -28,7 +27,7 @@ function groupOf(t, now) {
 const newest = (now) => (a, b) => timeOf(b, now) - timeOf(a, now);
 
 // 标题太长、截成“…”的：鼠标停上去（或 Tab 到这一行），等半秒以后像跑马灯一样一直往左走，整条走过去，后面隔一段接着同一个标题，
-// 一圈一圈不停（2026-11-07 Sean 要的：“全部过去”，不是来回晃）。每次停上去量一次标题多长，按每秒 40px 定一圈多久。
+// 一圈一圈不停（2026-11-07 Sean 要的）。每次停上去量一次标题多长，按每秒 40px 定一圈多久。
 // 减少动效时不滚，靠悬停提示看全名
 const REDUCE = matchMedia("(prefers-reduced-motion: reduce)");
 const GAP = 32; // 标题和后面接着的那一份之间空多少

@@ -1,7 +1,8 @@
 // 对话页的导航：桌面上左栏能整栏收起（收起后顶栏左边出展开钮、搜对话和新对话），窄屏（≤720px）左栏改成从左边滑出的抽屉，
 // 顶栏是“抽屉钮 + 标题 + 新对话”。对话页用这条顶栏，状态由 Workspace 经 NavContext 给。
 import { createContext, useContext, useEffect, useState } from "react";
-import { IconMenu, IconPanel, IconPlus, IconSearch } from "./icons.jsx";
+import { SquarePen } from "lucide-react";
+import { IconMenu, IconPanel, IconSearch } from "./icons.jsx";
 import { TitleInput } from "./menu.jsx";
 
 export const NavContext = createContext(null);
@@ -57,7 +58,7 @@ export function HeadBar({ title, end, edit }) {
       <button className="ws-icon-btn" aria-label="搜索对话" title={`搜索对话（${SEARCH_KEY}）`} aria-keyshortcuts={SEARCH_ARIA_KEY} aria-haspopup="dialog" onClick={nav.search}>
         <IconSearch size={18} />
       </button>
-      <button className="ws-icon-btn" aria-label="新对话" title="新对话" onClick={nav.newChat}><IconPlus size={18} /></button>
+      <button className="ws-icon-btn" aria-label="新对话" title="新对话" onClick={nav.newChat}><SquarePen size={18} /></button>
     </>
   ) : null;
   return (
@@ -71,7 +72,7 @@ export function HeadBar({ title, end, edit }) {
       )}
       <div className="flex items-center justify-end gap-1">
         {end}
-        {nav?.mobile && <button className="ws-icon-btn" aria-label="新对话" onClick={nav.newChat}><IconPlus size={18} /></button>}
+        {nav?.mobile && <button className="ws-icon-btn" aria-label="新对话" onClick={nav.newChat}><SquarePen size={18} /></button>}
       </div>
     </header>
   );

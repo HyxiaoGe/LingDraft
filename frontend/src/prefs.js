@@ -9,8 +9,8 @@ const read = (k) => { try { return localStorage.getItem(k); } catch { return nul
 const write = (k, v) => { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* 存不下就只管这一次 */ } };
 
 export const THEMES = [["system", "跟随系统"], ["light", "浅色"], ["dark", "深色"]];
-export const savedTheme = () => { const v = read(THEME_KEY); return v === "light" || v === "dark" ? v : "system"; };
-export const saveTheme = (v) => write(THEME_KEY, v === "system" ? null : v);
+const savedTheme = () => { const v = read(THEME_KEY); return v === "light" || v === "dark" ? v : "system"; };
+const saveTheme = (v) => write(THEME_KEY, v === "system" ? null : v);
 export const thinkDefault = () => read(THINK_KEY) !== "off";
 export const saveThinkDefault = (on) => write(THINK_KEY, on ? null : "off");
 

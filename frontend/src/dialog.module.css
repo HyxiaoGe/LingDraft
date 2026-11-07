@@ -1,4 +1,4 @@
-/* 弹窗的外壳：登录（login.jsx）、设置（settings.jsx）、搜对话（search.jsx）共用，2026-11-07 从 workspace.css 迁过来。
+/* 弹窗的外壳：登录（login.jsx）、设置（settings.jsx）、搜对话（search.jsx）共用。
    批次 E 整个弹窗收拾了一遍：内边距 24、标题 20（原来 26/22、18 不在刻度上），手机上按钮、输入框、关闭键都到 44。
    弹窗本身能拿焦点（触屏打开时焦点落在它上面，不自己弹键盘）；它不是按钮，焦点不画外圈（外圈套在边框外像两层边），换成边框染上强调色 */
 .overlay { position: fixed; inset: 0; z-index: 80; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 16px;

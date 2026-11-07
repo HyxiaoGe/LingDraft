@@ -35,12 +35,12 @@ export function MapCard({ card }) {
 // 署名：用到了哪几家
 const credit = (providers) => [...new Set(providers.filter(Boolean))].map((p) => PROVIDERS[p] || p).join("、") || "地图";
 
-export function dist(m) {
+function dist(m) {
   if (m < 1000) return `${m} 米`;
   return `${(m / 1000).toFixed(m < 10000 ? 1 : 0).replace(/\.0$/, "")} 公里`;
 }
 
-export function dur(s) {
+function dur(s) {
   const min = Math.max(1, Math.round(s / 60));
   if (min < 60) return `${min} 分钟`;
   return `${Math.floor(min / 60)} 小时${min % 60 ? ` ${min % 60} 分钟` : ""}`;

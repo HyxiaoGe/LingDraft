@@ -1,7 +1,7 @@
 // 对话里带的图：后端收 PNG / JPEG / WebP、不超过 4 MB（image-service 的上限，见 backend/app/tools/gateway.py 的 MAX_UPLOAD_BYTES）。
 // 超过 4 MB 的、别的格式浏览器读得出来的（iPhone 的 HEIC 在 Safari 里、GIF 取第一帧等），先在本机缩一缩、转成 WebP（不支持的浏览器转 JPEG）再传；
 // 读不出来、压不下去的不传，告诉用户换一张。只传一张，模型看不见图的内容，只能拿它改图、照着画（见后端 prompts 的 tools.generate_image.attached）
-export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 const TYPES = ["image/png", "image/jpeg", "image/webp"];
 // 选图框只列这几种：iPhone 上选 HEIC 的照片时，系统会先转成 JPEG 再给页面
 export const IMAGE_ACCEPT = TYPES.join(",");

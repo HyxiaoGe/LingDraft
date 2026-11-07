@@ -1,4 +1,4 @@
-/* 生成的图（images.jsx），2026-11-07 从 workspace.css 迁过来：回答里的图片卡片、看大图 */
+/* 生成的图（images.jsx）：回答里的图片卡片、看大图 */
 
 /* 图片卡片（照 Fusion 的图片卡片）：按图的比例定宽，生成中是灰底上一道斜光扫过（busy），出图后淡入；下面一行是哪个模型画的和几个按钮 */
 .images { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; margin: 2px 0 4px; }

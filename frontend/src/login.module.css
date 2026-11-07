@@ -1,4 +1,4 @@
-/* 登录（login.jsx），2026-11-07 从 workspace.css 迁过来：登录弹窗（外壳见 dialog.module.css）、左栏下面的头像和账号菜单、额度面板
+/* 登录（login.jsx）：登录弹窗（外壳见 dialog.module.css）、左栏下面的头像和账号菜单、额度面板
    （浮层见 menu.module.css，手机上的底部弹层见 sheet.module.css） */
 
 /* ---------- 登录弹窗 ---------- */

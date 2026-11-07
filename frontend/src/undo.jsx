@@ -10,9 +10,9 @@ import { IconUndo } from "./icons.jsx";
 import { NavContext, touch } from "./nav.jsx";
 import styles from "./undo.module.css";
 
-export const UNDO_MS = 5000;
+const UNDO_MS = 5000;
 const MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
-export const UNDO_KEY = MAC ? "⌘Z" : "Ctrl+Z";
+const UNDO_KEY = MAC ? "⌘Z" : "Ctrl+Z";
 // 光标在有字的输入框里：⌘Z 归输入框自己撤销打的字；空的输入框（比如顶栏删了以后光标落在新对话的输入框）照样撤销删除
 const typing = (el) => {
   const f = el?.closest?.("input, textarea, [contenteditable='true']");

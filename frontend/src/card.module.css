@@ -1,4 +1,4 @@
-/* 卡片的外壳，2026-11-07 从 workspace.css 迁过来：天气卡（weather.jsx）、地点卡和路线卡（maps.jsx）、航班火车行程卡（travel.jsx）、
+/* 卡片的外壳：天气卡（weather.jsx）、地点卡和路线卡（maps.jsx）、航班火车行程卡（travel.jsx）、
    提示卡（timeline.jsx：没跑完、内容审核没通过）都套这一层；里面的样式各在自己的 module */
 .card { border: 1px solid var(--line2); border-radius: var(--r-lg); padding: 14px 16px; background: var(--paper);
   display: flex; flex-direction: column; gap: 10px; animation: rise .25s var(--ease); margin: 2px 0; }

@@ -1,4 +1,4 @@
-/* 地点卡、路线卡（maps.jsx）和航班卡、火车卡、行程卡（travel.jsx，标题一行照地图卡），2026-11-07 从 workspace.css 迁过来；卡片外壳见 card.module.css。
+/* 地点卡、路线卡（maps.jsx）和航班卡、火车卡、行程卡（travel.jsx，标题一行照地图卡）；卡片外壳见 card.module.css。
    标题一行（查什么、在哪，或者起点 → 终点；右边署服务商和时间），下面一行一个地方、一种出行方式或者一个班次 */
 .head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .head > svg { flex: none; color: var(--accent); }

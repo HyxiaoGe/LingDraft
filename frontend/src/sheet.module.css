@@ -1,4 +1,4 @@
-/* 手机上的底部弹层，2026-11-07 从 workspace.css 迁过来：sheet.jsx 的 Sheet（“⋯”菜单、账号、额度、来源），选模型（composer.jsx）、轮次目录（turns.jsx）自己搭的也用这一套。
+/* 手机上的底部弹层：sheet.jsx 的 Sheet（“⋯”菜单、账号、额度、来源），选模型（composer.jsx）、轮次目录（turns.jsx）自己搭的也用这一套。
    盖一层暗底；最高 70dvh，里面滚；底下让出安全区。根上有 data-sheet：放在弹层里的东西（菜单的小字说明、选模型的行）靠它换成大一号 */
 .scrim { position: fixed; inset: 0; z-index: 70; background: var(--scrim); animation: fade .2s var(--ease); }
 .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 71; max-height: 70vh; max-height: 70dvh; display: flex; flex-direction: column;

@@ -31,7 +31,7 @@ export function useAuth() {
   return s;
 }
 
-// 左栏下面：头像和名字，点开是账号菜单。手机上是底部弹层（规范：菜单用 bottom sheet）。
+// 左栏下面：头像和名字，点开是账号菜单。手机上是底部弹层。
 // 设置（2026-11-07 Sean 定）：登录了是“谁、设置、退出登录”；游客也有一个“游客”头像，菜单里是“登录、设置”。
 // 记忆只从设置窗口里进，这里和左栏都不放。没有登录功能的部署没有账号，只留一个“设置”
 export function UserFoot({ auth, onLogin, onSettings, mobile }) {
