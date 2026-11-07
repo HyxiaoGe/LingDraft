@@ -55,8 +55,8 @@ export function creditsLine(left) {
   return left ? creditsParts(left).join(" · ") : null;
 }
 
-// 上面那句的两半：[还剩多少（或用完了）, 什么时候恢复]。额度面板分两行放，窄的地方不会在半截断开
-export function creditsParts(left) {
+// 上面那句的两半：[还剩多少（或用完了）, 什么时候恢复]
+function creditsParts(left) {
   const amount = left.exhausted ? `${left.span}的额度用完了` : `${left.span}还剩 ${num(left.remaining)} 额度`;
   return [amount, left.resetText];
 }
