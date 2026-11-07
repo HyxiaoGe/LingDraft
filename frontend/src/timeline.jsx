@@ -17,6 +17,7 @@ import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx
 import { Markdown } from "./markdown.jsx";
 import { ActionMenu } from "./menu.jsx";
 import { HeadBar, NavContext, touch } from "./nav.jsx";
+import proc from "./process.module.css";
 import { ACTIVE, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping } from "./research.js";
 import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
 import task from "./task.module.css";
@@ -664,11 +665,11 @@ function Process({ k, items, st, nums, rec, running, failed, now }) {
   const did = running ? "" : didText(items);
   const label = `${verb}${time ? ` ${time}` : ""}${did ? ` · ${did}` : ""}`;
   return (
-    <div className="ws-proc">
+    <div className={proc.proc}>
       {items.length
-        ? <button className="ws-proc-head" aria-expanded={shown} onClick={toggle}>{label}<IconChevron size={13} className={"chev" + (shown ? " up" : "")} /></button>
-        : <div className="ws-proc-head">{label}</div>}
-      {items.length > 0 && <Fold open={shown} onFound={found}><div className="ws-proc-body"><ProcItems items={items} st={st} nums={nums} running={running} /></div></Fold>}
+        ? <button className={proc.head} aria-expanded={shown} onClick={toggle}>{label}<IconChevron size={13} className={"chev" + (shown ? " up" : "")} /></button>
+        : <div className={proc.head}>{label}</div>}
+      {items.length > 0 && <Fold open={shown} onFound={found}><div className={proc.body}><ProcItems items={items} st={st} nums={nums} running={running} /></div></Fold>}
     </div>
   );
 }
@@ -693,7 +694,7 @@ function ProcItems({ items, st, nums, running, hideUnknown = false }) {
   return items.map((it) => (it.type === "step" ? (it.kind === "task" ? <TaskCard key={`step:${it.id}`} s={it} st={st} nums={nums} running={running} />
     : <ToolRow key={`step:${it.id}`} s={it} running={running} />)
     : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} running={running} thinking={running && it.live && it.ms == null} />
-      : it.type === "blocked" ? <div key={`blocked:${it.id}`} className="ws-tool bad"><IconWarn size={12} /><span className="main">内容审核没通过，这个子任务停在这里</span></div>
+      : it.type === "blocked" ? <div key={`blocked:${it.id}`} className={proc.tool + " " + proc.bad}><IconWarn size={12} /><span className={proc.main}>内容审核没通过，这个子任务停在这里</span></div>
         : it.type === "guide" ? <GuideNote key={`guide:${it.id}`} it={it} />
           : <ProcText key={`text:${it.id}`} it={it} cite={cite} />));
 }
@@ -701,9 +702,9 @@ function ProcItems({ items, st, nums, running, hideUnknown = false }) {
 // 用户插进这一轮的话：模型从这里开始看到它
 function GuideNote({ it }) {
   return (
-    <div className="ws-guide">
-      <span className="ws-guide-tag">你插了一句</span>
-      <div className="ws-guide-text">{it.text}</div>
+    <div className={proc.guide}>
+      <span className={proc.guideTag}>你插了一句</span>
+      <div className={proc.guideText}>{it.text}</div>
     </div>
   );
 }
@@ -789,7 +790,7 @@ function Reply({ it, cite, caret }) {
 
 // 过程里中途说的话（之后又去搜了、读了），一样收到就显示
 function ProcText({ it, cite }) {
-  return <div className="ws-proc-text"><Markdown text={mdText(it)} cite={cite} /></div>;
+  return <div className={proc.text}><Markdown text={mdText(it)} cite={cite} /></div>;
 }
 
 // 还在写的，最后一行半截的 Markdown 先收拾一下（见 tidyTyping）；写完的只去掉末尾半个引用
@@ -807,12 +808,12 @@ function Thinking({ it, running, thinking }) {
   const secs = it.ms != null ? Math.max(1, Math.round(it.ms / 1000)) : null;
   const label = thinking ? "深度思考中" : secs ? `思考了 ${secs} 秒` : "思考过程";
   return (
-    <div className={"ws-think" + (thinking ? " live" : "")}>
-      <button className="ws-think-head" aria-expanded={shown} onClick={toggle}>
+    <div className={proc.think + (thinking ? " " + proc.live : "")}>
+      <button className={proc.thinkHead} aria-expanded={shown} onClick={toggle}>
         {thinking ? <Spinner size={12} /> : <IconChevron size={13} className={"chev" + (shown ? " up" : "")} />}
         <span>{label}</span>
       </button>
-      <Fold open={shown} onFound={found}><div ref={box} className="ws-think-text">{text}</div></Fold>
+      <Fold open={shown} onFound={found}><div ref={box} className={proc.thinkText}>{text}</div></Fold>
     </div>
   );
 }
@@ -832,15 +833,15 @@ function ToolRow({ s, running }) {
     main = <>查天气「{s.text}」</>;
     sub = s.pending ? "查询中…" : s.ok ? s.title : `没查成：${s.message || "出错了"}`;
   } else if (s.kind === "place") {
-    main = <>查地点「{s.text}」{s.limits.map((l) => <span key={l} className="lim">{l}</span>)}</>;
+    main = <>查地点「{s.text}」{s.limits.map((l) => <span key={l} className={proc.lim}>{l}</span>)}</>;
     const n = s.places?.places.length;
     sub = s.pending ? "查询中…" : s.places ? (n ? `${n} 个地方` : "没找到") : `没查成：${s.message || "出错了"}`;
   } else if (s.kind === "route") {
-    main = <>查路线「{s.text}」{s.limits.map((l) => <span key={l} className="lim">{l}</span>)}</>;
+    main = <>查路线「{s.text}」{s.limits.map((l) => <span key={l} className={proc.lim}>{l}</span>)}</>;
     const got = s.routes?.routes.map((r) => MODES[r.mode] || r.mode).join("、");
     sub = s.pending ? "计算中…" : s.routes ? (got ? `算出${got}` : "没算出来") : `没查成：${s.message || "出错了"}`;
   } else if (s.kind === "flight" || s.kind === "train") {
-    main = <>{s.kind === "flight" ? "查航班" : "查火车"}「{s.text}」{s.limits.map((l) => <span key={l} className="lim">{l}</span>)}</>;
+    main = <>{s.kind === "flight" ? "查航班" : "查火车"}「{s.text}」{s.limits.map((l) => <span key={l} className={proc.lim}>{l}</span>)}</>;
     const n = s.travel?.services.length;
     sub = s.pending ? "查询中…" : s.travel ? (n ? `${n} 个班次` : "没查到班次") : `没查成：${s.message || "出错了"}`;
   } else if (s.kind === "itinerary") {
@@ -850,13 +851,13 @@ function ToolRow({ s, running }) {
     main = <>找文档库「{s.text}」</>;
     sub = s.pending ? "查找中…" : s.ok ? (s.hits ? `${s.hits} 个候选` : "没找到") : `没找成：${s.message || "出错了"}`;
   } else if (s.kind === "docs") { // 灰色小标是哪个库
-    main = <>查文档「{s.text}」{s.limits.map((l) => <span key={l} className="lim">{l}</span>)}</>;
+    main = <>查文档「{s.text}」{s.limits.map((l) => <span key={l} className={proc.lim}>{l}</span>)}</>;
     sub = s.pending ? "查询中…" : s.ok ? (s.hits ? `${s.hits} 段文档` : "没有带出处的文档") : `没查成：${s.message || "出错了"}`;
   } else if (s.kind === "image") {
     main = <>{s.edit ? "改图" : "画图"}「{s.text}」</>;
     sub = s.pending ? "生成中…" : s.image ? "已生成" : `没画成：${s.message || "出错了"}`;
   } else {
-    main = <>搜索「{s.text}」{s.limits.map((l) => <span key={l} className="lim">{l}</span>)}</>;
+    main = <>搜索「{s.text}」{s.limits.map((l) => <span key={l} className={proc.lim}>{l}</span>)}</>;
     sub = s.pending ? "搜索中…" : s.ok ? `${s.hits} 条结果${s.message ? `（${s.message}）` : ""}` : `没搜成：${s.message || "出错了"}`;
   }
   if (s.pending && !busy) {
@@ -864,10 +865,10 @@ function ToolRow({ s, running }) {
     bad = false;
   }
   return (
-    <div className={"ws-tool" + (busy ? " pending" : bad ? " bad" : "")}>
+    <div className={proc.tool + (busy ? " " + proc.pending : bad ? " " + proc.bad : "")}>
       {busy ? <Spinner size={12} /> : <Icon size={12} />}
-      <span className="main" title={s.text}>{main}</span>
-      {sub && <span className="sub" title={sub}>{sub}</span>}
+      <span className={proc.main} title={s.text}>{main}</span>
+      {sub && <span className={proc.sub} title={sub}>{sub}</span>}
     </div>
   );
 }
@@ -912,11 +913,11 @@ function LiveLine({ live, items, stopping, now }) {
   const waited = useWaited(`${items.length}:${lastItem?.text?.length ?? 0}:${pending.length}:${live?.phase}:${stage}:${sub}`, now);
   const secs = stage && !stopping && waited >= SHOW_WAIT ? Math.floor(waited / 1000) : 0;
   return (
-    <div className="ws-live">
-      {stage && <><Spinner size={14} /><span className="stage">{stage}</span></>}
-      {secs > 0 && <span className="secs">{secs} 秒</span>}
-      {secs > 0 && !touch() && <span className="key" aria-hidden="true"><kbd className="ws-kbd">Esc</kbd>停止</span>}
-      {secs * 1000 >= SLOW && <span className="slow">这一步比平常慢，可以接着等，也可以停止</span>}
+    <div className={proc.waiting}>
+      {stage && <><Spinner size={14} /><span className={proc.stage}>{stage}</span></>}
+      {secs > 0 && <span className={proc.secs}>{secs} 秒</span>}
+      {secs > 0 && !touch() && <span className={proc.key} aria-hidden="true"><kbd className="ws-kbd">Esc</kbd>停止</span>}
+      {secs * 1000 >= SLOW && <span className={proc.slow}>这一步比平常慢，可以接着等，也可以停止</span>}
     </div>
   );
 }

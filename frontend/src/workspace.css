@@ -160,39 +160,9 @@
 .ws-ai-model + .ws-ai-model { margin-left: -2px; } /* 和时间后面一样，点前面空 8px（模型名右边只有 4px） */
 .ws-time + .ws-ai-model::before, .ws-ai-model + .ws-ai-model::before { content: "·"; margin-right: 6px; }
 
-.ws-tool { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; line-height: 24px; color: var(--ink2); animation: ws-in .25s var(--ease); }
-.ws-tool > svg { flex: none; color: var(--faint); transform: translateY(2px); }
-.ws-tool .main { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-tool .main a { padding: 4px 0; } /* 读的那页：点按区到行高 24（第 31 条） */
-.ws-tool .sub { color: var(--muted); flex: none; font-size: 12px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-tool .lim { font-size: 11px; color: var(--muted); background: var(--hover); border-radius: 4px; padding: 0 5px; margin-left: 6px; }
-.ws-tool.bad .sub { color: var(--warn); }
-.ws-tool.pending { color: var(--accent); }
-.ws-tool.pending .spin { transform: translateY(2px); }
-
-.ws-live { display: flex; align-items: center; gap: 8px; min-height: 20px; font-size: 13px; line-height: 20px; color: var(--accent); flex-wrap: wrap; }
-.ws-live .stage { color: var(--ink2); }
-.ws-live .secs { color: var(--faint); font-variant-numeric: tabular-nums; }
-.ws-live .slow { color: var(--warn); }
-.ws-live span + span::before { content: "·"; margin-right: 8px; color: var(--faint); }
-/* 一轮里的东西：思考、工具步骤、正文、来源、推荐问题 */
-.ws-think-head { border: 0; background: none; padding: 2px 6px 2px 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); border-radius: var(--r-sm); }
-@media (hover: hover) { .ws-think-head:hover { color: var(--ink); } }
 /* 折叠的箭头：收起时朝右，展开时朝下 */
 .ws .chev { flex: none; transition: transform .2s var(--ease); transform: rotate(-90deg); }
 .ws .chev.up { transform: none; }
-.ws-think.live .ws-think-head { color: var(--accent); }
-.ws-think-text { margin: 4px 0 2px; padding: 8px 12px; background: var(--side); border-radius: var(--r-sm); font-size: 12.5px; line-height: 1.7; color: var(--muted);
-  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; }
-/* 一轮的过程：一行“已完成 25 秒”，点开是每一步，左边一道线把它们归在这一行下面 */
-.ws-proc-head { align-self: flex-start; border: 0; background: none; padding: 2px 0; display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted);
-  font-variant-numeric: tabular-nums; }
-@media (hover: hover) { button.ws-proc-head:hover { color: var(--ink); } }
-.ws-proc-body { margin: 6px 0 0 2px; padding: 2px 0 2px 14px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
-.ws-guide { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; margin: 4px 0; animation: ws-in .25s var(--ease); }
-.ws-guide-tag { font-size: 11.5px; color: var(--faint); }
-.ws-guide-text { max-width: 85%; font-size: 13px; line-height: 1.6; color: var(--ink2); background: var(--side); border: 1px solid var(--line); border-radius: var(--r-lg) var(--r-lg) 4px var(--r-lg); padding: 5px 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.ws-proc-text { font-size: 13px; line-height: 1.7; color: var(--ink2); overflow-wrap: anywhere; }
 
 /* 正文：Markdown（排版、代码块、表格各在 markdown.module.css、code-block.module.css、md-table.module.css，照搬 Fusion） */
 .ws-reply { font-size: 16px; line-height: 1.75; color: var(--ink); overflow-wrap: anywhere; }
@@ -230,9 +200,6 @@
 /* 只给读屏的：看不见，读屏会读（开始回答、答完了、停下了……见 timeline.jsx 的 useAnnounce） */
 .ws-sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-/* 藏着的快捷键在能用的那一刻写出来（批次 G 第 34 条）：排着的话旁边写 ↑ 撤回，回答在跑写 Esc 停止，撤销提示里写 ⌘Z。触屏上不写 */
-.ws-live .key .ws-kbd { height: 16px; margin: 0 4px; font-size: 12px; vertical-align: 1px; }
-.ws-live .key { color: var(--faint); }
 .ws-switch { position: relative; flex: none; width: 40px; height: 24px; border-radius: 999px; background: var(--line2); transition: background .15s var(--ease); }
 .ws-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: var(--paper); transition: transform .15s var(--ease); }
 .ws-switch.on { background: var(--accent); }
@@ -257,10 +224,6 @@
   /* 第 31 条：剩下不到 44px 的几处。看得见的大小不变，透明点按区补够 */
   .ws-user-foot .ws-btn, .ws-ai-foot .ws-btn { position: relative; }
   .ws-user-foot .ws-btn::after, .ws-ai-foot .ws-btn::after { content: ""; position: absolute; inset: -8px 0; } /* 看得见 28 */
-  button.ws-proc-head { position: relative; }
-  button.ws-proc-head::after { content: ""; position: absolute; inset: -12px 0; } /* 看得见 25 */
-  .ws-tool:has(.main a) { line-height: 44px; } /* 读的那页：这一行 44 高，链接上下撑满 */
-  .ws-tool .main a { padding: 15px 0; } /* 字高各家不同（Chromium 16、WebKit 15），往大里给；超出这一行的部分被裁掉，点按区就是整行 44 */
   /* 新对话：欢迎语在中间，今日灵感在输入框上面，输入框贴底，不在中间浮着 */
   .ws-main.fresh .ws-flow { margin: auto 0; padding-bottom: 24px; }
   .ws-main.fresh .ws-examples { flex: none; padding: 0 16px 8px; }
@@ -280,12 +243,11 @@
   .ws { display: block; height: auto; padding: 0; }
   .ws-main, .ws-scroll { display: block; overflow: visible; height: auto; }
   .ws-flow { max-width: none; padding: 0; }
-  .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-live, .ws-error,
+  .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-error,
   .ws-user-foot, .ws-ai-foot, .ws-btn, .ws-icon-btn,
   .chev { display: none !important; }
   .ws-print-title { display: block; margin: 0 0 24px; font: 600 20px/1.4 var(--serif); }
   .ws-user { margin-bottom: 16px; }
-  .ws-proc .ws-fold { display: none; }
   .ws-reply.typing .md > :last-child::after { display: none; }
   .ws *, .ws *::before, .ws *::after { animation: none !important; transition: none !important; }
 }
