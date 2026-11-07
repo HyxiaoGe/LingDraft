@@ -36,6 +36,10 @@
 .body { display: contents; }
 .title { grid-column: 2; grid-row: 1; display: block; font-size: 13px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sel .title { font-weight: 500; }
+/* 标题太长时停上去来回滚（data-run 和两个变量在 sidebar.jsx 的 marquee 里设）：滚的时候不要省略号；两头各停一会儿 */
+.row:is(:hover, :focus-within) .title[data-run] { text-overflow: clip; }
+.row:is(:hover, :focus-within) .title[data-run] > span { display: inline-block; animation: marquee var(--dur) linear .5s infinite alternate; }
+@keyframes marquee { 0%, 15% { transform: none; } 85%, 100% { transform: translateX(var(--far)); } }
 .sub { grid-column: 2 / 4; grid-row: 2; display: block; font-size: 12px; color: var(--muted); }
 .time { grid-column: 3; grid-row: 1; margin-left: 8px; flex: none; font-size: 12px; line-height: 20px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .sel .time { color: var(--muted); }

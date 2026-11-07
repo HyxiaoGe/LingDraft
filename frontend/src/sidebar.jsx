@@ -27,6 +27,20 @@ function groupOf(t, now) {
 }
 const newest = (now) => (a, b) => timeOf(b, now) - timeOf(a, now);
 
+// 标题太长、截成“…”的：鼠标停上去（或 Tab 到这一行），等半秒以后来回慢慢滚，看得到后半截（2026-11-07 Sean 要的）。
+// 每次停上去量一次差多少，按每秒 40px 定快慢。减少动效时不滚，靠悬停提示看全名
+const REDUCE = matchMedia("(prefers-reduced-motion: reduce)");
+function marquee(e) {
+  if (e.type === "pointerenter" ? e.pointerType !== "mouse" : !e.target.matches(":focus-visible")) return;
+  const box = e.currentTarget.querySelector("[data-title]");
+  if (!box) return;
+  const far = box.scrollWidth - box.clientWidth;
+  if (far < 2 || REDUCE.matches) { box.removeAttribute("data-run"); return; }
+  box.dataset.run = "";
+  box.style.setProperty("--far", `-${far}px`);
+  box.style.setProperty("--dur", `${Math.max(1.2, far / 40 / 0.7).toFixed(2)}s`);
+}
+
 function rowSub(t, now) {
   if (t.status === "queued") return "排队中";
   if (t.status === "running") return t.running_since ? `进行中，已用 ${elapsed(t.running_since, now)}` : "进行中";
@@ -107,14 +121,14 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
     const twin = seen[t.title] > 1 && stamp(t.updated_at, now);
     const sub = rowSub(t, now) || (twin ? sayWhen(twin) : "");
     return (
-      <div key={t.thread_id} className={cx(styles.row, sel && styles.sel, open && styles.menu)}>
+      <div key={t.thread_id} className={cx(styles.row, sel && styles.sel, open && styles.menu)} onPointerEnter={marquee} onFocus={marquee}>
         <a href={href(t.thread_id)} data-id={t.thread_id} className={styles.link} aria-current={sel ? "page" : undefined}
           onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onSelect(t.thread_id); }}>
           <span className={cx(styles.icon, styles[status])}>
             {status === "active" ? <Spinner size={15} /> : status === "failed" ? <CircleAlert size={15} strokeWidth={1.8} /> : <MessageSquare size={15} strokeWidth={1.8} />}
           </span>
           <span className={styles.body}>
-            <span className={styles.title} title={t.title}>{t.title}</span>
+            <span className={styles.title} data-title title={REDUCE.matches ? t.title : undefined}><span>{t.title}</span></span>
             {sub && <span className={styles.sub}>{sub}</span>}
           </span>
           <span className={styles.time}>{when(t.updated_at, now, group)}</span>
