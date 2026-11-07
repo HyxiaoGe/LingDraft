@@ -22,7 +22,6 @@ import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
 import { TurnIndex, TurnIndexButton, turnEntries } from "./turns.jsx";
 import { IMAGE_ACCEPT, ImageError, prepareImage } from "./upload.js";
 import { WeatherCard, forecastsOf } from "./weather.jsx";
-import { NotifyToggle } from "./alert.jsx";
 
 // 今日灵感没取到时，新对话页显示这几个
 const EXAMPLES = [
@@ -523,7 +522,7 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
         {itinerariesOf(items).map((card) => <ItineraryCard key={card.key} card={card} />)}
         <ImageCards steps={imagesOf(items)} tid={st?.thread_id} running={running} onRegenerate={last && idle ? act.say : null} title={title} base={images} />
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
-        {running && <LiveLine live={live} items={items} stopping={stopping} now={now} since={Date.parse(st?.running_since || rec?.started_at || "") || null} />}
+        {running && <LiveLine live={live} items={items} stopping={stopping} now={now} />}
         {!running && <AnswerSources nums={nums} sources={st?.sources} />}
         {!running && rec?.ended_at && rec.outcome === "no_reply" && <p className="ws-muted">这一轮没有给出文字回复。</p>}
         {failed && <Failed st={st} act={act} />}
@@ -931,8 +930,7 @@ const SLOW = 30000; // 同一步这么久没有新进展：说一声比平常慢
 
 // 正在跑的这一轮最下面一行：在等什么、等了几秒（思考、正文在出字时这一行空着，它们自己在动）。
 // 不是读屏的活区：阶段一变就播会打断，开始、答完由 useAnnounce 说
-function LiveLine({ live, items, stopping, now, since }) {
-  const born = useRef(Date.now()); // 取不到这一轮的开始时间（刚发出去、状态还没回来）就从这行出现算
+function LiveLine({ live, items, stopping, now }) {
   const lastItem = items.at(-1);
   const pending = items.filter((i) => i.type === "step" && i.pending);
   const streaming = lastItem?.live && (lastItem.type === "text" || (lastItem.type === "thinking" && lastItem.ms == null));
@@ -949,7 +947,6 @@ function LiveLine({ live, items, stopping, now, since }) {
       {secs > 0 && <span className="secs">{secs} 秒</span>}
       {secs > 0 && !touch() && <span className="key" aria-hidden="true"><kbd className="ws-kbd">Esc</kbd>停止</span>}
       {secs * 1000 >= SLOW && <span className="slow">这一步比平常慢，可以接着等，也可以停止</span>}
-      {!stopping && <NotifyToggle since={since ?? born.current} now={now} />}
     </div>
   );
 }

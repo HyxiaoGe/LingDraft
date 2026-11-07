@@ -348,12 +348,6 @@
 .ws-live .secs { color: var(--faint); font-variant-numeric: tabular-nums; }
 .ws-live .slow { color: var(--warn); }
 .ws-live span + span::before { content: "·"; margin-right: 8px; color: var(--faint); }
-/* 答完通知我（第 46 条）：跟在等待行后面，不抢眼；开着时是靛青 */
-.ws-notify { position: relative; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; margin-left: 4px; border: 1px solid var(--line2); border-radius: 999px;
-  background: var(--paper); font-size: 12px; color: var(--muted); transition: color .12s, border-color .12s; }
-@media (hover: hover) { .ws-notify:hover { color: var(--ink); border-color: var(--muted); } }
-.ws-notify.on { color: var(--accent); border-color: var(--accent-line); background: var(--accent-soft); }
-.ws-notify-note { font-size: 12px; color: var(--muted); }
 /* 一轮里的东西：思考、工具步骤、正文、来源、推荐问题 */
 .ws-think-head { border: 0; background: none; padding: 2px 6px 2px 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); border-radius: var(--r-sm); }
 @media (hover: hover) { .ws-think-head:hover { color: var(--ink); } }
@@ -943,8 +937,6 @@
   .ws-inspire { min-height: 80px; }
   .ws-skel-chip { height: 36px; }
   .ws-mark::after { inset: calc(50% - 22px); }
-  .ws-notify { height: 32px; }
-  .ws-notify::after { content: ""; position: absolute; inset: -6px 0; }
   /* M8：班次改成竖着的时间轴：出发、用时和班次、到达三行，左边一条线连着；价格、参考价和舱位、去飞猪看在右边 */
   .ws-svc { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "dep fare" "mid fare" "arr fare"; gap: 0 12px; align-items: start; padding: 12px 0; }
   .ws-svc .end { grid-area: dep; flex-direction: row; align-items: baseline; gap: 12px; }
@@ -988,7 +980,7 @@
   .ws-main, .ws-scroll { display: block; overflow: visible; height: auto; }
   .ws-flow { max-width: none; padding: 0; }
   .ws-side, .ws-scrim, .md-code-copy, .ws-head, .ws-dock, .ws-rail, .ws-jump, .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-live, .ws-error,
-  .ws-user-foot, .ws-ai-foot, .ws-pop, .ws-menu, .ws-toast-host, .ws-sheet, .ws-sheet-scrim, .ws-btn, .ws-icon-btn, .ws-notify, .ws-svc-tools, .ws-svc .fare a,
+  .ws-user-foot, .ws-ai-foot, .ws-pop, .ws-menu, .ws-toast-host, .ws-sheet, .ws-sheet-scrim, .ws-btn, .ws-icon-btn, .ws-svc-tools, .ws-svc .fare a,
   .chev, .md .md-table-box::before, .md .md-table-box::after { display: none !important; }
   .ws-print-title { display: block; margin: 0 0 24px; font: 600 20px/1.4 var(--serif); }
   .ws-user { margin-bottom: 16px; }
