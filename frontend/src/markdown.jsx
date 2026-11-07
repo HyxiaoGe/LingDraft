@@ -3,7 +3,7 @@
 // highlight.js 给代码上色（见 code-colors.js；有标了语言的代码块才去取）。直接出 React 元素，不插入 HTML；模型写的 HTML 照字面显示（<br> 例外，换行：表格格子里换行只能这么写）。
 // 自己加的：引用角标 [s3fa9c1]（连同前面一个字、后面的标点不断行）、代码块上面一条写语言和“复制”、表格放不下横着滑、
 // 标题比页面标题小一档、图片只给链接（模型写的图片地址多半打不开，也不替用户去别的网站取东西）
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -264,14 +264,22 @@ function Table({ children }) {
   );
 }
 
+// 引用角标经 context 拿 cite：组件要定在模块里，写在 components 里的箭头函数每次渲染都是新组件，角标会被卸掉重挂（新字一到就一次）
+const CiteContext = createContext(() => null);
+const CiteMark = ({ node }) => useContext(CiteContext)(node.properties.sid);
+
 const heading = (Tag) => function Heading({ node, ...props }) { return <Tag {...props} />; };
 const COMPONENTS = {
   h1: heading("h3"), h2: heading("h4"), h3: heading("h5"), h4: heading("h6"), h5: heading("h6"), h6: heading("h6"), // 正文里的标题比页面标题小
   pre: CodeBlock,
   table: ({ children }) => <Table>{children}</Table>,
   a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+  "cite-mark": CiteMark,
   img: ({ src, alt }) => (src ? <a href={src} target="_blank" rel="noreferrer">{alt || src}</a> : alt || null),
 };
+
+// 单个 ~ 不算删除线：中文常写“10~20 元”“3~5 天”，默认会把两个 ~ 之间划掉（Fusion 也这么关的）；删除线只认 ~~
+const GFM = [remarkGfm, { singleTilde: false }];
 
 // cite(sid) 返回引用角标；正文还在逐字出现时，最后一段可能写到一半，照常渲染（写到一半的符号见 research.tidyTyping）
 export function Markdown({ text, cite }) {
@@ -280,12 +288,14 @@ export function Markdown({ text, cite }) {
   const colors = useLazy("code", CODE_LANG.test(src));
   return (
     <div className="md">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkBreaks, remarkMath, remarkLinks]}
-        rehypePlugins={[rehypeCites, ...(tex ? [tex] : []), ...(colors ? [colors] : [])]}
-        components={{ ...COMPONENTS, "cite-mark": ({ node }) => cite(node.properties.sid) }}>
-        {src}
-      </ReactMarkdown>
+      <CiteContext.Provider value={cite}>
+        <ReactMarkdown
+          remarkPlugins={[GFM, remarkBreaks, remarkMath, remarkLinks]}
+          rehypePlugins={[rehypeCites, ...(tex ? [tex] : []), ...(colors ? [colors] : [])]}
+          components={COMPONENTS}>
+          {src}
+        </ReactMarkdown>
+      </CiteContext.Provider>
     </div>
   );
 }
