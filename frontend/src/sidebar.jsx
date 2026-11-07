@@ -27,18 +27,21 @@ function groupOf(t, now) {
 }
 const newest = (now) => (a, b) => timeOf(b, now) - timeOf(a, now);
 
-// 标题太长、截成“…”的：鼠标停上去（或 Tab 到这一行），等半秒以后来回慢慢滚，看得到后半截（2026-11-07 Sean 要的）。
-// 每次停上去量一次差多少，按每秒 40px 定快慢。减少动效时不滚，靠悬停提示看全名
+// 标题太长、截成“…”的：鼠标停上去（或 Tab 到这一行），等半秒以后像跑马灯一样一直往左走，整条走过去，后面隔一段接着同一个标题，
+// 一圈一圈不停（2026-11-07 Sean 要的：“全部过去”，不是来回晃）。每次停上去量一次标题多长，按每秒 40px 定一圈多久。
+// 减少动效时不滚，靠悬停提示看全名
 const REDUCE = matchMedia("(prefers-reduced-motion: reduce)");
+const GAP = 32; // 标题和后面接着的那一份之间空多少
 function marquee(e) {
   if (e.type === "pointerenter" ? e.pointerType !== "mouse" : !e.target.matches(":focus-visible")) return;
   const box = e.currentTarget.querySelector("[data-title]");
   if (!box) return;
-  const far = box.scrollWidth - box.clientWidth;
-  if (far < 2 || REDUCE.matches) { box.removeAttribute("data-run"); return; }
+  if (box.scrollWidth - box.clientWidth < 2 || REDUCE.matches) { box.removeAttribute("data-run"); return; }
+  const lap = box.firstChild.firstChild.getBoundingClientRect().width + GAP; // 走一圈的距离：标题本身加中间的空
   box.dataset.run = "";
-  box.style.setProperty("--far", `-${far}px`);
-  box.style.setProperty("--dur", `${Math.max(1.2, far / 40 / 0.7).toFixed(2)}s`);
+  box.style.setProperty("--gap", `${GAP}px`);
+  box.style.setProperty("--far", `-${lap}px`);
+  box.style.setProperty("--dur", `${(lap / 40).toFixed(2)}s`);
 }
 
 function rowSub(t, now) {
@@ -128,7 +131,9 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
             {status === "active" ? <Spinner size={15} /> : status === "failed" ? <CircleAlert size={15} strokeWidth={1.8} /> : <MessageSquare size={15} strokeWidth={1.8} />}
           </span>
           <span className={styles.body}>
-            <span className={styles.title} data-title title={REDUCE.matches ? t.title : undefined}><span>{t.title}</span></span>
+            <span className={styles.title} data-title title={REDUCE.matches ? t.title : undefined}>
+              <span><span>{t.title}</span><span aria-hidden="true">{t.title}</span></span>
+            </span>
             {sub && <span className={styles.sub}>{sub}</span>}
           </span>
           <span className={styles.time}>{when(t.updated_at, now, group)}</span>
