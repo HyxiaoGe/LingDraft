@@ -18,7 +18,7 @@ import { Markdown } from "./markdown.jsx";
 import { ActionMenu } from "./menu.jsx";
 import { HeadBar, NavContext, touch } from "./nav.jsx";
 import proc from "./process.module.css";
-import { ACTIVE, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping } from "./research.js";
+import { ACTIVE, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
 import task from "./task.module.css";
 import styles from "./timeline.module.css";
@@ -809,27 +809,96 @@ function Item({ it, st, nums, running, lastItem }) {
   return <Reply it={it} cite={(sid) => <Mark n={nums[sid]} s={st?.sources?.[sid]} nums={nums} sources={st?.sources} />} caret={running && lastItem} />;
 }
 
-// 正文：收到多少显示多少（后端约每 80ms 来一批），不再人为地一个个字往外放；正在写的时候末尾有光标
+// ---------------- 逐字出现（打字机） ----------------
+// 后端约每 80ms 发来一批字：正文每批五六个字、很匀，思考每批几个到七十多个不等（2026-11-07 本机量的）。直接显示是一跳一跳的；
+// 按“攒了多少放多快”放，批大批小速度就忽快忽慢，看着还是一阵一阵。这里按来字的速度匀速放：
+// - 来字速度取最近一秒左右（RATE_S）的平均；手里留大约 BUFFER_S 秒的字，两批之间一直有字可放
+// - 留的比该留的多了或少了，按平滑过的存量（HELD_S）在 FIX_S 秒左右里慢慢追平，来一大批也不会突然加速；攒了一秒以上的多出来那部分很快放掉，不越落越远
+// - 这一段收完了（答完、停了），剩下的在 DONE_S 秒左右放完，不在答完以后还慢慢吐
+// 放到哪、来字速度按条目记在 typed 里：条目在过程和正文之间挪动、重新挂载时接着往下放，不从头再来。
+// 打开时就已经有一大段的（存下来的对话、中途打开正在跑的对话）整段显示，不从头打一遍；系统设了减少动效的收到就显示。
+// md：是 Markdown（正文、中途说的话）。看不见的符号、引用、链接网址整块跳过（见 typingUnit）；每次显示都要把整段重新解析一遍
+// （几千字要好几毫秒），长了就隔几帧才显示一次，最慢一秒 15 次
+const RATE_S = 1;
+const BUFFER_S = 0.3;
+const HELD_S = 0.3;
+const FIX_S = 1;
+const DONE_S = 0.25;
+const MIN_CPS = 30;
+const typed = new Map();
+const STILL = matchMedia("(prefers-reduced-motion: reduce)");
+const fresh = (pos) => ({ pos, seen: pos, rate: 60, held: 0, at: performance.now() });
+
+function useTyped(key, text, live, md) {
+  const s = useRef(null);
+  s.current ??= !live || STILL.matches ? fresh(text.length) : typed.get(key) ?? fresh(text.length < 200 ? 0 : text.length);
+  const [, setShown] = useState(0);
+  useEffect(() => {
+    const st = s.current;
+    if (STILL.matches) st.pos = text.length;
+    if (live) typed.set(key, st);
+    if (st.pos >= text.length) {
+      if (!live) typed.delete(key);
+      return undefined;
+    }
+    const gap = md ? Math.min(66, Math.max(0, (text.length - 1500) / 60)) : 0;
+    let raf = 0;
+    let drawn = 0;
+    const frame = (t) => {
+      const dt = Math.max(0.001, (t - st.at) / 1000);
+      st.at = t;
+      st.rate += ((text.length - st.seen) / dt - st.rate) * (1 - Math.exp(-dt / RATE_S));
+      st.seen = text.length;
+      const left = text.length - st.pos;
+      st.held += (left - st.held) * (1 - Math.exp(-dt / HELD_S));
+      const fix = 1 + (st.held - st.rate * BUFFER_S) / Math.max(1, st.rate * FIX_S);
+      const v = Math.max(MIN_CPS, st.rate * Math.min(3, Math.max(0.5, fix)), (left - Math.max(80, st.rate)) / 0.3, live ? 0 : left / DONE_S);
+      st.pos = Math.min(text.length, st.pos + v * dt);
+      if (md) st.pos = Math.max(st.pos, typingUnit(text, Math.floor(st.pos)));
+      const end = st.pos >= text.length;
+      if (end || t - drawn >= gap) {
+        drawn = t;
+        setShown(Math.floor(st.pos)); // 整数没变就不重新渲染
+      }
+      if (!end) raf = requestAnimationFrame(frame);
+      else if (!live) typed.delete(key);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [key, text, live, md]);
+  let n = Math.floor(s.current.pos);
+  if (n >= text.length) return text;
+  if (/[\uD800-\uDBFF]/.test(text[n - 1] || "")) n++; // 不把占两个码元的字（emoji 之类）切成两半
+  return text.slice(0, n);
+}
+
+// 正文：逐字出现，正在写（或者还没放完）的时候末尾有光标，写完才能下载代码
 function Reply({ it, cite, caret }) {
+  const [text, typing] = useMd(it);
+  const on = caret || typing;
   return (
-    <div className={styles.reply + (caret ? " " + styles.typing : "")}>
-      <Markdown text={mdText(it)} cite={cite} download ready={!caret} />
+    <div className={styles.reply + (on ? " " + styles.typing : "")}>
+      <Markdown text={text} cite={cite} download ready={!on} />
     </div>
   );
 }
 
-// 过程里中途说的话（之后又去搜了、读了），一样收到就显示
+// 过程里中途说的话（之后又去搜了、读了），一样逐字出现
 function ProcText({ it, cite }) {
-  return <div className={proc.text}><Markdown text={mdText(it)} cite={cite} /></div>;
+  return <div className={proc.text}><Markdown text={useMd(it)[0]} cite={cite} /></div>;
 }
 
-// 还在写的，最后一行半截的 Markdown 先收拾一下（见 tidyTyping）；写完的只去掉末尾半个引用
-const mdText = (it) => (it.live ? tidyTyping(it.text) : cutPartialCite(it.text));
+// 显示到的那段 Markdown 和还在不在往外放。还在写、还没放完的，最后一行半截的 Markdown 先收拾一下（见 tidyTyping）；写完的只去掉末尾半个引用
+function useMd(it) {
+  const shown = useTyped(`text:${it.id}`, it.text, it.live, true);
+  const typing = shown.length < it.text.length;
+  return [it.live || typing ? tidyTyping(shown) : cutPartialCite(shown), typing];
+}
 
-// 思考：收到就显示。这一轮在跑时展开，想完的那段不收（跑着的时候收起来页面会往回缩、跳一下）；这一轮跑完就收成一行（过程不收）：
+// 思考：逐字出现。这一轮在跑时展开，想完的那段不收（跑着的时候收起来页面会往回缩、跳一下）；这一轮跑完就收成一行（过程不收）：
 // 思考往往很长，开着把回答推远。重新打开的对话里也收着，点开看原文
 function Thinking({ it, running, thinking }) {
-  const text = it.text;
+  const text = useTyped(`thinking:${it.id}`, it.text, it.live, false);
   const [shown, toggle, found] = useFoldOpen(`thinking:${it.id}`, running, false);
   const box = useRef(null);
   useLayoutEffect(() => { // 正在想的时候框里跟着最新的字

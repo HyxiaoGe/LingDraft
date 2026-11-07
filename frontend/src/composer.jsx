@@ -7,7 +7,7 @@ import { IconArrowDown, IconArrowUp, IconBulb, IconCheck, IconChevron, IconClose
 import { Viewer } from "./images.jsx";
 import { useLayer } from "./layers.js";
 import { NavContext, byKeyboard, touch } from "./nav.jsx";
-import { QUEUED, creditsLeft, creditsLine, loginLine, modelName } from "./research.js";
+import { QUEUED, creditsLeft, creditsLine, loginLine } from "./research.js";
 import { IMAGE_ACCEPT, ImageError, prepareImage } from "./upload.js";
 import styles from "./composer.module.css";
 import menu from "./menu.module.css";
@@ -282,6 +282,15 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
   }, []);
   useEffect(() => {
     const back = () => focus(false);
+    // 切去别的窗口、标签页再回来（2026-11-07 Sean 要的）：光标没在哪儿，或者只是点了正文停在某一轮上，就放回输入框，回来接着打字。
+    // 选着字、开着弹窗、光标在别的输入框或按钮链接上时不动；触屏不放（免得自己弹出键盘，见 focus）。等浏览器先把原来的焦点还回去再看
+    const ret = () => setTimeout(() => {
+      if (document.hidden || !document.hasFocus() || getSelection()?.toString() || document.querySelector('[aria-modal="true"]')) return;
+      const at = document.activeElement;
+      if (at && at !== document.body && (at.tabIndex >= 0 || at.isContentEditable || at.closest('[role="dialog"], [role="menu"]'))) return;
+      focus(true);
+    });
+    const shown = () => !document.hidden && ret();
     // 光标在输入框里、或者没在哪儿（点了正文）时才停；在改名、菜单、角标这些地方，Esc 归它们自己。
     // 在捕获阶段看：等它们处理完，改名框已经撤掉，光标就不在那儿了
     const esc = (e) => {
@@ -292,9 +301,13 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
     };
     addEventListener("ws-focus-input", back); // 见 focusInput
     addEventListener("keydown", esc, true);
+    addEventListener("focus", ret);
+    document.addEventListener("visibilitychange", shown);
     return () => {
       removeEventListener("ws-focus-input", back);
       removeEventListener("keydown", esc, true);
+      removeEventListener("focus", ret);
+      document.removeEventListener("visibilitychange", shown);
     };
   }, []);
 
@@ -415,7 +428,7 @@ function Attachment({ att, onRemove }) {
 
 // 输入框里发送按钮左边：深度思考开关（选的模型能开关才有）和选模型。新对话随便选；对话开始后模型定下不换，
 // 点开只说明一句、列出能选的给开新对话时参考。思考开关每句话都能改，按下去不抢光标（输入框里的字和光标都留着）。
-// 模型分三组：推荐（Auto，写明它现在用哪个：按接口给的 model 对出名字，不写死）、可用、登录后可用（游客锁着的，默认收起）。
+// 模型分三组：推荐（自动，只写名字，不写它现在用哪个、不加说明：2026-11-07 Sean 定）、可用、登录后可用（游客锁着的，默认收起）。
 // 桌面是菜单：往放得下的那边开（新对话的输入框在页面中间，往下开），高度按那边剩下的空间，再多就在里面滚，第一项不会被切掉。
 // 窄屏是底部弹层：最高 70dvh、里面滚，深度思考的开关和说明也在里面（输入框里只放模型名，能开关思考的名字前有个灯泡，亮着是开）。
 // 菜单、弹层打开时光标在里面：Esc 只收起它们，不会停掉正在跑的这一轮（见 Composer 的 Esc）；点外面、关闭钮也能收起。
@@ -595,8 +608,6 @@ function ModelList({ models, current, locked, onLogin, onChoose }) {
     const top = box.scrollTop + t.getBoundingClientRect().top - box.getBoundingClientRect().top - 4;
     box.scrollTo({ top, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   }, [showShut]);
-  const actual = auto.model ? modelName(models, auto.model, null) : null;
-  const autoNote = [auto.description, actual && `现在用 ${actual}`].filter(Boolean).join("，");
   const row = (m, note) => (
     <button key={m.id} role="menuitemradio" aria-checked={m.id === current} className={styles.row + (m.locked ? " " + styles.locked : "")}
       disabled={m.locked ? !onLogin : locked && m.id !== current} onClick={() => onChoose(m)}>
@@ -617,7 +628,7 @@ function ModelList({ models, current, locked, onLogin, onChoose }) {
     <div className="flex flex-col" role="menu" aria-label="选模型" onKeyDown={move}>
       <div role="group" aria-label="推荐">
         <div className={styles.group} aria-hidden="true">推荐</div>
-        {row(auto, autoNote)}
+        {row(auto, null)}
       </div>
       {free.length > 0 && (
         <div role="group" aria-label="可用">

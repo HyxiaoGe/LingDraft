@@ -171,7 +171,7 @@ def test_models_endpoint_and_default_auto():
     http, rr = _client(FakeResearchPlanner(catalog=_with({"deepseek-flash": "hidden"})))
     models = http.get("/api/models").json()["models"]
     assert [m["id"] for m in models] == [o.id for o in model_catalog.load().options if o.id != "deepseek-flash" and not o.status]
-    assert models[0] == {"id": AUTO, "name": "Auto", "description": models[0]["description"], "thinking": "toggle", "model": PRO, "locked": False}
+    assert models[0] == {"id": AUTO, "name": "自动", "description": models[0]["description"], "thinking": "toggle", "model": PRO, "locked": False}
     assert not any(m["locked"] for m in models)  # 现在没有登录，默认都算登录用户
     st = _create(http, "直接答：你好")
     assert st["model"] == AUTO

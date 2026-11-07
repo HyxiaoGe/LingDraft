@@ -3,7 +3,7 @@
 // 直接出 React 元素，不插入 HTML；模型写的 HTML 照字面显示（<br> 例外，换行：表格格子里换行只能这么写）。
 // 代码块见 code-block.jsx、表格见 md-table.jsx（都照搬 Fusion）。自己加的：引用角标 [s3fa9c1]（连同前面一个字、后面的标点不断行）、
 // 标题比页面标题小几档、图片只给链接（模型写的图片地址多半打不开，也不替用户去别的网站取东西）
-import { createContext, useContext } from "react";
+import { createContext, useContext, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
@@ -196,20 +196,23 @@ const COMPONENTS = {
 // 单个 ~ 不算删除线：中文常写“10~20 元”“3~5 天”，默认会把两个 ~ 之间划掉（Fusion 也这么关的）；删除线只认 ~~
 const GFM = [remarkGfm, { singleTilde: false }];
 
-// cite(sid) 返回引用角标；正文还在逐字出现时，最后一段可能写到一半，照常渲染（写到一半的符号见 research.tidyTyping）
+// cite(sid) 返回引用角标；正文还在逐字出现时，最后一段可能写到一半，照常渲染（写到一半的符号见 research.tidyTyping）。
+// 文字没变就不重新解析：正在写的那一轮每来一批字整个对话都会重新渲染，以前的回答不该跟着每次都解析一遍（几千字要好几毫秒，会卡掉逐字出现的帧）。
+// 角标、代码块、表格从 MdContext 取 cite、download、ready，这几样变了照样更新
 export function Markdown({ text, cite, download = false, ready = false }) {
-  const { text: src, math } = prep(text.replace(/\r\n/g, "\n"));
+  const { text: src, math } = useMemo(() => prep(text.replace(/\r\n/g, "\n")), [text]);
   const tex = useLazy("math", math);
+  const tree = useMemo(() => (
+    <ReactMarkdown
+      remarkPlugins={[GFM, remarkBreaks, remarkMath, remarkLinks]}
+      rehypePlugins={[rehypeCites, ...(tex ? [tex] : [])]}
+      components={COMPONENTS}>
+      {src}
+    </ReactMarkdown>
+  ), [src, tex]);
   return (
     <div className={"md " + styles.content}>
-      <MdContext.Provider value={{ cite, download, ready }}>
-        <ReactMarkdown
-          remarkPlugins={[GFM, remarkBreaks, remarkMath, remarkLinks]}
-          rehypePlugins={[rehypeCites, ...(tex ? [tex] : [])]}
-          components={COMPONENTS}>
-          {src}
-        </ReactMarkdown>
-      </MdContext.Provider>
+      <MdContext.Provider value={{ cite, download, ready }}>{tree}</MdContext.Provider>
     </div>
   );
 }

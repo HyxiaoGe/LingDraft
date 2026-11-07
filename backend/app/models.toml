@@ -16,7 +16,7 @@
 
 [[options]]
 id = "auto"
-name = "Auto"
+name = "自动"  # 2026-11-07 Sean 定：页面上写中文（id 和代码里还叫 auto / Auto）
 description = "默认选择"
 # Auto 是一种策略（model_catalog.Catalog._auto）：现在就是下面这个模型；以后按问题选模型改那里（Sean：用户多半不改默认，Auto 是降成本的地方）
 model = "deepseek:deepseek-v4-pro"
