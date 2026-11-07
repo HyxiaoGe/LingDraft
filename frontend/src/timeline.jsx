@@ -523,7 +523,6 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
       {t.user && <UserMsg text={live?.edit ?? t.user} image={t.image} src={userImageSrc(t, live, st?.thread_id)} at={live?.sentAt ?? t.sent_at} pinned={last} now={now}
         editable={last && idle} onEdit={act.edit} />}
       <div className={styles.ai}>
-        <div className={styles.aiHead}><span className={styles.aiMark} aria-hidden="true">灵</span>灵稿</div>
         {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} />}
         {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
         {mapsOf(items).map((card) => <MapCard key={card.key} card={card} />)}

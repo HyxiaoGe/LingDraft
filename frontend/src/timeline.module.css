@@ -54,9 +54,6 @@
 
 /* ---------- 回答 ---------- */
 .ai { margin: 0 0 26px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
-/* 回答开头：“灵稿”的标识，和左栏的品牌一样的宋体小方块 */
-.aiHead { display: flex; align-items: center; gap: 8px; font: 600 13px/20px var(--serif); letter-spacing: .04em; color: var(--accent); }
-.aiMark { width: 20px; height: 20px; flex: none; border-radius: var(--r-sm); background: var(--ink); color: var(--paper); font: 600 12px/20px var(--serif); text-align: center; letter-spacing: 0; }
 /* 回答下面一行：时间、模型、本轮用了多少、复制、重新回答 */
 .aiFoot { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 0 -10px; } /* 窄屏一行放不下就折行，“重新回答”不被挤出去 */
 .aiFoot :global(.ws-btn) { color: var(--muted); }

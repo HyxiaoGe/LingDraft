@@ -3,7 +3,7 @@
 // 照 Fusion 的样子（2026-11-07 Sean 嫌单调）：每行前面一个对话图标（正在回答换成转圈、没跑完换成感叹号），选中的那行是白底浮起来的一块，“新对话”用写字的图标
 import { CircleAlert, MessageSquare, MessagesSquare, SquarePen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconSearch, IconTrash, Spinner } from "./icons.jsx";
+import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconSearch, IconTrash, Logo, Spinner } from "./icons.jsx";
 import { useLayer } from "./layers.js";
 import { CreditsFoot, UserFoot } from "./login.jsx";
 import { ActionMenu, TitleInput } from "./menu.jsx";
@@ -152,7 +152,7 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
         {...(modal ? { role: "dialog", "aria-modal": true, "aria-label": "对话列表" } : {})}>
         {/* 品牌这行：右边是搜对话（照豆包）、收起（桌面）或关闭（抽屉），两个钮上下往外让 4px，不把这行撑高 */}
         <div className="flex items-center gap-[9px] px-1.5 phone:min-h-11">
-          <span className="flex size-7 items-center justify-center rounded-[7px] bg-ink font-serif text-[16px] leading-none font-semibold text-paper">灵</span>
+          <Logo size={28} className="flex-none" />
           <span className="font-serif text-[17px] leading-none font-semibold tracking-[.04em]">灵稿</span>
           <span className={cx(styles.tag, "text-[12px] text-muted")}>对话</span>
           <button className="ws-icon-btn -my-1 mr-0 ml-auto phone:my-0" aria-label="搜索对话" title={nav.mobile ? undefined : `搜索对话（${SEARCH_KEY}）`}
