@@ -84,15 +84,18 @@ export function useDoneAlert(tid, running, st, title) {
 }
 
 // 等待行旁边的“答完通知我”：这一轮跑了 10 秒以上才出；浏览器不支持通知、或者已经拒绝过就不出（标题和图标的提醒照样有）。
-// 点了才向浏览器要权限；允许了记在本机，以后每轮都通知，再点一下取消。since：这一轮开始的时间（毫秒）
+// 点了才向浏览器要权限；允许了记在本机，以后每轮都通知，再点一下取消。since：这一轮开始的时间（毫秒）。
+// 已经开着的不再挂“答完会通知你”（2026-11-07 Sean 定去掉）；只有这一轮刚点开的留着，让人知道点成了。开关在设置窗口里
 const AFTER = 10_000;
 export function NotifyToggle({ since, now }) {
   const [on, setOn] = useState(wants);
   const [perm, setPerm] = useState(permission);
   const [refused, setRefused] = useState(false);
+  const [justOn, setJustOn] = useState(false); // 这一轮刚点开的
   if (refused) return <span className="ws-notify-note">浏览器没允许通知，答完时标签页标题会提示</span>;
   if (perm === "unsupported" || perm === "denied" || now - since < AFTER) return null;
   const active = on && perm === "granted";
+  if (active && !justOn) return null;
   const click = async () => {
     if (active) {
       setWants(false);
@@ -104,6 +107,7 @@ export function NotifyToggle({ since, now }) {
     if (p === "granted") {
       setWants(true);
       setOn(true);
+      setJustOn(true);
     } else if (p === "denied") setRefused(true);
   };
   return (
