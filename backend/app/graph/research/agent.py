@@ -2,6 +2,7 @@
 
 用户每说一句话：先写进消息（update_state，as_node=START），再接着跑（stream(None)），直到模型给出不带工具调用的回复。
 - TurnMiddleware：每轮开始、结束时记下这一轮；开始时定下这一轮用哪个模型（见 model_catalog.Catalog.plan，记进这一轮的记录）；
+  Auto 的新对话第一句话先让模型判断难易，定下一个模型，整段对话沿用（state 的 auto_model，2026-11-08 Sean 定）；
   模型每次调用前换上系统提示词（日期按这一轮开始时北京时间的当天）。
   还没有标题时，按第一句话起标题，和调模型同时跑，不耽误回答（见 _TitleJob）。
   几点钟不放进发给模型的内容，要用时模型自己调 get_current_time（见 tools.research_tools）。
@@ -15,6 +16,7 @@
 - ModelCallCapMiddleware：一轮里调模型到了上限，最后一次不许调工具，用已经查到的回答（和子 agent 一样）。
 - InterruptedRetryMiddleware：模型生成到一半断了，自动再调一次，页面去掉断掉的半截（子 agent 也挂）。
 - ModelSelect：每次调模型换上这一轮定下的模型；之前几轮是别的模型答的，发过去时不带那几轮的思考（子 agent 也挂）。
+  主 agent 的模型出问题（不可用、首字超时、免费额度用完）换备用重调（2026-11-08 Sean 定）。
 - ContentGuard：模型服务的内容审核拦下请求时，去掉没通过的搜索、读页结果接着跑；去不掉就停下这一轮，之后不再带进上下文。
 - CompactionMiddleware：对话太长时，发给模型的那份里把之前几轮压一压，state 不改（见 compaction）；压掉的原文用 recall 工具取回。
 工具里有 task：把一件查资料的事交给子 agent（见 subagent），一次回复里调几次就并行跑几个。
@@ -47,14 +49,15 @@ from app.graph.research.memory import MemoryBook
 from app.identity import is_guest_sub
 from app.graph.research.sources import DOCS_TOOL, SEPARATORS, SUBAGENT_TOOL, collect_sources, parse, search_hits
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Source, Turn
-from app.model_catalog import LEGACY_MODEL, LEGACY_USE, ModelUse
-from app.model_guard import ContentBlocked, Interrupted
+from app.model_catalog import AUTO, LEGACY_MODEL, LEGACY_USE, ModelUse
+from app.model_guard import ContentBlocked, FreeTierUsedUp, Interrupted, ModelUnavailable
 
 TITLE_CHARS = 30  # 标题最长这么多字（汉字算一个、字母算半个，见 _width）：模型给的超过了不用（见 usable_title）；用户原话超过了截掉（照 Fusion）
 NEW_CHAT = "新对话"  # 模型给的不能用、用户原话里也没有字（纯数字、纯符号）时的标题
 TITLE_WAIT = 10  # 第一次调模型结束时标题还没起好，最多再等这么久（秒），再等不到用原话
 MAX_MODEL_CALLS = 20  # 主 agent 一轮最多调几次模型（2026-11-03 Sean 定）：只防跑飞，到 11-03 的真实对话每轮最多 2 次
 RESTART_WAIT_S = 2  # 模型生成到一半断了，等这么久再调一次（DeepSeek 资源不足时马上再发多半还是不够）
+ROUTE_WAIT_S = 10  # Auto 第一句话判断难易最多等这么久（秒），等不到当复杂
 log = logging.getLogger(__name__)
 TURN_END = "TurnMiddleware.after_agent"  # 一轮的最后一个节点：在它名下写状态，线程就停在这一轮结束的地方
 LOOP_ENTRY = "TurnMiddleware.before_model"  # 每次调模型从这个节点开始（工具做完也回到这里）：停在它前面的检查点就是“要调模型了”
@@ -137,17 +140,45 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         self.memory = memory
 
     def before_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
-        """开始一轮：记下开始时间和这一轮用的模型。用哪个模型只在这里定（以后查权限、余额也在这里），一轮里不换，出错重试接着用。
-        对话没定选项的（页面没传、2026-11-05 之前的对话）这时定成 Auto；定下的选项停了，改用 Auto，之后都是 Auto。"""
+        """同步跑时（测试直接 invoke）：Auto 不判断难易，当复杂。"""
+        return self._begin(state, runtime, None)
+
+    async def abefore_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
+        """开始一轮：记下开始时间和这一轮用的模型。用哪个模型只在这里定（以后查权限、余额也在这里），一轮里不换，出错重试接着用；
+        出问题换备用的在 ModelSelect。对话没定选项的（页面没传、2026-11-05 之前的对话）这时定成 Auto；定下的选项停了，改用 Auto，之后都是 Auto。
+        Auto 的对话还没定模型、又是第一轮的：先让模型判断这句话难不难（见 Catalog.pick），判断出错、超时当复杂。"""
+        simple = None
+        if not state.get("auto_model") and not state.get("turns") and self._plan(state, runtime).option == AUTO:
+            human = state["messages"][history.last_human(state["messages"])]
+            try:
+                simple = await asyncio.wait_for(self.planner.route(history.text_of(human)), ROUTE_WAIT_S)
+            except Exception as e:  # 点了停止（CancelledError）照常往外抛
+                log.warning("Auto 判断难易失败，当复杂：%s: %s", type(e).__name__, e)
+                simple = False
+        return self._begin(state, runtime, simple)
+
+    def _plan(self, state: ResearchState, runtime, simple: bool | None = None):
+        """这一轮的模型。Auto 的对话按定下的 auto_model；还没定的这时定：simple 是第一句话判断的难易，没判断的（老对话、同步跑）当复杂。"""
+        catalog, msgs = self.planner.catalog, state["messages"]
+        thinking = history.thinking_switch(msgs[history.last_human(msgs)])
+        now = self.planner.clock.now()
+        pick = state.get("auto_model") or catalog.pick(bool(simple), _guest(runtime), self.planner.usable, now)
+        return catalog.plan(state.get("option"), thinking, self.planner.usable, pick=pick, now=now)
+
+    def _begin(self, state: ResearchState, runtime, simple: bool | None) -> dict[str, Any]:
         msgs = state["messages"]
         human = msgs[history.last_human(msgs)]
         # 按 planner 的时钟（评测回放时挪到录像那时，见 app.clock）；结束时间这些模型看不到的照常用系统时钟
         started = self.planner.clock.now().isoformat(timespec="seconds")
-        plan = self.planner.catalog.plan(state.get("option"), history.thinking_switch(human), self.planner.usable)
+        plan = self._plan(state, runtime, simple)
         turn = Turn(id=human.id, started_at=started, option=plan.option, model=plan.agent, subagent_model=plan.subagent)
         out: dict[str, Any] = {"turns": list(state.get("turns", [])) + [turn]}
         if state.get("option") != plan.option:
             out["option"] = plan.option
+        # Auto 用的模型记下来，之后每轮都用它：免费的到期了、用完了换成备用，也记成备用，不再换回来
+        if plan.option == AUTO and state.get("auto_model") != plan.agent.ref:
+            out["auto_model"] = plan.agent.ref
+        emit({"type": "model", "ref": plan.agent.ref})  # 页面在回答开头显示这一轮用的模型（Auto 选到哪个，一轮结束才进记录）
         return out
 
     async def abefore_model(self, state: ResearchState, runtime) -> dict[str, Any] | None:
@@ -562,7 +593,52 @@ class ModelSelect(AgentMiddleware):
         turns = request.state.get("turns", [])
         use = (turns[-1].model if turns else None) or LEGACY_USE  # 2026-11-05 之前开始、之后重试的那一轮
         msgs = _others_without_thinking(request.messages, turns, use)
-        return await handler(request.override(model=self.planner.chat_model(use), messages=msgs))
+        try:
+            return await handler(request.override(model=self.planner.chat_model(use), messages=msgs))
+        except ModelUnavailable as e:
+            if not turns or (switch := self._backup(request, turns, use, e)) is None:
+                raise
+            backup, update = switch
+            log.warning("模型出问题，这次换备用 %s：%s: %s", backup.ref, use.ref, e)
+            if e.streamed:  # 页面去掉断掉的半截，说明在重新生成；没流出东西的接着说在等模型
+                emit({"type": "restart", "streamed": True})
+            emit({"type": "model", "ref": backup.ref})
+            msgs = _others_without_thinking(request.messages, update["turns"], backup)
+            resp = await handler(request.override(model=self.planner.chat_model(backup), messages=msgs))
+            return ExtendedModelResponse(model_response=resp, command=Command(update=update))
+
+    def _backup(self, request: ModelRequest, turns: list[Turn], use: ModelUse, e: ModelUnavailable) -> tuple[ModelUse, dict] | None:
+        """换备用（2026-11-08 Sean 定，models.toml 的 [auto] fallback）：返回备用和要写进 state 的（这一轮记录里的模型换成备用，
+        后面几次调模型都用它；Auto 的对话以后都用它）。已经是备用的不换（返回 None，照常失败）。
+        用户自己选的模型只有这一轮用备用，下一轮还是他选的。
+        这一轮前面已经有别的模型发的工具调用、又没带思考的（百炼上的 DeepSeek 带工具时不给思考），这一轮剩下的不开思考：
+        DeepSeek 开思考时这一轮的工具调用要带着思考，不带报 400（别家的思考它收，2026-11-08 实测）。"""
+        catalog = self.planner.catalog
+        if isinstance(e, FreeTierUsedUp):
+            catalog.used_up(use.ref)
+        turn = turns[-1]
+        fb = catalog.plan(catalog.auto.fallback, use.thinking, self.planner.usable)
+        if fb.agent.ref == use.ref:
+            return None
+        backup = fb.agent
+        if backup.thinking and _bare_tool_calls(request.messages, turn.id):
+            backup = backup.model_copy(update={"thinking": False, "effort": ""})
+        sub = turn.subagent_model if turn.option != AUTO else fb.subagent
+        update: dict[str, Any] = {"turns": [*turns[:-1], turn.model_copy(update={"model": backup, "subagent_model": sub})]}
+        if turn.option == AUTO:
+            update["auto_model"] = backup.ref
+        return backup, update
+
+
+def _guest(runtime) -> bool:
+    ctx = getattr(runtime, "context", None)
+    return bool(ctx and is_guest_sub(ctx.owner))
+
+
+def _bare_tool_calls(messages: list[BaseMessage], turn_id: str) -> bool:
+    """这一轮（从 turn_id 那条用户消息往后）有没有不带思考的工具调用。找不到那条消息就看全部。"""
+    start = next((k for k, m in enumerate(messages) if m.id == turn_id), -1)
+    return any(isinstance(m, AIMessage) and m.tool_calls and not m.additional_kwargs.get(history.REASONING) for m in messages[start + 1:])
 
 
 def _others_without_thinking(messages: list[BaseMessage], turns: list[Turn], use: ModelUse) -> list[BaseMessage]:

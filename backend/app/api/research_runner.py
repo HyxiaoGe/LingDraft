@@ -322,6 +322,9 @@ class ResearchRunner(BaseRunner):
         # 这时就不用记了；第一次调模型就出错的写不了 state（写了重试就接不上），记在这里：页面上还显示它，重试时直接用（ChatContext.title）。
         # 只在进程里：服务重启了就没了，和以前一样跳回原话、重试时再起
         self._titles: dict[str, str] = {}
+        # 线程 → 正在跑的这一轮主 agent 用的模型（"厂商:模型"，见 agent 发的 model 事件）：一轮结束才进这一轮的记录，
+        # 中途打开对话时页面按它显示回答开头的模型（Auto 判断完用的哪个、换了备用）。这一轮结束就不记了
+        self._models: dict[str, str] = {}
         # 占位都经过这把锁（见 _aadmit）：话排进去时看线程在不在跑、这一轮结束时退掉占位并取走排着的话，两件事不会交错，
         # 不会出现话排进去了、这一轮却已经结束没人发的情况（中间要等运行记录的库）
         self._queue_mu = asyncio.Lock()
@@ -413,6 +416,10 @@ class ResearchRunner(BaseRunner):
         locked 是 tier 这一档（见 model_catalog.TIERS）选不了的：照样列出来，页面上锁着（游客看得到要登录的模型）。"""
         return [{"id": o.id, "name": o.name, "description": o.description, "thinking": o.thinking, "model": o.model, "locked": not o.allows(tier)}
                 for o in self.planner.catalog.offered(self.planner.usable)]
+
+    def model_names(self) -> dict[str, dict[str, str]]:
+        """选项以外、回答开头可能出现的模型（Auto 用的免费额度）："厂商:模型" → 名字、图标（厂商前缀）。"""
+        return self.planner.catalog.names()
 
     def locked(self, option_id: str, tier: str) -> bool:
         """新对话能选的里面有这个选项，但 tier 这一档选不了。不在能选的里面的不算（开对话时照常报没有这个模型）。"""
@@ -630,6 +637,7 @@ class ResearchRunner(BaseRunner):
             # 点停止时这一轮刚好跑完了（检查点里已经是答完的样子）：算答完
         finally:
             self._running.pop(thread_id, None)
+            self._models.pop(thread_id, None)
         self._titles.pop(thread_id, None)  # 答完了：起好的标题随调模型写进 state 了
         await self._want_suggestions(thread_id)
         return None
@@ -663,6 +671,8 @@ class ResearchRunner(BaseRunner):
                     chunk = {"type": "restart", "id": buf.drop(task) if chunk.get("streamed") else None}
                 if chunk["type"] == "title" and not task:
                     self._titles[thread_id] = chunk["title"]
+                if chunk["type"] == "model" and not task:
+                    self._models[thread_id] = chunk["ref"]
                 if isinstance(result := chunk.get("result"), ToolMessage):
                     done.setdefault(task, []).append(result)
                 data = {k: v for k, v in chunk.items() if k not in ("type", "result")} | ({"task": task} if task else {})
@@ -1000,6 +1010,8 @@ class ResearchRunner(BaseRunner):
             "error_kind": failure and failure[0],
             # 对话定下的模型（选项的 id）：没定的（还没开始的老对话）、定的那个停了的，下一轮起是 Auto
             "model": self.planner.catalog.plan(v.get("option"), None, self.planner.usable).option,
+            # 正在跑的这一轮主 agent 用的模型（"厂商:模型"，见 _models）：页面在这一轮的记录出来之前按它显示。没在跑、还没定下的是 None
+            "model_ref": self._models.get(thread_id) if status in ("queued", "running") else None,
             "stopping": bool(run and run.get("stopping")),
             # 这一轮已经结束、推荐问题还在起（见 _suggest）：页面打开时接上事件流等着，起好了会再来一次状态
             "suggesting": status == "idle" and thread_id in self._suggest_for,

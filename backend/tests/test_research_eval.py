@@ -350,7 +350,7 @@ def test_model_head_checks_the_option(monkeypatch):
 
     monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "")
     monkeypatch.setattr(config, "ARK_API_KEY", "")
-    assert research.model_head("auto") == {"option": "auto", "model": "deepseek:deepseek-v4-pro", "subagent_model": "deepseek:deepseek-flash"}
+    assert research.model_head("auto") == {"option": "auto", "model": "按第一句话定", "subagent_model": "按第一句话定"}  # 每轮用的记在各轮
     with pytest.raises(SystemExit, match="没有这个模型"):
         research.model_head("no-such-model")
     with pytest.raises(SystemExit, match="没配 key"):

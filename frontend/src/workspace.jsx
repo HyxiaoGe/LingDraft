@@ -67,6 +67,8 @@ export default function Workspace() {
   const [putBack, setPutBack] = useState(null); // 要放回输入框的话：{thread, text, image?, rejected?}，每次是个新对象；image 是一起没发出去的图；rejected 是没发出去被拒的（连着被拒不叠加）
   // 能选的模型（/api/models，Auto 在第一个）：没取到是 []，不显示选择，新对话按 Auto
   const [models, setModels] = useState(null);
+  const [modelNames, setModelNames] = useState({}); // 选项以外、回答开头可能出现的模型的名字和图标（见 listModels）
+  const loadModels = () => listModels().then((r) => { setModels(r.models); setModelNames(r.names); });
   // 新对话选的模型：null 是 Auto；开新对话时还是上次选的，刷新页面回到 Auto。开始的对话以它定下的为准（st.model）
   const [pick, setPick] = useState(null);
   // 深度思考开关：每句话发的时候带上（选的模型能开关才带）。新对话（包括刷新）按设置里的默认（存本机，默认开）；
@@ -149,7 +151,8 @@ export default function Workspace() {
     document.head.prepend(m); // 好几条都对得上时浏览器用最前面那条
     return () => m.remove();
   }, [dark]);
-  useEffect(() => { listModels().then(setModels).catch(() => setModels([])); }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { loadModels().catch(() => setModels([])); }, []);
   // 身份定了取一次额度；每轮结束（busy 回到 false）再取：这一轮花的已经记上了
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (auth.ready && !busy) refreshCredits(); }, [auth.ready, busy]);
@@ -356,7 +359,7 @@ export default function Workspace() {
     } else if (ev === "title") {
       setLive((l) => (l ? { ...l, title: data.title } : l));
       refreshList();
-    } else if (ev === "delta" || ev === "step" || ev === "restart") {
+    } else if (ev === "delta" || ev === "step" || ev === "restart" || ev === "model") {
       setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
     } else if (ev === "guide") { // 等着插的话放进这一轮了：从下面挪进过程里。之后又插了一句的话以服务器为准
       setLive((l) => addLive(l, ev, data));
@@ -427,7 +430,7 @@ export default function Workspace() {
       if (!tidRef.current && e.status === 400 && said) {
         setPutBack({ thread: "new", text: said, image, rejected: true });
         setError("这句话没发出去，已经放回输入框：选的模型现在用不了，换一个再发。");
-        listModels().then(setModels).catch(() => {});
+        loadModels().catch(() => {});
         setBusy(false);
         setLive(null);
         return;
@@ -689,7 +692,7 @@ export default function Workspace() {
           onSettings={fromSide(() => setSettings("settings"))} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
         <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
           who={auth.ready ? (auth.me ? auth.me.name || "" : null) : earlyWho}
-          models={models} credits={credits} manage={manage}
+          models={models} modelNames={modelNames} credits={credits} manage={manage}
           picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />
         {search && (
           <SearchDialog threads={shownThreads && withCurrent(shownThreads, tid, st, live, busy)} now={now} href={chatPath}

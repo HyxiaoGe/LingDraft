@@ -18,7 +18,8 @@
 id = "auto"
 name = "自动"  # 2026-11-07 Sean 定：页面上写中文（id 和代码里还叫 auto / Auto）
 description = "默认选择"
-# Auto 是一种策略（model_catalog.Catalog._auto）：现在就是下面这个模型；以后按问题选模型改那里（Sean：用户多半不改默认，Auto 是降成本的地方）
+# Auto 是一种策略（model_catalog.Catalog.pick，2026-11-08 Sean 定，见下面的 [auto]）：第一句话判断难易，复杂的用下面这个模型，
+# 简单的用免费额度（[[free]]）；定下以后整段对话沿用，出问题才换备用。Sean：用户多半不改默认，Auto 是降成本的地方
 model = "deepseek:deepseek-v4-pro"
 access = "guest"
 effort = "high"  # 探针对照后定的（docs/probe/autonomy）
@@ -152,12 +153,46 @@ model = "minimax:MiniMax-M3.1-Flash"
 access = "guest"
 thinking = "always"
 
+# ---- Auto 怎么选（2026-11-08 Sean 定）----
+# 第一句话让 [roles] 的 route 判断难易，定下一个模型，整段对话沿用（后面问题再复杂也不换）：
+# - 复杂的：登录用户用 Auto 选项的模型（上面的 V4 Pro），游客用备用（游客只能用免费模型和备用）。
+# - 简单的：下面的免费额度按到期日从早到晚挑第一个能用的，都用不了用备用。
+# 出问题换备用：首字 30 秒没来、上游出错、免费额度用完、到期。Auto 的对话换过去就一直用备用；用户自己选的模型只有这一轮用备用，下一轮照旧
+# （见 graph.research.agent 的 ModelSelect）。DeepSeek 自己坏了备用也顶不上，先不管（Sean 定）。
+[auto]
+fallback = "deepseek-flash"  # 选项 id；固定用 DeepSeek Flash（Sean 定，起标题、推荐问题、写短版也是它）
+
+# 免费额度：各家给的试用额度（百炼控制台“模型用量 → 免费额度”能看到剩多少、哪天到期）。用完了、到期了自动不用：
+# - 不记还剩多少：厂商报额度用完（百炼是 AllocationQuota.FreeTierOnly）就当用完了，见 model_guard.FreeTierUsedUp。
+# - 前提：控制台里这个模型的“免费额度用完即停”开着，不然用完会接着按量收钱，我们记成 0 元（没有这个开关的厂商不往这里放）。
+# - until 照控制台的到期日写，这天北京时间 0 点起不再用；过了的删掉就行。
+# - 子 agent 用备用的；思考开关跟用户（这几个都实测过能关，2026-11-08）；记账是 0 元（rate 记成 free_tier），用户的额度也不扣。
+# - 不能同时是上面的选项或下面的内部用途（同一个模型记账会分不开）。
+# 2026-11-08 百炼：qwen3.8-max-0902 只剩 3 万多、用完即停没开，不放。
+[[free]]
+model = "dashscope:kimi-k3"
+name = "Kimi K3"
+icon = "moonshot"
+until = 2026-11-17
+
+[[free]]
+model = "dashscope:deepseek-v4.1-flash-1017"
+name = "DeepSeek V4.1 Flash"
+icon = "deepseek"
+until = 2027-01-17
+
+[[free]]
+model = "dashscope:kimi-k3.1-pro"
+name = "Kimi K3.1 Pro"
+icon = "moonshot"
+until = 2027-02-02
+
 # ---- 内部用途：用户看不到，不跟着选项走 ----
 [roles]
 # 起标题照 Fusion 用轻量模型、不开思考：标题是锦上添花，慢了、坏了就用原话（见 graph.research.agent._TitleJob）
 title = { model = "deepseek:deepseek-flash" }
-# 推荐问题：不开思考，小活
-suggest = { model = "deepseek:deepseek-v4-pro" }
+# 推荐问题：不开思考，小活（2026-11-08 Sean 定从 Pro 换成 Flash，和起标题、写短版统一）
+suggest = { model = "deepseek:deepseek-flash" }
 # 内容审核拦下请求时把资料一条条单独送审。只认得 DeepSeek 的拦截（见 app.model_guard），别家的审核以后统一做（2026-11-05 Sean 定）
 probe = { model = "deepseek:deepseek-v4-pro" }
 # 对话太长时给之前几轮写短版（见 graph.research.compaction）
@@ -166,6 +201,8 @@ summarize = { model = "deepseek:deepseek-flash" }
 dream = { model = "deepseek:deepseek-v4-pro", thinking = true, effort = "high" }
 # 评测的裁判：换被测的模型时裁判不变，分数才比得了（见 app.evals.research）
 judge = { model = "deepseek:deepseek-v4-pro" }
+# Auto 第一句话判断难易（见上面的 [auto]）：不开思考，小活；坏了、慢了当复杂
+route = { model = "deepseek:deepseek-flash" }
 
 # ---- 价格：成本记账用（见 app/costs.py），每次调模型按调用开始那一刻的价算好记下 ----
 # 2026-11-06 照各家官网填的（来源见 docs/credits/价格表-2026-11-06.md），国内站按量付费，元 / 百万 token。各家调价了改这里（Sean 和 Claude 手动维护），

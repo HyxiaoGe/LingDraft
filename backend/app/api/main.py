@@ -458,8 +458,9 @@ def research_list(who: Who):
 
 @app.get("/api/models")
 def research_models(who: Who):
-    """新对话能选的模型，Auto 在第一个（列表见 app/models.toml，没配 key 的不在里面）。这一档选不了的也列出来，标着 locked。"""
-    return {"models": research().models(who.tier)}
+    """新对话能选的模型，Auto 在第一个（列表见 app/models.toml，没配 key 的不在里面）。这一档选不了的也列出来，标着 locked。
+    names 是选项以外、回答开头可能出现的模型（Auto 用的免费额度）的名字和图标。"""
+    return {"models": research().models(who.tier), "names": research().model_names()}
 
 
 @app.post("/api/research/threads")
