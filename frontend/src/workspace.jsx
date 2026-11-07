@@ -153,6 +153,22 @@ export default function Workspace() {
   // 身份定了取一次额度；每轮结束（busy 回到 false）再取：这一轮花的已经记上了
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (auth.ready && !busy) refreshCredits(); }, [auth.ready, busy]);
+  // 额度到点重置：最早的那个重置时间过了一两秒再取一次，左栏圆环和额度面板马上变成新的（原来要刷新页面才变）。
+  // 标签页在后台时浏览器会拖着定时器，切回来时已经过了点也补取一次；这里的钟比服务器快、取回来还没重置的，隔 5 秒再取
+  useEffect(() => {
+    const ats = (credits?.windows || []).map((w) => Date.parse(w.resets_at)).filter((t) => !Number.isNaN(t));
+    if (!ats.length) return undefined;
+    const at = Math.min(...ats);
+    const wait = at - Date.now();
+    const timer = setTimeout(refreshCredits, wait > 0 ? Math.min(wait + 1500, 2 ** 31 - 1) : 5000);
+    const back = () => { if (!document.hidden && Date.now() >= at) refreshCredits(); };
+    document.addEventListener("visibilitychange", back);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", back);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [credits]);
   // 领不到游客身份（同一网络今天领得太多，2026-11-06 Sean 定每网络每天 5 个）：弹登录框，说清为什么、登录后会怎样（第 26 条）；
   // 没有登录功能的部署只能说明天再来
   useEffect(() => {
