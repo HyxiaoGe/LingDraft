@@ -6,6 +6,10 @@
 SDK 只重试发请求那一下（拿到状态码为止）。模型开始生成以后断的（流读到一半断开、流里来了错误、DeepSeek 资源不足、太久没片段）它不管，
 这几种换成 Interrupted：调用方可以把这次调用整个再发一次（对话 agent 再发一次，见 graph.research.agent.InterruptedRetryMiddleware）。
 
+首字超时：对话 agent 的流式调用发出去以后太久（建模型时给的秒数，见 research_llm.FIRST_TOKEN_S）没收到第一个有内容的片段（思考、正文、工具调用都算，
+服务端排队时的保活注释、开头只带角色的空片段不算）就当不可用，断开这次请求，调用方换备用（2026-11-08 Sean 定 30 秒）。
+免费额度用完：厂商用一种固定的错误说额度用完了（百炼开了“用完即停”时是 AllocationQuota.FreeTierOnly），换成 FreeTierUsedUp，不算熔断（服务答复了）。
+
 熔断：同一个模型连续 FAILURES 次不可用就断开 COOLDOWN_S 秒，这期间的调用直接失败、不发请求；
 冷却完放一个调用去试，成功就恢复，失败接着断开。请求本身的错误（400 之类）说明服务答复了，不算不可用。
 429（限流）也是服务答复了：这次调用失败，但不算进熔断，不然请求一密就把所有线程一起断开几分钟。
@@ -14,6 +18,7 @@ SDK 只重试发请求那一下（拿到状态码为止）。模型开始生成�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import threading
@@ -26,21 +31,28 @@ import openai
 FAILURES = 2
 COOLDOWN_S = 180
 BLOCKED_MESSAGE = "Content Exists Risk"  # DeepSeek 内容审核拦下请求时 error.message 的固定文字（HTTP 400）
+# 厂商说免费额度用完了的错误码：百炼开了“免费额度用完即停”时额度用完返回这个（官方文档“新人免费额度”，2026-11-08 查的）。
+# 火山、腾讯接进来时把它们的加在这里
+FREE_TIER_CODES = {"AllocationQuota.FreeTierOnly"}
 
 log = logging.getLogger(__name__)
 
 
 class ModelUnavailable(RuntimeError):
-    """模型服务不可用：服务商出错、连不上、密钥或余额有问题，或者正在熔断。"""
-
-
-class Interrupted(ModelUnavailable):
-    """模型开始生成以后断了，SDK 不重试这种：整个再调一次多半能好。这次失败已经让熔断断开的不给这个（再调也会被拒）。
-    streamed：断之前已经流出了片段（页面上有半截，再调之前要去掉）。"""
+    """模型服务不可用：服务商出错、连不上、密钥或余额有问题，或者正在熔断。
+    streamed：断之前已经流出了片段（页面上有半截，再调或换备用之前要去掉）。"""
 
     def __init__(self, message: str, streamed: bool = False) -> None:
         super().__init__(message)
         self.streamed = streamed
+
+
+class Interrupted(ModelUnavailable):
+    """模型开始生成以后断了，SDK 不重试这种：整个再调一次多半能好。这次失败已经让熔断断开的不给这个（再调也会被拒）。"""
+
+
+class FreeTierUsedUp(ModelUnavailable):
+    """这个模型的免费额度用完了（见 FREE_TIER_CODES）：调用方记下以后不再用它（model_catalog.Catalog.used_up），这次换备用。"""
 
 
 class ContentBlocked(RuntimeError):
@@ -53,6 +65,19 @@ class ContentBlocked(RuntimeError):
 
 def is_blocked(e: BaseException) -> bool:
     return isinstance(e, openai.APIError) and isinstance(e.body, dict) and e.body.get("message") == BLOCKED_MESSAGE
+
+
+def is_free_tier_used_up(e: BaseException) -> bool:
+    if not isinstance(e, openai.APIStatusError):
+        return False
+    body = e.body if isinstance(e.body, dict) else {}
+    return getattr(e, "code", None) in FREE_TIER_CODES or body.get("code") in FREE_TIER_CODES
+
+
+def has_content(chunk: Any) -> bool:
+    """流式片段里有没有模型生成的东西：正文、思考、工具调用（开头只带角色的空片段、最后的用量片段不算）。"""
+    m = chunk.message
+    return bool(m.content or m.additional_kwargs.get("reasoning_content") or getattr(m, "tool_call_chunks", None))
 
 
 def unavailable_reason(e: BaseException) -> str | None:
@@ -112,7 +137,7 @@ class Breaker:
         log.warning("模型服务不可用：%s，%s%s%s", key, reason, f"，断开 {self.cooldown_s:.0f} 秒" if opened else "",
                     f"（{detail[:300]}）" if detail else "")
         message = _message(reason, self.cooldown_s if opened else None)
-        return Interrupted(message, streamed) if interrupted and not opened else ModelUnavailable(message)
+        return Interrupted(message, streamed) if interrupted and not opened else ModelUnavailable(message, streamed)
 
     def release(self, key: str) -> None:
         """试探的调用没有定论（中途不读了、别的错误）：名额让给下一个。成功、失败时已经处理过，这里不再变。"""
@@ -146,11 +171,19 @@ class GuardedChatModel:
     def _guard_key(self) -> str:
         return str(getattr(self, "model_name", "") or type(self).__name__)
 
+    def _first_token_s(self) -> float | None:
+        """流式调用等第一个有内容的片段最多多少秒（见模块说明）；None 是不限（只有 langchain-openai 自己的片段超时）。建模型的地方按用途改。"""
+        return None
+
     def _translate(self, key: str, e: Exception, streamed: bool = False) -> Exception:
         """streamed：流式调用里已经收到过片段。"""
         if is_blocked(e):
             self.breaker.success(key)  # 服务答复了
             return ContentBlocked(output=False)
+        if is_free_tier_used_up(e):
+            self.breaker.success(key)  # 服务答复了
+            log.warning("免费额度用完了：%s", key)
+            return FreeTierUsedUp(_message("免费额度用完了", None))
         if isinstance(e, openai.RateLimitError):  # SDK 重试完还是限流：这一次失败，服务本身是好的
             self.breaker.success(key)
             return ModelUnavailable(_message("请求太频繁", None))
@@ -232,12 +265,28 @@ class GuardedChatModel:
         key = self._guard_key()
         probe = self.breaker.check(key)
         finish, streamed = None, False
+        limit = self._first_token_s()
+        deadline = None if limit is None else asyncio.get_running_loop().time() + limit  # 收到第一个有内容的片段以后就不管了
+        it = super()._astream(messages, stop=stop, run_manager=run_manager, **kwargs)  # type: ignore[misc]
         try:
             try:
-                async for chunk in super()._astream(messages, stop=stop, run_manager=run_manager, **kwargs):  # type: ignore[misc]
+                while True:
+                    try:
+                        async with asyncio.timeout_at(deadline) as waiting:
+                            chunk = await anext(it)
+                    except StopAsyncIteration:
+                        break
+                    except TimeoutError:
+                        if not waiting.expired():
+                            raise  # langchain-openai 自己的片段超时，照下面的处理
+                        raise self.breaker.failure(key, "首字超时", f"{limit:.0f} 秒没收到第一个片段", streamed=streamed) from None
+                    if deadline is not None and has_content(chunk):
+                        deadline = None
                     finish = (chunk.generation_info or {}).get("finish_reason") or finish
                     streamed = True
                     yield chunk
+            except ModelUnavailable:
+                raise
             except Exception as e:
                 err = self._translate(key, e, streamed)
                 if err is e:
@@ -245,5 +294,6 @@ class GuardedChatModel:
                 raise err from e
             self._settle(key, finish, streamed)
         finally:
+            await it.aclose()  # 首字超时、点了停止：断开这次请求
             if probe:
                 self.breaker.release(key)

@@ -344,5 +344,8 @@ class Compaction(BaseModel):
 class ResearchState(AgentState):
     title: NotRequired[str]  # 线程标题，第一轮开始前由模型起
     option: NotRequired[str]  # 对话定下的模型选项（models.toml 的 id）：新建对话时写进来，没选的第一轮开始时定成 auto；之后不换（见 agent.TurnMiddleware）
+    # Auto 的对话用的模型（"厂商:模型"）：第一句话判断难易时定下（见 model_catalog.Catalog.pick），整段对话沿用；
+    # 出问题换了备用、免费额度到期用完了，改成备用，不再换回来（2026-11-08 Sean 定，见 agent.TurnMiddleware、ModelSelect）
+    auto_model: NotRequired[str]
     turns: NotRequired[list[Turn]]
     compaction: NotRequired[Compaction]

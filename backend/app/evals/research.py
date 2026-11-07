@@ -232,7 +232,7 @@ def play(runner, tid: str, turn: CaseTurn, option: str | None = None) -> dict:
     return {"say": turn.say, "events": len(events), "status": view["status"], "error": runner.failure_detail(tid) or view.get("error"),
             "reply": history.final_text(msgs[history.last_human(msgs) + 1:]), "items": t["items"],
             "suggestions": rec_turn.get("suggestions", []), "usage": rec_turn.get("usage"), "outcome": rec_turn.get("outcome"),
-            "model": rec_turn.get("model"),  # 这一轮实际用的（Auto 以后会按问题选）
+            "model": rec_turn.get("model"),  # 这一轮实际用的（Auto 按第一句话定）
             "searches": seen["searches"], "failed_searches": seen["failed_searches"], "reads": seen["reads"],
             "time_checks": sum(1 for m in ais for tc in m.tool_calls if tc["name"] == TIME_TOOL), "calls": calls,
             "lookups": [tc["name"] for m in ais for tc in m.tool_calls if tc["name"] in LOOKUP_TOOLS],
@@ -488,6 +488,8 @@ def model_head(option: str) -> dict[str, str]:
         raise SystemExit(f"没有这个模型可选（看 app/models.toml）：{option}")
     if option != model_catalog.AUTO and not all(usable(r) for r in o.refs()):
         raise SystemExit(f"这个模型没配 key：{option}")
+    if option == model_catalog.AUTO:  # 2026-11-08 起按第一句话判断难易定下模型（见 Catalog.pick），每轮实际用的记在各轮的 model
+        return {"option": option, "model": "按第一句话定", "subagent_model": "按第一句话定"}
     plan = catalog.plan(option, None, usable)
     return {"option": option, "model": plan.agent.ref, "subagent_model": plan.subagent.ref}
 

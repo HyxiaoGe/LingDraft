@@ -808,8 +808,9 @@ class FlakyModel(FakeToolModel):
 
 
 def test_model_unavailable_fails_the_turn_and_retry_continues():
+    """模型不可用、换备用也不行（假实现里备用是同一个假模型）：这一轮失败，重试接着做。"""
     p = FakeResearchPlanner()
-    p._model = FlakyModel(fails=[1])
+    p._model = FlakyModel(fails=[1, 1])
     c = Chat(planner=p)
     with pytest.raises(ModelUnavailable):
         c.say("直接答")
@@ -863,7 +864,7 @@ def test_model_call_cap_counts_this_turn_and_carries_over_a_retry(monkeypatch):
     p._model = FailsAfterTools()
     c = Chat(planner=p)
     c.say("一直搜笔记软件")
-    p._model.fails.append(1)
+    p._model.fails.extend([1, 1])  # 换备用也出错（假实现里备用是同一个假模型）
     with pytest.raises(ModelUnavailable):
         c.say("一直搜阅读器")
     c.r.retry_input(c.tid)
@@ -906,13 +907,13 @@ def test_model_breaking_midway_is_called_again_and_the_page_drops_the_half(chat,
 
 
 def test_model_breaking_again_fails_the_turn_like_before(chat, monkeypatch):
-    """再调一次也断了：照常失败，页面给原因和重试。只再调一次。"""
+    """再调一次也断了：换备用（假实现里备用是同一个假模型，也断），再调一次也断，照常失败，页面给原因和重试。"""
     monkeypatch.setattr(agent_mod, "RESTART_WAIT_S", 0)
     with pytest.raises(ModelUnavailable):
         chat.say("一直断：比较两款笔记软件")
     v = chat.view()
     assert v["status"] == "failed" and v["error"].startswith("模型服务暂时不可用（连接失败）") and v["error_kind"] == "model"
-    assert len([e for e in chat.events if e["event"] == "restart"]) == 1  # 每再调一次发一条
+    assert len([e for e in chat.events if e["event"] == "restart"]) == 3  # 再调、换备用、备用再调各一条
 
 
 def test_stop_while_restarting_saves_no_half(chat, monkeypatch):

@@ -601,7 +601,7 @@ const PROVIDER_ICONS = { deepseek: "deepseek", ark: "volcengine", moonshot: "moo
 export function ModelIcon({ m, auto, size }) {
   const box = size ? { width: size, height: size, borderRadius: Math.round(size * 0.28), fontSize: Math.round(size * 0.5) } : undefined;
   if (auto) return <span className={styles.mark + " " + styles.auto} style={box} aria-hidden="true"><Sparkles strokeWidth={2} /></span>;
-  const key = PROVIDER_ICONS[(m.model || "").split(":")[0]];
+  const key = PROVIDER_ICONS[m.icon || (m.model || "").split(":")[0]]; // icon：托管在别家的（百炼上的 Kimi）按模型自己的厂商
   return <span className={styles.mark} style={box} aria-hidden="true">{key ? <img src={`/providers/${key}.svg`} alt="" /> : m.name.slice(0, 1)}</span>;
 }
 

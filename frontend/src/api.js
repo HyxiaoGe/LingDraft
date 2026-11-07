@@ -143,10 +143,12 @@ export async function getCredits() {
   return resp.json();
 }
 
+// 能选的模型（models，Auto 在第一个）和选项以外、回答开头可能出现的模型（names：Auto 用的免费额度，"厂商:模型" → {name, icon}）
 export async function listModels() {
   const resp = await authFetch("/api/models");
   if (!resp.ok) throw await httpError(resp);
-  return (await resp.json()).models;
+  const { models, names } = await resp.json();
+  return { models, names: names || {} };
 }
 
 // 开新对话。opts：model 是选的模型（listModels 里的 id，不给是 Auto；没有了返回 400），定下就不换；

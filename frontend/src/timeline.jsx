@@ -44,7 +44,7 @@ const readingOf = (id) => { try { return JSON.parse(sessionStorage.getItem(READI
 const keepReadingOf = (id, at) => { try { sessionStorage.setItem(READING + id, JSON.stringify(at)); } catch { /* 存不下就只管这一次打开 */ } };
 export const forgetReading = (id) => { try { sessionStorage.removeItem(READING + id); } catch { /* 没有就算了 */ } };
 
-export function Conversation({ st, live, busy, suggesting, error, now, act: rawAct, tid, putBack, listedTitle, models, credits, picker, manage, who }) {
+export function Conversation({ st, live, busy, suggesting, error, now, act: rawAct, tid, putBack, listedTitle, models, modelNames, credits, picker, manage, who }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
   const lastTop = useRef(0); // 上一次滚动时的位置：往上滚了才算用户离开底部
@@ -256,7 +256,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
         }}>
         <div className={styles.flow}>
           {!fresh && !opening && <h1 className={styles.printTitle}>{title}</h1>/* 只在打印时出现：屏幕上标题在顶栏，打印不印顶栏（第 49 条） */}
-          {fresh ? <Welcome who={who} /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} title={title} />}
+          {fresh ? <Welcome who={who} /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} modelNames={modelNames} title={title} />}
           {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error.text ?? error}</span>
             {error.login && picker.onLogin && <button className="ws-btn ws-error-act" onClick={picker.onLogin}>登录</button>}</div>}
         </div>
@@ -482,7 +482,7 @@ function Inspirations({ onPick }) {
 
 // ---------------- 一轮一轮 ----------------
 
-function Turns({ st, live, busy, suggesting, stopping, now, act, models, title }) {
+function Turns({ st, live, busy, suggesting, stopping, now, act, models, modelNames, title }) {
   const turns = st?.turns || [];
   const running = busy || ACTIVE.has(st?.status);
   // 刚说的话还没出现在存下来的对话里：先按页面手上的显示
@@ -498,7 +498,7 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models, title }
         shots += imagesOf(t.items).filter(drawn).length;
         return (
           <section key={t.id} className={styles.turn} data-turn={i} tabIndex={-1} aria-label={`第 ${i + 1} 轮`} aria-busy={last && running ? true : undefined}>
-            <Turn t={t} k={`${st?.thread_id}:${i}`} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} models={models} title={title} images={images} />
+            <Turn t={t} k={`${st?.thread_id}:${i}`} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} models={models} modelNames={modelNames} title={title} images={images} />
           </section>
         );
       })}
@@ -507,7 +507,7 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models, title }
 }
 
 // k：这一轮在页面上的记号（对话 id + 第几轮）。正在发的这一轮存下来以后 id 会变（见 Turns 的 pending），过程展开没展开按 k 记，不跟着重来
-function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, models, title, images }) {
+function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, models, modelNames, title, images }) {
   const items = mergeItems(t.items, live);
   const { process, answer } = splitTurn(items);
   const texts = items.filter((i) => i.type === "text").map((i) => i.text);
@@ -518,15 +518,17 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
   const idle = !running && st?.status === "idle";
   const failed = last && !running && st?.status === "failed";
   const replied = answer.some((i) => i.type === "text");
-  // 回答开头：这一轮用的模型的厂商图标和名字（照 Fusion）。答完的按这一轮记下的；正在答的按对话定下的选项（“自动”按它现在用的那个）
-  const ref = rec?.model?.ref || (running ? models?.find((m) => m.id === st?.model)?.model : null);
-  const who = ref && models?.length > 0 ? modelName(models, ref) : null;
+  // 回答开头：这一轮用的模型的厂商图标和名字（照 Fusion）。答完的按这一轮记下的；正在答的按后端说的这一轮用的（Auto 判断完选的、
+  // 出问题换的备用；中途打开的按状态里的 model_ref），还没定下就先不写。Auto 用的免费模型不在选项里，名字和图标在 modelNames
+  const ref = rec?.model?.ref || (running ? live?.model || st?.model_ref : null);
+  const named = ref && modelNames?.[ref];
+  const who = ref && models?.length > 0 ? named?.name || modelName(models, ref) : null;
   return (
     <>
       {t.user && <UserMsg text={live?.edit ?? t.user} image={t.image} src={userImageSrc(t, live, st?.thread_id)} at={live?.sentAt ?? t.sent_at} pinned={last} now={now}
         editable={last && idle} onEdit={act.edit} />}
       <div className={styles.ai}>
-        {who && <div className={styles.aiHead}><ModelIcon m={{ model: ref, name: who }} size={22} />{who}</div>}
+        {who && <div className={styles.aiHead}><ModelIcon m={{ model: ref, name: who, icon: named?.icon }} size={22} />{who}</div>}
         {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} />}
         {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
         {mapsOf(items).map((card) => <MapCard key={card.key} card={card} />)}

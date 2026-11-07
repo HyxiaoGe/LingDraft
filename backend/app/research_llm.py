@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import io
 import json
+import logging
 import math
 import re
 import threading
@@ -51,12 +52,22 @@ from app.tools.research_tools import TIME_TOOL, make_research_tools
 from app.tools.weather_mcp import WEATHER_TOOL, WeatherTool
 from app.tools.web_mcp import READ_TOOL, SEARCH_TOOL, WebTool
 
+log = logging.getLogger(__name__)
+
 PROBE_WORKERS = 4  # 单条送审同时发几个
 TITLE_TIMEOUT = 8  # 照 Fusion：起标题的超时（秒）
+FIRST_TOKEN_S = 30  # 主 agent、子 agent 等第一个片段最多多少秒，过了换备用（2026-11-08 Sean 定，见 model_guard 的说明）。实测 V4 Pro 10 万 token 没命中缓存约 10 秒
+ROUTE_TIMEOUT = 10  # Auto 第一句话判断难易的超时（秒）：慢了当复杂，不让用户多等
 TITLE_MAX_TOKENS = 64  # 起标题最多生成这么多：标题要的是 15 个字以内，模型不照做、去回答问题时到这里就截住
 SUMMARY_MAX_TOKENS = 2000  # 写短版最多生成这么多（要的是 300 词、600 字以内）
 
 # ---- 结构化输出 schema（扁平、全部 required，符合 strict 模式） ----
+
+
+class Route(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(description="One short sentence on why")
+    simple: bool = Field(description="True if a lightweight model can answer this conversation well")
 
 
 class Suggestions(BaseModel):
@@ -81,6 +92,8 @@ class ResearchPlanner(Protocol):
     async def connect_tools(self) -> None: ...  # 连上还没连上的 MCP 工具（见 McpTools）；有没连上的照常抛出（见 research_runner）
 
     async def title(self, text: str) -> str: ...
+
+    async def route(self, text: str) -> bool: ...  # Auto 第一句话：简单的（轻量模型就够）返回 True；出错照常抛出（调用方当复杂）
 
     async def suggest(self, question: str, reply: str) -> list[str]: ...
 
@@ -177,12 +190,14 @@ def _pass_back(msgs: list[BaseMessage], payload: dict, keys: Sequence[str]) -> N
 
 
 def make_chat_model(ref: str, *, thinking: bool, effort: str = "", timeout: int = 180, callbacks: list | None = None,
-                    max_tokens: int | None = None, guard: str | None = None, purpose: str = costs.AGENT) -> BaseChatModel:
+                    max_tokens: int | None = None, guard: str | None = None, purpose: str = costs.AGENT,
+                    first_token_s: float | None = None) -> BaseChatModel:
     """按"厂商:模型"建聊天模型（LangChain init_chat_model 的写法，模型选项见 app/models.toml）。effort 是思考强度，空的是厂商默认。
     不直接用 init_chat_model：它只建得出 LangChain 自己的类，我们要的是补过的子类（见下面各家的函数）。接新的一家：OpenAI 兼容接口的
     在 COMPAT 里加一行（开关思考的参数先实测），别的在 PROVIDERS 里加一个建模型的函数。
     每次调用都过熔断，服务商的错误换成 ModelUnavailable / ContentBlocked（见 app.model_guard）。
     熔断默认按模型名记，同一个模型的各种用途一起断开；guard 给了就这个用途单独记（见 LiveResearchPlanner 的起标题）。
+    first_token_s：流式调用等第一个有内容的片段最多多少秒，过了算不可用（见 model_guard）；不给是不限。
     每次调用记一行成本（见 app.costs），purpose 是记账时的用途：主 agent、子 agent 用的是 agent（子 agent 的由 task 工具标出来），
     内部用途是它的名字（见 role_model）。"""
     provider, _, name = ref.partition(":")
@@ -190,7 +205,7 @@ def make_chat_model(ref: str, *, thinking: bool, effort: str = "", timeout: int 
     if build is None:
         raise ValueError(f"未知的模型提供方：{provider}")
     return build(name, thinking=thinking, effort=effort, timeout=timeout, callbacks=callbacks, max_tokens=max_tokens, guard=guard,
-                 purpose=purpose)
+                 purpose=purpose, first_token_s=first_token_s)
 
 
 def usable(ref: str) -> bool:
@@ -244,7 +259,7 @@ def _compat(provider: str) -> Callable[..., BaseChatModel]:
     spec = COMPAT[provider]
 
     def build(name: str, *, thinking: bool, effort: str, timeout: int, callbacks: list | None, max_tokens: int | None,
-              guard: str | None, purpose: str) -> BaseChatModel:
+              guard: str | None, purpose: str, first_token_s: float | None = None) -> BaseChatModel:
         """走 ChatOpenAI，它只认 OpenAI 官方的字段，各家的思考不取，这里补（见 ChatCompat）。"""
         from langchain_openai import ChatOpenAI
 
@@ -257,6 +272,9 @@ def _compat(provider: str) -> Callable[..., BaseChatModel]:
 
             def _guard_key(self) -> str:
                 return guard_key(GuardedChatModel._guard_key(self), guard)
+
+            def _first_token_s(self) -> float | None:
+                return first_token_s
 
             def _cost_ref(self) -> str:
                 return f"{provider}:{name}"
@@ -302,7 +320,7 @@ def _compat(provider: str) -> Callable[..., BaseChatModel]:
 
 
 def _deepseek(name: str, *, thinking: bool, effort: str, timeout: int, callbacks: list | None, max_tokens: int | None,
-              guard: str | None, purpose: str) -> BaseChatModel:
+              guard: str | None, purpose: str, first_token_s: float | None = None) -> BaseChatModel:
     """DeepSeek 思考模式下：带工具的请求要把 reasoning_content 原样传回（langchain-openai / langchain-deepseek 都不做，这里补）。
     同一轮里的不传接口报 400；之前几轮的照它现在的文档也传，会拼进上下文，只传这一轮的话，下一轮上一轮的消息变了，前缀缓存从那里断
     （2026-11-01 Sean 定）。不接受强制 tool_choice（with_structured_output 会设），这里去掉；temperature 无效。"""
@@ -314,6 +332,9 @@ def _deepseek(name: str, *, thinking: bool, effort: str, timeout: int, callbacks
     class ChatDeepSeekRT(GuardedChatModel, MeteredChatModel, ChatDeepSeek):
         def _guard_key(self) -> str:
             return guard_key(GuardedChatModel._guard_key(self), guard)
+
+        def _first_token_s(self) -> float | None:
+            return first_token_s
 
         def _cost_ref(self) -> str:
             return f"deepseek:{name}"
@@ -411,10 +432,12 @@ class LiveResearchPlanner:
         self._prober = role_model(self.catalog, "probe", timeout=120)
         self._summarizer = role_model(self.catalog, "summarize", timeout=120, max_tokens=SUMMARY_MAX_TOKENS)
         self._dreamer = role_model(self.catalog, "dream", timeout=300)
-        # Auto 的两个先建好：没配 key 在这里就报错，不等到第一个对话
+        self._router = role_model(self.catalog, "route", timeout=ROUTE_TIMEOUT, guard="判断难易")  # 熔断单独记，理由和起标题一样
+        # Auto 的两个、备用的先建好：没配 key 在这里就报错，不等到第一个对话
         auto = self.catalog.plan(None, None, self.usable)
         self.chat_model(auto.agent)
         self.chat_model(auto.subagent, sub=True)
+        self.chat_model(self.catalog.plan(self.catalog.auto.fallback, None, self.usable).agent)
         url, key = config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY
         self.gateway = gateway or GatewayClient(url, key, scene=scene)  # 按编号取图、删图（图存在 image-service 里）
         self._tools = make_research_tools(self.clock)
@@ -433,7 +456,8 @@ class LiveResearchPlanner:
         """主 agent、子 agent 用的模型：同样的（模型、思考开关、强度）共用一个，用到时才建。以后后台改了选项，作废这里就能不重启生效。
         sub 不影响建出来的模型（主 agent、子 agent 用同一个模型时熔断一起断开），只是离线的假实现用它分开主 agent 和子 agent。"""
         if (m := self._models.get(use)) is None:
-            m = self._models[use] = make_chat_model(use.ref, thinking=use.thinking, effort=use.effort, callbacks=[ThinkingTimer()])
+            m = self._models[use] = make_chat_model(use.ref, thinking=use.thinking, effort=use.effort, callbacks=[ThinkingTimer()],
+                                                    first_token_s=FIRST_TOKEN_S)
         return m
 
     def tools(self) -> list:
@@ -446,6 +470,11 @@ class LiveResearchPlanner:
         """调用方不带这次运行的上下文来调（见 agent._TitleJob），字不进页面。"""
         out = await self._titler.ainvoke([("user", prompts.render("title.prompt", content=text))], config={"run_name": "title"})
         return str(out.content).strip()
+
+    async def route(self, text: str) -> bool:
+        res = await _structured(self._router, Route).ainvoke([("user", prompts.render("route.prompt", message=text))], config={"run_name": "route"})
+        log.info("Auto 判断难易：%s（%s）", "简单" if res.simple else "复杂", res.reason)
+        return res.simple
 
     async def suggest(self, question: str, reply: str) -> list[str]:
         res = await _structured(self._suggester, Suggestions).ainvoke([("user", prompts.render("suggest.prompt", question=question, reply=reply))],
@@ -1178,7 +1207,30 @@ class FakeToolModel(BaseChatModel):
             await asyncio.sleep(FAKE_CHUNK_GAP_S)  # 片段之间让出事件循环，像真模型在等网络：点了停止在这里取消得到
 
 
+class FailingModel(BaseChatModel):
+    """一调就抛 error 的模型（测换备用：FakeResearchPlanner.broken）。流式的先吐 chunks 个正文片段再抛（测断在半截）。"""
+
+    error: Any
+    chunks: int = 0
+
+    @property
+    def _llm_type(self) -> str:
+        return "failing"
+
+    def bind_tools(self, tools: Any, **kwargs: Any) -> FailingModel:
+        return self
+
+    def _generate(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> ChatResult:
+        raise self.error
+
+    async def _astream(self, messages: list[BaseMessage], stop=None, run_manager=None, **kwargs: Any) -> AsyncIterator[ChatGenerationChunk]:
+        for k in range(self.chunks):
+            yield ChatGenerationChunk(message=AIMessageChunk(content=f"半截{k}", id="failing-msg"))
+        raise self.error
+
+
 FAKE_BLOCKED = "【审核不通过】"
+FAKE_SIMPLE = "简单问题"  # 假模型判断难易：第一句话里有这几个字算简单（只是离线的假实现，真的由模型判断）
 _CUT: set[str] = set()  # 假模型“中途断”已经断过的（模型的前缀:这一轮那条用户消息的 id）
 FAKE_REMEMBER = "记住："  # 假模型整理记忆时，用户说的这几个字后面那句记成一条
 
@@ -1218,6 +1270,8 @@ class FakeResearchPlanner:
         self.catalog = catalog or model_catalog.load()
         self._usable = usable or (lambda ref: True)
         self.model_uses: list[tuple[ModelUse, bool]] = []  # 每次调模型用的（模型, 是不是子 agent），测试看选对了没有
+        self.broken: dict[str, BaseChatModel] = {}  # 这些模型（"厂商:模型"）换成坏的（FailingModel），测换备用
+        self.fail_route = False
         self.calls: list[tuple[str, Any]] = []
         self.fail_title = False
         self.dream_replies: list[str] = []  # 整理记忆时按顺序给这些回答；用完了照 dream 的说明
@@ -1233,8 +1287,11 @@ class FakeResearchPlanner:
         return self._usable(ref)
 
     def chat_model(self, use: ModelUse, *, sub: bool = False) -> BaseChatModel:
-        """不管选的是哪个，主 agent 都是 _model、子 agent 都是 _sub_model（测试会换掉它们）；用了哪个记在 model_uses。"""
+        """不管选的是哪个，主 agent 都是 _model、子 agent 都是 _sub_model（测试会换掉它们）；用了哪个记在 model_uses。
+        broken 里的模型换成坏的。"""
         self.model_uses.append((use, sub))
+        if (bad := self.broken.get(use.ref)) is not None:
+            return bad
         return self._sub_model if sub else self._model
 
     def tools(self) -> list:
@@ -1248,6 +1305,12 @@ class FakeResearchPlanner:
         if self.fail_title:
             raise RuntimeError("假模型：起标题失败")
         return f"标题：{text[:8]}"
+
+    async def route(self, text: str) -> bool:
+        self.calls.append(("route", text))
+        if self.fail_route:
+            raise RuntimeError("假模型：判断难易失败")
+        return FAKE_SIMPLE in text
 
     async def suggest(self, question: str, reply: str) -> list[str]:
         self.calls.append(("suggest", question))
