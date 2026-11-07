@@ -6,8 +6,8 @@
 .dock { position: relative; flex: none; }
 .dock::before { content: ""; position: absolute; bottom: 100%; left: 50%; width: min(100%, 888px); height: 24px; transform: translateX(-50%);
   background: linear-gradient(to bottom, transparent, var(--paper)); pointer-events: none; }
-:global(.ws-main.fresh) .dock { position: static; } /* 下面“内容由 AI 生成”那行贴着整个右栏的底，不是贴着输入框 */
-:global(.ws-main.fresh) .dock::before { content: none; }
+[data-fresh] .dock { position: static; } /* 下面“内容由 AI 生成”那行贴着整个右栏的底，不是贴着输入框 */
+[data-fresh] .dock::before { content: none; }
 @media print { .dock { display: none !important; } }
 
 /* 回到底部：浮在输入框上面正中 */
@@ -21,8 +21,8 @@
 
 /* 输入框下面一行小字；新对话页上它贴着整个右栏的底（手机上照常跟着输入框） */
 .ai { max-width: 832px; margin: 6px auto 0; text-align: center; font-size: 11.5px; color: var(--faint); }
-:global(.ws-main.fresh) .ai { position: absolute; left: 0; right: 0; bottom: 12px; }
-@media (max-width: 720px) { :global(.ws-main.fresh) .ai { position: static; } }
+[data-fresh] .ai { position: absolute; left: 0; right: 0; bottom: 12px; }
+@media (max-width: 720px) { [data-fresh] .ai { position: static; } }
 
 /* 输入框上面：额度快用完、用完了的提醒 */
 .credits { width: calc(100% - 56px); max-width: 800px; margin: 0 auto 4px; display: flex; gap: 6px; align-items: center; font-size: 12px; line-height: 1.5; color: var(--warn); }

@@ -140,7 +140,7 @@ function splitCites(value) {
     run.push(citeNode(m[1]));
     last = m.index + m[0].length;
     for (let t; (CITE_TAIL.lastIndex = last, t = CITE_TAIL.exec(value)); last = CITE_TAIL.lastIndex) run.push(t[1] ? citeNode(t[1]) : txt(t[0]));
-    out.push({ type: "element", tagName: "span", properties: { className: ["md-nobr"] }, children: run });
+    out.push({ type: "element", tagName: "span", properties: { dataNobr: "" }, children: run });
   }
   if (!out.length) return null;
   if (last < value.length) out.push(txt(value.slice(last)));

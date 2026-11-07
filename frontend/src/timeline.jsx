@@ -2,7 +2,7 @@
 // 最后一轮下面是推荐问题（起的时候先说一声）。回答时又说的话排着（最多一句），贴在输入框上沿，这一轮答完就发，能撤回到输入框；
 // 也能插进这一轮：模型做完手上这一步就看到它，插进去以后排在过程里。过程正在跑时展开，跑完不自动收起（用户自己收）；重新打开的对话里收成一行
 // “已完成 25 秒 · 搜了 6 次 · 读了 4 页”，点开看每一步。收起的内容还留在页面里，浏览器的查找搜得到（见 Fold）。
-// 每一轮是一个 section（.ws-turn），回答开头有“灵稿”的标识；三轮起右边（宽屏）或顶栏（窄屏）有轮次目录，见 TurnIndex。
+// 每一轮是一个 section（data-turn），回答开头有“灵稿”的标识；三轮起右边（宽屏）或顶栏（窄屏）有轮次目录，见 TurnIndex。
 // 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。这些一直显示，之前各轮的淡一档。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -21,6 +21,7 @@ import proc from "./process.module.css";
 import { ACTIVE, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping } from "./research.js";
 import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
 import task from "./task.module.css";
+import styles from "./timeline.module.css";
 import { TurnIndex, TurnIndexButton, turnEntries } from "./turns.jsx";
 import { WeatherCard, forecastsOf } from "./weather.jsx";
 
@@ -78,7 +79,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   const measure = (el) => {
     if (stick.current) return { bottom: true };
     const top = el.getBoundingClientRect().top;
-    for (const turn of el.querySelectorAll(".ws-turn[data-turn]")) {
+    for (const turn of el.querySelectorAll("[data-turn]")) {
       const r = turn.getBoundingClientRect();
       if (r.bottom > top + 1) return { turn: Number(turn.dataset.turn), offset: Math.round(top - r.top) };
     }
@@ -86,7 +87,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   };
   const backTo = (at) => {
     const el = scrollRef.current;
-    const turn = at && !at.bottom && el.querySelector(`.ws-turn[data-turn="${Number(at.turn)}"]`);
+    const turn = at && !at.bottom && el.querySelector(`[data-turn="${Number(at.turn)}"]`);
     if (!turn) return false; // 那一轮没了（改了最后一句以后轮数变了）：到底
     el.scrollTop += turn.getBoundingClientRect().top - el.getBoundingClientRect().top + (Number(at.offset) || 0);
     lastTop.current = el.scrollTop;
@@ -233,11 +234,11 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   };
 
   return (
-    <section ref={mainRef} className={"ws-main" + (fresh ? " fresh" : "")} aria-label="对话">
+    <section ref={mainRef} className={styles.main} data-fresh={fresh || undefined} aria-label="对话">
       <HeadBar title={fresh ? "新对话" : title} edit={edit}
         end={<>{index && !rail && <TurnIndexButton entries={entries} scroller={scrollRef} onJump={jumpTo} />}{headMenu}</>} />
       {menuAt && manageable && <ActionMenu label="这段对话的操作" anchor={menuAt} mobile={mobile} items={menuItems} note={menuNote} onClose={closeMenu} />}
-      <div className="ws-scroll" ref={scrollRef}
+      <div className={styles.scroll} data-scroll ref={scrollRef}
         onScroll={(e) => {
           // 往上滚了：离底部远了就不再跟着到底。没往上滚（内容长高了、往下滚）不算离开：跳到底以后内容马上长高，滚动事件晚一帧到，
           // 这时离底已经远了，但用户没动
@@ -253,15 +254,15 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
             readTimer.current = setTimeout(keepReading, 400);
           }
         }}>
-        <div className="ws-flow">
-          {!fresh && !opening && <h1 className="ws-print-title">{title}</h1>/* 只在打印时出现：屏幕上标题在顶栏，打印不印顶栏（第 49 条） */}
+        <div className={styles.flow}>
+          {!fresh && !opening && <h1 className={styles.printTitle}>{title}</h1>/* 只在打印时出现：屏幕上标题在顶栏，打印不印顶栏（第 49 条） */}
           {fresh ? <Welcome who={who} /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} title={title} />}
           {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error.text ?? error}</span>
             {error.login && picker.onLogin && <button className="ws-btn ws-error-act" onClick={picker.onLogin}>登录</button>}</div>}
         </div>
       </div>
       {index && rail && <TurnIndex entries={entries} scroller={scrollRef} onJump={jumpTo} mini={rail === "ticks"} />}
-      <div className="ws-sr" role="status" aria-live="polite">{said}</div>
+      <div className="sr-only" role="status" aria-live="polite">{said}</div>
       {mobile && starters}
       <Dock>
         {/* 刚被额度拦住、报错里已经说了用完了和登录后会怎样：输入框上面不再重复一遍（第 27 条：同一句别在最烦的时候说好几遍） */}
@@ -365,7 +366,7 @@ function greeting(who, at, roll) {
 function Welcome({ who }) {
   const [at] = useState(() => ({ time: new Date(), roll: Math.random() }));
   return (
-    <div className="ws-welcome">
+    <div className={styles.welcome}>
       <h2>{greeting(who ?? null, at.time, at.roll)}</h2>
     </div>
   );
@@ -376,9 +377,9 @@ function Welcome({ who }) {
 // 每 15 秒一个接一个翻过去换下一批（批次 A 停过，2026-11-07 Sean 定恢复、改成 15 秒），鼠标放在上面、键盘停在上面时不翻。
 // 系统设了减少动态效果：直接换，不翻。一行放不下的题折成两行，不截断。点一下直接发。取不到就显示固定的几个例子。取回来之前先放占位，出来时页面不跳
 const ROTATE_MS = 15000;
-const FLIP_MS = 300; // 和 .ws-inspire 里翻的过渡时长一致
+const FLIP_MS = 300; // 和 timeline.module.css 的 .inspire 里翻的过渡时长一致
 const FLIP_STAGGER = 80;
-const CHIP_GAP = 8; // 和 .ws-inspire 的 gap 一致
+const CHIP_GAP = 8; // 和 timeline.module.css 的 .inspire 的 gap 一致
 const ROWS = 2;
 
 function shuffled(xs) {
@@ -460,18 +461,18 @@ function Inspirations({ onPick }) {
   }, [paused, more, start]);
 
   return (
-    <section className="ws-examples" aria-label="新对话的起点">
+    <section className={styles.examples} aria-label="新对话的起点">
       {/* 停翻只看两行题：外面这块往下撑满了页面，鼠标放在下面的空白处不算 */}
       <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
         onFocus={() => setFocused(true)} onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setFocused(false)}>
-      <div className="ws-inspire-ruler" ref={ruler} aria-hidden="true">
-        {pool?.questions.map((q) => <span key={q} className="ws-suggest-item">{q}</span>)}
+      <div className={styles.ruler} ref={ruler} aria-hidden="true">
+        {pool?.questions.map((q) => <span key={q} className={styles.chip}>{q}</span>)}
       </div>
-      <div className={"ws-inspire" + (flipped ? " flip" : "")} ref={box} aria-label={pool?.today ? "今日灵感" : "可以这样问"} role="group">
+      <div className={styles.inspire + (flipped ? " " + styles.flip : "")} ref={box} aria-label={pool?.today ? "今日灵感" : "可以这样问"} role="group">
         {pool ? shown.map((i, n) => {
           const q = pool.questions[i];
           const d = `${n * FLIP_STAGGER}ms`; // 只有翻的两项错开，悬停变色不等
-          return <button key={q} className="ws-suggest-item" style={{ transitionDelay: `${d}, ${d}, 0ms, 0ms` }} onClick={() => onPick(q)}>{q}</button>;
+          return <button key={q} className={styles.chip} style={{ transitionDelay: `${d}, ${d}, 0ms, 0ms` }} onClick={() => onPick(q)}>{q}</button>;
         }) : [112, 168, 136, 150].map((w) => <span key={w} className="ws-skel ws-skel-chip" style={{ width: w }} aria-hidden="true" />)}
       </div>
       </div>
@@ -496,7 +497,7 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models, title }
         const images = shots; // 这一轮之前画成了几张：下载的文件名按整段对话数第几张
         shots += imagesOf(t.items).filter(drawn).length;
         return (
-          <section key={t.id} className="ws-turn" data-turn={i} tabIndex={-1} aria-label={`第 ${i + 1} 轮`} aria-busy={last && running ? true : undefined}>
+          <section key={t.id} className={styles.turn} data-turn={i} tabIndex={-1} aria-label={`第 ${i + 1} 轮`} aria-busy={last && running ? true : undefined}>
             <Turn t={t} k={`${st?.thread_id}:${i}`} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} models={models} title={title} images={images} />
           </section>
         );
@@ -521,8 +522,8 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
     <>
       {t.user && <UserMsg text={live?.edit ?? t.user} image={t.image} src={userImageSrc(t, live, st?.thread_id)} at={live?.sentAt ?? t.sent_at} pinned={last} now={now}
         editable={last && idle} onEdit={act.edit} />}
-      <div className="ws-ai">
-        <div className="ws-ai-head"><span className="ws-ai-mark" aria-hidden="true">灵</span>灵稿</div>
+      <div className={styles.ai}>
+        <div className={styles.aiHead}><span className={styles.aiMark} aria-hidden="true">灵</span>灵稿</div>
         {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} />}
         {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
         {mapsOf(items).map((card) => <MapCard key={card.key} card={card} />)}
@@ -532,13 +533,13 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
         {running && <LiveLine live={live} items={items} stopping={stopping} now={now} />}
         {!running && <AnswerSources nums={nums} sources={st?.sources} />}
-        {!running && rec?.ended_at && rec.outcome === "no_reply" && <p className="ws-muted">这一轮没有给出文字回复。</p>}
+        {!running && rec?.ended_at && rec.outcome === "no_reply" && <p className={styles.muted}>这一轮没有给出文字回复。</p>}
         {failed && <Failed st={st} act={act} />}
         {!running && (replied || rec?.ended_at || (last && idle)) && (
-          <div className={"ws-ai-foot" + (last ? "" : " quiet")}>
+          <div className={styles.aiFoot + (last ? "" : " " + styles.quiet)}>
             <Stamp iso={rec?.ended_at} now={now} />
-            {rec?.model && models?.length > 0 && <span className="ws-ai-model">{modelName(models, rec.model.ref)}</span>}
-            {rec?.credits != null && <span className="ws-ai-model">本轮 {creditsText(rec.credits)}</span>}
+            {rec?.model && models?.length > 0 && <span className={styles.model}>{modelName(models, rec.model.ref)}</span>}
+            {rec?.credits != null && <span className={styles.model}>本轮 {creditsText(rec.credits)}</span>}
             {replied && <CopyButton text={() => answerText(items, st?.sources)} />}
             {last && idle && <button className="ws-btn ghost sm" onClick={act.regenerate}><IconLoop size={13} />重新回答</button>}
           </div>
@@ -569,9 +570,9 @@ function UserImage({ img, src }) {
   const k = img?.width && img?.height ? Math.min(THUMB / img.width, THUMB / img.height, 1) : 0;
   const box = k ? { width: Math.round(img.width * k), aspectRatio: `${img.width} / ${img.height}` } : undefined;
   return (
-    <div className="ws-user-img" style={box}>
-      {failed ? <span className="ws-user-img-gone">图片取不到了</span> : (
-        <button className="ws-user-img-open" aria-label="看大图" onClick={(e) => setViewing(e.currentTarget)}>
+    <div className={styles.userImg} style={box}>
+      {failed ? <span className={styles.userImgGone}>图片取不到了</span> : (
+        <button className={styles.userImgOpen} aria-label="看大图" onClick={(e) => setViewing(e.currentTarget)}>
           <img src={src} alt="发的图" onError={() => setFailed(true)} />
         </button>
       )}
@@ -586,10 +587,10 @@ function UserMsg({ text, image, src, at, pinned, now, editable, onEdit }) {
   useEffect(() => { if (!editable) setEditing(false); }, [editable]); // 开着编辑框时这一轮又跑起来了（点了重新回答、推荐问题），编辑框就收起
   if (editing && editable) return <EditBox text={text} onCancel={() => { setEditing(false); focusInput(); }} onSend={(t) => { setEditing(false); onEdit(t); }} />;
   return (
-    <div className={"ws-user" + (pinned ? " pinned" : "")}>
+    <div className={styles.user}>
       {src && <UserImage key={src} img={image} src={src} />}
-      <div className="ws-bubble">{text}</div>
-      <div className={"ws-user-foot" + (pinned ? " pinned" : "")}>
+      <div className={styles.bubble}>{text}</div>
+      <div className={styles.userFoot + (pinned ? " " + styles.pinned : "")}>
         <Stamp iso={at} now={now} />
         <CopyButton text={() => text} />
         {editable && <button className="ws-btn ghost sm" onClick={() => setEditing(true)}><IconEdit size={13} />编辑</button>}
@@ -611,14 +612,14 @@ function EditBox({ text, onCancel, onSend }) {
   const changed = v.trim() && v.trim() !== text.trim();
   const send = () => changed && onSend(v.trim());
   return (
-    <div className="ws-edit">
+    <div className={styles.edit}>
       <textarea ref={ref} rows={1} value={v} data-esc aria-label="改这句话" onChange={(e) => setV(e.target.value)}
         onKeyDown={(e) => {
           if (enterSends(e)) { e.preventDefault(); send(); }
           else if (e.key === "Escape") onCancel();
         }} />
-      <div className="ws-edit-bar">
-        <span className="hint">发送后按新的话重新回答，这一轮原来的回答会被替换</span>
+      <div className={styles.editBar}>
+        <span className={styles.hint}>发送后按新的话重新回答，这一轮原来的回答会被替换</span>
         <button className="ws-btn ghost sm" onClick={onCancel}>取消</button>
         <button className="ws-btn primary sm" disabled={!changed} onClick={send}>发送</button>
       </div>
@@ -629,7 +630,7 @@ function EditBox({ text, onCancel, onSend }) {
 // 发送或回答完的时间，悬停看精确到秒
 function Stamp({ iso, now }) {
   const s = stamp(iso, now);
-  return s && <time className="ws-time" dateTime={iso} title={s.full}>{s.text}</time>;
+  return s && <time className={styles.time} dateTime={iso} title={s.full}>{s.text}</time>;
 }
 
 // 复制：点了以后显示“已复制”一会儿。text 是函数，点的时候才算要复制的文字
@@ -782,7 +783,7 @@ function Item({ it, st, nums, running, lastItem }) {
 // 正文：收到多少显示多少（后端约每 80ms 来一批），不再人为地一个个字往外放；正在写的时候末尾有光标
 function Reply({ it, cite, caret }) {
   return (
-    <div className={"ws-reply" + (caret ? " typing" : "")}>
+    <div className={styles.reply + (caret ? " " + styles.typing : "")}>
       <Markdown text={mdText(it)} cite={cite} download ready={!caret} />
     </div>
   );
@@ -931,16 +932,16 @@ function useWaited(sig, now) {
 
 // 正文写完以后在起“接着问”：起好了换成那几个问题，没起成（或用户先说了话）就不显示
 function SuggestWait() {
-  return <div className="ws-suggest-wait"><Spinner size={12} /><span>正在想接着问什么…</span></div>;
+  return <div className={styles.suggestWait}><Spinner size={12} /><span>正在想接着问什么…</span></div>;
 }
 
 // 接着问：和新对话页的今日灵感同一种胶囊（横排、放不下换行），名字分开（规范术语表，2026-11-06 Sean 定）
 function Suggestions({ items, onPick }) {
   return (
-    <div className="ws-suggest" role="group" aria-labelledby="ws-suggest-label">
-      <div className="ws-suggest-label" id="ws-suggest-label">接着问</div>
-      <div className="ws-suggest-list">
-        {items.map((q) => <button key={q} className="ws-suggest-item" onClick={() => onPick(q)}>{q}</button>)}
+    <div className={styles.suggest} role="group" aria-labelledby="ws-suggest-label">
+      <div className={styles.suggestLabel} id="ws-suggest-label">接着问</div>
+      <div className={styles.suggestList}>
+        {items.map((q) => <button key={q} className={styles.chip} onClick={() => onPick(q)}>{q}</button>)}
       </div>
     </div>
   );

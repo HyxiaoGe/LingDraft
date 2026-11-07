@@ -64,7 +64,7 @@ function usePop(mobile) {
       const el = mark.current;
       if (!el?.isConnected) return close();
       const r = el.getBoundingClientRect();
-      const view = el.closest(".ws-scroll")?.getBoundingClientRect() || { top: 0, bottom: innerHeight };
+      const view = el.closest("[data-scroll]")?.getBoundingClientRect() || { top: 0, bottom: innerHeight };
       if (r.bottom < view.top || r.top > view.bottom) return close();
       setPop((o) => (o ? { ...o, rect: r } : o));
     };

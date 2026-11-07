@@ -63,7 +63,6 @@
 @keyframes ws-spin { to { transform: rotate(360deg); } }
 @keyframes ws-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 @keyframes ws-fade { from { opacity: 0; } }
-.ws-muted { color: var(--muted); font-size: 13px; }
 
 /* ---------- 按钮 ---------- */
 .ws-btn { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: var(--r-sm); border: 1px solid var(--line2);
@@ -108,97 +107,14 @@
 .ws-rename { width: 100%; height: 30px; border: 1px solid var(--accent-line); border-radius: var(--r-sm); padding: 0 8px; font: inherit; font-size: 13px; color: var(--ink);
   background: var(--paper); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
 
-/* ---------- 对话 ---------- */
-.ws-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
-/* 两边都留出滚动条的位置（Windows、Mac 接了鼠标时滚动条占地方）：正文按整栏居中，和顶栏标题、输入框的中线对齐（2026-11-07 Sean 定） */
-.ws-scroll { flex: 1; overflow-y: auto; scrollbar-gutter: stable both-edges; container-type: inline-size; }
-/* 正文宽 832（2026-11-07 照 Fusion 的 52rem，原来 624 太挤），居中。--pad 是两边留白。
-   代码块、表格和天气、地图、行程卡都和正文一样宽、左右对齐，太宽的在框里横着滑（2026-11-07 Sean 定，不再往两边放宽） */
-.ws-flow { --pad: 28px; max-width: 888px; margin: 0 auto; padding: 28px var(--pad) 32px; }
-/* 用户的话：下面一行是时间、复制、编辑，悬停时浮出，最后一句的一直在（浮在下一行右边的空处，不占高度） */
-.ws-user { position: relative; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin: 0 0 36px; } /* 下面那行（时间、复制）一直在，给它留出位置 */
-/* 这句话带的图：气泡上面一张缩略图，知道宽高的先按比例占好位置；刚发出去的用本机的，按图本身的比例 */
-.ws-user-img { max-width: 80%; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--side); overflow: hidden; }
-.ws-user-img-open { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
-.ws-user-img img { display: block; max-width: 240px; max-height: 240px; }
-.ws-user-img[style] img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: cover; }
-.ws-user-img-gone { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; min-height: 48px; padding: 8px 12px; font-size: 12px; color: var(--muted); }
-.ws-user-foot { position: absolute; top: 100%; right: -8px; margin-top: 1px; display: flex; gap: 2px; }
-/* 时间：和小按钮一样高、一样的左右留白，跟按钮排在一行 */
-.ws-time { display: inline-flex; align-items: center; height: 28px; padding: 0 10px; font-size: 12px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.ws-user-foot .ws-btn { color: var(--muted); }
-@media (hover: hover) { .ws-user-foot .ws-btn:hover { color: var(--ink); } }
-/* 之前各轮的这行（话下面的、回答下面的）也一直显示（评审第 10 条：悬停才出现的，触屏上等于没有，新用户也发现不了），颜色淡一档，悬停加深 */
-.ws-user-foot:not(.pinned) .ws-btn, .ws-ai-foot.quiet .ws-btn { color: var(--faint); }
-/* 排着的话：这一轮答完就发，虚线框、淡一些 */
-/* 改最后一句 */
-.ws-edit { margin: 0 0 22px; border: 1px solid var(--accent-line); border-radius: var(--r-lg); background: var(--paper); padding: 10px 12px 8px; box-shadow: 0 0 0 3px var(--accent-soft); }
-/* 字和输入框、自己说的话一样 16px；最高和输入框一样（见 composer.module.css），再多在框里滚 */
-.ws-edit textarea { width: 100%; border: 0; outline: none; resize: none; font: inherit; font-size: 16px; background: transparent; line-height: 1.6; padding: 0; color: var(--ink);
-  max-height: max(160px, 40vh); max-height: max(160px, 40dvh); }
-.ws-edit-bar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
-.ws-edit-bar .hint { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); }
-/* 自己说的话：字和回答、输入框一样 16px（2026-11-07 Sean 定，原来 14），写的和发出去看到的一样大 */
-.ws-bubble { background: var(--side); border: 1px solid var(--line); border-radius: var(--r-lg) var(--r-lg) 4px var(--r-lg); padding: 9px 14px; font-size: 16px; max-width: 80%; white-space: pre-wrap; overflow-wrap: anywhere; }
-.ws-ai { margin: 0 0 26px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
-/* 一轮一个 section：轮与轮之间一道细线；轮次目录跳过来时顶上留一点空，键盘跳过来的有焦点框 */
-.ws-turn, .ws-reply .md > :is(h3, h4, h5, h6) { scroll-margin-top: 16px; }
-.ws-turn { border-radius: var(--r); }
-.ws-turn + .ws-turn { position: relative; padding-top: 24px; }
-/* 轮与轮之间的线单独画：直接用 border-top 会跟着上面的圆角（给焦点框用的）在两头弯下去 */
-.ws-turn + .ws-turn::before { content: ""; position: absolute; top: 0; left: 0; right: 0; border-top: 1px solid var(--line); }
-.ws-turn:focus { outline: none; }
-.ws-turn:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 8px; }
-/* 回答开头：“灵稿”的标识，和左栏的品牌一样的宋体小方块 */
-.ws-ai-head { display: flex; align-items: center; gap: 8px; font: 600 13px/20px var(--serif); letter-spacing: .04em; color: var(--accent); }
-.ws-ai-mark { width: 20px; height: 20px; flex: none; border-radius: var(--r-sm); background: var(--ink); color: var(--paper); font: 600 12px/20px var(--serif); text-align: center; letter-spacing: 0; }
-.ws-ai-foot { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 0 -10px; } /* 窄屏一行放不下就折行，“重新回答”不被挤出去 */
-.ws-ai-foot .ws-btn { color: var(--muted); }
-@media (hover: hover) { .ws-ai-foot .ws-btn:hover { color: var(--ink); } }
-.ws-ai-model { display: inline-flex; align-items: center; height: 28px; padding-right: 4px; font-size: 12px; color: var(--faint); white-space: nowrap; }
-.ws-time + .ws-ai-model { margin-left: -8px; }
-.ws-ai-model + .ws-ai-model { margin-left: -2px; } /* 和时间后面一样，点前面空 8px（模型名右边只有 4px） */
-.ws-time + .ws-ai-model::before, .ws-ai-model + .ws-ai-model::before { content: "·"; margin-right: 6px; }
-
 /* 折叠的箭头：收起时朝右，展开时朝下 */
 .ws .chev { flex: none; transition: transform .2s var(--ease); transform: rotate(-90deg); }
 .ws .chev.up { transform: none; }
 
-/* 正文：Markdown（排版、代码块、表格各在 markdown.module.css、code-block.module.css、md-table.module.css，照搬 Fusion） */
-.ws-reply { font-size: 16px; line-height: 1.75; color: var(--ink); overflow-wrap: anywhere; }
-.md-nobr { white-space: nowrap; }
-.ws-reply.typing .md > :last-child::after { content: ""; display: inline-block; width: 7px; height: 1.05em; margin-left: 2px; vertical-align: -2px; background: var(--accent); border-radius: 1px; animation: ws-blink 1s steps(2) infinite; }
-@keyframes ws-blink { to { opacity: 0; } }
-
-/* 接着问：和今日灵感同一种胶囊，一行一个（2026-11-07 Sean 定：问题都是整句，横排挤在一起不好读） */
-.ws-suggest { margin: -12px 0 26px; }
-.ws-suggest-label { margin-bottom: 8px; font-size: 12px; color: var(--muted); }
-.ws-suggest-list { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
-.ws-suggest-wait { display: flex; align-items: center; gap: 6px; margin: -12px 0 26px; font-size: 12.5px; color: var(--accent); }
-.ws-suggest-wait span { color: var(--muted); }
-.ws-suggest-item { border: 1px solid var(--line2); background: var(--paper); border-radius: var(--r); padding: 6px 12px; font-size: 13px; color: var(--ink2); text-align: left; transition: border-color .15s, color .15s; }
-@media (hover: hover) { .ws-suggest-item:hover { border-color: var(--accent-line); color: var(--accent); } }
 .ws-error { display: flex; gap: 8px; align-items: flex-start; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-line); border-radius: var(--r); padding: 9px 12px; font-size: 13px; margin: 0 0 16px; }
 .ws-error svg { flex: none; margin-top: 2px; }
 .ws-error span { flex: 1; }
 .ws-error-act { height: 26px; padding: 0 10px; font-size: 12.5px; color: var(--danger); border-color: var(--danger-line); background: var(--paper); flex: none; }
-
-/* 新对话：欢迎语、输入框、例子一起放在中间偏上（上面空的和下面空的按 1 : 1.4 分）；“内容由 AI 生成”放到最底下。标题用宋体 */
-.ws-main.fresh .ws-scroll { display: flex; flex-direction: column; }
-.ws-main.fresh .ws-flow { margin-top: auto; width: 100%; padding-bottom: 12px; }
-.ws-main.fresh .ws-error { margin: 12px 0 0; } /* 新对话发出去被拒（图不收、额度用完）：和上面的说明隔开，紧挨着下面的输入框 */
-.ws-welcome { text-align: center; }
-.ws-welcome h2 { font: 600 28px/1.35 var(--serif); letter-spacing: .02em; margin: 0; text-wrap: balance; }
-.ws-examples { flex: 1.4 1 0; width: 100%; max-width: 756px; margin: 0 auto; padding: 18px 28px 40px; position: relative; }
-.ws-inspire { min-height: 72px; display: flex; flex-wrap: wrap; justify-content: center; align-content: flex-start; gap: 8px; }
-.ws-inspire-ruler { position: absolute; top: 0; left: 0; right: 0; height: 0; overflow: hidden; visibility: hidden; display: flex; } /* 一排放不下的剪掉，不把页面撑宽；量的宽度不受影响 */
-.ws-inspire-ruler .ws-suggest-item { flex: none; height: 32px; padding: 0 12px; line-height: 30px; white-space: nowrap; }
-.ws-inspire .ws-suggest-item, .ws-suggest-list .ws-suggest-item { flex: none; max-width: 100%; min-height: 32px; padding: 4px 12px; line-height: 1.5; text-align: left; }
-.ws-inspire .ws-suggest-item { backface-visibility: hidden; transition-property: opacity, transform, border-color, color; transition-duration: .3s, .3s, .15s, .15s; }
-.ws-inspire.flip .ws-suggest-item { opacity: 0; transform: rotateX(90deg); } /* 换一批：一个接一个翻过去（错开见 Inspirations） */
-
-/* 只给读屏的：看不见，读屏会读（开始回答、答完了、停下了……见 timeline.jsx 的 useAnnounce） */
-.ws-sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 .ws-switch { position: relative; flex: none; width: 40px; height: 24px; border-radius: 999px; background: var(--line2); transition: background .15s var(--ease); }
 .ws-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: var(--paper); transition: transform .15s var(--ease); }
@@ -208,8 +124,6 @@
 /* 窄屏：左栏收窄；再窄（手机）左栏改成抽屉 */
 @media (max-width: 1100px) {
   .ws { grid-template-columns: 220px minmax(0, 1fr); }
-  .ws-flow { --pad: 22px; padding: 24px var(--pad) 28px; }
-  /* 顶栏的左内边距跟着改成 14（在 nav.jsx 的 HeadBar 上），和这里正文的 22 对齐 */
 }
 /* 手机：顶栏是“抽屉钮 + 标题 + 新对话”，对话列表、额度、账号都在左边滑出的抽屉里；输入框贴底，留出底部安全区。
    能点的都至少 44px 见方（看得见的部分不一定这么大，用透明的点按区补） */
@@ -217,38 +131,18 @@
   .ws { grid-template-columns: minmax(0, 1fr); }
   .ws-icon-btn { width: 44px; height: 44px; }
 
-  .ws-flow { --pad: 16px; padding: 20px var(--pad) 24px; }
-  /* 输入框 16px：iOS 上聚焦不自动放大页面（M3）。对话的输入框、改这句话的框不分宽窄都是 16（见 composer.module.css 和上面的 .ws-edit）；
+  /* 输入框 16px：iOS 上聚焦不自动放大页面（M3）。对话的输入框、改这句话的框不分宽窄都是 16（见 composer.module.css 和 timeline.module.css 的 .edit）；
      弹窗里的输入框见各自的 module */
   .ws-rename { font-size: 16px; }
-  /* 第 31 条：剩下不到 44px 的几处。看得见的大小不变，透明点按区补够 */
-  .ws-user-foot .ws-btn, .ws-ai-foot .ws-btn { position: relative; }
-  .ws-user-foot .ws-btn::after, .ws-ai-foot .ws-btn::after { content: ""; position: absolute; inset: -8px 0; } /* 看得见 28 */
-  /* 新对话：欢迎语在中间，今日灵感在输入框上面，输入框贴底，不在中间浮着 */
-  .ws-main.fresh .ws-flow { margin: auto 0; padding-bottom: 24px; }
-  .ws-main.fresh .ws-examples { flex: none; padding: 0 16px 8px; }
-  /* 今日灵感：看得见的 36px，透明点按区上下各补 4px 到 44px（两行之间隔 8px，点按区正好挨着不重叠） */
-  .ws-inspire .ws-suggest-item, .ws-suggest-list .ws-suggest-item { position: relative; }
-  .ws-inspire .ws-suggest-item, .ws-suggest-list .ws-suggest-item { min-height: 36px; }
-  .ws-inspire .ws-suggest-item::after, .ws-suggest-list .ws-suggest-item::after { content: ""; position: absolute; inset: -4px 0; }
-  .ws-inspire { min-height: 80px; }
   .ws-skel-chip { height: 36px; }
 }
 /* 打印、另存 PDF（第 49 条，按 Cmd/Ctrl+P）：只印对话本身——标题、每一轮的问题、回答和卡片；
    左栏、顶栏、输入框、轮次目录、各种按钮、接着问都不印。过程只印收起来那一行；回答下面的来源全部展开，每条印出网址。
    卡片、表格、来源不从中间断开 */
-.ws-print-title { display: none; }
 @media print {
   html, body, #root { height: auto; }
   .ws { display: block; height: auto; padding: 0; }
-  .ws-main, .ws-scroll { display: block; overflow: visible; height: auto; }
-  .ws-flow { max-width: none; padding: 0; }
-  .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-error,
-  .ws-user-foot, .ws-ai-foot, .ws-btn, .ws-icon-btn,
-  .chev { display: none !important; }
-  .ws-print-title { display: block; margin: 0 0 24px; font: 600 20px/1.4 var(--serif); }
-  .ws-user { margin-bottom: 16px; }
-  .ws-reply.typing .md > :last-child::after { display: none; }
+  .ws-error, .ws-btn, .ws-icon-btn, .chev { display: none !important; }
   .ws *, .ws *::before, .ws *::after { animation: none !important; transition: none !important; }
 }
 /* 系统要求减少动效：只留转圈，其他动画和过渡都关掉 */

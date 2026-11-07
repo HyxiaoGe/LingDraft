@@ -99,7 +99,7 @@ export function SearchDialog({ threads, now, href, onOpen, onClose }) {
                       onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onOpen(t.thread_id); }}>
                       <span className={styles.title} title={t.title}><Hit text={t.title || "新对话"} q={q} /></span>
                       {status && <span className={styles.dot + " " + styles[status]} title={status === "active" ? "进行中" : "没有完成"} />}
-                      {status && <span className="ws-sr">{status === "active" ? "，进行中" : "，没有完成"}</span>}
+                      {status && <span className="sr-only">{status === "active" ? "，进行中" : "，没有完成"}</span>}
                       <span className={styles.time} title={s?.full}>{s?.text}</span>
                     </a>
                   );
@@ -108,7 +108,7 @@ export function SearchDialog({ threads, now, href, onOpen, onClose }) {
             </>
           )}
         </div>
-        <div className="ws-sr" role="status">{q && rows ? (rows.length ? `找到 ${rows.length} 段对话` : "没有找到") : ""}</div>
+        <div className="sr-only" role="status">{q && rows ? (rows.length ? `找到 ${rows.length} 段对话` : "没有找到") : ""}</div>
       </div>
     </div>
   );

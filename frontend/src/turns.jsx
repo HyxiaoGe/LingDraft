@@ -30,7 +30,7 @@ function useReading(scroller, count) {
     const measure = () => {
       frame = 0;
       const line = el.getBoundingClientRect().top + Math.min(80, el.clientHeight / 4);
-      const sections = [...el.querySelectorAll(".ws-turn")];
+      const sections = [...el.querySelectorAll("[data-turn]")];
       let turn = 0;
       sections.forEach((s, i) => { if (s.getBoundingClientRect().top <= line) turn = i; });
       if (el.scrollHeight - el.scrollTop - el.clientHeight < 4) turn = sections.length - 1;

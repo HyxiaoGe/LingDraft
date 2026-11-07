@@ -2,6 +2,7 @@
    字号跟着外面走（回答 16px、过程里的话 13px，见 workspace.css），这里的间距用 em 跟着缩放。
    正文的标题比页面标题低三档（markdown.jsx 里 # 写成 h3、## 写成 h4……），字号照 Fusion 的 # / ## / ### / #### */
 .content { overflow-wrap: anywhere; font-variant-numeric: normal; }
+.content [data-nobr] { white-space: nowrap; } /* 引用角标和它前面一个字连在一起，不在中间折行（见 markdown.jsx 的 splitCites） */
 
 .content :where(p) { margin: 0 0 1em; }
 .content :where(h3, h4, h5, h6) { font-weight: 600; line-height: 1.4; text-wrap: pretty; color: var(--ink); }
