@@ -1,0 +1,79 @@
+/* 来源（sources.jsx），2026-11-07 从 workspace.css 迁过来：正文里的引用角标、来源卡（桌面）、手机上的来源弹层、回答下面的来源 */
+
+/* 引用角标：浅靛青小签，抬到字的上半截（用 top 抬，不撑高行距），悬停或打开来源卡时填满。
+   来源卡、回答下面的来源列表上的编号用同一种签（.lb），一眼对得上。不在来源里的 id 是灰的问号（.off） */
+.mark { position: relative; top: -.4em; height: 16px; padding: 0 4px; margin-left: 2px; border: 0; border-radius: 4px; background: var(--accent-soft); color: var(--accent);
+  font: 600 10px/16px var(--sans); letter-spacing: .02em; font-variant-numeric: tabular-nums; user-select: none; transition: background .12s, color .12s; }
+.mark.off { background: var(--hover); color: var(--faint); cursor: help; }
+.mark.on { background: var(--accent); color: var(--paper); }
+@media (hover: hover) { .mark:hover { background: var(--accent); color: var(--paper); } }
+/* 角标画出来只有 16px 高：透明热区扩到桌面 24px、手机 44px（评审第 10 条、M6），不改它的样子。
+   几个角标连在一起时（正文里包在 .md-nobr 里，见 markdown.jsx）横向只扩到和旁边的接上（各 1px，正好是中间那 2px 的一半），不叠到隔壁，点哪个开哪个；竖向照样扩 */
+.mark::after { content: ""; position: absolute; inset: calc(50% - 12px); }
+:global(.md-nobr) > .mark:not(:only-of-type)::after { left: -1px; right: -1px; }
+.lb { display: inline-block; min-width: 22px; height: 18px; padding: 0 5px; border-radius: 4px; text-align: center;
+  background: var(--accent-soft); color: var(--accent); font: 600 10.5px/18px var(--sans); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+/* 来源网站的图标，放在域名前；取不到时是域名首字母 */
+.fav { display: inline-block; width: 12px; height: 12px; margin-right: 5px; border-radius: 2px; vertical-align: -2px; object-fit: contain; }
+.fav.letter { background: var(--hover); color: var(--muted); font: 600 8.5px/12px var(--sans); text-align: center; }
+
+/* 来源卡：编号和徽标（读到全文、只有摘要）、标题、网址和发布日期、开头一段、打开原文。桌面是贴着角标的浮层（.pop），手机放在底部弹层里（.sheet） */
+.pop { position: fixed; z-index: 50; animation: rise .15s var(--ease); background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r-lg);
+  box-shadow: var(--lift); padding: 13px 15px; font-size: 13px; line-height: 1.55; }
+.top { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
+.top .lb { background: var(--accent); color: var(--paper); margin-right: 2px; }
+.close { width: 24px; height: 24px; margin: -4px -8px -4px auto; } /* 和 .ws-icon-btn 一起用 */
+.name { font: 600 14px/1.5 var(--serif); overflow-wrap: anywhere; }
+.site { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.excerpt { font: 12.5px/1.7 var(--serif); color: var(--ink2); border-left: 2px solid var(--line2); padding: 1px 0 1px 10px; margin-top: 9px; max-height: 110px; overflow: hidden; }
+.actions { display: flex; gap: 6px; margin-top: 11px; }
+.badge { font-size: 11px; border-radius: 4px; padding: 0 6px; line-height: 18px; border: 1px solid var(--line2); color: var(--muted); white-space: nowrap; }
+.badge.full { border-color: var(--ok-line); background: var(--ok-soft); color: var(--ok); }
+.badge.summary { border-color: var(--warn-line); background: var(--warn-soft); color: var(--warn); }
+
+/* 手机上点角标弹出的来源（M5）：同一张卡放大一号；能切到这一轮的全部来源，每条一行至少 52px */
+.sheet .name { font-size: 16px; }
+.sheet .site { font-size: 13px; }
+.sheet .excerpt { font-size: 14px; max-height: none; }
+.sheet .actions a { min-height: 44px; padding: 0 16px; font-size: 14px; }
+.all { width: 100%; min-height: 44px; margin-top: 16px; justify-content: center; font-size: 14px; } /* 和 .ws-btn.ghost 一起用 */
+.list { list-style: none; margin: 0; padding: 0; }
+.list button { display: flex; align-items: flex-start; gap: 12px; width: 100%; min-height: 52px; padding: 8px; border: 0; border-radius: var(--r); background: none; text-align: left;
+  font-size: 14px; line-height: 1.5; color: var(--ink); }
+.list button[aria-current="true"] { background: var(--accent-soft); }
+.list .lb, .cited .lb { flex: none; margin-top: 2px; }
+.t { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+.txt { display: flex; flex-direction: column; min-width: 0; }
+.meta { color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+
+/* 回答下面的来源：默认一行（几个网站图标加条数），点开每条：编号、标题（最多两行），下面一行“域名 + 路径的开头”和日期 */
+.citedHead { border: 1px solid var(--line); background: var(--paper); border-radius: 999px; padding: 3px 10px 3px 6px; display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12.5px; color: var(--ink2); font-variant-numeric: tabular-nums; transition: border-color .15s; }
+@media (hover: hover) { .citedHead:hover { border-color: var(--line2); color: var(--ink); } }
+.sites { display: inline-flex; gap: 3px; }
+.citedHead .fav { margin: 0; width: 14px; height: 14px; }
+.citedHead .fav.letter { line-height: 14px; }
+.cited ol { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.cited li { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.6; min-width: 0; }
+.cited a { min-height: 24px; color: var(--ink2); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+@media (hover: hover) { .cited a:hover { color: var(--accent); } }
+.url { display: none; } /* 只在打印时出现：纸上点不了链接，印出网址 */
+
+@keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
+@media (max-width: 720px) {
+  .mark::after { inset: calc(50% - 22px); }
+  /* 看得见 28，透明点按区补到 44 */
+  .citedHead { position: relative; }
+  .citedHead::after { content: ""; position: absolute; inset: -8px 0; }
+  .cited a { padding: 12px 0; }
+}
+
+/* 打印：来源卡不印；回答下面的来源全部展开，每条印出网址，不从中间断开 */
+@media print {
+  .pop { display: none !important; }
+  .cited :global(.ws-fold) { display: block; content-visibility: visible; }
+  .cited a { display: block; -webkit-line-clamp: unset; }
+  .url { display: block; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .cited li { break-inside: avoid; }
+}

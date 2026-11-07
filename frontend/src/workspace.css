@@ -212,7 +212,6 @@
 .md-nobr { white-space: nowrap; }
 .ws-reply.typing .md > :last-child::after { content: ""; display: inline-block; width: 7px; height: 1.05em; margin-left: 2px; vertical-align: -2px; background: var(--accent); border-radius: 1px; animation: ws-blink 1s steps(2) infinite; }
 @keyframes ws-blink { to { opacity: 0; } }
-.ws-mark.off { background: var(--hover); color: var(--faint); cursor: help; }
 
 /* 接着问：和今日灵感同一种胶囊，一行一个（2026-11-07 Sean 定：问题都是整句，横排挤在一起不好读） */
 .ws-suggest { margin: -12px 0 26px; }
@@ -422,64 +421,6 @@
 .ws-switch.on { background: var(--accent); }
 .ws-switch.on::after { transform: translateX(16px); }
 
-
-/* ---------- 来源：正文里的角标、来源卡、回答下面的来源 ---------- */
-/* 引用角标：浅靛青小签，抬到字的上半截（用 top 抬，不撑高行距），悬停或打开来源卡时填满。
-   来源卡、回答下面的来源列表上的编号用同一种签，一眼对得上 */
-.ws-mark { position: relative; top: -.4em; height: 16px; padding: 0 4px; margin-left: 2px; border: 0; border-radius: 4px; background: var(--accent-soft); color: var(--accent);
-  font: 600 10px/16px var(--sans); letter-spacing: .02em; font-variant-numeric: tabular-nums; user-select: none; transition: background .12s, color .12s; }
-.ws-mark.on { background: var(--accent); color: var(--paper); }
-@media (hover: hover) { .ws-mark:hover { background: var(--accent); color: var(--paper); } }
-/* 角标画出来只有 16px 高：透明热区扩到桌面 24px、手机 44px（评审第 10 条、M6），不改它的样子。
-   几个角标连在一起时横向只扩到和旁边的接上（各 1px，正好是中间那 2px 的一半），不叠到隔壁，点哪个开哪个；竖向照样扩 */
-.ws-mark::after { content: ""; position: absolute; inset: calc(50% - 12px); }
-.md-nobr > .ws-mark:not(:only-of-type)::after { left: -1px; right: -1px; }
-.ws-pop-top .lb, .ws-cited .lb, .ws-src-list .lb {
-  display: inline-block; min-width: 22px; height: 18px; padding: 0 5px; border-radius: 4px; text-align: center;
-  background: var(--accent-soft); color: var(--accent); font: 600 10.5px/18px var(--sans); letter-spacing: .02em; font-variant-numeric: tabular-nums; }
-/* 来源网站的图标，放在域名前；取不到时是域名首字母 */
-.ws-fav { display: inline-block; width: 12px; height: 12px; margin-right: 5px; border-radius: 2px; vertical-align: -2px; object-fit: contain; }
-.ws-fav.letter { background: var(--hover); color: var(--muted); font: 600 8.5px/12px var(--sans); text-align: center; }
-
-.ws-pop { position: fixed; z-index: 50; animation: ws-in .15s var(--ease); background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r-lg);
-  box-shadow: var(--lift); padding: 13px 15px; font-size: 13px; line-height: 1.55; }
-.ws-pop-top { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; }
-.ws-pop-top .lb { background: var(--accent); color: var(--paper); margin-right: 2px; }
-.ws-pop-close { width: 24px; height: 24px; margin: -4px -8px -4px auto; }
-.ws-pop-title { font: 600 14px/1.5 var(--serif); overflow-wrap: anywhere; }
-.ws-pop-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
-.ws-pop-excerpt { font: 12.5px/1.7 var(--serif); color: var(--ink2); border-left: 2px solid var(--line2); padding: 1px 0 1px 10px; margin-top: 9px; max-height: 110px; overflow: hidden; }
-.ws-pop-actions { display: flex; gap: 6px; margin-top: 11px; }
-.ws-badge { font-size: 11px; border-radius: 4px; padding: 0 6px; line-height: 18px; border: 1px solid var(--line2); color: var(--muted); white-space: nowrap; }
-.ws-badge.body { border-color: var(--ok-line); background: var(--ok-soft); color: var(--ok); }
-.ws-badge.summary { border-color: var(--warn-line); background: var(--warn-soft); color: var(--warn); }
-
-/* 回答下面的来源：默认一行（几个网站图标加条数），点开每条：编号、标题（最多两行），下面一行“域名 + 路径的开头”和日期 */
-.ws-cited-head { border: 1px solid var(--line); background: var(--paper); border-radius: 999px; padding: 3px 10px 3px 6px; display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12.5px; color: var(--ink2); font-variant-numeric: tabular-nums; transition: border-color .15s; }
-@media (hover: hover) { .ws-cited-head:hover { border-color: var(--line2); color: var(--ink); } }
-.ws-cited-head .sites { display: inline-flex; gap: 3px; }
-.ws-cited-head .ws-fav { margin: 0; width: 14px; height: 14px; }
-.ws-cited-head .ws-fav.letter { line-height: 14px; }
-.ws-cited ol { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.ws-cited li { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.6; min-width: 0; }
-.ws-cited .lb { flex: none; margin-top: 2px; }
-.ws-cited .txt, .ws-src-list .txt { display: flex; flex-direction: column; min-width: 0; }
-.ws-cited a { min-height: 24px; color: var(--ink2) !important; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
-@media (hover: hover) { .ws-cited a:hover { color: var(--accent) !important; } }
-.ws-cited .meta, .ws-src-list .meta { color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
-/* 手机上点角标弹出的来源（M5）：同一张卡放大一号；能切到这一轮的全部来源，每条一行至少 52px */
-.ws-src-sheet .ws-pop-title { font-size: 16px; }
-.ws-src-sheet .ws-pop-meta { font-size: 13px; }
-.ws-src-sheet .ws-pop-excerpt { font-size: 14px; max-height: none; }
-.ws-src-sheet .ws-pop-actions a { min-height: 44px; padding: 0 16px; font-size: 14px; }
-.ws-src-all { width: 100%; min-height: 44px; margin-top: 16px; justify-content: center; font-size: 14px; border: 1px solid var(--line2); }
-.ws-src-list { list-style: none; margin: 0; padding: 0; }
-.ws-src-list button { display: flex; align-items: flex-start; gap: 12px; width: 100%; min-height: 52px; padding: 8px; border: 0; border-radius: var(--r); background: none; text-align: left; font-size: 14px; line-height: 1.5; color: var(--ink); }
-.ws-src-list button[aria-current="true"] { background: var(--accent-soft); }
-.ws-src-list .lb { flex: none; margin-top: 2px; }
-.ws-src-list .t { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
-
 /* 窄屏：左栏收窄；再窄（手机）左栏改成抽屉 */
 @media (max-width: 1100px) {
   .ws { grid-template-columns: 220px minmax(0, 1fr); }
@@ -497,14 +438,13 @@
      弹窗里的输入框见各自的 module */
   .ws-rename { font-size: 16px; }
   /* 第 31 条：剩下不到 44px 的几处。看得见的大小不变，透明点按区补够 */
-  .ws-user-foot .ws-btn, .ws-ai-foot .ws-btn, .ws-cited-head { position: relative; }
-  .ws-user-foot .ws-btn::after, .ws-ai-foot .ws-btn::after, .ws-cited-head::after { content: ""; position: absolute; inset: -8px 0; } /* 看得见 28 */
+  .ws-user-foot .ws-btn, .ws-ai-foot .ws-btn { position: relative; }
+  .ws-user-foot .ws-btn::after, .ws-ai-foot .ws-btn::after { content: ""; position: absolute; inset: -8px 0; } /* 看得见 28 */
   button.ws-proc-head { position: relative; }
   button.ws-proc-head::after { content: ""; position: absolute; inset: -12px 0; } /* 看得见 25 */
   .ws-card-actions .ws-btn { height: 44px; }
   .ws-tool:has(.main a) { line-height: 44px; } /* 读的那页：这一行 44 高，链接上下撑满 */
   .ws-tool .main a { padding: 15px 0; } /* 字高各家不同（Chromium 16、WebKit 15），往大里给；超出这一行的部分被裁掉，点按区就是整行 44 */
-  .ws-cited a { padding: 12px 0; }
   /* 新对话：欢迎语在中间，今日灵感在输入框上面，输入框贴底，不在中间浮着 */
   .ws-main.fresh .ws-flow { margin: auto 0; padding-bottom: 24px; }
   .ws-main.fresh .ws-examples { flex: none; padding: 0 16px 8px; }
@@ -514,7 +454,6 @@
   .ws-inspire .ws-suggest-item::after, .ws-suggest-list .ws-suggest-item::after { content: ""; position: absolute; inset: -4px 0; }
   .ws-inspire { min-height: 80px; }
   .ws-skel-chip { height: 36px; }
-  .ws-mark::after { inset: calc(50% - 22px); }
   /* M8：班次改成竖着的时间轴：出发、用时和班次、到达三行，左边一条线连着；价格、参考价和舱位、去飞猪看在右边 */
   .ws-svc { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "dep fare" "mid fare" "arr fare"; gap: 0 12px; align-items: start; padding: 12px 0; }
   .ws-svc .end { grid-area: dep; flex-direction: row; align-items: baseline; gap: 12px; }
@@ -542,22 +481,19 @@
 /* 打印、另存 PDF（第 49 条，按 Cmd/Ctrl+P）：只印对话本身——标题、每一轮的问题、回答和卡片；
    左栏、顶栏、输入框、轮次目录、各种按钮、接着问都不印。过程只印收起来那一行；回答下面的来源全部展开，每条印出网址。
    卡片、表格、来源不从中间断开 */
-.ws-print-title, .ws-cited .url { display: none; }
+.ws-print-title { display: none; }
 @media print {
   html, body, #root { height: auto; }
   .ws { display: block; height: auto; padding: 0; }
   .ws-main, .ws-scroll { display: block; overflow: visible; height: auto; }
   .ws-flow { max-width: none; padding: 0; }
   .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-live, .ws-error,
-  .ws-user-foot, .ws-ai-foot, .ws-pop, .ws-btn, .ws-icon-btn, .ws-svc-tools, .ws-svc .fare a,
+  .ws-user-foot, .ws-ai-foot, .ws-btn, .ws-icon-btn, .ws-svc-tools, .ws-svc .fare a,
   .chev { display: none !important; }
   .ws-print-title { display: block; margin: 0 0 24px; font: 600 20px/1.4 var(--serif); }
   .ws-user { margin-bottom: 16px; }
   .ws-proc .ws-fold { display: none; }
-  .ws-cited .ws-fold { display: block; content-visibility: visible; }
-  .ws-cited a { display: block; -webkit-line-clamp: unset; }
-  .ws-cited .url { display: block; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-  .ws-card, .ws-cited li, .ws-image { break-inside: avoid; }
+  .ws-card, .ws-image { break-inside: avoid; }
   .ws-image-act { display: none !important; }
   .ws-reply.typing .md > :last-child::after { display: none; }
   .ws *, .ws *::before, .ws *::after { animation: none !important; transition: none !important; }
