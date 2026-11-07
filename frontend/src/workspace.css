@@ -109,7 +109,8 @@
 .ws-brand .name { font: 600 17px/1 var(--serif); letter-spacing: .04em; }
 .ws-brand .tag { font-size: 12px; color: var(--muted); }
 .ws-brand .tag::before { content: ""; display: inline-block; width: 1px; height: 11px; background: var(--line2); margin: 0 8px 0 2px; vertical-align: -1px; }
-.ws-side-toggle { margin: -4px -4px -4px auto; } /* 收起（桌面）、关闭（抽屉）：贴在品牌这行右边，不把这行撑高 */
+.ws-side-search { margin: -4px 0 -4px auto; } /* 搜对话（照豆包放在品牌这行右边）、收起（桌面）、关闭（抽屉）：贴在这行右边，不把这行撑高 */
+.ws-side-toggle { margin: -4px -4px -4px 0; }
 /* 桌面上收起左栏：整栏藏掉，顶栏左边出展开钮（窄屏不管这个，左栏是抽屉） */
 @media (min-width: 721px) {
   .ws.side-off { grid-template-columns: minmax(0, 1fr); }
@@ -148,7 +149,6 @@
 .ws-task.sel .title { font-weight: 500; }
 .ws-task.sel .time { color: var(--muted); } /* 选中底上 faint 只有 4.24:1（第 32 条） */
 .ws-task .sub { display: block; font-size: 12px; color: var(--muted); }
-.ws-task .title mark { background: var(--accent-soft); color: var(--accent); }
 .ws-task .time { font-size: 12px; color: var(--faint); margin-top: 1px; flex: none; font-variant-numeric: tabular-nums; }
 /* “⋯”：悬停、键盘聚焦、选中、菜单开着时出现；没有悬停的设备（触屏）一直在 */
 .ws-task .more { flex: none; width: 26px; height: 26px; margin: 4px 4px 0 0; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted);
@@ -158,19 +158,8 @@
 @media (hover: hover) { .ws-task:hover .more { opacity: 1; } }
 @media (hover: none) { .ws-task .more { opacity: 1; } }
 .ws-side .ws-task.renaming { display: block; padding: 4px; }
-/* 搜索（第 13 条、M1）：只搜标题 */
-/* 边框用内阴影画：输入框能撑满整个框的高度（手机上 44px 的热区就是输入框本身）；点框里的图标、空白处也把光标放进去 */
-.ws-search { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 4px 0 12px; border-radius: var(--r); background: var(--paper);
-  box-shadow: inset 0 0 0 1px var(--line2); color: var(--faint); margin-top: -8px; cursor: text; }
-.ws-search:focus-within { box-shadow: inset 0 0 0 1px var(--accent-line), 0 0 0 3px var(--accent-soft); }
-.ws-search svg { flex: none; }
-.ws-search input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: none; padding: 0; font: inherit; font-size: 13px; color: var(--ink); -webkit-appearance: none; appearance: none; border-radius: 0; }
-.ws-search input::placeholder { color: var(--faint); }
-.ws-search input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 .ws-kbd { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 4px; margin-right: 4px; border: 1px solid var(--line2); border-radius: var(--r-sm);
   font: 12px/1 var(--sans); color: var(--faint); }
-.ws-search-clear { flex: none; width: 26px; height: 26px; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
-@media (hover: hover) { .ws-search-clear:hover { background: var(--hover); color: var(--ink); } }
 /* 改标题的框：右边写着几个字、最多几个 */
 .ws-title-input { position: relative; display: block; min-width: 0; }
 .ws-title-input .ws-rename { padding-right: 48px; }
@@ -887,13 +876,11 @@
   .ws-scrim { position: fixed; inset: 0; z-index: 40; background: var(--scrim); animation: ws-fade .2s var(--ease); }
   .ws-brand { min-height: 44px; }
   .ws-icon-btn { width: 44px; height: 44px; }
-  .ws-side-toggle { margin: 0 -8px 0 auto; }
+  .ws-side-search { margin: 0 0 0 auto; }
+  .ws-side-toggle { margin: 0 -8px 0 0; }
   .ws-new { height: 44px; }
   .ws-side .ws-task-link { padding: 12px 4px 12px 8px; }
   .ws-side .ws-task .more { width: 44px; height: 44px; margin: 0; opacity: 1; } /* 没有悬停：一直在 */
-  .ws-search { height: 44px; margin-top: 0; }
-  .ws-search input { font-size: 16px; }
-  .ws-search-clear { width: 44px; height: 44px; margin-right: -4px; }
   .ws-toast-host { right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); }
   .ws-toast { max-width: none; }
   .ws-toast-act { height: 44px; }
@@ -1046,6 +1033,47 @@
 .mem-edit-bar .ws-count { margin-right: auto; }
 .mem-edit-error { color: var(--danger); font-size: 13px; margin-top: 8px; }
 .mem .ws-error { margin: 16px 0 0; }
+/* ---------- 搜对话的窗口（2026-11-07 Sean 定，照豆包） ---------- */
+/* 和设置窗口一样大：宽 960、高是屏高减上下各 48（最高 880），居中。上面搜索框，下面一行一条对话：标题、（进行中、没跑完的点）、右边时间 */
+.find-overlay { padding: 48px 24px; }
+.find-dialog { display: flex; flex-direction: column; max-width: 960px; height: min(880px, 100vh - 96px); height: min(880px, 100dvh - 96px); max-height: none; padding: 0; overflow: hidden; }
+.find-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 24px 16px 16px 24px; }
+.find-head .ws-dialog-close { position: static; flex: none; }
+/* 边框用内阴影画：输入框撑满整个框的 44 高（手机上的热区就是输入框本身）；点框里的图标、空白处也把光标放进去 */
+.find-box { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 4px 0 12px; border-radius: var(--r);
+  background: var(--paper); box-shadow: inset 0 0 0 1px var(--line2); color: var(--faint); cursor: text; }
+.find-box:focus-within { box-shadow: inset 0 0 0 1px var(--accent-line), 0 0 0 3px var(--accent-soft); }
+.find-box svg { flex: none; }
+.find-box input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: none; padding: 0; font: inherit; font-size: 16px; color: var(--ink); }
+.find-box input::placeholder { color: var(--faint); }
+.find-clear { flex: none; width: 32px; height: 32px; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
+@media (hover: hover) { .find-clear:hover { background: var(--hover); color: var(--ink); } }
+.find-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 24px; }
+.find-label { display: flex; gap: 8px; padding: 8px 8px 4px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.find-label span { color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
+.find-list { display: flex; flex-direction: column; }
+.find-row { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 8px; border-radius: var(--r); color: var(--ink) !important; text-decoration: none !important; }
+@media (hover: hover) { .find-row[aria-selected="true"] { background: var(--hover); } }
+@media (hover: none) { .find-row:active { background: var(--hover); } }
+.find-row .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.find-row mark { background: var(--accent-soft); color: var(--accent); }
+.find-row .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+.find-row .dot.active { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.find-row .dot.failed { background: var(--danger); }
+.find-row .time { flex: none; margin-left: auto; padding-left: 16px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.find-skel { display: flex; flex-direction: column; gap: 24px; padding: 16px 8px; }
+.find-empty { padding: 24px 8px; color: var(--muted); line-height: 1.6; }
+@media (max-width: 720px) {
+  /* 手机上从底部升起，占九成高，一行 48 高 */
+  .find-overlay { align-items: flex-end; padding: 0; }
+  .find-dialog { max-width: none; height: 90vh; height: 90dvh; padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    border-width: 1px 0 0; border-radius: var(--r-lg) var(--r-lg) 0 0; animation: ws-sheet-up .2s var(--ease); }
+  .find-head { padding: 16px 4px 8px 16px; gap: 4px; }
+  .find-clear { width: 44px; height: 44px; margin-right: -4px; }
+  .find-body { padding: 0 8px 24px; }
+  .find-row { min-height: 48px; font-size: 16px; }
+}
+
 /* ---------- 设置窗口（2026-11-07 Sean 定） ---------- */
 /* 照豆包的设置窗口：大的两栏窗口，宽 960、高是屏高减去上下各 48（最高 880），居中，换哪一类大小都不变（11-07 Sean 嫌 800×720 还小）。
    左边是“设置”、谁、几类（一类一项设置）；右边是那一类的标题和一组组的行：组名小字在上，几行在圆角框里（一行 48 高），说明写在框下面 */

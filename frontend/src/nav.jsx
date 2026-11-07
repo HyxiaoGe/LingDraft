@@ -1,7 +1,7 @@
-// 对话页的导航：桌面上左栏能整栏收起（收起后顶栏左边出展开钮和新对话），窄屏（≤720px）左栏改成从左边滑出的抽屉，
+// 对话页的导航：桌面上左栏能整栏收起（收起后顶栏左边出展开钮、搜对话和新对话），窄屏（≤720px）左栏改成从左边滑出的抽屉，
 // 顶栏是“抽屉钮 + 标题 + 新对话”。对话页用这条顶栏，状态由 Workspace 经 NavContext 给。
 import { createContext, useContext, useEffect, useState } from "react";
-import { IconMenu, IconPanel, IconPlus } from "./icons.jsx";
+import { IconMenu, IconPanel, IconPlus, IconSearch } from "./icons.jsx";
 import { TitleInput } from "./menu.jsx";
 
 export const NavContext = createContext(null);
@@ -34,7 +34,7 @@ const MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 export const SIDE_KEY = MAC ? "⌘⇧S" : "Ctrl+Shift+S";
 export const SIDE_ARIA_KEY = MAC ? "Meta+Shift+S" : "Control+Shift+S";
 export const isSideKey = (e) => (MAC ? e.metaKey : e.ctrlKey) && e.shiftKey && !e.altKey && e.code === "KeyS";
-// 搜索对话标题：⌘K / Ctrl+K（左栏收起时先展开，手机上先开抽屉）
+// 搜对话的窗口：⌘K / Ctrl+K（见 search.jsx；左栏收起、手机上抽屉没开也能直接打开）
 export const SEARCH_KEY = MAC ? "⌘K" : "Ctrl+K";
 export const SEARCH_ARIA_KEY = MAC ? "Meta+K" : "Control+K";
 export const isSearchKey = (e) => (MAC ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey && e.code === "KeyK";
@@ -52,6 +52,9 @@ export function HeadBar({ title, end, edit }) {
     <>
       <button className="ws-icon-btn" data-nav="expand" aria-label="展开侧栏" title={`展开侧栏（${SIDE_KEY}）`} aria-keyshortcuts={SIDE_ARIA_KEY} onClick={nav.toggleSide}>
         <IconPanel size={18} />
+      </button>
+      <button className="ws-icon-btn" aria-label="搜索对话" title={`搜索对话（${SEARCH_KEY}）`} aria-keyshortcuts={SEARCH_ARIA_KEY} aria-haspopup="dialog" onClick={nav.search}>
+        <IconSearch size={18} />
       </button>
       <button className="ws-icon-btn" aria-label="新对话" title="新对话" onClick={nav.newChat}><IconPlus size={18} /></button>
     </>

@@ -12,6 +12,7 @@ import { AFTER_RUN_ERROR, errorText, quotaText } from "./errors.js";
 import { useLayer } from "./layers.js";
 import { CreditsFoot, LoginDialog, UserFoot, useAuth } from "./login.jsx";
 import { saveThinkDefault, thinkDefault, useTheme } from "./prefs.js";
+import { SearchDialog } from "./search.jsx";
 import { SettingsDialog } from "./settings.jsx";
 import { ActionMenu, TitleInput } from "./menu.jsx";
 import { MOBILE, NavContext, SEARCH_ARIA_KEY, SEARCH_KEY, SIDE_ARIA_KEY, SIDE_KEY, isSearchKey, isSideKey, useMedia } from "./nav.jsx";
@@ -52,6 +53,7 @@ export default function Workspace() {
   const [loginWant, setLoginWant] = useState(null); // 游客点了“登录后可用”里的哪个模型（登录弹窗说登录后就能用它，第 28 条）
   const [threads, setThreads] = useState(null);
   const [tid, setTid] = useState(routeId);
+  const [search, setSearch] = useState(false); // 搜对话的窗口开着没有（见 search.jsx）
   const [settings, setSettings] = useState(oldPage); // 设置窗口开着时是窗口里的哪一类（见 settings.jsx，"settings" 是刚打开）；关着是 null
   const [theme, setTheme, dark] = useTheme(); // 主题（设置窗口里选，存本机）：跟随系统、浅色、深色
   const [st, setSt] = useState(null);
@@ -620,35 +622,30 @@ export default function Workspace() {
     if (document.activeElement?.closest?.(".ws-side")) navFocus.current = "drawer"; // 焦点在抽屉里：关上以后回到抽屉钮
     setDrawer(false);
   };
-  const nav = { mobile, collapsed: sideOff, drawer, toggleSide, openDrawer: () => setDrawer(true), closeDrawer, newChat: () => select(null) };
+  const openSearch = () => { setDrawer(false); setSearch(true); };
+  const nav = { mobile, collapsed: sideOff, drawer, toggleSide, openDrawer: () => setDrawer(true), closeDrawer, newChat: () => select(null), search: openSearch };
   useEffect(() => {
     const to = navFocus.current;
     navFocus.current = null;
     if (to) document.querySelector(`[data-nav="${to}"]`)?.focus();
   }, [sideOff, drawer]);
   useEffect(() => { if (!mobile) setDrawer(false); }, [mobile]); // 窗口拉宽了：抽屉不再是抽屉
-  // 快捷键：桌面上收起、展开左栏，窄屏开、关抽屉；⌘K 到左栏的搜索框（收起着先展开，窄屏先开抽屉）。别的弹窗开着时 ⌘K 不动
+  // 快捷键：桌面上收起、展开左栏，窄屏开、关抽屉；⌘K 打开搜对话的窗口（开着就把框里的字选上）。别的弹窗开着时 ⌘K 不动
   const sideKey = useRef(null);
   sideKey.current = () => (mobile ? (drawer ? closeDrawer() : setDrawer(true)) : toggleSide());
   const searchKey = useRef(null);
-  searchKey.current = () => {
-    if (mobile && !drawer) {
-      navFocus.current = "search";
-      setDrawer(true);
-    } else if (!mobile && sideOff) {
-      navFocus.current = "search";
-      saveSideOff(false);
-      setSideOff(false);
-    } else {
-      const box = document.querySelector('[data-nav="search"]');
-      box?.focus();
-      box?.select();
-    }
-  };
+  searchKey.current = openSearch;
   useEffect(() => {
     const key = (e) => {
       if (e.repeat) return;
       if (isSearchKey(e)) {
+        const open = document.querySelector(".find-box input");
+        if (open) {
+          e.preventDefault();
+          open.focus();
+          open.select();
+          return;
+        }
         if (document.querySelector('[aria-modal="true"]:not(#ws-side)')) return;
         e.preventDefault();
         searchKey.current();
@@ -674,10 +671,14 @@ export default function Workspace() {
       <div className={"ws" + (sideOff ? " side-off" : "") + (mobile && drawer ? " drawer" : "")} data-theme={dark ? "dark" : "light"}>
         {mobile && drawer && <div className="ws-scrim" onClick={closeDrawer} aria-hidden="true" />}
         <Sidebar threads={shownThreads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={fromSide(select)} manage={manage}
-          onSettings={fromSide(() => setSettings("settings"))} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
+          onSettings={fromSide(() => setSettings("settings"))} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
         <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
           models={models} credits={credits} manage={manage}
           picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />
+        {search && (
+          <SearchDialog threads={shownThreads && withCurrent(shownThreads, tid, st, live, busy)} now={now} href={chatPath}
+            onOpen={(id) => { setSearch(false); select(id); }} onClose={() => setSearch(false)} />
+        )}
         {settings && (
           <SettingsDialog view={settings} onView={setSettings} onClose={() => setSettings(null)} mobile={mobile} auth={auth}
             onLogin={onLogin && (() => { setSettings(null); onLogin(); })}
@@ -726,21 +727,24 @@ function rowSub(t, now) {
   return "";
 }
 
-// 搜到的那几个字标出来（只搜标题，不分大小写）
-function Hit({ text, q }) {
-  const i = q ? text.toLowerCase().indexOf(q) : -1;
-  if (i < 0) return text;
-  return <>{text.slice(0, i)}<mark>{text.slice(i, i + q.length)}</mark>{text.slice(i + q.length)}</>;
+// 列表每隔几秒取一次；当前这个线程以页面手上的状态为准，刚新建、列表里还没有的先补一行（左栏和搜对话的窗口都用）
+function withCurrent(threads, current, st, live, busy) {
+  if (!current) return threads;
+  const mine = threads.find((t) => t.thread_id === current);
+  const title = live?.title || st?.title;
+  const patch = { ...(busy ? { status: "running", running_since: st?.running_since || mine?.running_since } : st ? { status: st.status } : {}),
+    ...(title ? { title } : {}) };
+  return mine ? threads.map((t) => (t.thread_id === current ? { ...t, ...patch } : t))
+    : [{ thread_id: current, title: live?.said || "新对话", status: "running", ...patch }, ...threads];
 }
 
 // 窄屏时这一栏是抽屉（nav.drawer 开着）：打开时焦点进来，Tab 在里面转，Esc、点外面、右上角的关闭都能关上。
-// 抽屉里的菜单、改名框开着、搜索框里有字时，Esc 先归它们
+// 抽屉里的菜单、改名框开着时，Esc 先归它们
 const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
-function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, onSettings, auth, onLogin, credits, onCredits, nav }) {
+function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, onSettings, onSearch, auth, onLogin, credits, onCredits, nav }) {
   const [menu, setMenu] = useState(null); // 打开菜单的那一行：{id, anchor: 那一行的“⋯”}
   const [renaming, setRenaming] = useState(null); // 正在改名的线程 id
-  const [query, setQuery] = useState(""); // 搜索框里的字
   const box = useRef(null);
   const modal = nav.mobile && nav.drawer;
   useEffect(() => { if (modal) box.current?.querySelector('[data-nav="close"]')?.focus(); }, [modal]);
@@ -755,21 +759,10 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, onSe
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     }
   };
-  // 列表每隔几秒取一次；当前这个线程以页面手上的状态为准，刚新建、列表里还没有的先补一行
-  let rows = threads || [];
-  if (current) {
-    const mine = rows.find((t) => t.thread_id === current);
-    const title = live?.title || st?.title;
-    const patch = { ...(busy ? { status: "running", running_since: st?.running_since || mine?.running_since } : st ? { status: st.status } : {}),
-      ...(title ? { title } : {}) };
-    rows = mine ? rows.map((t) => (t.thread_id === current ? { ...t, ...patch } : t))
-      : [{ thread_id: current, title: live?.said || "新对话", status: "running", ...patch }, ...rows];
-  }
+  const rows = withCurrent(threads || [], current, st, live, busy);
   // 标题一样的几条（比如两个“广州今日天气”）：下面多一行日期和钟点，好分清
   const seen = {};
   for (const t of rows) seen[t.title] = (seen[t.title] || 0) + 1;
-  const q = query.trim().toLowerCase();
-  const hits = q ? rows.filter((t) => (t.title || "").toLowerCase().includes(q)).sort(newest(now)) : null;
   const groups = GROUPS.map(([key, name]) => {
     const items = rows.filter((t) => groupOf(t, now) === key);
     items.sort(key === "pinned" ? (a, b) => Date.parse(b.pinned_at) - Date.parse(a.pinned_at) : newest(now));
@@ -809,7 +802,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, onSe
           onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onSelect(t.thread_id); }}>
           <span className={"dot " + status} />
           <span className="body">
-            <span className="title" title={t.title}><Hit text={t.title} q={q} /></span>
+            <span className="title" title={t.title}>{t.title}</span>
             {sub && <span className="sub">{sub}</span>}
           </span>
           <span className="time">{when(t.updated_at, now, group)}</span>
@@ -829,6 +822,8 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, onSe
         <span className="logo">灵</span>
         <span className="name">灵稿</span>
         <span className="tag">对话</span>
+        <button className="ws-icon-btn ws-side-search" aria-label="搜索对话" title={nav.mobile ? undefined : `搜索对话（${SEARCH_KEY}）`} aria-keyshortcuts={SEARCH_ARIA_KEY}
+          aria-haspopup="dialog" onClick={onSearch}><IconSearch size={18} /></button>
         {nav.mobile
           ? <button className="ws-icon-btn ws-side-toggle" data-nav="close" aria-label="关闭对话列表" onClick={nav.closeDrawer}><IconClose size={18} /></button>
           : <button className="ws-icon-btn ws-side-toggle" data-nav="collapse" aria-label="收起侧栏" title={`收起侧栏（${SIDE_KEY}）`} aria-keyshortcuts={SIDE_ARIA_KEY}
@@ -839,53 +834,20 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, onSe
           <IconPlus size={15} /> 新对话
         </button>
       </div>
-      {/* 搜索（第 13 条、M1）：边打边筛，只搜标题；Esc 清空，↓ 到第一条，回车打开第一条 */}
-      <div className="ws-search" role="search"
-        onMouseDown={(e) => { if (!e.target.closest("input, button")) { e.preventDefault(); e.currentTarget.querySelector("input").focus(); } }}>
-        <IconSearch size={15} />
-        <input type="search" data-nav="search" data-esc={query ? "" : undefined} value={query} placeholder="搜索对话标题" aria-label="搜索对话标题" aria-keyshortcuts={SEARCH_ARIA_KEY}
-          enterKeyHint="search" autoComplete="off" onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.nativeEvent.isComposing) return;
-            if (e.key === "Escape" && query) {
-              e.preventDefault();
-              e.stopPropagation();
-              setQuery("");
-            } else if (e.key === "ArrowDown") {
-              const a = box.current.querySelector(".ws-groups .ws-task-link");
-              if (a) { e.preventDefault(); a.focus(); }
-            } else if (e.key === "Enter" && hits?.length) {
-              e.preventDefault();
-              onSelect(hits[0].thread_id);
-            }
-          }} />
-        {query ? (
-          <button className="ws-search-clear" aria-label="清空搜索" onClick={(e) => { setQuery(""); e.currentTarget.parentElement.querySelector("input").focus(); }}>
-            <IconClose size={14} />
-          </button>
-        ) : !nav.mobile && <kbd className="ws-kbd" aria-hidden="true">{SEARCH_KEY}</kbd>}
-      </div>
       <nav className="ws-groups" aria-label="对话列表">
         {threads === null && (
           <div className="ws-side-skel" role="status" aria-label="正在取对话列表">
             {[78, 62, 70, 54, 66].map((w) => <span key={w} className="ws-skel ws-skel-row" style={{ width: `${w}%` }} />)}
           </div>
         )}
-        {threads !== null && !hits && rows.length === 0 && <div className="ws-side-empty">还没有对话</div>}
-        {hits ? (hits.length ? (
-          <div className="ws-group" role="group" aria-label="搜索结果">
-            <div className="ws-group-name">标题里有“{query.trim()}”<span>{hits.length}</span></div>
-            {hits.map((t) => row(t))}
+        {threads !== null && rows.length === 0 && <div className="ws-side-empty">还没有对话</div>}
+        {groups.map(([key, name, items]) => (
+          <div className="ws-group" key={key} role="group" aria-label={name}>
+            <div className="ws-group-name" aria-hidden="true">{name}<span>{items.length}</span></div>
+            {items.map((t) => row(t, key))}
           </div>
-        ) : threads !== null && <div className="ws-side-empty">没有标题里有“{query.trim()}”的对话。只搜标题，不搜对话内容。</div>)
-          : groups.map(([key, name, items]) => (
-            <div className="ws-group" key={key} role="group" aria-label={name}>
-              <div className="ws-group-name" aria-hidden="true">{name}<span>{items.length}</span></div>
-              {items.map((t) => row(t, key))}
-            </div>
-          ))}
+        ))}
       </nav>
-      <div className="ws-sr" role="status">{hits ? (hits.length ? `找到 ${hits.length} 段对话` : "没有找到") : ""}</div>
       <div className="ws-foot">
         <CreditsFoot credits={credits} guest={!auth.me} onLogin={auth.login ? onLogin : null} onOpen={onCredits} mobile={nav.mobile} />
         <span className="ws-foot-user"><UserFoot auth={auth} onLogin={onLogin} onSettings={onSettings} mobile={nav.mobile} /></span>

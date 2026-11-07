@@ -103,7 +103,8 @@ export function stamp(iso, now = Date.now()) {
 // 写在一句话里的：今天的也说出“今天”（“今天 03:00 整理过”），别的同 text
 export const sayWhen = (s) => (s.day ? s.text : `今天 ${s.hm}`);
 
-// 左栏对话的时间：“今天”“昨天”两组里只写钟点（组名已经说了是哪天）；别的组和搜索结果只写哪天（今天、昨天、11月5日），一列里不混钟点和日期
+// 左栏对话的时间：“今天”“昨天”两组里只写钟点（组名已经说了是哪天）；别的组只写哪天（今天、昨天、11月5日），一列里不混钟点和日期。
+// 搜对话的窗口里不分组，照豆包写 stamp 的 text（14:32、昨天 20:53、11月5日 17:01）
 export function when(iso, now = Date.now(), group) {
   const s = stamp(iso, now);
   return !s ? "" : group === "today" || group === "yesterday" ? s.hm : s.day || "今天";
