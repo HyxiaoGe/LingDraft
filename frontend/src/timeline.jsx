@@ -18,7 +18,7 @@ import { Markdown } from "./markdown.jsx";
 import { ActionMenu } from "./menu.jsx";
 import { HeadBar, NavContext, touch } from "./nav.jsx";
 import proc from "./process.module.css";
-import { ACTIVE, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping } from "./research.js";
+import { ACTIVE, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
 import task from "./task.module.css";
 import styles from "./timeline.module.css";
@@ -809,27 +809,84 @@ function Item({ it, st, nums, running, lastItem }) {
   return <Reply it={it} cite={(sid) => <Mark n={nums[sid]} s={st?.sources?.[sid]} nums={nums} sources={st?.sources} />} caret={running && lastItem} />;
 }
 
-// 正文：收到多少显示多少（后端约每 80ms 来一批），不再人为地一个个字往外放；正在写的时候末尾有光标
+// ---------------- 逐字出现（打字机） ----------------
+// 后端约每 80ms 发来一批字，直接显示是一跳一跳的。这里按帧把收到的字匀着放出来：每秒放“还没显示的字数 / LAG_S”这么多、最少 MIN_CPS 个，
+// 收得快就放得快，只比收到的晚零点几秒。这一段已经收完（这一轮答完、停了）就换成短得多的 DONE_LAG_S，剩下的一下子放完，不在答完以后还慢慢吐。
+// 显示到第几个字按条目记在 typed 里：条目在过程和正文之间挪动、重新挂载时接着往下显示，不从头再来。
+// 打开时就已经有一大段的（存下来的对话、中途打开正在跑的对话）整段显示，不从头打一遍；系统设了减少动效的收到就显示。
+// md：是 Markdown（正文、中途说的话）。看不见的符号、引用、链接网址整块跳过（见 typingUnit）；每次显示都要把整段重新解析一遍
+// （几千字要好几毫秒），长了就隔几帧才显示一次，最慢一秒 15 次
+const LAG_S = 0.2;
+const DONE_LAG_S = 0.06;
+const MIN_CPS = 30;
+const typed = new Map();
+const STILL = matchMedia("(prefers-reduced-motion: reduce)");
+
+function useTyped(key, text, live, md) {
+  const pos = useRef(null);
+  pos.current ??= !live || STILL.matches ? text.length : typed.has(key) ? Math.min(typed.get(key), text.length) : text.length < 200 ? 0 : text.length;
+  const [, setShown] = useState(0);
+  useEffect(() => {
+    if (STILL.matches) pos.current = text.length;
+    if (pos.current >= text.length) {
+      if (!live) typed.delete(key);
+      return undefined;
+    }
+    const lag = live ? LAG_S : DONE_LAG_S;
+    const gap = md ? Math.min(66, Math.max(0, (text.length - 1500) / 60)) : 0;
+    let raf = 0;
+    let last = performance.now();
+    let drawn = last;
+    const frame = (t) => {
+      const left = text.length - pos.current;
+      pos.current = Math.min(text.length, pos.current + (Math.max(MIN_CPS, left / lag) * Math.max(0, t - last)) / 1000);
+      if (md) pos.current = Math.max(pos.current, typingUnit(text, Math.floor(pos.current)));
+      last = t;
+      const end = pos.current >= text.length;
+      typed.set(key, pos.current);
+      if (end || t - drawn >= gap) {
+        drawn = t;
+        setShown(Math.floor(pos.current)); // 整数没变就不重新渲染
+      }
+      if (!end) raf = requestAnimationFrame(frame);
+      else if (!live) typed.delete(key);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [key, text, live, md]);
+  let n = Math.floor(pos.current);
+  if (n >= text.length) return text;
+  if (/[\uD800-\uDBFF]/.test(text[n - 1] || "")) n++; // 不把占两个码元的字（emoji 之类）切成两半
+  return text.slice(0, n);
+}
+
+// 正文：逐字出现，正在写（或者还没放完）的时候末尾有光标，写完才能下载代码
 function Reply({ it, cite, caret }) {
+  const [text, typing] = useMd(it);
+  const on = caret || typing;
   return (
-    <div className={styles.reply + (caret ? " " + styles.typing : "")}>
-      <Markdown text={mdText(it)} cite={cite} download ready={!caret} />
+    <div className={styles.reply + (on ? " " + styles.typing : "")}>
+      <Markdown text={text} cite={cite} download ready={!on} />
     </div>
   );
 }
 
-// 过程里中途说的话（之后又去搜了、读了），一样收到就显示
+// 过程里中途说的话（之后又去搜了、读了），一样逐字出现
 function ProcText({ it, cite }) {
-  return <div className={proc.text}><Markdown text={mdText(it)} cite={cite} /></div>;
+  return <div className={proc.text}><Markdown text={useMd(it)[0]} cite={cite} /></div>;
 }
 
-// 还在写的，最后一行半截的 Markdown 先收拾一下（见 tidyTyping）；写完的只去掉末尾半个引用
-const mdText = (it) => (it.live ? tidyTyping(it.text) : cutPartialCite(it.text));
+// 显示到的那段 Markdown 和还在不在往外放。还在写、还没放完的，最后一行半截的 Markdown 先收拾一下（见 tidyTyping）；写完的只去掉末尾半个引用
+function useMd(it) {
+  const shown = useTyped(`text:${it.id}`, it.text, it.live, true);
+  const typing = shown.length < it.text.length;
+  return [it.live || typing ? tidyTyping(shown) : cutPartialCite(shown), typing];
+}
 
-// 思考：收到就显示。这一轮在跑时展开，想完的那段不收（跑着的时候收起来页面会往回缩、跳一下）；这一轮跑完就收成一行（过程不收）：
+// 思考：逐字出现。这一轮在跑时展开，想完的那段不收（跑着的时候收起来页面会往回缩、跳一下）；这一轮跑完就收成一行（过程不收）：
 // 思考往往很长，开着把回答推远。重新打开的对话里也收着，点开看原文
 function Thinking({ it, running, thinking }) {
-  const text = it.text;
+  const text = useTyped(`thinking:${it.id}`, it.text, it.live, false);
   const [shown, toggle, found] = useFoldOpen(`thinking:${it.id}`, running, false);
   const box = useRef(null);
   useLayoutEffect(() => { // 正在想的时候框里跟着最新的字
