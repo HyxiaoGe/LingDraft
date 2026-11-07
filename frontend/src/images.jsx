@@ -100,7 +100,7 @@ export function ImageCards({ steps, tid, running, onRegenerate, title, base = 0 
   if (!steps.length) return null;
   let n = base;
   return (
-    <div className="ws-images">
+    <div className={styles.images}>
       {/* 画成了却带着说明的：以前的图已经不在了（见 history.IMAGE_GONE），照没画成的样子说一声 */}
       {steps.map((s) => (drawn(s)
         ? <ImageCard key={s.id} img={s.image} src={imageUrl(tid, s.image)} name={imageFileName(title, ++n, s.image.mime_type)}
@@ -118,13 +118,13 @@ function PendingCard({ s, running: turnRunning }) {
   const [w, h] = ratioOf(s.aspect_ratio);
   const f = frame(w, h);
   return (
-    <figure className="ws-image" style={{ width: f.width }}>
-      <div className={"ws-image-frame" + (running ? " busy" : "")} style={f}>
+    <figure className={styles.image} style={{ width: f.width }}>
+      <div className={styles.frame + (running ? " " + styles.busy : "")} style={f}>
         {running ? (
-          <div className="ws-image-wait" role="status">
-            <Spinner size={13} /><span>正在生成图片</span><span className="secs" aria-hidden="true">· {secs} 秒</span>
+          <div className={styles.wait} role="status">
+            <Spinner size={13} /><span>正在生成图片</span><span className={styles.secs} aria-hidden="true">· {secs} 秒</span>
           </div>
-        ) : <span className="ws-image-note">{s.pending ? "没有画完" : s.message || "图片生成失败"}</span>}
+        ) : <span className={styles.note}>{s.pending ? "没有画完" : s.message || "图片生成失败"}</span>}
       </div>
     </figure>
   );
@@ -145,33 +145,33 @@ function ImageCard({ img, src, name, onOpen, onRegenerate }) {
     setState("loaded");
   }, []);
   return (
-    <figure className="ws-image" style={{ width: f.width }}>
-      <div className={"ws-image-frame" + (state === "loading" ? " busy" : "")} style={f}>
+    <figure className={styles.image} style={{ width: f.width }}>
+      <div className={styles.frame + (state === "loading" ? " " + styles.busy : "")} style={f}>
         {state === "failed" ? (
-          <div className="ws-image-failed">
+          <div className={styles.failed}>
             <span>图片加载失败</span>
             <button className="ws-btn sm" onClick={() => { setState("loading"); setAttempt((n) => n + 1); }}><IconLoop size={13} />重试</button>
           </div>
         ) : (
-          <button className="ws-image-open" aria-label="看大图" onClick={(e) => onOpen(e.currentTarget)}>
+          <button className={styles.open} aria-label="看大图" onClick={(e) => onOpen(e.currentTarget)}>
             <img ref={imgRef} key={attempt} src={attempt ? `${src}?retry=${attempt}` : src} alt={imageAlt(img.prompt)} data-loaded={state === "loaded"}
               data-instant={instant || undefined} onLoad={() => setState("loaded")} onError={() => setState("failed")} />
           </button>
         )}
       </div>
-      <figcaption className="ws-image-cap">
-        <div className="row">
-          <span className="by">{model ? `本次生图由 ${model} 提供` : ""}</span>
-          <button className="ws-image-act text" onClick={() => editThis(src, name)}><IconEdit size={14} />改这张</button>
-          <button className="ws-image-act text" aria-expanded={promptOpen} onClick={() => setPromptOpen(!promptOpen)}>{promptOpen ? "收起描述" : "查看描述"}</button>
-          <a className="ws-image-act" href={src} download={name} aria-label="下载" title="下载">
+      <figcaption className={styles.cap}>
+        <div className={styles.row}>
+          <span className={styles.by}>{model ? `本次生图由 ${model} 提供` : ""}</span>
+          <button className={styles.act + " " + styles.text} onClick={() => editThis(src, name)}><IconEdit size={14} />改这张</button>
+          <button className={styles.act + " " + styles.text} aria-expanded={promptOpen} onClick={() => setPromptOpen(!promptOpen)}>{promptOpen ? "收起描述" : "查看描述"}</button>
+          <a className={styles.act} href={src} download={name} aria-label="下载" title="下载">
             <IconDownload size={14} />
           </a>
           {onRegenerate && (
-            <button className="ws-image-act" aria-label="重新生成" title="重新生成" onClick={() => onRegenerate(REGENERATE_REQUEST)}><IconLoop size={14} /></button>
+            <button className={styles.act} aria-label="重新生成" title="重新生成" onClick={() => onRegenerate(REGENERATE_REQUEST)}><IconLoop size={14} /></button>
           )}
         </div>
-        {promptOpen && <p className="ws-image-prompt">{img.prompt}</p>}
+        {promptOpen && <p className={styles.prompt}>{img.prompt}</p>}
       </figcaption>
     </figure>
   );

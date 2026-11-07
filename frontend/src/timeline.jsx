@@ -7,6 +7,7 @@
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
+import shell from "./card.module.css";
 import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelTools, Pending, enterSends, focusInput, useAutoHeight, useImageDrop } from "./composer.jsx";
 import { failureText } from "./errors.js";
 import { IconBook, IconCheck, IconChevron, IconCloudSun, IconCopy, IconDownload, IconEdit, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, Spinner } from "./icons.jsx";
@@ -18,6 +19,7 @@ import { ActionMenu } from "./menu.jsx";
 import { HeadBar, NavContext, touch } from "./nav.jsx";
 import { ACTIVE, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping } from "./research.js";
 import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
+import task from "./task.module.css";
 import { TurnIndex, TurnIndexButton, turnEntries } from "./turns.jsx";
 import { WeatherCard, forecastsOf } from "./weather.jsx";
 
@@ -719,16 +721,16 @@ function TaskCard({ s, st, nums, running }) {
   const did = [done("search") && `搜了 ${done("search")} 次`, done("read") && `读了 ${done("read")} 页`].filter(Boolean).join("、");
   const status = live ? taskActivity(s) : s.pending ? "没有完成" : !s.ok ? s.message || "没做成" : did || "已完成";
   return (
-    <div className={"ws-task" + (live ? " live" : !s.pending && !s.ok ? " bad" : "")}>
-      <button className="ws-task-head" aria-expanded={open} onClick={toggle}>
+    <div className={task.task + (live ? " " + task.live : !s.pending && !s.ok ? " " + task.bad : "")}>
+      <button className={task.head} aria-expanded={open} onClick={toggle}>
         {live ? <Spinner size={12} /> : <IconFork size={12} />}
-        <span className="main" title={s.text}>{s.text || "子任务"}</span>
-        <span className="sub" title={status}>{status}</span>
+        <span className={task.main} title={s.text}>{s.text || "子任务"}</span>
+        <span className={task.sub} title={status}>{status}</span>
         <IconChevron size={13} className={"chev" + (open ? " up" : "")} />
       </button>
       <Fold open={open} onFound={found}>
-        <div className="ws-task-body">
-          {s.prompt && <div className="ws-task-prompt">{s.prompt}</div>}
+        <div className={task.body}>
+          {s.prompt && <div className={task.prompt}>{s.prompt}</div>}
           <ProcItems items={sub} st={st} nums={nums} running={live} hideUnknown={live} />
         </div>
       </Fold>
@@ -767,9 +769,9 @@ const BLOCKED_TEXT = {
 function Item({ it, st, nums, running, lastItem }) {
   if (it.type === "blocked") {
     return (
-      <div className="ws-card warn">
-        <div className="ws-card-title"><IconWarn size={15} />内容审核没通过</div>
-        <div className="ws-card-sub">{BLOCKED_TEXT[it.reason] || BLOCKED_TEXT.input}这一轮不会带进之后的对话。</div>
+      <div className={shell.card + " " + shell.warn}>
+        <div className={shell.title}><IconWarn size={15} />内容审核没通过</div>
+        <div className={shell.sub}>{BLOCKED_TEXT[it.reason] || BLOCKED_TEXT.input}这一轮不会带进之后的对话。</div>
       </div>
     );
   }
@@ -946,10 +948,10 @@ function Suggestions({ items, onPick }) {
 // 这一轮中途停下了：原因和能做什么按后端给的类别说（见 errors.js 的 failureText）
 function Failed({ st, act }) {
   return (
-    <div className="ws-card warn">
-      <div className="ws-card-title"><IconWarn size={15} />这一轮中途停下了</div>
-      <div className="ws-card-sub">{failureText(st)}</div>
-      <div className="ws-card-actions"><button className="ws-btn primary" onClick={act.retry}><IconRetry size={14} />重试</button></div>
+    <div className={shell.card + " " + shell.warn}>
+      <div className={shell.title}><IconWarn size={15} />这一轮中途停下了</div>
+      <div className={shell.sub}>{failureText(st)}</div>
+      <div className={shell.actions}><button className="ws-btn primary" onClick={act.retry}><IconRetry size={14} />重试</button></div>
     </div>
   );
 }

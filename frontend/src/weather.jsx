@@ -3,7 +3,9 @@
 // 气温折线和降水概率柱子分上下两条，共用时间轴，不叠在一张图上（单位不同，不用两套纵轴）
 import { useLayoutEffect, useRef, useState } from "react";
 import { IconCloud, IconCloudSun, IconFog, IconRain, IconSnow, IconSun, IconThunder } from "./icons.jsx";
+import shell from "./card.module.css";
 import { stamp } from "./research.js";
+import styles from "./weather.module.css";
 
 // 这一轮查到的天气，一个地方的一天一张（没指定哪天的算一张）：同样的查了几次，位置按第一次、内容用最后一次
 export function forecastsOf(items) {
@@ -41,15 +43,15 @@ export function WeatherCard({ fc }) {
   // 问了某一天、预报里有：只有这一天，排成一行，是哪天写在标题上
   const one = fc.days.length === 1 && fc.days[0].date === fc.requested_date;
   return (
-    <section className="ws-card ws-weather" aria-label={`${fc.location}的天气预报`}>
-      <div className="ws-weather-head">
+    <section className={shell.card + " " + shell.weather} aria-label={`${fc.location}的天气预报`}>
+      <div className={styles.head}>
         <IconCloudSun size={15} />
-        <span className="place">{parts.at(-1)}</span>
-        {parts.length > 1 && <span className="adm">{parts.slice(0, -1).join("·")}</span>}
-        {one && <span className="on">{dayName(fc.requested_date, fc.today)} {monthDay(fc.requested_date)}</span>}
-        <span className="by" title={at?.full}>和风天气{at && ` · ${at.text} 更新`}</span>
+        <span className={styles.place}>{parts.at(-1)}</span>
+        {parts.length > 1 && <span className={styles.adm}>{parts.slice(0, -1).join("·")}</span>}
+        {one && <span className={styles.date}>{dayName(fc.requested_date, fc.today)} {monthDay(fc.requested_date)}</span>}
+        <span className={styles.by} title={at?.full}>和风天气{at && ` · ${at.text} 更新`}</span>
       </div>
-      <div className={"ws-weather-days" + (one ? " one" : "")} style={{ "--n": fc.days.length }}>
+      <div className={styles.days + (one ? " " + styles.one : "")} style={{ "--n": fc.days.length }}>
         {fc.days.map((d) => <Day key={d.date} d={d} today={fc.today} />)}
       </div>
       {fc.hourly.length > 1 && <Hourly hours={fc.hourly} today={fc.today} />}
@@ -61,12 +63,12 @@ function Day({ d, today }) {
   const Icon = skyIcon(d.day);
   const sky = !d.night || d.night === d.day ? d.day : `${d.day}转${d.night}`;
   return (
-    <div className={"ws-weather-day" + (d.date === today ? " today" : "")}>
-      <div className="when"><b>{dayName(d.date, today)}</b><span>{monthDay(d.date)}</span></div>
+    <div className={styles.day + (d.date === today ? " " + styles.today : "")}>
+      <div className={styles.when}><b>{dayName(d.date, today)}</b><span>{monthDay(d.date)}</span></div>
       <Icon size={22} stroke={1.6} />
-      <div className="sky" title={`白天${d.day}，夜间${d.night}`}>{sky}</div>
-      <div className="temp"><b>{deg(d.high)}</b><span>{deg(d.low)}</span></div>
-      {d.wind && <div className="wind">{d.wind}</div>}
+      <div className={styles.sky} title={`白天${d.day}，夜间${d.night}`}>{sky}</div>
+      <div className={styles.temp}><b>{deg(d.high)}</b><span>{deg(d.low)}</span></div>
+      {d.wind && <div className={styles.wind}>{d.wind}</div>}
     </div>
   );
 }
@@ -151,45 +153,45 @@ function Hourly({ hours, today }) {
   const reading = h && `${hourName(h, today)} ${h.text}，${deg(h.temp)}` + (h.pop != null ? `，降水概率 ${h.pop}%` : "") + (h.precip > 0 ? `，${h.precip} 毫米` : "");
 
   return (
-    <div className="ws-hourly">
-      <div className="ws-hourly-head">
-        <span className="title">{span}</span>
+    <div className={styles.hourly}>
+      <div className={styles.hourlyHead}>
+        <span className={styles.title}>{span}</span>
         {h ? (
-          <span className="read">
+          <span className={styles.read}>
             <b>{hourName(h, today)}</b> {h.text} · {deg(h.temp)}
             {h.pop != null && ` · 降水概率 ${h.pop}%`}{h.precip > 0 && ` · ${h.precip} 毫米`}
           </span>
         ) : (
-          <span className="key"><i />气温{hasPop && <><i className="rain" />降水概率</>}</span>
+          <span className={styles.key}><i />气温{hasPop && <><i className={styles.rain} />降水概率</>}</span>
         )}
       </div>
       <div ref={box}>
         {w > 0 && (
           <svg width={w} height={HEIGHT} tabIndex={0} role="slider" aria-label={`${summary}。左右方向键逐小时看`} aria-valuemin={0} aria-valuemax={last} aria-valuenow={at ?? 0}
             aria-valuetext={reading || summary} {...pointer} onKeyDown={keys} onFocus={(e) => e.target.matches(":focus-visible") && at == null && setAt(0)} onBlur={() => setAt(null)}>
-            {h && <line className="cross" x1={x(at)} x2={x(at)} y1={TEMP_TOP - 8} y2={BAR_BOTTOM} />}
+            {h && <line className={styles.cross} x1={x(at)} x2={x(at)} y1={TEMP_TOP - 8} y2={BAR_BOTTOM} />}
             {hasPop && (
               <>
                 {hours.map((p, i) => {
                   const bh = ((p.pop ?? 0) / 100) * (BAR_BOTTOM - BAR_TOP);
-                  return bh > 0 && <path key={p.time} className={"bar" + (i === at ? " on" : "")} d={barPath(x(i) - bw / 2, BAR_BOTTOM - bh, bw, bh)} />;
+                  return bh > 0 && <path key={p.time} className={styles.bar + (i === at ? " " + styles.on : "")} d={barPath(x(i) - bw / 2, BAR_BOTTOM - bh, bw, bh)} />;
                 })}
                 {hours.map((p, i) => p.pop >= POP_LABEL && p.pop !== hours[i - 1]?.pop && (
                   <text key={p.time} x={x(i)} y={BAR_BOTTOM - (p.pop / 100) * (BAR_BOTTOM - BAR_TOP) - 4}>{p.pop}%</text>
                 ))}
-                {maxPop === 0 && <text className="none" x={w / 2} y={(BAR_TOP + BAR_BOTTOM) / 2 + 8}>降水概率都是 0</text>}
-                <line className="base" x1={PAD - bw / 2} x2={w - PAD + bw / 2} y1={BAR_BOTTOM + 0.5} y2={BAR_BOTTOM + 0.5} />
+                {maxPop === 0 && <text className={styles.none} x={w / 2} y={(BAR_TOP + BAR_BOTTOM) / 2 + 8}>降水概率都是 0</text>}
+                <line className={styles.base} x1={PAD - bw / 2} x2={w - PAD + bw / 2} y1={BAR_BOTTOM + 0.5} y2={BAR_BOTTOM + 0.5} />
               </>
             )}
-            <path className="tl" d={hours.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.temp).toFixed(1)}`).join("")} />
+            <path className={styles.tl} d={hours.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.temp).toFixed(1)}`).join("")} />
             {hours.map((p, i) => ticks[i] && (
               <g key={p.time}>
-                <circle className="dot" cx={x(i)} cy={y(p.temp)} r={3} />
-                <text className="t" x={x(i)} y={y(p.temp) - 8}>{deg(p.temp)}</text>
+                <circle className={styles.dot} cx={x(i)} cy={y(p.temp)} r={3} />
+                <text className={styles.t} x={x(i)} y={y(p.temp) - 8}>{deg(p.temp)}</text>
                 <text x={x(i)} y={HEIGHT - 4}>{i > 0 && hourOf(p.time) === 0 ? `${dayWord(p.time.slice(0, 10), today)}0时` : `${hourOf(p.time)}时`}</text>
               </g>
             ))}
-            {h && <circle className="dot on" cx={x(at)} cy={y(h.temp)} r={4.5} />}
+            {h && <circle className={styles.dot} cx={x(at)} cy={y(h.temp)} r={4.5} />}
           </svg>
         )}
       </div>
