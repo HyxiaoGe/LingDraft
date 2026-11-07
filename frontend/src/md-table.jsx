@@ -39,7 +39,7 @@ export function MdTable({ children }) {
   const scrolls = over.horizontal || over.vertical;
   const kind = over.horizontal && over.vertical ? "both" : over.horizontal ? "horizontal" : "vertical";
   return (
-    <div className={"md-wide " + styles.box}>
+    <div className={styles.box}>
       <div className={styles.frame}>
         <div className={styles.viewport} data-left={over.left} data-right={over.right}>
           <div ref={ref} className={styles.scroll} role="region" aria-label="表格" aria-describedby={scrolls ? id : undefined}

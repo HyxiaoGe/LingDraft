@@ -41,7 +41,7 @@ export function WeatherCard({ fc }) {
   // 问了某一天、预报里有：只有这一天，排成一行，是哪天写在标题上
   const one = fc.days.length === 1 && fc.days[0].date === fc.requested_date;
   return (
-    <section className="ws-card ws-wide ws-weather" aria-label={`${fc.location}的天气预报`}>
+    <section className="ws-card ws-weather" aria-label={`${fc.location}的天气预报`}>
       <div className="ws-weather-head">
         <IconCloudSun size={15} />
         <span className="place">{parts.at(-1)}</span>

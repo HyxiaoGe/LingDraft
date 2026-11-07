@@ -283,13 +283,9 @@
 .ws-head-side.end { justify-content: flex-end; }
 .ws-head-title { min-width: 0; font-weight: 600; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-scroll { flex: 1; overflow-y: auto; container-type: inline-size; }
-/* 正文宽 832（2026-11-07 照 Fusion 的 52rem，原来 624 太挤）。--pad 是两边留白，--text 是正文实际的宽 */
-.ws-flow { --pad: 28px; --text: calc(min(888px, 100cqw) - 2 * var(--pad)); max-width: 888px; margin: 0 auto; padding: 28px var(--pad) 32px;
-  /* 表格和天气、地图、行程卡可以比正文宽（代码块不放宽，和正文对齐）：最宽 1152（照 Fusion 的 72rem），两边各留 28；右边有轮次目录时，右沿离目录 24px 为止（目录 184 宽、离右边 16）；
-     放不下就和正文一样宽。往两边对称放宽，中线和正文对齐 */
-  --room: calc(100cqw - 2 * var(--pad)); --wide: max(var(--text), min(1152px, var(--room))); }
-.ws-scroll.rail .ws-flow { --room: calc(100cqw - 2 * (16px + 184px + 24px)); }
-.ws-ai > .ws-wide, .ws-reply .md > .md-wide { width: var(--wide); margin-left: calc((var(--text) - var(--wide)) / 2); margin-right: 0; }
+/* 正文宽 832（2026-11-07 照 Fusion 的 52rem，原来 624 太挤），居中。--pad 是两边留白。
+   代码块、表格和天气、地图、行程卡都和正文一样宽、左右对齐，太宽的在框里横着滑（2026-11-07 Sean 定，不再往两边放宽） */
+.ws-flow { --pad: 28px; max-width: 888px; margin: 0 auto; padding: 28px var(--pad) 32px; }
 /* 用户的话：下面一行是时间、复制、编辑，悬停时浮出，最后一句的一直在（浮在下一行右边的空处，不占高度） */
 .ws-user { position: relative; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin: 0 0 36px; } /* 下面那行（时间、复制）一直在，给它留出位置 */
 /* 这句话带的图：气泡上面一张缩略图，知道宽高的先按比例占好位置；刚发出去的用本机的，按图本身的比例 */
@@ -917,7 +913,6 @@
   .ws-cited .ws-fold { display: block; content-visibility: visible; }
   .ws-cited a { display: block; -webkit-line-clamp: unset; }
   .ws-cited .url { display: block; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
-  .ws-ai > .ws-wide, .ws-reply .md > .md-wide { width: auto; margin-left: 0; }
   .ws-card, .ws-cited li, .ws-image { break-inside: avoid; }
   .ws-image-act { display: none !important; }
   .ws-reply.typing .md > :last-child::after { display: none; }

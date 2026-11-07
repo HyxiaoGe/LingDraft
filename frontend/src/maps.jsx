@@ -63,7 +63,7 @@ function PlaceCard({ pl }) {
   const where = pl.near ? `${pl.near}附近` : pl.city;
   const what = pl.query.split("|").map((w) => w.trim()).filter(Boolean).join("、");
   return (
-    <section className="ws-card ws-wide ws-map" aria-label={`${where || ""}的${what}`}>
+    <section className="ws-card ws-map" aria-label={`${where || ""}的${what}`}>
       <Head icon={IconPin} providers={pl.places.map((p) => p.provider)} at={pl.fetched_at}>
         <span className="what">{what}</span>
         {where && <span className="where">{where}</span>}
@@ -105,7 +105,7 @@ function RouteCard({ rp }) {
   const fastest = Math.min(...rp.routes.map((r) => r.duration_s ?? Infinity));
   const missing = rp.unavailable_modes.map((m) => MODES[m] || m);
   return (
-    <section className="ws-card ws-wide ws-map" aria-label={`${rp.origin}到${rp.destination}的路线`}>
+    <section className="ws-card ws-map" aria-label={`${rp.origin}到${rp.destination}的路线`}>
       <Head icon={IconRoute} providers={rp.routes.map((r) => r.provider)} at={rp.fetched_at}>
         <span className="what">{rp.origin}</span>
         <span className="to">→</span>

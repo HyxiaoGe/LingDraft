@@ -228,7 +228,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
       <HeadBar title={fresh ? "新对话" : title} edit={edit}
         end={<>{index && !wide && <TurnIndexButton entries={entries} scroller={scrollRef} onJump={jumpTo} />}{headMenu}</>} />
       {menuAt && manageable && <ActionMenu label="这段对话的操作" anchor={menuAt} mobile={mobile} items={menuItems} note={menuNote} onClose={closeMenu} />}
-      <div className={"ws-scroll" + (index && wide ? " rail" : "")} ref={scrollRef}
+      <div className="ws-scroll" ref={scrollRef}
         onScroll={(e) => {
           // 往上滚了：离底部远了就不再跟着到底。没往上滚（内容长高了、往下滚）不算离开：跳到底以后内容马上长高，滚动事件晚一帧到，
           // 这时离底已经远了，但用户没动

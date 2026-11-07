@@ -91,7 +91,7 @@ export function TravelCard({ card }) {
   const filtered = !!slot || onlyFast;
   const clear = () => { setSlot(null); setOnlyFast(false); };
   return (
-    <section className="ws-card ws-wide ws-map ws-travel" aria-label={`${tl.origin}到${tl.destination}的${KIND_NAMES[tl.kind]}`}>
+    <section className="ws-card ws-map ws-travel" aria-label={`${tl.origin}到${tl.destination}的${KIND_NAMES[tl.kind]}`}>
       <div className="ws-map-head">
         <Icon size={15} />
         <span className="what">{tl.origin}</span>
@@ -159,7 +159,7 @@ function ServiceRow({ s }) {
 export function ItineraryCard({ card }) {
   const it = card.data;
   return (
-    <section className="ws-card ws-wide ws-map ws-travel" aria-label={it.title}>
+    <section className="ws-card ws-map ws-travel" aria-label={it.title}>
       <div className="ws-map-head">
         <IconTicket size={15} />
         <span className="what">{it.title}</span>

@@ -1,11 +1,7 @@
-/* 表格（照搬 Fusion 的 MarkdownTable.module.css，颜色换成灵稿的变量）。
-   框按表格内容的宽：窄表格和正文一样宽，宽的放宽到 .md-wide 那么宽（见 workspace.css），再宽就在框里滑 */
+/* 表格（照搬 Fusion 的 MarkdownTable.module.css，颜色换成灵稿的变量）。和正文一样宽，放不下就在框里滑 */
 .box { margin-block: 1.5rem; }
 .frame {
-  width: fit-content;
-  min-width: min(100%, var(--text, 100%));
   max-width: 100%;
-  margin-inline: auto;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 14px;

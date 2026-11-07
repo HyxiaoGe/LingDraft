@@ -1,7 +1,7 @@
 // 回答里的代码块（2026-11-07 Sean 定，照搬 Fusion 的 CodeBlock）：
 // 上面一条写语言、行数，右边“复制”；左边行号；超过 12 行先只显示前 12 行，底下“显示剩余 N 行代码”，上面那条的箭头展开、折叠。
 // HTML 代码块还能“下载”成文件，回答写完才能点，免得下到半截代码。
-// 和正文一样宽、左右对齐（不像表格、卡片那样往两边放宽），长的行在框里横着滑。
+// 和正文一样宽、左右对齐，长的行在框里横着滑。
 // 没照搬的：HTML 的“运行”（Sean 定不要）、Fusion 按钮上的玻璃光斑（那是 Fusion 自己的视觉风格）
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronUp, ClipboardCopy, Download, FileText, Hash } from "lucide-react";
