@@ -64,9 +64,9 @@ export function HeadBar({ title, end, edit }) {
     <header className={"grid h-[58px] flex-none grid-cols-[1fr_minmax(0,832px)_1fr] items-center gap-2 border-b border-line px-3 narrow:pl-3.5 print:hidden!"
       + " phone:h-12 phone:grid-cols-[1fr_minmax(0,max-content)_1fr] phone:gap-1 phone:px-1"}>
       <div className="flex items-center gap-1">{side}</div>
-      {edit ? <TitleInput value={edit.value} className="head" onDone={edit.onDone} /> : (
+      {edit ? <TitleInput value={edit.value} head onDone={edit.onDone} /> : (
         <div className="min-w-0 truncate text-center text-[16px] font-semibold" title={title || undefined}>
-          {title ?? <span className="ws-skel ws-skel-title mx-auto" aria-label="正在打开对话" role="status" />}
+          {title ?? <span className="mx-auto block h-4 w-2/5 max-w-[240px] rounded-sm bg-hover" aria-label="正在打开对话" role="status" />}
         </div>
       )}
       <div className="flex items-center justify-end gap-1">

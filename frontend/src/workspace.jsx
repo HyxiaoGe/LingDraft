@@ -20,7 +20,7 @@ import { useDoneAlert } from "./alert.jsx";
 import { Conversation, forgetReading } from "./timeline.jsx";
 import { UndoToast, useUndo } from "./undo.jsx";
 import { uploadErrorText } from "./upload.js";
-// 样式：workspace.css 由 tailwind.css 引进来（放在 legacy 层里，见那边的说明）
+// 样式：对话页的变量、基础样式和共用的小件在 tailwind.css，各块的在各自的 *.module.css
 
 // 地址：/chat/new 是新对话，/chat/<线程 id> 是某个对话；别的地址（/、/chat）都当新对话，进来时改成 /chat/new。
 // 线程 id 只有字母、数字、- 和 _（后端校验），地址里不用编码；对不上的 id 后端回 404，页面换成新对话

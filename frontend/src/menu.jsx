@@ -71,8 +71,8 @@ function PopMenu({ label, anchor, items, note, onClose }) {
 }
 
 // 改标题：回车或点别处保存，Esc 不改；onDone(新标题或 null, 怎么结束的："enter" | "escape" | "blur")。
-// 空的、没改的由调用的地方当没改；回车、Esc 结束的，焦点由调用的地方放回去（点别处结束的焦点已经在别处了）
-export function TitleInput({ value, className = "", onDone }) {
+// head：顶栏上的（字居中、大一号）。空的、没改的由调用的地方当没改；回车、Esc 结束的，焦点由调用的地方放回去（点别处结束的焦点已经在别处了）
+export function TitleInput({ value, head = false, onDone }) {
   const [v, setV] = useState(value);
   const ref = useRef(null);
   const done = useRef(false);
@@ -84,8 +84,8 @@ export function TitleInput({ value, className = "", onDone }) {
     onDone(title, how);
   };
   return (
-    <span className={"ws-title-input " + className}>
-      <input ref={ref} className="ws-rename" data-esc value={v} maxLength={TITLE_MAX} aria-label="对话标题" aria-describedby={id}
+    <span className={styles.titleInput + (head ? " " + styles.head : "")}>
+      <input ref={ref} className={styles.rename} data-esc value={v} maxLength={TITLE_MAX} aria-label="对话标题" aria-describedby={id}
         onChange={(e) => setV(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); finish(v.trim(), "enter"); }

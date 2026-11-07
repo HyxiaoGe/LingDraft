@@ -313,13 +313,13 @@ function ThreadSkeleton() {
     return () => clearTimeout(t);
   }, []);
   return (
-    <div className="ws-skel-thread" role="status" aria-label="正在打开对话">
+    <div className="flex flex-col gap-3" role="status" aria-label="正在打开对话">
       {show && (
         <>
-          <div className="ws-skel ws-skel-bubble" />
-          {[96, 88, 92, 60].map((w) => <div key={w} className="ws-skel ws-skel-line" style={{ width: `${w}%` }} />)}
-          <div className="ws-skel ws-skel-bubble short" />
-          {[90, 72].map((w) => <div key={w} className="ws-skel ws-skel-line" style={{ width: `${w}%` }} />)}
+          <div className="mb-3 h-10 w-[44%] self-end rounded-lg bg-hover" />
+          {[96, 88, 92, 60].map((w) => <div key={w} className="h-4 rounded-sm bg-hover" style={{ width: `${w}%` }} />)}
+          <div className="mb-3 mt-6 h-10 w-[28%] self-end rounded-lg bg-hover" />
+          {[90, 72].map((w) => <div key={w} className="h-4 rounded-sm bg-hover" style={{ width: `${w}%` }} />)}
         </>
       )}
     </div>
@@ -473,7 +473,7 @@ function Inspirations({ onPick }) {
           const q = pool.questions[i];
           const d = `${n * FLIP_STAGGER}ms`; // 只有翻的两项错开，悬停变色不等
           return <button key={q} className={styles.chip} style={{ transitionDelay: `${d}, ${d}, 0ms, 0ms` }} onClick={() => onPick(q)}>{q}</button>;
-        }) : [112, 168, 136, 150].map((w) => <span key={w} className="ws-skel ws-skel-chip" style={{ width: w }} aria-hidden="true" />)}
+        }) : [112, 168, 136, 150].map((w) => <span key={w} className="block h-8 flex-none rounded-md bg-hover phone:h-9" style={{ width: w }} aria-hidden="true" />)}
       </div>
       </div>
     </section>

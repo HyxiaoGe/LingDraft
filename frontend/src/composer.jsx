@@ -445,7 +445,7 @@ export function ModelTools({ models, loading, current, locked, onPick, thinking,
   useLayer(open, close);
   useEffect(() => { setOpen(false); }, [mobile]); // 窗口拉宽、变窄：菜单和弹层不是一个东西
   const opt = models?.find((m) => m.id === current);
-  if (loading) return <span className="ws-skel inline-block h-7 w-[120px] rounded-full" aria-hidden="true" />;
+  if (loading) return <span className="inline-block h-7 w-[120px] rounded-full bg-hover" aria-hidden="true" />;
   if (!models?.length || !current) return null;
   const toggle = opt?.thinking === "toggle";
   const name = opt?.name || current;

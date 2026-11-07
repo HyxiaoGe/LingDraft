@@ -1,15 +1,13 @@
-/* Tailwind（2026-11-07 Sean 定：前端从手写 CSS 一块一块迁到 Tailwind + CSS modules，照 Fusion 的做法）。
-   层的先后：theme → legacy（还没迁的 workspace.css，和全站的 style.css，两个照原来的先后）→ utilities。Tailwind 的类排在 legacy 后面，迁过来的组件写的类不会被旧的全局样式盖掉；
-   CSS modules 不在层里，比所有层都优先（同名属性 module 说了算）。
-   先不引 Tailwind 的样式重置（preflight）：还没迁的地方靠 workspace.css 自己的重置，整页迁完再换。
-   所以按钮这类元素要自己写清楚边框、底色、内边距（浏览器默认的都还在）。 */
-@layer theme, base, legacy, components, utilities;
+/* Tailwind（2026-11-07 Sean 定：前端从手写 CSS 迁到 Tailwind + CSS modules，照 Fusion 的做法；workspace.css 2026-11-07 迁完删掉）。
+   层的先后：theme → base（全站的 style.css，后面是对话页的变量、深色、重置、焦点框、打印）→ components（各处共用的按钮、图标按钮、开关、报错条……）→ utilities。
+   CSS modules 不在层里，比所有层都优先（同名属性 module 说了算），所以 module 里改共用类（:global(.ws-btn) 之类）一定改得动。
+   还没引 Tailwind 的样式重置（preflight），按钮这类元素要自己写清楚边框、底色、内边距（浏览器默认的都还在）。 */
+@layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
-@import "./workspace.css" layer(legacy);
-@import "./style.css" layer(legacy);
+@import "./style.css" layer(base);
 @import "tailwindcss/utilities.css" layer(utilities);
 
-/* 颜色、字体、圆角、缓动指向 workspace.css 里 .ws 上的变量，深色主题跟着换：text-ink、bg-side、border-line、rounded-md…… */
+/* 颜色、字体、圆角、缓动指向下面 .ws 上的变量，深色主题跟着换：text-ink、bg-side、border-line、rounded-md…… */
 @theme inline {
   --color-paper: var(--paper);
   --color-side: var(--side);
@@ -38,8 +36,140 @@
   --shadow-lift: var(--lift);
 }
 
-/* 灵稿的断点（和 workspace.css 一致）：narrow 是 ≤1100 左栏收窄，phone 是 ≤720 手机（左栏变抽屉），desktop 是 >720。
-   phone 写在 narrow 后面，两个都满足时 phone 说了算 */
+/* 灵稿的断点：narrow 是 ≤1100 左栏收窄，phone 是 ≤720 手机（左栏变抽屉），desktop 是 >720。
+   phone 写在 narrow 后面，两个都满足时 phone 说了算。module 里没法用这几个名字，照写 @media (max-width: 720px) 这些 */
 @custom-variant narrow (@media (max-width: 1100px));
 @custom-variant phone (@media (max-width: 720px));
 @custom-variant desktop (@media (min-width: 721px));
+
+/* ---------- 对话页的底子：两栏，左边对话列表，右边对话。都挂在 .ws 下 ----------
+   都保持安静：颜色只有墨色、一种靛青和几种状态色，标题和来源标题用宋体。 */
+@layer base {
+  .ws {
+    --paper: #ffffff; --side: #f6f7f8; --hover: #eceef1; --sel: #e3e6ea;
+    --line: #e3e6ea; --line2: #d3d7dd;
+    --ink: #1b1f24; --ink2: #3a414a; --muted: #535b66; --faint: #646c78;
+    --accent: #2c4f95; --accent-soft: #ecf0f8; --accent-line: #c5d0e6;
+    --ok: #2a7349; --ok-soft: #e9f3ec; --ok-line: #c9e2d1;
+    --warn: #94570c; --warn-soft: #fbf3e6; --warn-line: #efd9b6;
+    --danger: #b3261e; --danger-soft: #fbeceb; --danger-line: #f0c9c6;
+    --sans: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", "STSong", "SimSun", serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    --r-sm: 6px; --r: 10px; --r-lg: 14px;
+    --lift: 0 1px 2px rgba(20, 24, 31, .06), 0 12px 32px rgba(20, 24, 31, .14); /* 浮层：来源卡 */
+    --scrim: rgba(20, 24, 31, .32); /* 弹窗、抽屉后面压暗的那层 */
+    --ink-hover: #343a42; /* 墨色按钮（发送、主按钮）悬停 */
+    --sheen: rgba(255, 255, 255, .7); /* 图片加载时扫过的那道光 */
+    --pulse: rgba(44, 79, 149, .1); /* 左栏正在回答的点外面那圈 */
+    --rain: #4a86c8; /* 天气卡降水 */
+    --ease: cubic-bezier(.2, .7, .2, 1);
+    color-scheme: light;
+    display: grid; grid-template-columns: 248px minmax(0, 1fr);
+    /* 手机上地址栏伸缩时跟着可视区变（dvh），不认 dvh 的按 100vh；横屏刘海那侧让开 */
+    height: 100vh; height: 100dvh; padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left);
+    background: var(--paper); color: var(--ink); font: 14px/1.6 var(--sans);
+    font-variant-numeric: tabular-nums; /* 数字等宽（批次 G 第 39 条）：时间、额度、计数上下对得齐；正文段落里的数字照常 */
+  }
+  /* 深色（批次 G 第 16 条）：设置窗口里能选跟随系统、浅色、深色（2026-11-07 Sean 定），页面算好以后写在 .ws 的 data-theme 上（见 prefs.js）。
+     只换颜色变量；只管屏幕，打印照旧是浅色。
+     新加的颜色值都在批次 G 对照清单里逐个报备；--paper 用的是浅色的 --ink，--line2 用的是浅色的 --ink2。
+     墨色、靛青、红色底上的字一律写 var(--paper)：浅色时是白，深色时是深底色，底色变浅了字跟着变深 */
+  @media screen {
+    .ws[data-theme="dark"] {
+      --paper: #1b1f24; --side: #16191d; --hover: #2a2f36; --sel: #323841;
+      --line: #2e333a; --line2: #3a414a;
+      --ink: #e6e8eb; --ink2: #c5cad1; --muted: #a4abb5; --faint: #969ea9;
+      --accent: #93ade3; --accent-soft: #232c3d; --accent-line: #3d4d70;
+      --ok: #7fc79d; --ok-soft: #1b2a21; --ok-line: #2f4b3a;
+      --warn: #e2b06f; --warn-soft: #2c2419; --warn-line: #4d3e25;
+      --danger: #f0a29b; --danger-soft: #321e1d; --danger-line: #5a312e;
+      --lift: 0 1px 2px rgba(0, 0, 0, .3), 0 12px 32px rgba(0, 0, 0, .5);
+      --scrim: rgba(0, 0, 0, .5);
+      --ink-hover: #c5cad1;
+      --sheen: rgba(255, 255, 255, .06);
+      --pulse: rgba(147, 173, 227, .16);
+      --rain: #6b9fd8;
+      color-scheme: dark;
+    }
+    /* 页面底（iOS 往下拉过头时露出来的那块）跟着变深；只在对话页 */
+    body:has(> #root > .ws[data-theme="dark"]) { background: #1b1f24; }
+  }
+  /* 用 :where 把基础样式的优先级压到最低，各组件自己的颜色才不会被盖掉 */
+  :where(.ws) button { font: inherit; color: inherit; cursor: pointer; }
+  :where(.ws) button:disabled { cursor: default; }
+  :where(.ws) a { color: var(--accent); text-decoration: none; }
+  :where(.ws) ::placeholder { color: var(--faint); opacity: 1; } /* 浏览器默认的占位符颜色深色下对比不够（第 32 条） */
+  @media (hover: hover) { :where(.ws) a:hover { text-decoration: underline; text-underline-offset: 3px; } }
+  /* 输入框各自有聚焦样式（描边加一圈浅色），这里只管按钮和链接 */
+  .ws :focus-visible:not(input, textarea) { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* 桌面上收起左栏：整页只剩右边一栏（左栏藏掉在 sidebar.module.css），顶栏左边出展开钮 */
+  @media (min-width: 721px) { .ws.side-off { grid-template-columns: minmax(0, 1fr); } }
+  /* 窄屏：左栏收窄；手机：左栏改成抽屉（顶栏是“抽屉钮 + 标题 + 新对话”，对话列表、额度、账号都在抽屉里），输入框贴底，留出底部安全区。
+     手机上能点的都至少 44px 见方（看得见的部分不一定这么大，用透明的点按区补，在各自的 module 里） */
+  @media (max-width: 1100px) { .ws { grid-template-columns: 220px minmax(0, 1fr); } }
+  @media (max-width: 720px) { .ws { grid-template-columns: minmax(0, 1fr); } }
+
+  /* 打印、另存 PDF（第 49 条，按 Cmd/Ctrl+P）：只印对话本身——标题、每一轮的问题、回答和卡片；
+     左栏、顶栏、输入框、轮次目录、各种按钮、接着问都不印。过程只印收起来那一行；回答下面的来源全部展开，每条印出网址。
+     卡片、表格、来源不从中间断开。各块怎么印写在各自的 module 里 */
+  @media print {
+    html, body, #root { height: auto; }
+    .ws { display: block; height: auto; padding: 0; }
+    .ws *, .ws *::before, .ws *::after { animation: none !important; transition: none !important; }
+  }
+  /* 系统要求减少动效：只留转圈，其他动画和过渡都关掉 */
+  @media (prefers-reduced-motion: reduce) {
+    .ws *:not(.spin), .ws *::before, .ws *::after { animation: none !important; transition: none !important; }
+  }
+}
+
+/* ---------- 各处共用的小件：按钮、图标按钮、转圈、折叠箭头、快捷键、字数、开关、报错条 ----------
+   各处要改它们的样子，在自己的 module 里写 .xxx :global(.ws-btn)（module 比这一层优先） */
+@layer components {
+  /* 按钮：默认白底描边，primary 墨色，danger 红色，ghost 没有底和边，sm 矮一号 */
+  .ws-btn { display: inline-flex; align-items: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: var(--r-sm); border: 1px solid var(--line2);
+    background: var(--paper); font-size: 13px; white-space: nowrap; transition: background .15s var(--ease), border-color .15s var(--ease); text-decoration: none !important; }
+  @media (hover: hover) { .ws-btn:hover:not(:disabled) { background: var(--hover); } }
+  .ws-btn:disabled { opacity: .45; }
+  .ws-btn.primary { background: var(--ink); border-color: var(--ink); color: var(--paper); font-weight: 500; }
+  @media (hover: hover) { .ws-btn.primary:hover:not(:disabled) { background: var(--ink-hover); } }
+  .ws-btn.danger { background: var(--danger); border-color: var(--danger); color: var(--paper); font-weight: 500; }
+  @media (hover: hover) { .ws-btn.danger:hover:not(:disabled) { background: var(--danger); filter: brightness(.92); } }
+  .ws-btn.ghost { background: transparent; border-color: transparent; color: var(--ink2); }
+  @media (hover: hover) { .ws-btn.ghost:hover:not(:disabled) { background: var(--hover); } }
+  .ws-btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
+  /* 只有图标的按钮：顶栏的展开左栏、抽屉钮、新对话，左栏的收起、关闭……手机上 44 见方 */
+  .ws-icon-btn { flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-sm);
+    background: none; color: var(--muted); transition: background .15s var(--ease), color .15s var(--ease); }
+  @media (hover: hover) { .ws-icon-btn:hover { background: var(--hover); color: var(--ink); } }
+  @media (max-width: 720px) { .ws-icon-btn { width: 44px; height: 44px; } }
+
+  /* 转圈（icons.jsx 的 Spinner） */
+  .ws .spin { animation: ws-spin .9s linear infinite; flex: none; }
+  @keyframes ws-spin { to { transform: rotate(360deg); } }
+  /* 折叠的箭头：收起时朝右，展开时朝下 */
+  .ws .chev { flex: none; transition: transform .2s var(--ease); transform: rotate(-90deg); }
+  .ws .chev.up { transform: none; }
+
+  /* 快捷键：藏着的快捷键在能用的那一刻写出来（批次 G 第 34 条）：排着的话旁边写 ↑ 撤回，回答在跑写 Esc 停止，撤销提示里写 ⌘Z。触屏上不写 */
+  .ws-kbd { flex: none; display: inline-flex; align-items: center; height: 20px; padding: 0 4px; margin-right: 4px; border: 1px solid var(--line2); border-radius: var(--r-sm);
+    font: 12px/1 var(--sans); color: var(--faint); }
+  /* 字数：改标题、改记忆的框旁边写着几个字、最多几个，到上限变橙色 */
+  .ws-count { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ws-count.full { color: var(--warn); }
+  /* 开关：设置里的各项、输入框的深度思考 */
+  .ws-switch { position: relative; flex: none; width: 40px; height: 24px; border-radius: 999px; background: var(--line2); transition: background .15s var(--ease); }
+  .ws-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: var(--paper); transition: transform .15s var(--ease); }
+  .ws-switch.on { background: var(--accent); }
+  .ws-switch.on::after { transform: translateX(16px); }
+  /* 报错条：对话里发出去被拒、记忆没取到……可以带一个按钮（.ws-error-act，和 .ws-btn 一起用） */
+  .ws-error { display: flex; gap: 8px; align-items: flex-start; color: var(--danger); background: var(--danger-soft); border: 1px solid var(--danger-line); border-radius: var(--r);
+    padding: 9px 12px; font-size: 13px; margin: 0 0 16px; }
+  .ws-error svg { flex: none; margin-top: 2px; }
+  .ws-error span { flex: 1; }
+  .ws-error-act { height: 26px; padding: 0 10px; font-size: 12.5px; color: var(--danger); border-color: var(--danger-line); background: var(--paper); flex: none; }
+
+  @media print { .ws-error, .ws-btn, .ws-icon-btn, .chev { display: none !important; } }
+}

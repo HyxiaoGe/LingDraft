@@ -150,7 +150,7 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
         <nav ref={list} className="-mx-1 flex flex-1 flex-col gap-[18px] overflow-y-auto px-1" aria-label="对话列表">
           {threads === null && (
             <div className="flex flex-col gap-4 p-2" role="status" aria-label="正在取对话列表">
-              {[78, 62, 70, 54, 66].map((w) => <span key={w} className="ws-skel ws-skel-row" style={{ width: `${w}%` }} />)}
+              {[78, 62, 70, 54, 66].map((w) => <span key={w} className="block h-4 rounded-sm bg-hover" style={{ width: `${w}%` }} />)}
             </div>
           )}
           {threads !== null && rows.length === 0 && <div className="p-2 text-[13px] leading-[1.6] text-muted">还没有对话</div>}

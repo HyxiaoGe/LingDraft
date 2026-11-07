@@ -82,7 +82,7 @@ export function SearchDialog({ threads, now, href, onOpen, onClose }) {
         <div className={styles.body}>
           {rows === null ? (
             <div className={styles.skel} role="status" aria-label="正在取对话列表">
-              {[62, 48, 70, 54, 66, 44].map((w) => <span key={w} className="ws-skel ws-skel-row" style={{ width: `${w}%` }} />)}
+              {[62, 48, 70, 54, 66, 44].map((w) => <span key={w} className="block h-4 rounded-sm bg-hover" style={{ width: `${w}%` }} />)}
             </div>
           ) : rows.length === 0 ? (
             <div className={styles.empty}>{q ? `没有标题里有“${query.trim()}”的对话。只搜标题，不搜对话内容。` : "还没有对话"}</div>
