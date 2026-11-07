@@ -323,7 +323,6 @@ function Welcome() {
   return (
     <div className="ws-welcome">
       <h2>想问什么？</h2>
-      <p>需要查的会上网搜、读原文，复杂的问题拆开分头去查，回答里标明出处。</p>
     </div>
   );
 }
