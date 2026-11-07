@@ -664,18 +664,14 @@
 /* 轮次目录（turns.jsx）。宽的时候在正文右边一栏，从顶栏下面开始，太长自己滚 */
 .ws-rail { position: absolute; top: calc(58px + 24px); right: 16px; width: 184px; max-height: calc(100% - 58px - 24px - 48px); overflow-y: auto; overscroll-behavior: contain; z-index: 1; } /* 顶栏 58px 下面空 24px */
 .ws-rail-title { padding: 0 8px 8px; font-size: 12px; color: var(--faint); }
-.ws-index-list, .ws-index-heads { list-style: none; margin: 0; padding: 0; }
-.ws-index-heads { padding: 0 0 4px 24px; }
-.ws-index-turn, .ws-index-head { width: 100%; border: 0; background: none; text-align: left; border-radius: var(--r-sm); color: var(--muted); transition: background .12s, color .12s; }
+.ws-index-list { list-style: none; margin: 0; padding: 0; }
+.ws-index-turn { width: 100%; border: 0; background: none; text-align: left; border-radius: var(--r-sm); color: var(--muted); transition: background .12s, color .12s; }
 .ws-index-turn { display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; font-size: 12.5px; line-height: 20px; }
 .ws-index-turn .n { flex: none; min-width: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .ws-index-turn .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-index-head { display: block; padding: 4px 8px; font-size: 12px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-index-head.sub { padding-left: 16px; }
-@media (hover: hover) { .ws-index-turn:hover, .ws-index-head:hover { background: var(--hover); color: var(--ink); } }
+@media (hover: hover) { .ws-index-turn:hover { background: var(--hover); color: var(--ink); } }
 .ws-index-turn.on { background: var(--accent-soft); color: var(--accent); }
 .ws-index-turn.on .n { color: var(--accent); }
-.ws-index-head.on { color: var(--accent); }
 /* 窄的时候：顶栏右边的“轮次”按钮，电脑上点开是按钮下面的浮层 */
 .ws-index-btn-box { position: relative; display: flex; }
 .ws-index-btn { width: auto; padding: 0 8px; gap: 4px; font-size: 13px; white-space: nowrap; }
@@ -930,9 +926,6 @@
   .ws-index-btn { width: 44px; padding: 0; }
   .ws-index-sheet .ws-index-turn { min-height: 48px; align-items: center; padding: 8px 12px; font-size: 16px; line-height: 24px; }
   .ws-index-sheet .ws-index-turn .n { min-width: 16px; }
-  .ws-index-sheet .ws-index-heads { padding-left: 32px; }
-  .ws-index-sheet .ws-index-head { min-height: 44px; padding: 12px; font-size: 14px; line-height: 20px; }
-  .ws-index-sheet .ws-index-head.sub { padding-left: 24px; }
   .ws-inspire { min-height: 80px; }
   .ws-skel-chip { height: 36px; }
   .ws-inspire-label { margin-bottom: 12px; }

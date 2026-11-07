@@ -213,8 +213,8 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   runningRef.current = running;
   const pendingKinds = running ? [st?.guided_message && "guided", st?.queued_message && "queued"].filter(Boolean) : [];
   const said = useAnnounce(st, running, stopping); // 读屏：只在开始、答完、停下、出错时说一句（见 useAnnounce）
-  // 轮次目录：三轮起（或一条回答有三个以上小标题）才有，见 turnEntries。正文右边放得下就放一栏，放不下顶栏右边一个按钮点开
-  const entries = !fresh && !opening ? turnEntries(st, live, running) : [];
+  // 轮次目录：三轮起才有，只列轮次，见 turnEntries。正文右边放得下就放一栏，放不下顶栏右边一个按钮点开
+  const entries = !fresh && !opening ? turnEntries(st, live) : [];
   const index = entries.length > 0;
   const jumpTo = (id) => {
     const el = scrollRef.current?.querySelector(`[data-turn="${CSS.escape(id)}"]`);
