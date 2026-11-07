@@ -1,9 +1,11 @@
 /* Tailwind（2026-11-07 Sean 定：前端从手写 CSS 迁到 Tailwind + CSS modules，照 Fusion 的做法；workspace.css 2026-11-07 迁完删掉）。
-   层的先后：theme → base（全站的 style.css，后面是对话页的变量、深色、重置、焦点框、打印）→ components（各处共用的按钮、图标按钮、开关、报错条……）→ utilities。
+   层的先后：theme → base（Tailwind 的样式重置 preflight，全站的 style.css，后面是对话页的变量、深色、焦点框、打印）→ components（各处共用的按钮、图标按钮、开关、报错条……）→ utilities。
    CSS modules 不在层里，比所有层都优先（同名属性 module 说了算），所以 module 里改共用类（:global(.ws-btn) 之类）一定改得动。
-   还没引 Tailwind 的样式重置（preflight），按钮这类元素要自己写清楚边框、底色、内边距（浏览器默认的都还在）。 */
+   preflight 把浏览器的默认样式清掉了（2026-11-07 起）：外边距、内边距、边框都是 0，按钮和输入框没有底色、字跟着外面，列表没有圆点，图片和图标是块；
+   要什么样子自己写，不用再写 border: 0、background: none 这类抵消默认的 */
 @layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
 @import "./style.css" layer(base);
 @import "tailwindcss/utilities.css" layer(utilities);
 
@@ -95,11 +97,13 @@
     /* 页面底（iOS 往下拉过头时露出来的那块）跟着变深；只在对话页 */
     body:has(> #root > .ws[data-theme="dark"]) { background: #1b1f24; }
   }
+  /* preflight 把点按时的灰色高亮去掉了，这里留着：很多按钮只在有鼠标时才有悬停样式，触屏上点下去靠它看出点到了 */
+  html { -webkit-tap-highlight-color: initial; }
   /* 用 :where 把基础样式的优先级压到最低，各组件自己的颜色才不会被盖掉 */
-  :where(.ws) button { font: inherit; color: inherit; cursor: pointer; }
+  :where(.ws) button { cursor: pointer; }
   :where(.ws) button:disabled { cursor: default; }
   :where(.ws) a { color: var(--accent); text-decoration: none; }
-  :where(.ws) ::placeholder { color: var(--faint); opacity: 1; } /* 浏览器默认的占位符颜色深色下对比不够（第 32 条） */
+  :where(.ws) ::placeholder { color: var(--faint); } /* preflight 给的是半透明的字色，深色下对比不够（第 32 条） */
   @media (hover: hover) { :where(.ws) a:hover { text-decoration: underline; text-underline-offset: 3px; } }
   /* 输入框各自有聚焦样式（描边加一圈浅色），这里只管按钮和链接 */
   .ws :focus-visible:not(input, textarea) { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -141,8 +145,7 @@
   @media (hover: hover) { .ws-btn.ghost:hover:not(:disabled) { background: var(--hover); } }
   .ws-btn.sm { height: 28px; padding: 0 10px; font-size: 12px; }
   /* 只有图标的按钮：顶栏的展开左栏、抽屉钮、新对话，左栏的收起、关闭……手机上 44 见方 */
-  .ws-icon-btn { flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: var(--r-sm);
-    background: none; color: var(--muted); transition: background .15s var(--ease), color .15s var(--ease); }
+  .ws-icon-btn { flex: none; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--r-sm); color: var(--muted); transition: background .15s var(--ease), color .15s var(--ease); }
   @media (hover: hover) { .ws-icon-btn:hover { background: var(--hover); color: var(--ink); } }
   @media (max-width: 720px) { .ws-icon-btn { width: 44px; height: 44px; } }
 

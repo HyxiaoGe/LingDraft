@@ -4,8 +4,7 @@
    窄：顶栏右边的“轮次”按钮，电脑上点开是按钮下面的浮层，手机上是底部弹层 */
 
 /* 一行一轮：序号 + 那句话的第一行，最多两行，再长截掉（鼠标停上去看全句） */
-.list { list-style: none; margin: 0; padding: 0; }
-.turn { width: 100%; display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: none; text-align: left;
+.turn { width: 100%; display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; border-radius: var(--r-sm); text-align: left;
   font-size: 12.5px; line-height: 20px; color: var(--muted); transition: background .12s, color .12s; }
 .n { flex: none; min-width: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .t { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }

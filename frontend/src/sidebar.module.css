@@ -42,7 +42,7 @@
 @keyframes pulse { 50% { box-shadow: 0 0 0 5px var(--pulse); } }
 
 /* “⋯”：悬停、键盘聚焦、选中、菜单开着时出现；没有悬停的设备（触屏）一直在 */
-.more { flex: none; width: 26px; height: 26px; margin: 4px 4px 0 0; padding: 0; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted);
+.more { flex: none; width: 26px; height: 26px; margin: 4px 4px 0 0; border-radius: var(--r-sm); color: var(--muted);
   display: inline-flex; align-items: center; justify-content: center; opacity: 0; }
 @media (hover: hover) { .more:hover { color: var(--ink); background: var(--line); } }
 .row:focus-within .more, .row.sel .more, .row.menu .more { opacity: 1; }

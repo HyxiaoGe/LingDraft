@@ -9,8 +9,7 @@
 .body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px 8px 16px; }
 .roomy .body { padding: 16px; } /* 来源：放的是一张卡，四周都留 16 */
 /* 一行一项（“⋯”菜单、账号）：至少 52 高，字 16 */
-.act { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 0 12px; border: 0; border-radius: var(--r-sm); background: none;
-  font: inherit; font-size: 16px; color: var(--ink); text-align: left; }
+.act { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 0 12px; border-radius: var(--r-sm); font-size: 16px; color: var(--ink); text-align: left; }
 .act svg { flex: none; color: var(--muted); }
 .act:active:not(:disabled) { background: var(--hover); }
 .act:disabled, .act:disabled svg { color: var(--faint); }

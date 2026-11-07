@@ -54,7 +54,7 @@ function useReading(scroller, count) {
 // 目录本身：rail 和浮层、弹层共用。onJump(i) 跳到第 i 轮；点了以后 onDone（浮层、弹层收起）
 function IndexList({ entries, at, onJump, onDone }) {
   return (
-    <ol className={styles.list}>
+    <ol>
       {entries.map((e) => (
         <li key={e.i}>
           <button className={styles.turn + (e.i === at ? " " + styles.on : "")} aria-current={e.i === at ? "location" : undefined} title={e.text}

@@ -13,8 +13,8 @@
 .user { position: relative; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; margin: 0 0 36px; } /* 下面那行（时间、复制）一直在，给它留出位置 */
 /* 这句话带的图：气泡上面一张缩略图，知道宽高的先按比例占好位置；刚发出去的用本机的，按图本身的比例 */
 .userImg { max-width: 80%; border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--side); overflow: hidden; }
-.userImgOpen { display: block; width: 100%; height: 100%; padding: 0; border: 0; background: none; cursor: zoom-in; }
-.userImg img { display: block; max-width: 240px; max-height: 240px; }
+.userImgOpen { display: block; width: 100%; height: 100%; cursor: zoom-in; }
+.userImg img { max-width: 240px; max-height: 240px; }
 .userImg[style] img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: cover; }
 .userImgGone { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; min-height: 48px; padding: 8px 12px; font-size: 12px; color: var(--muted); }
 /* 自己说的话：字和回答、输入框一样 16px（2026-11-07 Sean 定，原来 14），写的和发出去看到的一样大 */
@@ -31,7 +31,7 @@
 /* 改最后一句 */
 .edit { margin: 0 0 22px; border: 1px solid var(--accent-line); border-radius: var(--r-lg); background: var(--paper); padding: 10px 12px 8px; box-shadow: 0 0 0 3px var(--accent-soft); }
 /* 字和输入框、自己说的话一样 16px；最高和输入框一样（见 composer.module.css），再多在框里滚 */
-.edit textarea { width: 100%; border: 0; outline: none; resize: none; font: inherit; font-size: 16px; background: transparent; line-height: 1.6; padding: 0; color: var(--ink);
+.edit textarea { width: 100%; outline: none; resize: none; font-size: 16px; line-height: 1.6; color: var(--ink);
   max-height: max(160px, 40vh); max-height: max(160px, 40dvh); }
 .editBar { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
 .hint { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); }
@@ -58,7 +58,7 @@
 .time + .model { margin-left: -8px; }
 .model + .model { margin-left: -2px; } /* 和时间后面一样，点前面空 8px（模型名右边只有 4px） */
 .time + .model::before, .model + .model::before { content: "·"; margin-right: 6px; }
-.muted { color: var(--muted); font-size: 13px; }
+.muted { margin: 1em 0; color: var(--muted); font-size: 13px; }
 
 /* 正文：Markdown（排版、代码块、表格各在 markdown.module.css、code-block.module.css、md-table.module.css，照搬 Fusion）；正在写的时候末尾一个光标 */
 .reply { font-size: 16px; line-height: 1.75; color: var(--ink); overflow-wrap: anywhere; }
@@ -81,7 +81,7 @@
 .main[data-fresh] .flow { margin-top: auto; width: 100%; padding-bottom: 12px; }
 .main[data-fresh] :global(.ws-error) { margin: 12px 0 0; } /* 新对话发出去被拒（图不收、额度用完）：和上面的说明隔开，紧挨着下面的输入框 */
 .welcome { text-align: center; }
-.welcome h2 { font: 600 28px/1.35 var(--serif); letter-spacing: .02em; margin: 0; text-wrap: balance; }
+.welcome h2 { font: 600 28px/1.35 var(--serif); letter-spacing: .02em; text-wrap: balance; }
 .examples { flex: 1.4 1 0; width: 100%; max-width: 756px; margin: 0 auto; padding: 18px 28px 40px; position: relative; }
 .inspire { min-height: 72px; display: flex; flex-wrap: wrap; justify-content: center; align-content: flex-start; gap: 8px; }
 .ruler { position: absolute; top: 0; left: 0; right: 0; height: 0; overflow: hidden; visibility: hidden; display: flex; } /* 一排放不下的剪掉，不把页面撑宽；量的宽度不受影响 */

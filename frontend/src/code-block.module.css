@@ -60,11 +60,10 @@
   border-radius: 9px;
   background: linear-gradient(135deg, var(--paper), var(--accent-soft));
   color: var(--code-muted);
-  font: inherit;
   cursor: pointer;
   transition: border-color .15s, color .15s;
 }
-.iconButton { width: 32px; height: 32px; padding: 0; flex-shrink: 0; }
+.iconButton { width: 32px; height: 32px; flex-shrink: 0; }
 .button { height: 32px; padding-inline: 10px; gap: 6px; flex-shrink: 0; font-size: 12px; }
 .iconButton > svg,
 .button > svg,
@@ -87,7 +86,6 @@
 .row { display: flex; min-width: 100%; }
 .gutter {
   flex-shrink: 0;
-  box-sizing: border-box;
   padding: var(--code-padding) 10px;
   border-right: 1px solid var(--code-edge);
   background: var(--code-gutter);

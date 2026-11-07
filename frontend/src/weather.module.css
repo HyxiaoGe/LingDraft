@@ -31,7 +31,7 @@
 .key i { width: 12px; height: 2px; border-radius: 1px; background: var(--accent); }
 .key i.rain { width: 8px; height: 8px; border-radius: 2px; background: var(--rain); margin-left: 8px; }
 /* 手指在图上左右拖着读数，上下划照常滚页面 */
-.hourly svg { display: block; overflow: visible; touch-action: pan-y; -webkit-user-select: none; user-select: none; }
+.hourly svg { overflow: visible; touch-action: pan-y; -webkit-user-select: none; user-select: none; }
 .tl { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .dot { fill: var(--accent); stroke: var(--paper); stroke-width: 2; }
 .bar { fill: var(--rain); }

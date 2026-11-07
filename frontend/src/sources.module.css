@@ -2,7 +2,7 @@
 
 /* 引用角标：浅靛青小签，抬到字的上半截（用 top 抬，不撑高行距），悬停或打开来源卡时填满。
    来源卡、回答下面的来源列表上的编号用同一种签（.lb），一眼对得上。不在来源里的 id 是灰的问号（.off） */
-.mark { position: relative; top: -.4em; height: 16px; padding: 0 4px; margin-left: 2px; border: 0; border-radius: 4px; background: var(--accent-soft); color: var(--accent);
+.mark { position: relative; top: -.4em; height: 16px; padding: 0 4px; margin-left: 2px; border-radius: 4px; background: var(--accent-soft); color: var(--accent);
   font: 600 10px/16px var(--sans); letter-spacing: .02em; font-variant-numeric: tabular-nums; user-select: none; transition: background .12s, color .12s; }
 .mark.off { background: var(--hover); color: var(--faint); cursor: help; }
 .mark.on { background: var(--accent); color: var(--paper); }
@@ -37,8 +37,8 @@
 .sheet .excerpt { font-size: 14px; max-height: none; }
 .sheet .actions a { min-height: 44px; padding: 0 16px; font-size: 14px; }
 .all { width: 100%; min-height: 44px; margin-top: 16px; justify-content: center; font-size: 14px; } /* 和 .ws-btn.ghost 一起用 */
-.list { list-style: none; margin: 0; padding: 0; }
-.list button { display: flex; align-items: flex-start; gap: 12px; width: 100%; min-height: 52px; padding: 8px; border: 0; border-radius: var(--r); background: none; text-align: left;
+.list { margin: 0; padding: 0; }
+.list button { display: flex; align-items: flex-start; gap: 12px; width: 100%; min-height: 52px; padding: 8px; border-radius: var(--r); text-align: left;
   font-size: 14px; line-height: 1.5; color: var(--ink); }
 .list button[aria-current="true"] { background: var(--accent-soft); }
 .list .lb, .cited .lb { flex: none; margin-top: 2px; }
@@ -53,7 +53,7 @@
 .sites { display: inline-flex; gap: 3px; }
 .citedHead .fav { margin: 0; width: 14px; height: 14px; }
 .citedHead .fav.letter { line-height: 14px; }
-.cited ol { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.cited ol { margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .cited li { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.6; min-width: 0; }
 .cited a { min-height: 24px; color: var(--ink2); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
 @media (hover: hover) { .cited a:hover { color: var(--accent); } }

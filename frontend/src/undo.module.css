@@ -3,8 +3,8 @@
 .toast { pointer-events: auto; display: flex; align-items: center; gap: 12px; max-width: 400px; min-height: 44px; padding: 4px 4px 4px 16px; border-radius: var(--r);
   background: var(--ink); color: var(--paper); box-shadow: var(--lift); font-size: 13px; animation: rise .2s var(--ease); }
 .text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.act { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 36px; padding: 0 12px; border: 0; border-radius: var(--r-sm); background: none;
-  color: var(--paper); font: inherit; font-weight: 600; }
+.act { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 36px; padding: 0 12px; border-radius: var(--r-sm);
+  color: var(--paper); font-weight: 600; }
 @media (hover: hover) { .act:hover { background: var(--ink2); } }
 /* 深色底上焦点外圈用纸色、画在按钮里面（原来这条被全局的焦点外圈盖住了，迁过来以后才生效） */
 .act:focus-visible { outline: 2px solid var(--paper); outline-offset: -4px; }
