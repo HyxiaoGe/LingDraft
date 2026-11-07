@@ -673,6 +673,7 @@ export default function Workspace() {
         <Sidebar threads={shownThreads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={fromSide(select)} manage={manage}
           onSettings={fromSide(() => setSettings("settings"))} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
         <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
+          who={auth.ready ? (auth.me ? auth.me.name || "" : null) : undefined}
           models={models} credits={credits} manage={manage}
           picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />
         {search && (

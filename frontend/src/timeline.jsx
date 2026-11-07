@@ -41,7 +41,7 @@ const readingOf = (id) => { try { return JSON.parse(sessionStorage.getItem(READI
 const keepReadingOf = (id, at) => { try { sessionStorage.setItem(READING + id, JSON.stringify(at)); } catch { /* 存不下就只管这一次打开 */ } };
 export const forgetReading = (id) => { try { sessionStorage.removeItem(READING + id); } catch { /* 没有就算了 */ } };
 
-export function Conversation({ st, live, busy, suggesting, error, now, act: rawAct, tid, putBack, listedTitle, models, credits, picker, manage }) {
+export function Conversation({ st, live, busy, suggesting, error, now, act: rawAct, tid, putBack, listedTitle, models, credits, picker, manage, who }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
   const lastTop = useRef(0); // 上一次滚动时的位置：往上滚了才算用户离开底部
@@ -247,7 +247,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
         }}>
         <div className="ws-flow">
           {!fresh && !opening && <h1 className="ws-print-title">{title}</h1>/* 只在打印时出现：屏幕上标题在顶栏，打印不印顶栏（第 49 条） */}
-          {fresh ? <Welcome /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} title={title} />}
+          {fresh ? <Welcome who={who} /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} title={title} />}
           {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error.text ?? error}</span>
             {error.login && picker.onLogin && <button className="ws-btn ws-error-act" onClick={picker.onLogin}>登录</button>}</div>}
         </div>
@@ -318,11 +318,46 @@ function ThreadSkeleton() {
   );
 }
 
-// 新对话：欢迎语在输入框上面，下面是今日灵感，一起放在中间偏上（窄屏输入框贴底，这些在它上面）
-function Welcome() {
+// 新对话：欢迎语在输入框上面，下面是今日灵感，一起放在中间偏上（窄屏输入框贴底，这些在它上面）。
+// 欢迎语（2026-11-07 Sean 定，照 Claude 网页版）：按这台设备上的钟点问候，带登录名字；每次打开新对话随机挑一句，停在页面上不换。
+// 一半是这个钟点的话，一半是不分钟点的（回来啦这类）和周五、周末的。名字没有或太长就不带名字，不拿邮箱前缀凑。
+// 游客（和没有登录功能的部署）不带名字，也不说“回来啦、接着来”这类当他来过的话
+const NAME_MAX = 12;
+const c = (n) => (n ? `，${n}` : ""); // “晚上好，Sean”：没名字就只有“晚上好”
+// 每段钟点 [从几点, 到几点（不含）, 几句话]；back：当他来过的话，游客不说；named：没名字读着太单薄，没名字（包括游客）不说
+const GREET_SLOTS = [
+  [5, 9, (n) => [{ t: `早${c(n)}`, named: true }, { t: `早上好${c(n)}，先来杯咖啡？` }, { t: `新的一天${c(n)}` }]],
+  [9, 12, (n) => [{ t: `上午好${c(n)}` }, { t: `${n ? `${n}，` : ""}今天想弄明白点什么？` }]],
+  [12, 14, (n) => [{ t: `中午好${c(n)}` }, { t: `午饭吃了吗${c(n)}？` }]],
+  [14, 18, (n) => [{ t: `下午好${c(n)}` }, { t: `下午接着来${c(n)}`, back: true }]],
+  [18, 23, (n) => [{ t: `晚上好${c(n)}` }, { t: `忙完了吗${c(n)}？` }]],
+  [23, 29, (n) => [{ t: `夜深了${c(n)}，早点休息` }, { t: `还没睡呀${c(n)}` }]], // 23 点到第二天 5 点
+];
+const greetAny = (n, day) => [
+  { t: n ? `${n}，回来啦` : "回来啦", back: true },
+  { t: `欢迎回来${c(n)}`, back: true },
+  { t: `接着来吧${c(n)}`, back: true },
+  { t: `想问点什么${c(n)}？` },
+  ...(day === 5 ? [{ t: `周五了${c(n)}`, named: true }] : []),
+  ...(day === 0 || day === 6 ? [{ t: `周末愉快${c(n)}` }] : []),
+];
+function greeting(who, at, roll) {
+  const guest = who === null;
+  const name = !guest && who.trim().length <= NAME_MAX ? who.trim() : "";
+  const h = at.getHours() < 5 ? at.getHours() + 24 : at.getHours();
+  const ok = (x) => !(guest && x.back) && !(x.named && !name);
+  const slot = GREET_SLOTS.find(([from, to]) => h >= from && h < to)[2](name).filter(ok);
+  const rest = greetAny(name, at.getDay()).filter(ok);
+  const pool = roll < 0.5 ? slot : rest;
+  return pool[Math.floor(((roll * 2) % 1) * pool.length)].t;
+}
+
+// who：登录了是名字（没填是空字符串），游客是 null，还没认出是谁是 undefined（先空着占好高度，认出来再写，不先闪一句别的）
+function Welcome({ who }) {
+  const [at] = useState(() => ({ time: new Date(), roll: Math.random() }));
   return (
     <div className="ws-welcome">
-      <h2>想问什么？</h2>
+      <h2>{who === undefined ? "\u00a0" : greeting(who, at.time, at.roll)}</h2>
     </div>
   );
 }
