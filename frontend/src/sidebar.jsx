@@ -1,8 +1,10 @@
 // 左栏：对话列表。最上面品牌、搜对话、收起（手机上是关闭抽屉），下面“新对话”，再下面按时间分组的对话，最下面额度和账号。
-// 手机上是左边滑出的抽屉（遮罩也在这里）。2026-11-07 从 workspace.jsx 拆出来，样式迁到 Tailwind + CSS modules，长相不变：
-// 简单的排版写在元素上，悬停、选中、伪元素、动画和手机抽屉在 sidebar.module.css
+// 手机上是左边滑出的抽屉（遮罩也在这里）。2026-11-07 从 workspace.jsx 拆出来，样式迁到 Tailwind + CSS modules：
+// 简单的排版写在元素上，悬停、选中、伪元素、动画和手机抽屉在 sidebar.module.css。
+// 2026-11-07 Sean 嫌单调，照 Fusion 美化：每行前面一个对话图标（正在回答换成转圈、没跑完换成感叹号），选中的那行是白底浮起来的一块，“新对话”用写字的图标
+import { CircleAlert, MessageSquare, MessagesSquare, SquarePen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconPlus, IconSearch, IconTrash } from "./icons.jsx";
+import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconSearch, IconTrash, Spinner } from "./icons.jsx";
 import { useLayer } from "./layers.js";
 import { CreditsFoot, UserFoot } from "./login.jsx";
 import { ActionMenu, TitleInput } from "./menu.jsx";
@@ -108,7 +110,9 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
       <div key={t.thread_id} className={cx(styles.row, sel && styles.sel, open && styles.menu)}>
         <a href={href(t.thread_id)} data-id={t.thread_id} className={styles.link} aria-current={sel ? "page" : undefined}
           onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onSelect(t.thread_id); }}>
-          <span className={cx(styles.dot, styles[status])} />
+          <span className={cx(styles.icon, styles[status])}>
+            {status === "active" ? <Spinner size={15} /> : status === "failed" ? <CircleAlert size={15} strokeWidth={1.8} /> : <MessageSquare size={15} strokeWidth={1.8} />}
+          </span>
           <span className={styles.body}>
             <span className={styles.title} title={t.title}>{t.title}</span>
             {sub && <span className={styles.sub}>{sub}</span>}
@@ -141,22 +145,27 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
               onClick={nav.toggleSide}><IconPanel size={18} /></button>}
         </div>
         <div className="flex flex-col gap-1">
-          <button ref={newBtn} className={"flex h-[38px] items-center gap-2 rounded-md border border-line2 bg-paper px-3 py-0 text-[13px] transition-[border-color] duration-150 ease-ws"
-            + " hover:border-faint aria-[current=page]:border-ink aria-[current=page]:shadow-[inset_0_0_0_.5px_var(--ink)] phone:h-11"}
+          <button ref={newBtn} className={cx(styles.newChat, "flex h-10 items-center gap-2 rounded-md border border-line2 bg-paper px-3 py-0 text-[13.5px] font-medium phone:h-11")}
             onClick={() => onSelect(null)} aria-current={!current ? "page" : undefined}>
-            <IconPlus size={15} /> 新对话
+            <SquarePen size={15} strokeWidth={1.8} className="text-accent" /> 新对话
           </button>
         </div>
         <nav ref={list} className="-mx-1 flex flex-1 flex-col gap-[18px] overflow-y-auto px-1" aria-label="对话列表">
           {threads === null && (
-            <div className="flex flex-col gap-4 p-2" role="status" aria-label="正在取对话列表">
-              {[78, 62, 70, 54, 66].map((w) => <span key={w} className="block h-4 rounded-sm bg-hover" style={{ width: `${w}%` }} />)}
+            <div className="flex flex-col gap-4 px-2.5 py-2" role="status" aria-label="正在取对话列表">
+              {[78, 62, 70, 54, 66].map((w) => (
+                <span key={w} className="flex items-center gap-[9px]"><span className="block size-[15px] flex-none rounded-sm bg-hover" /><span className="block h-4 rounded-sm bg-hover" style={{ width: `${w}%` }} /></span>
+              ))}
             </div>
           )}
-          {threads !== null && rows.length === 0 && <div className="p-2 text-[13px] leading-[1.6] text-muted">还没有对话</div>}
+          {threads !== null && rows.length === 0 && (
+            <div className="flex flex-col items-center gap-2 px-2 pt-8 text-center text-[13px] leading-[1.6] text-muted">
+              <MessagesSquare size={22} strokeWidth={1.6} className="text-faint" />还没有对话
+            </div>
+          )}
           {groups.map(([key, name, items]) => (
             <div className="flex flex-col gap-px" key={key} role="group" aria-label={name}>
-              <div className="flex gap-1.5 px-2 pb-1 text-[12px] font-medium text-muted" aria-hidden="true">
+              <div className="flex gap-1.5 px-2.5 pb-1 text-[12px] font-medium text-muted" aria-hidden="true">
                 {name}<span className="font-normal text-faint tabular-nums">{items.length}</span>
               </div>
               {items.map((t) => row(t, key))}

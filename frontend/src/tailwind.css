@@ -63,7 +63,6 @@
     --scrim: rgba(20, 24, 31, .32); /* 弹窗、抽屉后面压暗的那层 */
     --ink-hover: #343a42; /* 墨色按钮（发送、主按钮）悬停 */
     --sheen: rgba(255, 255, 255, .7); /* 图片加载时扫过的那道光 */
-    --pulse: rgba(44, 79, 149, .1); /* 左栏正在回答的点外面那圈 */
     --rain: #4a86c8; /* 天气卡降水 */
     --ease: cubic-bezier(.2, .7, .2, 1);
     color-scheme: light;
@@ -90,7 +89,6 @@
       --scrim: rgba(0, 0, 0, .5);
       --ink-hover: #c5cad1;
       --sheen: rgba(255, 255, 255, .06);
-      --pulse: rgba(147, 173, 227, .16);
       --rain: #6b9fd8;
       color-scheme: dark;
     }
