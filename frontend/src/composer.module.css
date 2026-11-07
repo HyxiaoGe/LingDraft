@@ -111,28 +111,43 @@
 .tip .cur { color: var(--ink2); }
 
 /* 选模型的菜单（桌面）：位置和最高多高由页面按剩下的空间算（见 ModelMenu），里面滚 */
-.menu { position: absolute; right: 0; z-index: 60; width: 300px; overflow-y: auto; overscroll-behavior: contain; padding: 4px;
+.menu { position: absolute; right: 0; z-index: 60; width: 320px; overflow-y: auto; overscroll-behavior: contain; padding: 6px;
   background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r); box-shadow: var(--lift); animation: rise .12s var(--ease); }
-.menu > .menuNote { padding: 4px 8px; } /* 和 menu.module.css 的 .note 一起用 */
-.group { display: flex; align-items: center; gap: 4px; padding: 8px 8px 4px; font-size: 12px; color: var(--faint); }
-.group.toggle { width: 100%; min-height: 32px; border-radius: var(--r-sm); text-align: left; color: var(--muted); }
+.menu > .menuNote { padding: 6px 10px 6px; } /* 和 menu.module.css 的 .note 一起用 */
+.group { display: flex; align-items: center; gap: 4px; padding: 10px 10px 4px; font-size: 12px; color: var(--faint); }
+.group.toggle { width: 100%; min-height: 34px; margin-top: 4px; border-radius: var(--r-sm); text-align: left; color: var(--muted); transition: background .12s var(--ease); }
 @media (hover: hover) { .group.toggle:hover { background: var(--hover); color: var(--ink2); } }
 .group.toggle svg { color: var(--faint); }
-.row { display: flex; width: 100%; min-height: 32px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border-radius: var(--r-sm); text-align: left; font-size: 13px; color: var(--ink); }
+/* 一行：厂商图标、名字和一句说明、右边打勾（选着的）或锁（登录后可用的）。选着的那行淡靛青底、名字靛青 */
+.row { display: flex; width: 100%; min-height: 44px; align-items: center; gap: 12px; padding: 7px 10px; border-radius: var(--r-sm); text-align: left; font-size: 13px; color: var(--ink);
+  transition: background .12s var(--ease); }
+.row + .row { margin-top: 2px; }
 @media (hover: hover) { .row:hover:not(:disabled) { background: var(--hover); } }
+.row[aria-checked="true"], .row[aria-checked="true"]:hover:not(:disabled) { background: var(--accent-soft); }
+.row[aria-checked="true"] .name { color: var(--accent); }
 .row:disabled { color: var(--faint); }
-.row svg { flex: none; color: var(--accent); }
+.row > svg { flex: none; color: var(--accent); }
 .row .lock { color: var(--faint); }
-.name { font-weight: 500; }
+.name { font-weight: 500; line-height: 20px; }
 .row.locked:not(:disabled) .name { color: var(--muted); } /* 游客能点去登录的锁着的模型：不像能选的那么黑 */
-.desc { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.desc { font-size: 12px; line-height: 1.45; color: var(--muted); }
 .row:disabled .desc { color: var(--faint); }
+/* 厂商图标：白底小方块（深色模式也是白底，黑色的标志看得清）；没有图标的厂商写一个字；“自动”是淡靛青底的星。锁着的、点不了的淡一点 */
+.mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 8px;
+  background: #fff; color: #3f4650; font-size: 14px; font-weight: 600; line-height: 1; overflow: hidden; }
+.mark img { width: 76%; height: 76%; }
+.mark svg { width: 64%; height: 64%; }
+.mark.auto { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+.row.locked .mark, .row:disabled .mark { opacity: .5; }
+.modelBtn .mark { width: 20px; height: 20px; margin-right: 2px; border-radius: 6px; font-size: 11px; }
+.modelBtn .mark img { width: 80%; height: 80%; }
 
-/* 选模型的底部弹层（手机，弹层本身见 sheet.module.css，根上有 data-sheet）：每行至少 52px */
+/* 选模型的底部弹层（手机，弹层本身见 sheet.module.css，根上有 data-sheet）：每行至少 56px */
 [data-sheet] .group { padding: 12px 12px 4px; font-size: 13px; }
 [data-sheet] .group.toggle { min-height: 52px; padding: 8px 12px; }
-[data-sheet] .row { min-height: 52px; padding: 8px 12px; font-size: 16px; }
+[data-sheet] .row { min-height: 56px; gap: 12px; padding: 8px 12px; font-size: 16px; }
 [data-sheet] .desc { font-size: 13px; }
+[data-sheet] .mark { width: 36px; height: 36px; border-radius: 10px; font-size: 16px; }
 .switchRow { display: flex; width: 100%; min-height: 52px; align-items: center; gap: 12px; padding: 8px 12px; border-radius: var(--r-sm);
   text-align: left; font-size: 16px; color: var(--ink); }
 /* 触屏没有悬停（悬停的灰底都包在 hover: hover 里）；按下去的那一下给灰底 */

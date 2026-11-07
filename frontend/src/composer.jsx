@@ -1,6 +1,7 @@
 // 输入框那一块（样式在 composer.module.css 和元素上的 Tailwind 类）：
 // 输入框本身（写字、加图、发送 / 停止、这一轮答完再发），右下角的深度思考和选模型，贴在上沿的“还没发出去的话”，
 // 上面的额度提醒和“回到底部”，还有拖图进来时盖在对话区上的那层。
+import { Sparkles } from "lucide-react";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getDraft, setDraft } from "./drafts.js";
 import { IconArrowDown, IconArrowUp, IconBulb, IconCheck, IconChevron, IconClose, IconImage, IconInsert, IconLock, IconStop, IconUndo, IconWarn, Spinner } from "./icons.jsx";
@@ -428,7 +429,8 @@ function Attachment({ att, onRemove }) {
 
 // 输入框里发送按钮左边：深度思考开关（选的模型能开关才有）和选模型。新对话随便选；对话开始后模型定下不换，
 // 点开只说明一句、列出能选的给开新对话时参考。思考开关每句话都能改，按下去不抢光标（输入框里的字和光标都留着）。
-// 模型分三组：推荐（自动，只写名字，不写它现在用哪个、不加说明：2026-11-07 Sean 定）、可用、登录后可用（游客锁着的，默认收起）。
+// 模型分两组：可用（“自动”排第一个，只写名字，不写它现在用哪个、不加说明：2026-11-07 Sean 定）、登录后可用（游客锁着的，默认收起）。
+// 每个模型前面是厂商的小图标（见 ModelIcon），输入框里的模型按钮上也有。
 // 桌面是菜单：往放得下的那边开（新对话的输入框在页面中间，往下开），高度按那边剩下的空间，再多就在里面滚，第一项不会被切掉。
 // 窄屏是底部弹层：最高 70dvh、里面滚，深度思考的开关和说明也在里面（输入框里只放模型名，能开关思考的名字前有个灯泡，亮着是开）。
 // 菜单、弹层打开时光标在里面：Esc 只收起它们，不会停掉正在跑的这一轮（见 Composer 的 Esc）；点外面、关闭钮也能收起。
@@ -474,6 +476,7 @@ export function ModelTools({ models, loading, current, locked, onPick, thinking,
         aria-label={mobile && toggle ? `${name}，深度思考${thinking ? "已开" : "已关"}` : undefined}
         title={mobile ? undefined : locked ? "这段对话用的模型" : "选模型"} onClick={() => (open ? close() : setOpen(true))}>
         {mobile && toggle && <IconBulb size={14} className={styles.bulb + (thinking ? " " + styles.on : "")} />}
+        {opt && <ModelIcon m={opt} auto={opt === models[0]} />}
         <span className="min-w-0 truncate">{name}</span><IconChevron size={13} className={styles.caret} />
       </button>
       {open && !mobile && <ModelMenu anchor={box} note={note} onLeave={() => setOpen(false)}>{list}</ModelMenu>}
@@ -589,12 +592,25 @@ function ModelSheet({ title, onClose, children }) {
   );
 }
 
-// 模型列表（菜单和弹层共用）：推荐 / 可用 / 登录后可用（N，默认收起；正在用的在里面就展开）。↑↓ 在能点的之间挪。
+// 模型前面的厂商小图标：白底小方块（深色模式下也看得清黑色的标志），按 model 的厂商前缀对图标（public/providers，都来自 lobe-icons，MIT：
+// 七个照搬 Fusion；智谱用 Z.ai 的“Z”、混元用彩色版，都是 @lobehub/icons-static-svg 1.102.0 的）；以后接了没有图标的厂商，写名字的第一个字。
+// “自动”是一颗星。大小看放在哪（菜单、弹层、按钮），写在样式里；别的地方用（回答开头，见 timeline.jsx）给 size
+
+const PROVIDER_ICONS = { deepseek: "deepseek", ark: "volcengine", moonshot: "moonshot", xai: "xai", dashscope: "qwen", mimo: "xiaomi", minimax: "minimax",
+  zhipuai: "zai", hunyuan: "hunyuan" };
+export function ModelIcon({ m, auto, size }) {
+  const box = size ? { width: size, height: size, borderRadius: Math.round(size * 0.28), fontSize: Math.round(size * 0.5) } : undefined;
+  if (auto) return <span className={styles.mark + " " + styles.auto} style={box} aria-hidden="true"><Sparkles strokeWidth={2} /></span>;
+  const key = PROVIDER_ICONS[(m.model || "").split(":")[0]];
+  return <span className={styles.mark} style={box} aria-hidden="true">{key ? <img src={`/providers/${key}.svg`} alt="" /> : m.name.slice(0, 1)}</span>;
+}
+
+// 模型列表（菜单和弹层共用）：可用（“自动”第一个）/ 登录后可用（N，默认收起；正在用的在里面就展开）。只有一组时不写组名。↑↓ 在能点的之间挪。
 // 锁着的只给能登录的游客看（点了开登录弹窗，说登录后就能用它）；登录了、或者没有登录功能，锁着的就是怎么都选不了，不列（第 28 条：原来列成“暂不开放”）
 function ModelList({ models, current, locked, onLogin, onChoose }) {
-  const [auto, ...rest] = models;
-  const free = rest.filter((m) => !m.locked);
-  const shut = onLogin ? rest.filter((m) => m.locked) : [];
+  const auto = models[0];
+  const free = models.filter((m) => !m.locked);
+  const shut = onLogin ? models.filter((m) => m.locked) : [];
   const [showShut, setShowShut] = useState(() => shut.some((m) => m.id === current));
   // 点开“登录后可用”：展开的在下面、多半在菜单外，把这一组滚到菜单顶上让人看见
   const shutRef = useRef(null);
@@ -611,8 +627,9 @@ function ModelList({ models, current, locked, onLogin, onChoose }) {
   const row = (m, note) => (
     <button key={m.id} role="menuitemradio" aria-checked={m.id === current} className={styles.row + (m.locked ? " " + styles.locked : "")}
       disabled={m.locked ? !onLogin : locked && m.id !== current} onClick={() => onChoose(m)}>
-      <span className="flex min-w-0 flex-col"><b className={styles.name}>{m.name}</b>{note && <small className={styles.desc}>{note}</small>}</span>
-      {m.id === current ? <IconCheck size={14} /> : m.locked && <IconLock size={13} className={styles.lock} />}
+      <ModelIcon m={m} auto={m === auto} />
+      <span className="flex min-w-0 flex-1 flex-col"><b className={styles.name}>{m.name}</b>{note && <small className={styles.desc}>{note}</small>}</span>
+      {m.id === current ? <IconCheck size={15} /> : m.locked && <IconLock size={13} className={styles.lock} />}
     </button>
   );
   const move = (e) => {
@@ -626,16 +643,10 @@ function ModelList({ models, current, locked, onLogin, onChoose }) {
   };
   return (
     <div className="flex flex-col" role="menu" aria-label="选模型" onKeyDown={move}>
-      <div role="group" aria-label="推荐">
-        <div className={styles.group} aria-hidden="true">推荐</div>
-        {row(auto, null)}
+      <div role="group" aria-label="可用">
+        {shut.length > 0 && <div className={styles.group} aria-hidden="true">可用</div>}
+        {free.map((m) => row(m, m === auto ? null : m.description))}
       </div>
-      {free.length > 0 && (
-        <div role="group" aria-label="可用">
-          <div className={styles.group} aria-hidden="true">可用</div>
-          {free.map((m) => row(m, m.description))}
-        </div>
-      )}
       {shut.length > 0 && (
         <div role="group" aria-label="登录后可用">
           <button ref={shutRef} className={styles.group + " " + styles.toggle} role="menuitem" aria-expanded={showShut} onClick={() => { reveal.current = !showShut; setShowShut(!showShut); }}>

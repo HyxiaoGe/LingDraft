@@ -54,7 +54,9 @@
 
 /* ---------- 回答 ---------- */
 .ai { margin: 0 0 26px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
-/* 回答下面一行：时间、模型、本轮用了多少、复制、重新回答 */
+/* 回答开头：这一轮用的模型（厂商图标 + 名字，图标见 composer.jsx 的 ModelIcon） */
+.aiHead { display: flex; align-items: center; gap: 8px; font-size: 13px; line-height: 22px; font-weight: 500; color: var(--muted); }
+/* 回答下面一行：时间、本轮用了多少、复制、重新回答（模型写在开头） */
 .aiFoot { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 0 -10px; } /* 窄屏一行放不下就折行，“重新回答”不被挤出去 */
 .aiFoot :global(.ws-btn) { color: var(--muted); }
 @media (hover: hover) { .aiFoot :global(.ws-btn):hover { color: var(--ink); } }

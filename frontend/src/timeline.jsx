@@ -8,7 +8,7 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
 import shell from "./card.module.css";
-import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelTools, Pending, enterSends, focusInput, useAutoHeight, useImageDrop } from "./composer.jsx";
+import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelIcon, ModelTools, Pending, enterSends, focusInput, useAutoHeight, useImageDrop } from "./composer.jsx";
 import { failureText } from "./errors.js";
 import { IconBook, IconCheck, IconChevron, IconCloudSun, IconCopy, IconDownload, IconEdit, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, Spinner } from "./icons.jsx";
 import { ImageCards, Viewer, drawn, imageUrl, imagesOf } from "./images.jsx";
@@ -518,11 +518,15 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
   const idle = !running && st?.status === "idle";
   const failed = last && !running && st?.status === "failed";
   const replied = answer.some((i) => i.type === "text");
+  // 回答开头：这一轮用的模型的厂商图标和名字（照 Fusion）。答完的按这一轮记下的；正在答的按对话定下的选项（“自动”按它现在用的那个）
+  const ref = rec?.model?.ref || (running ? models?.find((m) => m.id === st?.model)?.model : null);
+  const who = ref && models?.length > 0 ? modelName(models, ref) : null;
   return (
     <>
       {t.user && <UserMsg text={live?.edit ?? t.user} image={t.image} src={userImageSrc(t, live, st?.thread_id)} at={live?.sentAt ?? t.sent_at} pinned={last} now={now}
         editable={last && idle} onEdit={act.edit} />}
       <div className={styles.ai}>
+        {who && <div className={styles.aiHead}><ModelIcon m={{ model: ref, name: who }} size={22} />{who}</div>}
         {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} />}
         {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
         {mapsOf(items).map((card) => <MapCard key={card.key} card={card} />)}
@@ -537,7 +541,6 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
         {!running && (replied || rec?.ended_at || (last && idle)) && (
           <div className={styles.aiFoot + (last ? "" : " " + styles.quiet)}>
             <Stamp iso={rec?.ended_at} now={now} />
-            {rec?.model && models?.length > 0 && <span className={styles.model}>{modelName(models, rec.model.ref)}</span>}
             {rec?.credits != null && <span className={styles.model}>本轮 {creditsText(rec.credits)}</span>}
             {replied && <CopyButton text={() => answerText(items, st?.sources)} />}
             {last && idle && <button className="ws-btn ghost sm" onClick={act.regenerate}><IconLoop size={13} />重新回答</button>}
