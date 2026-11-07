@@ -41,7 +41,7 @@ export function Dock({ children }) {
 export function JumpButton({ more, onClick }) {
   return (
     <button className={styles.jump + (more ? " " + styles.more : "")} aria-label={more ? "有新内容，回到底部" : "回到底部"} title="回到底部"
-      onMouseDown={(e) => e.preventDefault()} onClick={onClick}><IconArrowDown size={16} />{more && <span>有新内容</span>}</button>
+      onMouseDown={(e) => e.preventDefault()} onClick={onClick}><IconArrowDown size={18} />{more && <span>有新内容</span>}</button>
   );
 }
 
