@@ -594,13 +594,15 @@ function ModelSheet({ title, onClose, children }) {
 
 // 模型前面的厂商小图标：白底小方块（深色模式下也看得清黑色的标志），按 model 的厂商前缀对图标（public/providers，都来自 lobe-icons，MIT：
 // 七个照搬 Fusion；智谱用 Z.ai 的“Z”、混元用彩色版，都是 @lobehub/icons-static-svg 1.102.0 的）；以后接了没有图标的厂商，写名字的第一个字。
-// “自动”是一颗星。大小看放在哪（菜单、弹层、按钮），写在样式里
+// “自动”是一颗星。大小看放在哪（菜单、弹层、按钮），写在样式里；别的地方用（回答开头，见 timeline.jsx）给 size
+
 const PROVIDER_ICONS = { deepseek: "deepseek", ark: "volcengine", moonshot: "moonshot", xai: "xai", dashscope: "qwen", mimo: "xiaomi", minimax: "minimax",
   zhipuai: "zai", hunyuan: "hunyuan" };
-function ModelIcon({ m, auto }) {
-  if (auto) return <span className={styles.mark + " " + styles.auto} aria-hidden="true"><Sparkles strokeWidth={2} /></span>;
+export function ModelIcon({ m, auto, size }) {
+  const box = size ? { width: size, height: size, borderRadius: Math.round(size * 0.28), fontSize: Math.round(size * 0.5) } : undefined;
+  if (auto) return <span className={styles.mark + " " + styles.auto} style={box} aria-hidden="true"><Sparkles strokeWidth={2} /></span>;
   const key = PROVIDER_ICONS[(m.model || "").split(":")[0]];
-  return <span className={styles.mark} aria-hidden="true">{key ? <img src={`/providers/${key}.svg`} alt="" /> : m.name.slice(0, 1)}</span>;
+  return <span className={styles.mark} style={box} aria-hidden="true">{key ? <img src={`/providers/${key}.svg`} alt="" /> : m.name.slice(0, 1)}</span>;
 }
 
 // 模型列表（菜单和弹层共用）：可用（“自动”第一个）/ 登录后可用（N，默认收起；正在用的在里面就展开）。只有一组时不写组名。↑↓ 在能点的之间挪。
