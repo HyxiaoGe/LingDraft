@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads,
   pinResearchThread, queueResearch, regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
-import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconPlus, IconSearch, IconTrash } from "./icons.jsx";
+import { IconBook, IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconPlus, IconSearch, IconTrash } from "./icons.jsx";
 import { setDraft } from "./drafts.js";
 import { AFTER_RUN_ERROR, errorText, quotaText } from "./errors.js";
 import { CreditsFoot, LoginDialog, UserFoot, useAuth } from "./login.jsx";
@@ -47,6 +47,7 @@ const leftover = (s) => [s.guided_message && "guided", s.queued_message && "queu
 export default function Workspace() {
   const auth = useAuth(); // 身份：游客还是登录了（见 auth.js）。身份一变整页重载，这里不用跟着改状态
   const [loginOpen, setLoginOpen] = useState(false);
+  const [loginWant, setLoginWant] = useState(null); // 游客点了“登录后可用”里的哪个模型（登录弹窗说登录后就能用它，第 28 条）
   const [threads, setThreads] = useState(null);
   const [tid, setTid] = useState(routeId);
   const [memory, setMemoryState] = useState(onMemoryPath); // 右侧是记忆页（这时没有选中的对话）
@@ -132,12 +133,19 @@ export default function Workspace() {
   // 身份定了取一次额度；每轮结束（busy 回到 false）再取：这一轮花的已经记上了
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (auth.ready && !busy) refreshCredits(); }, [auth.ready, busy]);
-  // 领不到游客身份（同一地址今天领得太多，2026-11-06 Sean 定）：弹登录框，说人多、请先登录；没有登录功能的部署只能提示稍后再来
+  // 领不到游客身份（同一网络今天领得太多，2026-11-06 Sean 定每网络每天 5 个）：弹登录框，说清为什么、登录后会怎样（第 26 条）；
+  // 没有登录功能的部署只能说明天再来
   useEffect(() => {
     if (!auth.crowded) return;
     if (auth.login) setLoginOpen(true);
-    else setError("当前访问人数过多，请稍后再来");
+    else setError(`你所在的网络今天新来的游客太多了（防刷，同一网络每天最多 ${auth.crowded.per_ip || 5} 个游客身份），明天再来就能接着用。`);
   }, [auth.crowded, auth.login]);
+  // 点了锁着的模型去登录的：登录回来（整页重载过）直接选好它
+  useEffect(() => {
+    if (!models?.length || !auth.me) return;
+    const id = takeWant();
+    if (id && models.some((m) => m.id === id && !m.locked)) setPick(id);
+  }, [models, auth.me]);
   const picked = models?.some((m) => m.id === pick && !m.locked) ? pick : models?.[0]?.id; // 选的不在列表里了（刚下架）、锁上了也按 Auto
   // 输入框旁边显示的模型：新对话是选的；开始的对话是它定下的（状态还没取回来时，刚发出去的按选的，打开的老对话先不显示）
   const current = !tid ? picked : st?.thread_id === tid && st.model ? st.model : live ? picked : null;
@@ -369,7 +377,7 @@ export default function Workspace() {
       if (e.status === 429 && e.detail?.code === "credits_exhausted") {
         const text = said ?? extra.edit;
         if (text) setPutBack({ thread: tidRef.current || "new", text, image, rejected: true });
-        setError({ text: quotaText(e.detail), login: !!e.detail.guest });
+        setError({ text: quotaText(e.detail) + (text ? "刚才那句已经放回输入框。" : ""), login: !!e.detail.guest, quota: true });
         refreshCredits();
         setBusy(false);
         setLive(null);
@@ -565,7 +573,17 @@ export default function Workspace() {
   // 执行中这一轮的来源跟着事件来（库里一轮跑完才有），叠在已存的来源上：正文里的引用据此显示成编号
   const shown = st && live?.sources ? { ...st, sources: { ...st.sources, ...live.sources } } : st;
 
-  const onLogin = auth.login && !auth.me ? () => setLoginOpen(true) : null; // 游客点“登录后可用”的模型、记忆页的登录都开这个弹窗
+  // 游客开登录弹窗（左栏、额度、记忆页、报错里的登录，点“登录后可用”的模型）。点模型进来的带着那个模型；从按钮直接进来的参数是点击事件，不算
+  const onLogin = auth.login && !auth.me ? (want) => {
+    const m = want?.id && want.locked ? want : null;
+    setLoginWant(m);
+    keepWant(m?.id);
+    setLoginOpen(true);
+  } : null;
+  const closeLogin = () => { // 没登录就关了：不用再记着要哪个模型
+    setLoginOpen(false);
+    keepWant(null);
+  };
 
   // ---- 导航：收起左栏、抽屉 ----
   // 收起、展开：按下的按钮跟着没了，焦点挪到对面那个按钮上（顶栏的展开钮 / 左栏的收起钮）
@@ -634,16 +652,29 @@ export default function Workspace() {
       <div className={"ws" + (sideOff ? " side-off" : "") + (mobile && drawer ? " drawer" : "")}>
         {mobile && drawer && <div className="ws-scrim" onClick={closeDrawer} aria-hidden="true" />}
         <Sidebar threads={shownThreads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={fromSide(select)} manage={manage}
-          memory={memory} onMemory={fromSide(openMemory)} auth={auth} onLogin={fromSide(() => setLoginOpen(true))} credits={credits} onCredits={refreshCredits} nav={nav} />
+          memory={memory} onMemory={fromSide(openMemory)} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
         {memory ? <MemoryPage auth={auth} onLogin={onLogin} undo={undo} threads={shownThreads} onOpen={(id) => select(id)} />
           : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
             models={models} credits={credits} manage={manage}
             picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />}
-        <LoginDialog open={loginOpen} crowded={auth.crowded} onClose={() => setLoginOpen(false)} />
+        <LoginDialog open={loginOpen} crowded={auth.crowded} want={loginWant} credits={credits} onClose={closeLogin} />
         <UndoToast undo={undo} />
       </div>
     </NavContext.Provider>
   );
+}
+
+// 游客点了锁着的模型去登录：记下是哪个（OAuth 要跳出去再回来、邮箱登录完整页重载，所以记在 sessionStorage），登录回来取一次就删
+const WANT_KEY = "lingdraft.want-model";
+function keepWant(id) {
+  try { if (id) sessionStorage.setItem(WANT_KEY, id); else sessionStorage.removeItem(WANT_KEY); } catch { /* 存不了就算了：回来按 Auto */ }
+}
+function takeWant() {
+  try {
+    const id = sessionStorage.getItem(WANT_KEY);
+    sessionStorage.removeItem(WANT_KEY);
+    return id;
+  } catch { return null; }
 }
 
 // ---------------- 左栏：对话列表 ----------------
@@ -779,9 +810,17 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
           : <button className="ws-icon-btn ws-side-toggle" data-nav="collapse" aria-label="收起侧栏" title={`收起侧栏（${SIDE_KEY}）`} aria-keyshortcuts={SIDE_ARIA_KEY}
             onClick={nav.toggleSide}><IconPanel size={18} /></button>}
       </div>
-      <button className="ws-new" onClick={() => onSelect(null)} aria-current={!current && !memory ? "page" : undefined}>
-        <IconPlus size={15} /> 新对话
-      </button>
+      <div className="ws-side-top">
+        <button className="ws-new" onClick={() => onSelect(null)} aria-current={!current && !memory ? "page" : undefined}>
+          <IconPlus size={15} /> 新对话
+        </button>
+        {/* 记忆（第 30 条，2026-11-07 Sean 定）：新对话下面一行，游客也看得见（点进去写着登录后才有）。没有登录功能的部署谁都没有记忆，不放 */}
+        {(auth.login || auth.me) && (
+          <button className="ws-nav-row" onClick={onMemory} aria-current={memory ? "page" : undefined}>
+            <IconBook size={15} />记忆
+          </button>
+        )}
+      </div>
       {/* 搜索（第 13 条、M1）：边打边筛，只搜标题；Esc 清空，↓ 到第一条，回车打开第一条 */}
       <div className="ws-search" role="search"
         onMouseDown={(e) => { if (!e.target.closest("input, button")) { e.preventDefault(); e.currentTarget.querySelector("input").focus(); } }}>
@@ -830,8 +869,8 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
       </nav>
       <div className="ws-sr" role="status">{hits ? (hits.length ? `找到 ${hits.length} 段对话` : "没有找到") : ""}</div>
       <div className="ws-foot">
-        <CreditsFoot credits={credits} guest={!auth.me} onLogin={auth.login ? onLogin : null} onOpen={onCredits} />
-        <span className="ws-foot-user"><UserFoot auth={auth} onLogin={onLogin} memory={memory} onMemory={onMemory} /></span>
+        <CreditsFoot credits={credits} guest={!auth.me} onLogin={auth.login ? onLogin : null} onOpen={onCredits} mobile={nav.mobile} />
+        <span className="ws-foot-user"><UserFoot auth={auth} onLogin={onLogin} mobile={nav.mobile} /></span>
       </div>
       {menuRow && (
         <RowMenu key={menuRow.thread_id} t={menuRow} anchor={menu.anchor} mobile={nav.mobile} size={sz} onClose={() => setMenu(null)}

@@ -1,3 +1,5 @@
+import { loginLine } from "./research.js";
+
 // 页面上的报错：按出了什么错转写成“发生了什么 + 能做什么”，不把后端、浏览器的原话直接显示出来（前端施工规范第二节）。
 // e 是 api.js 的 httpError（有 status，额度用完时 detail 是 {code, kind, resets_at, guest…}），或者连不上时 fetch 抛的 TypeError（没有 status）。
 // 看的只是状态码和后端给的结构化字段，不看报错文字
@@ -20,15 +22,19 @@ export function errorText(what, e, todo) {
   return `${what}：${why}，${todo || generic}。`;
 }
 
-// 额度用完了（429，detail.code 是 credits_exhausted，见后端 app.quota.Exhausted）：哪个窗口、什么时候重置，游客说登录以后有自己的额度。
-// 具体的说法批次 E 统一改
+// 额度用完了（429，detail.code 是 credits_exhausted，见后端 app.quota.Exhausted）：哪个额度、什么时候恢复（说法和 research.js 的 creditsLine 一样），
+// 游客再说登录后会怎样（detail.login、per_ask，见 loginLine）。所有游客合用的那份用完了要说清是为什么——不是这个人用多了（评审第 26 条）
 export function quotaText(d) {
   const when = new Date(d.resets_at);
   const day = Number.isNaN(when.getTime()) ? " " : `（${when.getMonth() + 1}月${when.getDate()}日）`;
-  if (d.kind === "guests") return `今天游客合用的额度用完了，明天${day}0 点重置；登录后有自己的额度。`;
+  const after = d.guest ? loginLine(d) : null;
+  if (d.kind === "guests") {
+    return `今天所有游客合用的额度用完了：游客共用一份每日总量，用来控制成本，不是你用多了。明天${day}0 点恢复。`
+      + `登录后用自己的额度，${after ? `${after.replace(/^登录后/, "")}，` : ""}不受这个影响。`;
+  }
   const span = d.kind === "week" ? "这周" : "今天";
-  const reset = d.kind === "week" ? `下周一${day}0 点重置` : `明天${day}0 点重置`;
-  return `${span}的额度用完了，${reset}${d.guest ? "；登录后额度更多" : ""}。`;
+  const reset = d.kind === "week" ? `下周一${day}0 点恢复` : `明天${day}0 点恢复`;
+  return `${span}的额度用完了，${reset}。${after ? `${after}。` : d.guest ? "登录后额度更多。" : ""}`;
 }
 
 // 这一轮没跑完（状态 failed）：按后端给的类别（error_kind，见 app.api.research_runner 的 _failure）说原因和能做什么。

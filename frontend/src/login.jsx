@@ -1,8 +1,10 @@
-// 登录：左栏下面的登录入口和用户菜单、登录弹窗（GitHub、Google、邮箱验证码）、/auth/callback 页。身份本身见 auth.js。
-import { useEffect, useRef, useState } from "react";
-import { EmailLogin, checkSession, completeCallback, emailLoginAvailable, init, signIn, signOut, snapshot, subscribeAuth } from "./auth.js";
-import { IconBook, IconClose, IconLock, Spinner } from "./icons.jsx";
-import { creditsLeft } from "./research.js";
+// 登录：左栏下面的登录入口和账号菜单、额度按钮和面板、登录弹窗（邮箱验证码、GitHub、Google）、/auth/callback 页。身份本身见 auth.js。
+import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { EmailLogin, checkSession, completeCallback, emailLoginAvailable, emailLoginKnown, init, signIn, signOut, snapshot, subscribeAuth } from "./auth.js";
+import { IconClose, IconLock, Spinner } from "./icons.jsx";
+import { asksOf, creditsLeft, creditsLine, creditsParts, creditsShort, loginLine, num } from "./research.js";
+import { Sheet } from "./sheet.jsx";
 
 // 当前身份：{ready, login, me}（见 auth.snapshot）。回到这个标签页时和 auth 服务对一下账（别处退出了就跟着退）
 export function useAuth() {
@@ -22,99 +24,111 @@ export function useAuth() {
   return s;
 }
 
-// 左栏下面：游客看到“登录”，登录了看到头像和邮箱，点开能去记忆页、退出（2026-11-06 Sean 定：记忆入口收进这里，游客没有记忆）
-export function UserFoot({ auth, onLogin, onOpen, memory, onMemory }) {
+// 左栏下面：游客看到“登录”，登录了看到头像和名字，点开是账号菜单（谁、退出登录）。手机上是底部弹层（规范：菜单用 bottom sheet）。
+// 记忆不在这里：2026-11-07 Sean 定放回左栏“新对话”下面一行，游客也看得见（推翻 11-06 收进这里的做法，评审第 30 条）
+export function UserFoot({ auth, onLogin, mobile }) {
   const [open, setOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const btn = useRef(null);
   const box = useRef(null);
-  useEffect(() => {
-    if (!open) return;
-    const down = (e) => !box.current?.contains(e.target) && !btn.current?.contains(e.target) && setOpen(false);
-    const key = (e) => e.key === "Escape" && (setOpen(false), btn.current?.focus());
-    addEventListener("mousedown", down);
-    addEventListener("keydown", key);
-    return () => {
-      removeEventListener("mousedown", down);
-      removeEventListener("keydown", key);
-    };
-  }, [open]);
+  usePopClose(open && !mobile, box, btn, () => setOpen(false));
   if (!auth.ready || !auth.login) return null;
   if (!auth.me) return <button className="ws-login-link" onClick={onLogin}>登录</button>;
   const { me } = auth;
   const label = me.name || me.email || "已登录";
-  const rect = open ? btn.current?.getBoundingClientRect() : null;
+  const close = () => setOpen(false);
+  const leave = () => { setLeaving(true); signOut().catch(() => setLeaving(false)); };
+  const note = "退出后在 Fusion 等其他应用也会退出。";
+  const who = (
+    <div className="ws-menu-note ws-user-note">
+      <b>{me.name || me.email}</b>
+      {me.name && me.email && <span>{me.email}</span>}
+      {me.tier === "admin" && <span>管理员</span>}
+    </div>
+  );
+  const rect = open && !mobile ? btn.current?.getBoundingClientRect() : null;
   return (
     <>
-      <button ref={btn} className="ws-user-btn" aria-haspopup="menu" aria-expanded={open} title={me.email} onClick={() => setOpen(!open)}>
+      <button ref={btn} className="ws-user-btn" aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={open} title={mobile ? undefined : me.email} onClick={() => setOpen(!open)}>
         <Avatar me={me} />
         <span className="ws-user-name">{label}</span>
       </button>
-      {open && rect && (
+      {open && mobile && onWs(
+        <Sheet title="账号" onClose={close} className="ws-act-sheet">
+          {who}
+          <button className="ws-sheet-act" disabled={leaving} onClick={leave}>{leaving ? <Spinner size={18} /> : <IconClose size={18} />}退出登录</button>
+          <div className="ws-menu-note">{note}</div>
+        </Sheet>,
+      )}
+      {rect && (
         <div ref={box} className="ws-menu ws-user-menu" role="menu" aria-label="账号" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: 232 }}>
-          <div className="ws-menu-note ws-user-note">
-            <b>{me.name || me.email}</b>
-            {me.name && me.email && <span>{me.email}</span>}
-            {me.tier === "admin" && <span>管理员</span>}
-          </div>
-          <button role="menuitem" aria-current={memory ? "page" : undefined} onClick={() => { setOpen(false); onMemory?.(); }}>
-            <IconBook size={14} />记忆
-          </button>
-          <button role="menuitem" disabled={leaving} onClick={() => { setLeaving(true); signOut().catch(() => setLeaving(false)); }}>
+          {who}
+          <button role="menuitem" disabled={leaving} onClick={leave}>
             {leaving ? <Spinner size={14} /> : <IconClose size={14} />}退出登录
           </button>
-          <div className="ws-menu-note">退出后在 Fusion 等其他应用也会退出。</div>
+          <div className="ws-menu-note">{note}</div>
         </div>
       )}
     </>
   );
 }
 
-// 左栏最下面常驻的额度按钮（2026-11-06 Sean 定，照 Claude 用量弹层）：小圆环画剩余比例、旁边是剩余数字（游客前面标“试用”，管理员“不限”）；
-// 显示最紧的那个窗口，用到八成变黄、用完变红；没取到不显示。点开是额度面板（UsagePanel）：来源、每个窗口剩百分之几、余额、什么时候重置
-export function CreditsFoot({ credits, guest, onLogin, onOpen }) {
-  const [open, setOpen] = useState(false);
-  const btn = useRef(null);
-  const box = useRef(null);
+// 桌面上的小浮层：点外面、按 Esc 收起（Esc 时焦点回到按钮）
+function usePopClose(on, box, btn, close) {
+  const closing = useRef(close);
+  closing.current = close;
   useEffect(() => {
-    if (!open) return;
-    const down = (e) => !box.current?.contains(e.target) && !btn.current?.contains(e.target) && setOpen(false);
-    const key = (e) => e.key === "Escape" && (setOpen(false), btn.current?.focus());
+    if (!on) return;
+    const down = (e) => !box.current?.contains(e.target) && !btn.current?.contains(e.target) && closing.current();
+    const key = (e) => e.key === "Escape" && (closing.current(), btn.current?.focus());
     addEventListener("mousedown", down);
     addEventListener("keydown", key);
     return () => {
       removeEventListener("mousedown", down);
       removeEventListener("keydown", key);
     };
-  }, [open]);
+  }, [on, box, btn]);
+}
+
+// 弹层挂到 .ws 里：颜色等变量定义在 .ws 上；手机上左栏是带 transform 的抽屉，挂在里面 fixed 会跟着抽屉走
+const onWs = (node) => createPortal(node, document.querySelector(".ws") || document.body);
+
+// 左栏最下面常驻的额度按钮：小圆环画剩余比例，旁边写“约可问 N 次”（2026-11-07 Sean 定，第 27 条）；管理员写“额度不限”。
+// 显示最紧的那个额度，用到八成变黄、用完变红；没取到不显示。点开是额度面板（UsagePanel，手机上是底部弹层），完整那句在面板里
+export function CreditsFoot({ credits, guest, onLogin, onOpen, mobile }) {
+  const [open, setOpen] = useState(false);
+  const btn = useRef(null);
+  const box = useRef(null);
+  usePopClose(open && !mobile, box, btn, () => setOpen(false));
   if (!credits) return null;
   const left = credits.unlimited ? null : creditsLeft(credits);
-  const used = usedBy(credits); // 管理员不限：按钮上显示今天用了多少
   if (!credits.unlimited && !left) return null;
   const frac = left ? Math.max(0, Math.min(1, left.remaining / left.limit)) : 1;
   const cls = "ws-credits-btn" + (left?.exhausted ? " out" : left?.warn ? " warn" : "");
-  const title = credits.unlimited ? `额度不限；今天用了 ${used.day} credits，这周 ${used.week}`
-    : `${left.span}还剩 ${Math.floor(left.remaining)} / ${left.limit} credits，${left.resetText}`;
-  const rect = open ? btn.current?.getBoundingClientRect() : null;
+  const line = credits.unlimited ? `额度不限，今天用了 ${num(usedBy(credits).day)} 额度` : creditsLine(left);
+  const close = () => setOpen(false);
+  const panel = <UsagePanel credits={credits} left={left} guest={guest} mobile={mobile} onLogin={onLogin && (() => { close(); onLogin(); })} />;
+  const rect = open && !mobile ? btn.current?.getBoundingClientRect() : null;
   return (
     <>
-      <button ref={btn} className={cls} title={title} aria-label={"额度：" + title} aria-haspopup="dialog" aria-expanded={open}
+      <button ref={btn} className={cls} title={mobile ? undefined : line} aria-label={"额度：" + line} aria-haspopup="dialog" aria-expanded={open}
         onClick={() => { if (!open) onOpen?.(); setOpen(!open); }}>
         <Ring frac={frac} />
-        <span>{credits.unlimited ? <><small>今天</small>{used.day}</> : <>{guest && <small>试用</small>}{Math.floor(left.remaining)}</>}</span>
+        <span>{credits.unlimited ? "额度不限" : creditsShort(left)}</span>
       </button>
-      {open && rect && (
-        <div ref={box} className="ws-menu ws-usage" role="dialog" aria-label="额度" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: 232 }}>
-          <UsagePanel credits={credits} guest={guest} onLogin={onLogin && (() => { setOpen(false); onLogin(); })} />
+      {open && mobile && onWs(<Sheet title="额度" onClose={close} className="ws-usage-sheet">{panel}</Sheet>)}
+      {rect && (
+        <div ref={box} className="ws-menu ws-usage" role="dialog" aria-label="额度" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: 264 }}>
+          {panel}
         </div>
       )}
     </>
   );
 }
 
-// 今天、这周用了多少（取整）；没有那个窗口算 0
+// 今天、这周用了多少；没有那个窗口算 0
 function usedBy(credits) {
-  const of = (kind) => Math.floor(credits.windows.find((w) => w.kind === kind)?.used || 0);
+  const of = (kind) => credits.windows.find((w) => w.kind === kind)?.used || 0;
   return { day: of("day"), week: of("week") };
 }
 
@@ -131,38 +145,36 @@ function Ring({ frac, size = 16 }) {
   );
 }
 
-// 额度面板（照 Claude 用量弹层的样子）：来源一行；每个窗口一行，左标签右“剩余 xx%”；余额一行；底下是重置时间，游客多一个去登录的按钮
-function UsagePanel({ credits, guest, onLogin }) {
-  const source = credits.unlimited ? "管理员" : guest ? "游客试用" : "登录账号";
+// 额度面板：完整的一句（“今天还剩 7,300 额度，约可问 36 次 · 明天 0 点恢复”，和输入框上面的提醒、用完时的报错同一种说法），
+// 额度来源，怎么估的；游客下面是去登录的按钮，写着登录后会怎样。只写最紧的那个额度，日、周不并排列（第 27 条）
+function UsagePanel({ credits, left, guest, mobile, onLogin }) {
   if (credits.unlimited) {
     const used = usedBy(credits);
     return (
       <>
-        <div className="ws-menu-note">额度来源：{source}（不限）</div>
-        <div className="ws-usage-rows">
-          <div className="ws-usage-row"><span>今天已用</span><b>{used.day} credits</b></div>
-          <div className="ws-usage-row"><span>这周已用</span><b>{used.week} credits</b></div>
-        </div>
-        <div className="ws-menu-note">每天 0 点、每周一 0 点重新计（北京时间）</div>
+        <div className="ws-usage-main">额度不限</div>
+        <div className="ws-menu-note">管理员。今天用了 {num(used.day)} 额度，这周 {num(used.week)}；按北京时间算。</div>
       </>
     );
   }
-  const ws = credits.windows.filter((w) => w.kind === "day" || w.kind === "week");
-  const left = creditsLeft(credits);
-  const pct = (w) => Math.max(0, Math.floor((1 - w.used / w.limit) * 100));
+  const after = guest ? loginLine(credits) : null;
+  const [amount, when] = creditsParts(left);
+  const [more, asks] = after ? after.split("，") : [];
   return (
     <>
-      <div className="ws-menu-note">额度来源：{source}</div>
-      <div className="ws-usage-rows">
-        {ws.map((w) => (
-          <div key={w.kind} className={"ws-usage-row" + (w.used >= w.limit ? " out" : w.used >= w.limit * (credits.warn_at ?? 0.8) ? " warn" : "")}>
-            <span>{w.kind === "week" ? "每周限额" : "每日限额"}</span><b>剩余 {pct(w)}%</b>
-          </div>
-        ))}
-        <div className="ws-usage-row"><span>余额</span><b>{Math.floor(left.remaining)} credits</b></div>
+      {/* 和别处同一句，分两行：还剩多少 / 什么时候恢复（中间的“ · ”只是不显示，读屏、复制照旧是整句） */}
+      <div className={"ws-usage-main" + (left.exhausted ? " out" : left.warn ? " warn" : "")}>
+        {amount}<span className="ws-usage-when"><span className="sep"> · </span>{when}</span>
       </div>
-      <div className="ws-menu-note">{ws.some((w) => w.kind === "week") ? "每天 0 点、每周一 0 点重置" : "每天 0 点重置"}（北京时间）</div>
-      {guest && onLogin && <button onClick={onLogin}><IconLock size={14} />登录后每天 10000 credits</button>}
+      <div className="ws-menu-note">
+        {guest ? "游客试用的额度。" : "登录账号的额度。"}
+        {credits.per_ask > 0 && `按一次约 ${num(credits.per_ask)} 额度估算，联网查得多、开着深度思考的问题会用得多一些。`}按北京时间算。
+      </div>
+      {after && onLogin && (
+        <button className={"ws-usage-login" + (mobile ? " ws-sheet-act" : "")} onClick={onLogin}>
+          <IconLock size={mobile ? 18 : 14} /><span>{more}{asks && <>，<span className="ws-keep">{asks}</span></>}</span>
+        </button>
+      )}
     </>
   );
 }
@@ -173,47 +185,98 @@ function Avatar({ me }) {
   return <span className="ws-avatar">{(me.name || me.email || "?").trim()[0].toUpperCase()}</span>;
 }
 
-// 登录弹窗。验证码换登录的那几秒不能关（关了这次验证码就作废，用户还以为在登录）
-// crowded：是因为领不到游客身份弹出来的，标题和说明换成“人多、请先登录”
-export function LoginDialog({ open, onClose, crowded }) {
-  const [view, setView] = useState("methods");
+const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
+const touch = () => matchMedia("(pointer: coarse)").matches;
+
+// 登录弹窗（第 29 条，2026-11-07 Sean 定）：邮箱验证码在最上面、直接填；GitHub、Google 在“或者”下面，Google 标着要能打开它。
+// 邮箱能不能用页面起来时就问好了（auth.js 的 emailLoginAvailable），还没问到的那一会儿给邮箱那栏留着位置。
+// 焦点（待确认第 7 条）：打开时进到弹窗里（桌面落在第一个能填、能点的地方；触屏落在弹窗本身，不自己弹出键盘），Tab 在弹窗里转，
+// 关掉回到打开它的地方。验证码换登录的那几秒不能关（关了这次验证码就作废，用户还以为在登录）。
+// crowded：是因为领不到游客身份弹出来的（auth.js），说清为什么、登录后会怎样（第 26 条）；want：游客点了锁着的模型，说登录后就能用它（第 28 条）；
+// credits：现在的额度（游客的里面有登录后每天多少）
+export function LoginDialog({ open, onClose, crowded, want, credits }) {
+  const [phase, setPhase] = useState("start"); // start：填邮箱、或者选别的方式；code：填验证码
   const [going, setGoing] = useState(null); // 正在跳去的 provider
-  const [email, setEmail] = useState(null); // 邮箱验证码能不能用：null 还没问
+  const [asked, setAsked] = useState(null); // 打开以后问到的邮箱验证码能不能用
   const [critical, setCritical] = useState(false);
   const [error, setError] = useState(null);
+  const box = useRef(null);
+  const autoFocused = useRef(null); // 弹窗自己放焦点的地方：焦点还在这里就算用户没动过
   const criticalRef = useRef(false);
   criticalRef.current = critical;
+  const closing = useRef(onClose);
+  closing.current = onClose;
   useEffect(() => {
     if (!open) return;
-    setView("methods");
+    setPhase("start");
     setGoing(null);
     setError(null);
-    emailLoginAvailable().then(setEmail);
-    const key = (e) => e.key === "Escape" && !criticalRef.current && onClose();
+    setAsked(null);
+    emailLoginAvailable().then(setAsked);
+    const back = document.activeElement;
+    const key = (e) => {
+      if (e.key !== "Escape" || criticalRef.current) return;
+      e.preventDefault();
+      closing.current();
+    };
     addEventListener("keydown", key);
-    return () => removeEventListener("keydown", key);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      removeEventListener("keydown", key);
+      if (back?.isConnected && back !== document.body) back.focus({ preventScroll: true });
+    };
   }, [open]);
+  // 邮箱验证码能不能用：页面起来时多半已经问到了（emailLoginKnown），打开的第一下就用它，不先闪一下转圈；null 是还没问到
+  const email = asked ?? emailLoginKnown();
+  // 焦点进弹窗：打开时、邮箱那栏刚问到时，落到第一个能填能点的地方。用户自己挪过（不在弹窗放的地方了）就不动
+  useEffect(() => {
+    const el = box.current;
+    if (!open || !el || phase !== "start") return;
+    const a = document.activeElement;
+    if (el.contains(a) && a !== el && a !== autoFocused.current) return;
+    const to = touch() ? el : el.querySelector("input:not(:disabled), .ws-login-btn:not(:disabled)") || el;
+    autoFocused.current = to;
+    to.focus({ preventScroll: true });
+  }, [open, email, phase]);
   if (!open) return null;
   const go = (provider) => {
     setGoing(provider);
     setError(null);
     signIn(provider).catch(() => { setGoing(null); setError("没能打开登录页：检查网络后再点一次；一直不行，可以换一种方式登录。"); });
   };
+  // Tab 每一下都自己挪（不交给浏览器）：Safari 默认 Tab 跳过按钮，只在首尾拦的话从邮箱框一按就出了弹窗
+  const trap = (e) => {
+    if (e.key !== "Tab") return;
+    const els = [...box.current.querySelectorAll(FOCUSABLE)].filter((x) => x.offsetParent !== null);
+    if (!els.length) return;
+    e.preventDefault();
+    const i = els.indexOf(document.activeElement);
+    const n = els.length;
+    els[i < 0 ? (e.shiftKey ? n - 1 : 0) : (i + (e.shiftKey ? n - 1 : 1)) % n].focus();
+  };
+  const asks = asksOf(credits?.login?.day ?? crowded?.login?.day ?? 0, credits?.per_ask ?? crowded?.per_ask);
+  const desc = crowded
+    ? `你所在的网络今天新来的游客太多了（防刷，同一网络每天最多 ${crowded.per_ip || 5} 个游客身份）。登录后不受这个限制${asks ? `，每天约可问 ${asks} 次` : "，马上能接着用"}。`
+    : `${want ? `登录后就能用 ${want.name}。` : ""}登录后能用全部模型${asks ? `，每天约可问 ${asks} 次` : ""}；对话和记忆按账号保存，现在的对话会一起并进账号。`;
   return (
     <div className="ws-overlay" onMouseDown={(e) => e.target === e.currentTarget && !critical && onClose()}>
-      <div className="ws-dialog" role="dialog" aria-modal="true" aria-labelledby="ws-login-title">
+      <div ref={box} className="ws-dialog" role="dialog" aria-modal="true" aria-labelledby="ws-login-title" aria-describedby="ws-login-desc" tabIndex={-1} onKeyDown={trap}>
         {!critical && <button className="ws-dialog-close" aria-label="关闭" onClick={onClose}><IconClose size={16} /></button>}
-        {view === "email" ? (
-          <EmailPanel onBack={() => setView("methods")} onDone={onClose} setCritical={setCritical} />
-        ) : (
+        {phase === "start" && (
           <>
-            <h2 id="ws-login-title" className="ws-dialog-title">{crowded ? "当前访问人数过多" : "登录灵稿"}</h2>
-            <p className="ws-dialog-desc">{crowded ? "请先登录，登录后可以马上继续聊天；对话和记忆也会按账号保存。" : "登录后能用全部模型，对话和记忆按账号保存。现在这些对话会一起并进账号。"}</p>
+            <h2 id="ws-login-title" className="ws-dialog-title">{crowded ? "登录后接着用" : "登录灵稿"}</h2>
+            <p id="ws-login-desc" className="ws-dialog-desc">{desc}</p>
+          </>
+        )}
+        {email === null && phase === "start" && <div className="ws-login-wait" role="status"><Spinner size={14} />正在准备邮箱登录…</div>}
+        {email && <EmailFlow phase={phase} setPhase={setPhase} setCritical={setCritical} blocked={!!going} />}
+        {phase === "start" && (
+          <>
+            {email !== false && <div className="ws-login-or">或者</div>}
             <div className="ws-login-methods">
               <button className="ws-login-btn" disabled={!!going} onClick={() => go("github")}>{going === "github" ? <Spinner size={15} /> : <GitHubMark />}用 GitHub 登录</button>
-              <button className="ws-login-btn" disabled={!!going} onClick={() => go("google")}>{going === "google" ? <Spinner size={15} /> : <GoogleMark />}用 Google 登录</button>
-              {email && <button className="ws-login-btn" disabled={!!going} onClick={() => setView("email")}><IconLock size={16} />用邮箱验证码登录</button>}
+              <button className="ws-login-btn" disabled={!!going} onClick={() => go("google")}>
+                {going === "google" ? <Spinner size={15} /> : <GoogleMark />}用 Google 登录<small>需要能打开 Google</small>
+              </button>
             </div>
             {error && <div className="ws-login-err" role="alert">{error}</div>}
           </>
@@ -223,18 +286,21 @@ export function LoginDialog({ open, onClose, crowded }) {
   );
 }
 
-// 邮箱验证码：填邮箱 → 发码 → 填码。重发有间隔；验证码对了换登录的那几秒告诉弹窗别关
-function EmailPanel({ onBack, onDone, setCritical }) {
-  const [phase, setPhase] = useState("email");
+// 邮箱验证码：填邮箱 → 发码 → 填码。填邮箱那步就在弹窗最上面（phase 是 start），发出去以后整个弹窗换成填验证码（phase 是 code）。
+// 两个框都有看得见的标签（第 33 条：只靠占位符，填完就不知道这框是什么，读屏也会丢字段名），出错的那句连在框上（aria-describedby）。
+// 重发有间隔；验证码对了换登录的那几秒告诉弹窗别关；换好了整页重载（身份变了，按新身份重取）
+function EmailFlow({ phase, setPhase, setCritical, blocked }) {
   const [addr, setAddr] = useState("");
   const [code, setCode] = useState("");
-  const [sent, setSent] = useState(null); // {masked, codeLength, resendAt}
+  const [sent, setSent] = useState(null); // {masked, codeLength, expiresIn, resendAt}
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [now, setNow] = useState(Date.now);
   const flow = useRef(null);
   const ctl = useRef(null);
   const input = useRef(null);
+  const first = useRef(true);
+  const ids = useId();
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => {
@@ -243,7 +309,10 @@ function EmailPanel({ onBack, onDone, setCritical }) {
       flow.current?.cancel();
     };
   }, []);
-  useEffect(() => { input.current?.focus(); }, [phase]);
+  useEffect(() => { // 换了一步（发出去了、回去换邮箱）：光标跟到这一步的框里；刚打开时由弹窗决定焦点
+    if (first.current) { first.current = false; return; }
+    input.current?.focus();
+  }, [phase]);
   const run = async (fn, critical = false) => {
     if (busy) return;
     setBusy(true);
@@ -254,9 +323,9 @@ function EmailPanel({ onBack, onDone, setCritical }) {
       await fn(ctl.current.signal);
     } catch (e) {
       if (e?.name === "AbortError") return;
-      setError(e?.message || "出错了，再试一次");
+      setError(e?.message || "出错了，再试一次"); // EmailLogin 抛的都是自己写的说法（EMAIL_ERRORS 等），SDK 的英文报错在 auth.js 里换掉了
       if (["interaction_expired", "interaction_consumed", "invalid_interaction", "flow_expired", "too_many_attempts"].includes(e?.code)) {
-        setPhase("email");
+        setPhase("start");
         setCode("");
         setSent(null);
       }
@@ -268,7 +337,7 @@ function EmailPanel({ onBack, onDone, setCritical }) {
   const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr.trim());
   const start = (e) => {
     e.preventDefault();
-    if (!valid) return setError("邮箱地址不对");
+    if (!valid) return setError("邮箱地址的格式不对，再看一下");
     return run(async (signal) => {
       flow.current?.cancel();
       flow.current = new EmailLogin();
@@ -287,34 +356,34 @@ function EmailPanel({ onBack, onDone, setCritical }) {
     if (code.length !== (sent?.codeLength || 6)) return undefined;
     return run(async (signal) => {
       await flow.current.verify(code, signal);
-      onDone();
       location.reload(); // 身份变了，整页按新身份重取
     }, true);
   };
   const wait = sent ? Math.max(0, Math.ceil((sent.resendAt - now) / 1000)) : 0;
-  if (phase === "email") {
+  const err = error && <div id={ids + "err"} className="ws-login-err" role="alert">{error}</div>;
+  if (phase !== "code" || !sent) {
     return (
-      <form onSubmit={start}>
-        <h2 id="ws-login-title" className="ws-dialog-title">用邮箱登录</h2>
-        <p className="ws-dialog-desc">填邮箱，我们发一个验证码过去。没有账号会直接注册。</p>
-        <input ref={input} className="ws-field" type="email" autoComplete="email" placeholder="邮箱" value={addr} disabled={busy} onChange={(e) => setAddr(e.target.value)} />
-        {error && <div className="ws-login-err" role="alert">{error}</div>}
-        <div className="ws-dialog-actions">
-          <button type="button" className="ws-btn ghost" disabled={busy} onClick={onBack}>换个方式</button>
-          <button type="submit" className="ws-btn primary" disabled={busy || !addr.trim()}>{busy && <Spinner size={14} />}发送验证码</button>
-        </div>
+      <form className="ws-login-email" onSubmit={start} noValidate>
+        <label className="ws-field-label" htmlFor={ids + "addr"}>邮箱</label>
+        <input ref={input} id={ids + "addr"} className="ws-field" type="email" autoComplete="email" inputMode="email" placeholder="name@example.com" value={addr} disabled={busy}
+          aria-invalid={error ? true : undefined} aria-describedby={error ? ids + "err" : undefined} onChange={(e) => setAddr(e.target.value)} />
+        {err}
+        <button type="submit" className="ws-btn primary ws-login-send" disabled={busy || blocked || !addr.trim()}>{busy && <Spinner size={14} />}发送验证码</button>
+        <div className="ws-login-tip">没有账号会直接注册。</div>
       </form>
     );
   }
   return (
-    <form onSubmit={verify}>
+    <form onSubmit={verify} noValidate>
       <h2 id="ws-login-title" className="ws-dialog-title">输入验证码</h2>
-      <p className="ws-dialog-desc">验证码已发到 {sent.masked}{sent.expiresIn > 0 && `，${Math.max(1, Math.round(sent.expiresIn / 60))} 分钟内有效`}。</p>
-      <input ref={input} className="ws-field code" inputMode="numeric" autoComplete="one-time-code" placeholder={"·".repeat(sent.codeLength)} maxLength={sent.codeLength}
-        value={code} disabled={busy} onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
-      {error && <div className="ws-login-err" role="alert">{error}</div>}
+      <p id="ws-login-desc" className="ws-dialog-desc">验证码已发到 {sent.masked}{sent.expiresIn > 0 && `，${Math.max(1, Math.round(sent.expiresIn / 60))} 分钟内有效`}。</p>
+      <label className="ws-field-label" htmlFor={ids + "code"}>验证码<span>{sent.codeLength} 位数字</span></label>
+      <input ref={input} id={ids + "code"} className="ws-field code" inputMode="numeric" autoComplete="one-time-code" maxLength={sent.codeLength}
+        value={code} disabled={busy} aria-invalid={error ? true : undefined} aria-describedby={error ? ids + "err" : undefined}
+        onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
+      {err}
       <div className="ws-dialog-actions">
-        <button type="button" className="ws-btn ghost" disabled={busy} onClick={() => { setPhase("email"); setCode(""); setError(null); }}>换个邮箱</button>
+        <button type="button" className="ws-btn ghost" disabled={busy} onClick={() => { setPhase("start"); setCode(""); setError(null); }}>换个邮箱</button>
         <button type="button" className="ws-btn ghost" disabled={busy || wait > 0} onClick={resend}>{wait > 0 ? `重新发送（${wait} 秒）` : "重新发送"}</button>
         <button type="submit" className="ws-btn primary" disabled={busy || code.length !== sent.codeLength}>{busy && <Spinner size={14} />}登录</button>
       </div>
