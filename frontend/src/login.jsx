@@ -51,7 +51,6 @@ export function UserFoot({ auth, onLogin, onSettings, mobile }) {
   // 点了一项：菜单收起，焦点先回头像按钮，再打开的窗口（设置、登录）关上以后就回到这里（桌面；手机上底部弹层自己把焦点还回去）
   const pick = (fn) => () => { close(); if (!mobile) btn.current?.focus({ preventScroll: true }); fn?.(); };
   const leave = () => { setLeaving(true); signOut().catch(() => setLeaving(false)); };
-  const note = "退出后在 Fusion 等其他应用也会退出。";
   // 名字就是邮箱 @ 前面那段的（邮箱登录没填名字时就是这样）只写邮箱，不上下各写一遍
   const named = me?.name && me.name !== me.email?.split("@")[0] ? me.name : null;
   const who = me && (
@@ -80,7 +79,6 @@ export function UserFoot({ auth, onLogin, onSettings, mobile }) {
           {items.map(([Icon, text, fn, busy]) => (
             <button key={text} className={sheet.act} disabled={leaving} onClick={fn}>{busy ? <Spinner size={18} /> : <Icon size={18} />}{text}</button>
           ))}
-          {me && <div className={menu.note}>{note}</div>}
         </Sheet>,
       )}
       {rect && (
@@ -89,7 +87,6 @@ export function UserFoot({ auth, onLogin, onSettings, mobile }) {
           {items.map(([Icon, text, fn, busy]) => (
             <button key={text} role="menuitem" disabled={leaving} onClick={fn}>{busy ? <Spinner size={14} /> : <Icon size={14} />}{text}</button>
           ))}
-          {me && <div className={menu.note}>{note}</div>}
         </div>
       )}
     </>
