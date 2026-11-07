@@ -625,7 +625,7 @@
 .ws-main.fresh .ws-dock { position: static; } /* 下面这行贴着整个右栏的底，不是贴着输入框 */
 .ws-main.fresh .ws-ai-note { position: absolute; left: 0; right: 0; bottom: 12px; }
 .ws-welcome { text-align: center; }
-.ws-welcome h2 { font: 600 28px/1.35 var(--serif); letter-spacing: .02em; margin: 0; }
+.ws-welcome h2 { font: 600 28px/1.35 var(--serif); letter-spacing: .02em; margin: 0; text-wrap: balance; }
 .ws-examples { flex: 1.4 1 0; width: 100%; max-width: 756px; margin: 0 auto; padding: 18px 28px 40px; position: relative; }
 .ws-inspire { min-height: 72px; display: flex; flex-wrap: wrap; justify-content: center; align-content: flex-start; gap: 8px; }
 .ws-inspire-ruler { position: absolute; top: 0; left: 0; right: 0; height: 0; overflow: hidden; visibility: hidden; display: flex; } /* 一排放不下的剪掉，不把页面撑宽；量的宽度不受影响 */
