@@ -52,10 +52,12 @@ export function UserFoot({ auth, onLogin, onSettings, mobile }) {
   const pick = (fn) => () => { close(); if (!mobile) btn.current?.focus({ preventScroll: true }); fn?.(); };
   const leave = () => { setLeaving(true); signOut().catch(() => setLeaving(false)); };
   const note = "退出后在 Fusion 等其他应用也会退出。";
+  // 名字就是邮箱 @ 前面那段的（邮箱登录没填名字时就是这样）只写邮箱，不上下各写一遍
+  const named = me?.name && me.name !== me.email?.split("@")[0] ? me.name : null;
   const who = me && (
     <div className={menu.note + " " + styles.who}>
-      <b>{me.name || me.email}</b>
-      {me.name && me.email && <span>{me.email}</span>}
+      <b>{named || me.email || me.name}</b>
+      {named && me.email && <span>{me.email}</span>}
       {me.tier === "admin" && <span>管理员</span>}
     </div>
   );

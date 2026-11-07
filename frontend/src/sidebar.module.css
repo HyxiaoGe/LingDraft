@@ -72,8 +72,8 @@
 @keyframes fade { from { opacity: 0; } }
 @media print { .scrim { display: none !important; } }
 
-/* 最下面的额度按钮（login.jsx 的 CreditsFoot）：小圆环（剩余比例）+“约可问 N 次”，和头像并排；点开是额度面板。用到八成变黄、用完变红 */
-.credits { display: inline-flex; align-items: center; gap: 6px; height: 24px; margin: -4px 0; padding: 0 9px 0 6px; border: 1px solid var(--line2); border-radius: 999px;
+/* 最下面的额度按钮（login.jsx 的 CreditsFoot）：小圆环（剩余比例）+“剩 N 额度”，和头像并排，不缩、不折行（挤的时候让右边的名字截短）；点开是额度面板。用到八成变黄、用完变红 */
+.credits { flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; height: 24px; margin: -4px 0; padding: 0 9px 0 6px; border: 1px solid var(--line2); border-radius: 999px;
   background: var(--paper); font: inherit; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; cursor: pointer; transition: border-color .15s, color .15s; }
 .credits .ring { color: var(--accent); flex: none; }
 .credits[aria-expanded="true"] { color: var(--ink); border-color: var(--ink); }
