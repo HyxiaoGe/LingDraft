@@ -132,7 +132,7 @@
 .row.locked:not(:disabled) .name { color: var(--muted); } /* 游客能点去登录的锁着的模型：不像能选的那么黑 */
 .desc { font-size: 12px; line-height: 1.45; color: var(--muted); }
 .row:disabled .desc { color: var(--faint); }
-/* 厂商图标：白底小方块（深色模式也是白底，黑色的标志看得清）；没有图标的写一个字；“自动”是淡靛青底的星。锁着的、点不了的淡一点 */
+/* 厂商图标：白底小方块（深色模式也是白底，黑色的标志看得清）；没有图标的厂商写一个字；“自动”是淡靛青底的星。锁着的、点不了的淡一点 */
 .mark { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 1px solid var(--line); border-radius: 7px;
   background: #fff; color: #3f4650; font-size: 12px; font-weight: 600; line-height: 1; overflow: hidden; }
 .mark img { width: 66%; height: 66%; }

@@ -592,9 +592,11 @@ function ModelSheet({ title, onClose, children }) {
   );
 }
 
-// 模型前面的厂商小图标：白底小方块（深色模式下也看得清黑色的标志），按 model 的厂商前缀对图标（public/providers，照搬 Fusion，来自 lobe-icons，MIT）；
-// 没有图标的（智谱、混元）写名字的第一个字。“自动”是一颗星。大小看放在哪（菜单、弹层、按钮），写在样式里
-const PROVIDER_ICONS = { deepseek: "deepseek", ark: "volcengine", moonshot: "moonshot", xai: "xai", dashscope: "qwen", mimo: "xiaomi", minimax: "minimax" };
+// 模型前面的厂商小图标：白底小方块（深色模式下也看得清黑色的标志），按 model 的厂商前缀对图标（public/providers，都来自 lobe-icons，MIT：
+// 七个照搬 Fusion，智谱、混元是 @lobehub/icons-static-svg 1.102.0 的彩色版）；以后接了没有图标的厂商，写名字的第一个字。
+// “自动”是一颗星。大小看放在哪（菜单、弹层、按钮），写在样式里
+const PROVIDER_ICONS = { deepseek: "deepseek", ark: "volcengine", moonshot: "moonshot", xai: "xai", dashscope: "qwen", mimo: "xiaomi", minimax: "minimax",
+  zhipuai: "zhipu", hunyuan: "hunyuan" };
 function ModelIcon({ m, auto }) {
   if (auto) return <span className={styles.mark + " " + styles.auto} aria-hidden="true"><Sparkles strokeWidth={2} /></span>;
   const key = PROVIDER_ICONS[(m.model || "").split(":")[0]];
