@@ -12,6 +12,8 @@ import { opener, useLayer } from "./layers.js";
 import { Avatar } from "./login.jsx";
 import { MemoryPanel } from "./memory.jsx";
 import { THEMES } from "./prefs.js";
+import dialog from "./dialog.module.css";
+import styles from "./settings.module.css";
 
 const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
 const SECTIONS = [
@@ -49,7 +51,7 @@ export function SettingsDialog({ view, onView, onClose, mobile, auth, onLogin, t
     if (cur) {
       last.current = cur.key;
       box.current?.focus({ preventScroll: true });
-    } else box.current?.querySelector(`.set-nav-item[data-key="${last.current}"]`)?.focus({ preventScroll: true });
+    } else box.current?.querySelector(`[data-key="${last.current}"]`)?.focus({ preventScroll: true });
   }, [cur?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   // Tab 每一下都自己挪，只在窗口里转（和登录窗口一样：Safari 默认 Tab 跳过按钮）
   const trap = (e) => {
@@ -61,31 +63,31 @@ export function SettingsDialog({ view, onView, onClose, mobile, auth, onLogin, t
     const n = els.length;
     els[i < 0 ? (e.shiftKey ? n - 1 : 0) : (i + (e.shiftKey ? n - 1 : 1)) % n].focus();
   };
-  const close = <button className="ws-dialog-close" aria-label="关闭" onClick={onClose}><IconClose size={16} /></button>;
+  const close = <button className={`${dialog.close} ${dialog.inline} ${styles.close}`} aria-label="关闭" onClick={onClose}><IconClose size={16} /></button>;
   return (
-    <div className="ws-overlay set-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={box} className="ws-dialog set-dialog" role="dialog" aria-modal="true" aria-label="设置" tabIndex={-1} onKeyDown={trap}>
+    <div className={`${dialog.overlay} ${dialog.large}`} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={box} className={`${dialog.dialog} ${dialog.large} ${dialog.side} flex phone:flex-col`} role="dialog" aria-modal="true" aria-label="设置" tabIndex={-1} onKeyDown={trap}>
         {(!mobile || !cur) && (
-          <nav className="set-nav" aria-label="设置分类">
-            <div className="set-head"><h2 className="set-title">设置</h2>{mobile && close}</div>
+          <nav className={styles.nav} aria-label="设置分类">
+            <div className={styles.head}><h2 className={styles.title}>设置</h2>{mobile && close}</div>
             <Me auth={auth} onLogin={onLogin} />
-            <div className="set-nav-list">
+            <div className={styles.navList}>
               {sections.map(({ key, label, Icon }) => (
-                <button key={key} data-key={key} className="set-nav-item" aria-current={!mobile && cur?.key === key ? "page" : undefined} onClick={() => onView(key)}>
-                  <Icon size={16} />{label}{mobile && <IconChevron size={16} className="chev" />}
+                <button key={key} data-key={key} className={styles.navItem} aria-current={!mobile && cur?.key === key ? "page" : undefined} onClick={() => onView(key)}>
+                  <Icon size={16} />{label}{mobile && <IconChevron size={16} className={styles.chev} />}
                 </button>
               ))}
             </div>
           </nav>
         )}
         {cur && (
-          <section className="set-pane" aria-labelledby={paneId}>
-            <div className="set-head">
-              {mobile && <button className="ws-btn ghost sm set-back" aria-label="返回设置" onClick={() => onView("settings")}><IconChevron size={14} className="back" />设置</button>}
-              <h2 id={paneId} className="set-title">{cur.label}</h2>
+          <section className={styles.pane} aria-labelledby={paneId}>
+            <div className={styles.head}>
+              {mobile && <button className={"ws-btn ghost sm " + styles.back} aria-label="返回设置" onClick={() => onView("settings")}><IconChevron size={14} className={styles.backIcon} />设置</button>}
+              <h2 id={paneId} className={styles.title}>{cur.label}</h2>
               {close}
             </div>
-            <div className="set-body" ref={body}>
+            <div className={styles.body} ref={body}>
               {cur.key === "general" && (
                 <Group label="新对话" footId={thinkId}
                   foot={`新对话默认${think ? "开" : "关"}深度思考。对话里随时能切，只管那一段对话；只对能开关思考的模型有效。存在这台设备上。`}>
@@ -95,8 +97,8 @@ export function SettingsDialog({ view, onView, onClose, mobile, auth, onLogin, t
               {cur.key === "look" && (
                 <Group label="主题" role="radiogroup" foot="跟随系统时，系统换深浅色这里跟着换。存在这台设备上。">
                   {THEMES.map(([v, label]) => (
-                    <button key={v} className="set-row" role="radio" aria-checked={theme === v} onClick={() => onTheme(v)}>
-                      <span className="set-name">{label}</span>{theme === v && <IconCheck size={16} className="check" />}
+                    <button key={v} className={styles.row} role="radio" aria-checked={theme === v} onClick={() => onTheme(v)}>
+                      <span className={styles.name}>{label}</span>{theme === v && <IconCheck size={16} className={styles.check} />}
                     </button>
                   ))}
                 </Group>
@@ -116,9 +118,9 @@ function Me({ auth, onLogin }) {
   if (!auth.login) return null;
   const { me } = auth;
   return (
-    <div className="set-me">
+    <div className={styles.me}>
       {me ? <Avatar me={me} /> : <span className="ws-avatar guest" aria-hidden="true">游</span>}
-      <span className="set-me-text">
+      <span className={styles.meText}>
         <b>{me ? me.name || me.email : "游客"}</b>
         {me?.name && me.email && <small>{me.email}</small>}
       </span>
@@ -130,10 +132,10 @@ function Me({ auth, onLogin }) {
 // 一组：上面一行小字是组名，中间是圆角框里的几行，下面是说明（footId 给开关念说明用）
 function Group({ label, foot, footId, role, children }) {
   return (
-    <div className="set-group">
-      {label && <div className="set-group-label">{label}</div>}
-      <div className="set-rows" role={role} aria-label={role ? label : undefined}>{children}</div>
-      {foot && <p className="set-foot" id={footId}>{foot}</p>}
+    <div className={styles.group}>
+      {label && <div className={styles.groupLabel}>{label}</div>}
+      <div className={styles.rows} role={role} aria-label={role ? label : undefined}>{children}</div>
+      {foot && <p className={styles.foot} id={footId}>{foot}</p>}
     </div>
   );
 }
@@ -141,8 +143,8 @@ function Group({ label, foot, footId, role, children }) {
 // 整行都是开关：读屏念“深度思考，开关，开”和下面的说明
 function SwitchRow({ name, on, onChange, desc, disabled }) {
   return (
-    <button className="set-row" role="switch" aria-checked={on} aria-describedby={desc} disabled={disabled} onClick={() => onChange(!on)}>
-      <span className="set-name">{name}</span>
+    <button className={styles.row} role="switch" aria-checked={on} aria-describedby={desc} disabled={disabled} onClick={() => onChange(!on)}>
+      <span className={styles.name}>{name}</span>
       <span className={"ws-switch" + (on ? " on" : "")} aria-hidden="true" />
     </button>
   );

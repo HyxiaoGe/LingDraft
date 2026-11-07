@@ -1,0 +1,30 @@
+/* 弹窗的外壳：登录（login.jsx）、设置（settings.jsx）、搜对话（search.jsx）共用，2026-11-07 从 workspace.css 迁过来。
+   批次 E 整个弹窗收拾了一遍：内边距 24、标题 20（原来 26/22、18 不在刻度上），手机上按钮、输入框、关闭键都到 44。
+   弹窗本身能拿焦点（触屏打开时焦点落在它上面，不自己弹键盘）；它不是按钮，焦点不画外圈（外圈套在边框外像两层边），换成边框染上强调色 */
+.overlay { position: fixed; inset: 0; z-index: 80; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 16px;
+  animation: rise .12s var(--ease); }
+.dialog { position: relative; width: 100%; max-width: 380px; max-height: calc(100dvh - 32px); overflow-y: auto; background: var(--paper); border: 1px solid var(--line2);
+  border-radius: var(--r-lg); box-shadow: var(--lift); padding: 24px; }
+.dialog:focus-visible { outline: none; border-color: var(--accent-line); }
+.close { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted);
+  display: flex; align-items: center; justify-content: center; }
+@media (hover: hover) { .close:hover { background: var(--hover); color: var(--ink); } }
+/* 放在标题那一行里的关闭键（设置、搜对话） */
+.close.inline { position: static; flex: none; }
+
+/* 大窗口（设置、搜对话，2026-11-07 Sean 定，照豆包）：宽 960、高是屏高减上下各 48（最高 880），居中；里面自己分区、自己滚。
+   设置窗口的底色是左栏那种浅灰（side） */
+.overlay.large { padding: 48px 24px; }
+.dialog.large { max-width: 960px; height: min(880px, 100vh - 96px); height: min(880px, 100dvh - 96px); max-height: none; padding: 0; overflow: hidden; }
+.dialog.side { background: var(--side); }
+
+@keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes sheet-up { from { transform: translateY(100%); } }
+
+@media (max-width: 720px) {
+  .close { top: 4px; right: 4px; width: 44px; height: 44px; }
+  /* 大窗口从底部升起，占九成高 */
+  .overlay.large { align-items: flex-end; padding: 0; }
+  .dialog.large { max-width: none; height: 90vh; height: 90dvh; padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    border-width: 1px 0 0; border-radius: var(--r-lg) var(--r-lg) 0 0; animation: sheet-up .2s var(--ease); }
+}

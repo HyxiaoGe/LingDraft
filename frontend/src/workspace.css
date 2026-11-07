@@ -154,45 +154,6 @@
 .ws-user-note b { font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-user-note span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ---------- 登录弹窗 ---------- */
-.ws-overlay { position: fixed; inset: 0; z-index: 80; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 16px; animation: ws-in .12s var(--ease); }
-/* 批次 E 整个弹窗收拾了一遍：内边距 24、标题 20（原来 26/22、18 不在刻度上），手机上按钮、输入框、关闭键都到 44（见窄屏那段）。
-   弹窗本身能拿焦点（触屏打开时焦点落在它上面，不自己弹键盘）；它不是按钮，焦点不画外圈（外圈套在边框外像两层边），换成边框染上强调色 */
-.ws-dialog { position: relative; width: 100%; max-width: 380px; max-height: calc(100dvh - 32px); overflow-y: auto; background: var(--paper); border: 1px solid var(--line2);
-  border-radius: var(--r-lg); box-shadow: var(--lift); padding: 24px; }
-.ws .ws-dialog:focus-visible { outline: none; border-color: var(--accent-line); }
-.ws-dialog-close { position: absolute; top: 8px; right: 8px; width: 32px; height: 32px; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); display: flex; align-items: center; justify-content: center; }
-@media (hover: hover) { .ws-dialog-close:hover { background: var(--hover); color: var(--ink); } }
-.ws-dialog-title { margin: 0 16px 8px 0; font: 600 20px/1.3 var(--serif); letter-spacing: .02em; } /* 右边让开关闭键 */
-.ws-dialog-desc { margin: 0 0 16px; color: var(--muted); font-size: 13px; line-height: 1.6; text-wrap: pretty; }
-/* 邮箱在最上面（第 29 条）：看得见的标签（第 33 条）、框、发送按钮占满一行；下面“或者”一条线，再下面 GitHub、Google */
-.ws-field-label { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0 0 4px; font-size: 13px; font-weight: 500; color: var(--ink2); }
-.ws-field-label span { font-size: 12px; font-weight: 400; color: var(--muted); }
-.ws-login-email { display: flex; flex-direction: column; }
-.ws-login-send { width: 100%; height: 40px; justify-content: center; margin-top: 12px; font-size: 14px; }
-.ws-login-tip { margin-top: 8px; font-size: 12px; color: var(--muted); text-align: center; }
-/* 邮箱还没问到时转圈占着邮箱那栏的高（标签 + 框 + 发送 + 小字：桌面 144、手机 152，见窄屏那段），问到了弹窗不跳 */
-.ws-login-wait { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 144px; font-size: 13px; color: var(--muted); }
-.ws-login-or { display: flex; align-items: center; gap: 12px; margin: 16px 0; font-size: 12px; color: var(--muted); }
-.ws-login-or::before, .ws-login-or::after { content: ""; flex: 1; height: 1px; background: var(--line); }
-.ws-login-methods { display: flex; flex-direction: column; gap: 8px; }
-.ws-login-btn { display: flex; align-items: center; justify-content: center; gap: 8px; height: 40px; border: 1px solid var(--line2); border-radius: var(--r); background: var(--paper); font-size: 14px; }
-@media (hover: hover) { .ws-login-btn:hover:not(:disabled) { background: var(--hover); border-color: var(--faint); } }
-.ws-login-btn:disabled { opacity: .55; }
-.ws-login-btn svg { flex: none; }
-.ws-login-btn small { font-size: 12px; color: var(--muted); }
-.ws-login-err { margin-top: 8px; color: var(--danger); font-size: 13px; line-height: 1.5; }
-.ws-field { width: 100%; height: 40px; border: 1px solid var(--line2); border-radius: var(--r); padding: 0 12px; font: inherit; font-size: 14px; color: var(--ink); background: var(--paper); outline: none; }
-.ws-field:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
-.ws-field[aria-invalid] { border-color: var(--danger-line); }
-.ws-field.code { font-size: 20px; letter-spacing: .3em; text-align: center; font-variant-numeric: tabular-nums; }
-.ws-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
-.ws-dialog-actions .ws-btn.primary .spin { color: var(--paper); }
-/* 登录回跳页：就一个转圈 */
-.ws-callback { display: flex; align-items: center; justify-content: center; }
-.ws-callback-box { display: flex; align-items: center; gap: 12px; color: var(--muted); }
-.ws-callback-box[role="alert"] { flex-direction: column; gap: 10px; color: var(--ink); }
-
 /* ---------- 对话 ---------- */
 .ws-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
 /* 两边都留出滚动条的位置（Windows、Mac 接了鼠标时滚动条占地方）：正文按整栏居中，和顶栏标题、输入框的中线对齐（2026-11-07 Sean 定） */
@@ -386,12 +347,6 @@
 .ws-image-act.text { gap: 4px; }
 @media (hover: hover) { .ws-image-act:hover { background: var(--hover); color: var(--ink) !important; } }
 .ws-image-prompt { margin: 4px 0 0; padding: 6px 8px; border-radius: var(--r-sm); background: var(--side); color: var(--ink2); line-height: 1.6; white-space: pre-wrap; }
-.ws-viewer { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 40px;
-  background: rgba(16, 18, 22, .82); animation: ws-in .2s var(--ease); cursor: zoom-out; }
-.ws-viewer img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--r-sm); cursor: default; box-shadow: 0 12px 48px rgba(0, 0, 0, .4); }
-.ws-viewer-close { position: absolute; top: 14px; right: 16px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
-  border: 0; border-radius: 99px; background: rgba(255, 255, 255, .12); color: #fff; }
-@media (hover: hover) { .ws-viewer-close:hover { background: rgba(255, 255, 255, .22); } }
 @media (prefers-reduced-motion: reduce) {
   .ws-image-open img { transition: opacity .2s linear; filter: none; transform: none; }
   .ws-image-frame.busy::before { display: none; }
@@ -597,14 +552,11 @@
   .ws-toast-host { right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); }
   .ws-toast { max-width: none; }
   .ws-toast-act { height: 44px; }
-  .ws-login-btn, .ws-login-send, .ws-field, .ws-dialog-actions .ws-btn { height: 44px; }
-  .ws-dialog-close { top: 4px; right: 4px; width: 44px; height: 44px; }
-  .ws-dialog-title { margin-right: 24px; }
-  .ws-login-wait { min-height: 152px; }
 
   .ws-flow { --pad: 16px; padding: 20px var(--pad) 24px; }
-  /* 输入框 16px：iOS 上聚焦不自动放大页面（M3）。对话的输入框、改这句话的框不分宽窄都是 16（见 composer.module.css 和上面的 .ws-edit） */
-  .ws-rename, .ws-field:not(.code) { font-size: 16px; }
+  /* 输入框 16px：iOS 上聚焦不自动放大页面（M3）。对话的输入框、改这句话的框不分宽窄都是 16（见 composer.module.css 和上面的 .ws-edit）；
+     弹窗里的输入框见各自的 module */
+  .ws-rename { font-size: 16px; }
   /* 第 31 条：剩下不到 44px 的几处。看得见的大小不变，透明点按区补够 */
   .ws-user-foot .ws-btn, .ws-ai-foot .ws-btn, .ws-cited-head { position: relative; }
   .ws-user-foot .ws-btn::after, .ws-ai-foot .ws-btn::after, .ws-cited-head::after { content: ""; position: absolute; inset: -8px 0; } /* 看得见 28 */
@@ -674,138 +626,4 @@
 /* 系统要求减少动效：只留转圈，其他动画和过渡都关掉 */
 @media (prefers-reduced-motion: reduce) {
   .ws *:not(.spin), .ws *::before, .ws *::after { animation: none !important; transition: none !important; }
-}
-
-/* ---------- 记忆列表（在设置窗口里） ---------- */
-.mem-head { padding: 16px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); }
-.mem-head b { display: block; margin-bottom: 4px; font-weight: 500; }
-.mem-head p { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
-.mem-head .ws-btn { margin-top: 12px; }
-.mem-status { color: var(--muted); font-size: 13px; margin: 16px 16px 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.mem-list { list-style: none; margin: 16px 0 0; padding: 0; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
-.mem-list li { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px 8px; }
-.mem-list li + li { border-top: 1px solid var(--line); }
-.mem-list li.editing { padding-bottom: 12px; }
-.mem-list .text { min-width: 0; line-height: 1.65; overflow-wrap: anywhere; }
-.mem-list .meta { flex: none; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
-/* 每条下面：什么时候记的、从哪段对话记下的（点了打开），右边改、删 */
-.mem-foot { display: flex; align-items: center; gap: 8px; min-height: 32px; min-width: 0; }
-.mem-from { min-width: 0; line-height: 24px; font-size: 12px; color: var(--muted) !important; text-decoration: none !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-@media (hover: hover) { a.mem-from:hover { color: var(--accent) !important; text-decoration: underline !important; } }
-.mem-from.gone { color: var(--faint) !important; }
-.mem-acts { margin-left: auto; display: flex; gap: 4px; flex: none; }
-.mem-acts .ws-icon-btn { color: var(--faint); }
-@media (hover: hover) { .mem-acts .ws-icon-btn:hover { color: var(--ink); } }
-@media (hover: hover) { .mem-acts .ws-icon-btn.danger:hover { color: var(--danger); background: var(--danger-soft); } }
-.mem-edit textarea { display: block; width: 100%; resize: none; overflow: hidden; border: 1px solid var(--accent-line); border-radius: var(--r-sm); padding: 8px 12px;
-  font: inherit; line-height: 1.65; color: var(--ink); background: var(--paper); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
-.mem-edit-bar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
-.mem-edit-bar .ws-count { margin-right: auto; }
-.mem-edit-error { color: var(--danger); font-size: 13px; margin-top: 8px; }
-.mem .ws-error { margin: 16px 0 0; }
-/* ---------- 搜对话的窗口（2026-11-07 Sean 定，照豆包） ---------- */
-/* 和设置窗口一样大：宽 960、高是屏高减上下各 48（最高 880），居中。上面搜索框，下面一行一条对话：标题、（进行中、没跑完的点）、右边时间 */
-.find-overlay { padding: 48px 24px; }
-.find-dialog { display: flex; flex-direction: column; max-width: 960px; height: min(880px, 100vh - 96px); height: min(880px, 100dvh - 96px); max-height: none; padding: 0; overflow: hidden; }
-.find-head { flex: none; display: flex; align-items: center; gap: 12px; padding: 24px 16px 16px 24px; }
-.find-head .ws-dialog-close { position: static; flex: none; }
-/* 边框用内阴影画：输入框撑满整个框的 44 高（手机上的热区就是输入框本身）；点框里的图标、空白处也把光标放进去 */
-.find-box { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 4px 0 12px; border-radius: var(--r);
-  background: var(--paper); box-shadow: inset 0 0 0 1px var(--line2); color: var(--faint); cursor: text; }
-.find-box:focus-within { box-shadow: inset 0 0 0 1px var(--accent-line), 0 0 0 3px var(--accent-soft); }
-.find-box svg { flex: none; }
-.find-box input { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: none; padding: 0; font: inherit; font-size: 16px; color: var(--ink); }
-.find-box input::placeholder { color: var(--faint); }
-.find-clear { flex: none; width: 32px; height: 32px; border: 0; border-radius: var(--r-sm); background: none; color: var(--muted); display: inline-flex; align-items: center; justify-content: center; }
-@media (hover: hover) { .find-clear:hover { background: var(--hover); color: var(--ink); } }
-.find-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 24px; }
-.find-label { display: flex; gap: 8px; padding: 8px 8px 4px; font-size: 12px; font-weight: 500; color: var(--muted); }
-.find-label span { color: var(--faint); font-weight: 400; font-variant-numeric: tabular-nums; }
-.find-list { display: flex; flex-direction: column; }
-.find-row { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 8px; border-radius: var(--r); color: var(--ink) !important; text-decoration: none !important; }
-@media (hover: hover) { .find-row[aria-selected="true"] { background: var(--hover); } }
-@media (hover: none) { .find-row:active { background: var(--hover); } }
-.find-row .title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.find-row mark { background: var(--accent-soft); color: var(--accent); }
-.find-row .dot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
-.find-row .dot.active { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.find-row .dot.failed { background: var(--danger); }
-.find-row .time { flex: none; margin-left: auto; padding-left: 16px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.find-skel { display: flex; flex-direction: column; gap: 24px; padding: 16px 8px; }
-.find-empty { padding: 24px 8px; color: var(--muted); line-height: 1.6; }
-@media (max-width: 720px) {
-  /* 手机上从底部升起，占九成高，一行 48 高 */
-  .find-overlay { align-items: flex-end; padding: 0; }
-  .find-dialog { max-width: none; height: 90vh; height: 90dvh; padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-    border-width: 1px 0 0; border-radius: var(--r-lg) var(--r-lg) 0 0; animation: ws-sheet-up .2s var(--ease); }
-  .find-head { padding: 16px 4px 8px 16px; gap: 4px; }
-  .find-clear { width: 44px; height: 44px; margin-right: -4px; }
-  .find-body { padding: 0 8px 24px; }
-  .find-row { min-height: 48px; font-size: 16px; }
-}
-
-/* ---------- 设置窗口（2026-11-07 Sean 定） ---------- */
-/* 照豆包的设置窗口：大的两栏窗口，宽 960、高是屏高减去上下各 48（最高 880），居中，换哪一类大小都不变（11-07 Sean 嫌 800×720 还小）。
-   左边是“设置”、谁、几类（一类一项设置）；右边是那一类的标题和一组组的行：组名小字在上，几行在圆角框里（一行 48 高），说明写在框下面 */
-.set-overlay { padding: 48px 24px; }
-.set-dialog { display: flex; max-width: 960px; background: var(--side); height: min(880px, 100vh - 96px); height: min(880px, 100dvh - 96px); max-height: none; padding: 0; overflow: hidden; }
-.set-nav { flex: none; width: 240px; display: flex; flex-direction: column; overflow-y: auto; border-right: 1px solid var(--line); }
-.set-head { flex: none; display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 12px 0 24px; }
-.set-pane .set-head { display: grid; grid-template-columns: 1fr auto 1fr; padding: 0 12px; } /* 标题居中，左边手机上放返回，右边关闭 */
-.set-title { min-width: 0; margin: 0; font-size: 16px; font-weight: 600; }
-.set-nav .set-title { flex: 1; }
-.set-pane .set-title { grid-column: 2; }
-.set-head .ws-dialog-close { position: static; flex: none; grid-column: 3; justify-self: end; }
-.set-back { justify-self: start; gap: 4px; padding: 0 8px; }
-.set-back .back { transform: rotate(90deg); }
-.set-me { display: flex; align-items: center; gap: 12px; margin: 0 16px 16px; }
-.set-me .ws-avatar { width: 32px; height: 32px; font-size: 14px; line-height: 32px; }
-.set-me-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.set-me-text b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.set-me-text small { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.set-nav-list { display: flex; flex-direction: column; gap: 4px; padding: 0 12px 16px; }
-.set-nav-item { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border: 0; border-radius: var(--r); background: none;
-  color: var(--ink2); font-weight: 500; text-align: left; }
-.set-nav-item svg { flex: none; color: var(--muted); }
-.set-nav-item .chev { margin-left: auto; transform: rotate(-90deg); }
-@media (hover: hover) { .set-nav-item:hover { background: var(--hover); } }
-.set-nav-item[aria-current] { background: var(--paper); color: var(--ink); box-shadow: 0 0 0 1px var(--line); }
-.set-nav-item[aria-current] svg { color: var(--ink); }
-.set-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.set-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px 24px 24px; }
-.set-group + .set-group { margin-top: 24px; }
-.set-group-label { padding: 0 16px 8px; font-size: 12px; font-weight: 500; color: var(--muted); }
-.set-rows { background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
-.set-row { display: flex; align-items: center; gap: 16px; width: 100%; min-height: 48px; padding: 12px 16px; border: 0; background: none; color: var(--ink); text-align: left; }
-.set-row + .set-row { border-top: 1px solid var(--line); }
-.ws .set-row:focus-visible { outline-offset: -2px; } /* 框是 overflow: hidden，外圈画在里面才看得见 */
-.set-name { flex: 1; min-width: 0; font-weight: 500; }
-.set-row .check { flex: none; color: var(--accent); }
-@media (hover: hover) { .set-row:not(:disabled):hover { background: var(--hover); } }
-.set-row:disabled .ws-switch { background: var(--line); }
-.set-row:disabled .ws-switch::after { background: var(--side); }
-.set-foot { margin: 8px 16px 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
-.set-body .mem { padding-top: 8px; }
-@media (max-width: 720px) {
-  .mem-edit textarea { font-size: 16px; }
-  .mem-edit-bar .ws-btn { height: 44px; padding: 0 16px; font-size: 14px; }
-  .mem-foot { min-height: 44px; }
-  .mem-status .ws-btn, .mem-head .ws-btn { height: 44px; padding: 0 16px; font-size: 14px; } /* 游客的登录、没取到时的再试一次 */
-  .mem-from { padding: 12px 0; line-height: 20px; } /* 点按区 44 高 */
-  /* 设置窗口：从底部升起，占九成高。先是分类列表（一类一行，48 高），点进去换成那一类，左上角“设置”回来 */
-  .set-overlay { align-items: flex-end; padding: 0; }
-  .set-dialog { flex-direction: column; max-width: none; height: 90vh; height: 90dvh; padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-    border-width: 1px 0 0; border-radius: var(--r-lg) var(--r-lg) 0 0; animation: ws-sheet-up .2s var(--ease); }
-  .set-nav { flex: 1; width: auto; border-right: 0; }
-  .set-head { height: auto; padding: 4px 4px 4px 16px; border-bottom: 1px solid var(--line); }
-  .set-pane .set-head { padding: 4px; }
-  .set-me { margin: 16px 16px 8px; }
-  .set-me .ws-btn { height: 44px; padding: 0 16px; font-size: 14px; }
-  .set-nav-list { gap: 0; margin: 8px 16px 24px; padding: 0; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
-  .set-nav-item { height: 48px; padding: 0 16px; border-radius: 0; font-size: 16px; }
-  .set-nav-item + .set-nav-item { border-top: 1px solid var(--line); }
-  .ws .set-nav-item:focus-visible { outline-offset: -2px; }
-  .set-body { padding: 16px 16px 24px; }
-  .set-row { font-size: 16px; }
-  .ws-btn.set-back { height: 44px; font-size: 14px; }
 }

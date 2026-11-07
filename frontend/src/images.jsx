@@ -3,6 +3,7 @@
 // 占位没照搬 Fusion 的点阵：灰底上一道斜光扫过，中间写正在生成和用了几秒（2026-10-31 Sean 定）
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { IconClose, IconDownload, IconEdit, IconLoop, Spinner } from "./icons.jsx";
+import styles from "./images.module.css";
 import { useLayer } from "./layers.js";
 
 const MAX_W = 640;
@@ -182,9 +183,9 @@ export function Viewer({ img, src, onClose }) {
   useEffect(() => { close.current?.focus(); }, []);
   useLayer(true, onClose);
   return (
-    <div className="ws-viewer" role="dialog" aria-modal="true" aria-label="图片" onClick={onClose}>
+    <div className={styles.viewer} role="dialog" aria-modal="true" aria-label="图片" onClick={onClose}>
       <img src={src} alt={img.alt ?? imageAlt(img.prompt)} onClick={(e) => e.stopPropagation()} />
-      <button ref={close} className="ws-viewer-close" aria-label="关闭" onClick={onClose}><IconClose size={20} /></button>
+      <button ref={close} className={styles.close} aria-label="关闭" onClick={onClose}><IconClose size={20} /></button>
     </div>
   );
 }

@@ -7,6 +7,8 @@ import { opener, useLayer } from "./layers.js";
 import { touch } from "./nav.jsx";
 import { asksOf, creditsLeft, creditsLine, creditsParts, creditsShort, loginLine, num } from "./research.js";
 import { Sheet } from "./sheet.jsx";
+import dialog from "./dialog.module.css";
+import styles from "./login.module.css";
 import side from "./sidebar.module.css";
 
 // 当前身份：{ready, login, me}（见 auth.snapshot）。回到这个标签页时和 auth 服务对一下账（别处退出了就跟着退）
@@ -199,6 +201,7 @@ export function Avatar({ me }) {
 }
 
 const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
+const ERR = "mt-2 text-[13px] leading-[1.5] text-danger"; // 出错的那句（弹窗里、邮箱那栏下面）
 
 // 登录弹窗（第 29 条，2026-11-07 Sean 定）：邮箱验证码在最上面、直接填；GitHub、Google 在“或者”下面，Google 标着要能打开它。
 // 邮箱能不能用页面起来时就问好了（auth.js 的 emailLoginAvailable），还没问到的那一会儿给邮箱那栏留着位置。
@@ -237,7 +240,7 @@ export function LoginDialog({ open, onClose, crowded, want, credits }) {
     if (!open || !el || phase !== "start") return;
     const a = document.activeElement;
     if (el.contains(a) && a !== el && a !== autoFocused.current) return;
-    const to = touch() ? el : el.querySelector("input:not(:disabled), .ws-login-btn:not(:disabled)") || el;
+    const to = touch() ? el : el.querySelector("input:not(:disabled), [data-method]:not(:disabled)") || el;
     autoFocused.current = to;
     to.focus({ preventScroll: true });
   }, [open, email, phase]);
@@ -262,27 +265,27 @@ export function LoginDialog({ open, onClose, crowded, want, credits }) {
     ? `你所在的网络今天新来的游客太多了（防刷，同一网络每天最多 ${crowded.per_ip || 5} 个游客身份）。登录后不受这个限制${asks ? `，每天约可问 ${asks} 次` : "，马上能接着用"}。`
     : `${want ? `登录后就能用 ${want.name}。` : ""}登录后能用全部模型${asks ? `，每天约可问 ${asks} 次` : ""}；对话和记忆按账号保存，现在的对话会一起并进账号。`;
   return (
-    <div className="ws-overlay" onMouseDown={(e) => e.target === e.currentTarget && !critical && onClose()}>
-      <div ref={box} className="ws-dialog" role="dialog" aria-modal="true" aria-labelledby="ws-login-title" aria-describedby="ws-login-desc" tabIndex={-1} onKeyDown={trap}>
-        {!critical && <button className="ws-dialog-close" aria-label="关闭" onClick={onClose}><IconClose size={16} /></button>}
+    <div className={dialog.overlay} onMouseDown={(e) => e.target === e.currentTarget && !critical && onClose()}>
+      <div ref={box} className={dialog.dialog} role="dialog" aria-modal="true" aria-labelledby="ws-login-title" aria-describedby="ws-login-desc" tabIndex={-1} onKeyDown={trap}>
+        {!critical && <button className={dialog.close} aria-label="关闭" onClick={onClose}><IconClose size={16} /></button>}
         {phase === "start" && (
           <>
-            <h2 id="ws-login-title" className="ws-dialog-title">{crowded ? "登录后接着用" : "登录灵稿"}</h2>
-            <p id="ws-login-desc" className="ws-dialog-desc">{desc}</p>
+            <h2 id="ws-login-title" className={styles.title}>{crowded ? "登录后接着用" : "登录灵稿"}</h2>
+            <p id="ws-login-desc" className={styles.desc}>{desc}</p>
           </>
         )}
-        {email === null && phase === "start" && <div className="ws-login-wait" role="status"><Spinner size={14} />正在准备邮箱登录…</div>}
+        {email === null && phase === "start" && <div className="flex min-h-[144px] items-center justify-center gap-2 text-[13px] text-muted phone:min-h-[152px]" role="status"><Spinner size={14} />正在准备邮箱登录…</div>}
         {email && <EmailFlow phase={phase} setPhase={setPhase} setCritical={setCritical} blocked={!!going} />}
         {phase === "start" && (
           <>
-            {email !== false && <div className="ws-login-or">或者</div>}
-            <div className="ws-login-methods">
-              <button className="ws-login-btn" disabled={!!going} onClick={() => go("github")}>{going === "github" ? <Spinner size={15} /> : <GitHubMark />}用 GitHub 登录</button>
-              <button className="ws-login-btn" disabled={!!going} onClick={() => go("google")}>
+            {email !== false && <div className={styles.or}>或者</div>}
+            <div className="flex flex-col gap-2">
+              <button className={styles.method} data-method="github" disabled={!!going} onClick={() => go("github")}>{going === "github" ? <Spinner size={15} /> : <GitHubMark />}用 GitHub 登录</button>
+              <button className={styles.method} data-method="google" disabled={!!going} onClick={() => go("google")}>
                 {going === "google" ? <Spinner size={15} /> : <GoogleMark />}用 Google 登录<small>需要能打开 Google</small>
               </button>
             </div>
-            {error && <div className="ws-login-err" role="alert">{error}</div>}
+            {error && <div className={ERR} role="alert">{error}</div>}
           </>
         )}
       </div>
@@ -364,29 +367,29 @@ function EmailFlow({ phase, setPhase, setCritical, blocked }) {
     }, true);
   };
   const wait = sent ? Math.max(0, Math.ceil((sent.resendAt - now) / 1000)) : 0;
-  const err = error && <div id={ids + "err"} className="ws-login-err" role="alert">{error}</div>;
+  const err = error && <div id={ids + "err"} className={ERR} role="alert">{error}</div>;
   if (phase !== "code" || !sent) {
     return (
-      <form className="ws-login-email" onSubmit={start} noValidate>
-        <label className="ws-field-label" htmlFor={ids + "addr"}>邮箱</label>
-        <input ref={input} id={ids + "addr"} className="ws-field" type="email" autoComplete="email" inputMode="email" placeholder="name@example.com" value={addr} disabled={busy}
+      <form className="flex flex-col" onSubmit={start} noValidate>
+        <label className={styles.label} htmlFor={ids + "addr"}>邮箱</label>
+        <input ref={input} id={ids + "addr"} className={styles.field} type="email" autoComplete="email" inputMode="email" placeholder="name@example.com" value={addr} disabled={busy}
           aria-invalid={error ? true : undefined} aria-describedby={error ? ids + "err" : undefined} onChange={(e) => setAddr(e.target.value)} />
         {err}
-        <button type="submit" className="ws-btn primary ws-login-send" disabled={busy || blocked || !addr.trim()}>{busy && <Spinner size={14} />}发送验证码</button>
-        <div className="ws-login-tip">没有账号会直接注册。</div>
+        <button type="submit" className={"ws-btn primary " + styles.send} disabled={busy || blocked || !addr.trim()}>{busy && <Spinner size={14} />}发送验证码</button>
+        <div className="mt-2 text-center text-[12px] text-muted">没有账号会直接注册。</div>
       </form>
     );
   }
   return (
     <form onSubmit={verify} noValidate>
-      <h2 id="ws-login-title" className="ws-dialog-title">输入验证码</h2>
-      <p id="ws-login-desc" className="ws-dialog-desc">验证码已发到 {sent.masked}{sent.expiresIn > 0 && `，${Math.max(1, Math.round(sent.expiresIn / 60))} 分钟内有效`}。</p>
-      <label className="ws-field-label" htmlFor={ids + "code"}>验证码<span>{sent.codeLength} 位数字</span></label>
-      <input ref={input} id={ids + "code"} className="ws-field code" inputMode="numeric" autoComplete="one-time-code" maxLength={sent.codeLength}
+      <h2 id="ws-login-title" className={styles.title}>输入验证码</h2>
+      <p id="ws-login-desc" className={styles.desc}>验证码已发到 {sent.masked}{sent.expiresIn > 0 && `，${Math.max(1, Math.round(sent.expiresIn / 60))} 分钟内有效`}。</p>
+      <label className={styles.label} htmlFor={ids + "code"}>验证码<span>{sent.codeLength} 位数字</span></label>
+      <input ref={input} id={ids + "code"} className={styles.field + " " + styles.code} inputMode="numeric" autoComplete="one-time-code" maxLength={sent.codeLength}
         value={code} disabled={busy} aria-invalid={error ? true : undefined} aria-describedby={error ? ids + "err" : undefined}
         onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
       {err}
-      <div className="ws-dialog-actions">
+      <div className={styles.actions}>
         <button type="button" className="ws-btn ghost" disabled={busy} onClick={() => { setPhase("start"); setCode(""); setError(null); }}>换个邮箱</button>
         <button type="button" className="ws-btn ghost" disabled={busy || wait > 0} onClick={resend}>{wait > 0 ? `重新发送（${wait} 秒）` : "重新发送"}</button>
         <button type="submit" className="ws-btn primary" disabled={busy || code.length !== sent.codeLength}>{busy && <Spinner size={14} />}登录</button>
@@ -407,14 +410,14 @@ export function AuthCallbackPage() {
   }, []);
   const interactive = new URLSearchParams(location.search).has("code");
   return (
-    <div className="ws ws-callback">
+    <div className="ws flex items-center justify-center">
       {error ? (
-        <div className="ws-callback-box" role="alert">
+        <div className="flex flex-col items-center gap-2.5 text-ink" role="alert">
           <div>{error}</div>
           <a href="/">回到首页</a>
         </div>
       ) : (
-        <div className="ws-callback-box"><Spinner size={22} />{interactive && <span>正在完成登录…</span>}</div>
+        <div className="flex items-center gap-3 text-muted"><Spinner size={22} />{interactive && <span>正在完成登录…</span>}</div>
       )}
     </div>
   );

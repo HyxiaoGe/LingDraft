@@ -639,7 +639,7 @@ export default function Workspace() {
     const key = (e) => {
       if (e.repeat) return;
       if (isSearchKey(e)) {
-        const open = document.querySelector(".find-box input");
+        const open = document.querySelector("[data-find]");
         if (open) {
           e.preventDefault();
           open.focus();

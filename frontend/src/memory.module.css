@@ -1,0 +1,39 @@
+/* 记忆列表（memory.jsx，放在设置窗口里），2026-11-07 从 workspace.css 迁过来。
+   上面一张卡：记了几条和一句说明；下面一张卡是记忆列表，一条一行 */
+.mem { padding-top: 8px; }
+.mem > :global(.ws-error) { margin: 16px 0 0; }
+.head { padding: 16px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.head b { display: block; margin-bottom: 4px; font-weight: 500; }
+.head p { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
+.head :global(.ws-btn) { margin-top: 12px; }
+.status { color: var(--muted); font-size: 13px; margin: 16px 16px 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.list { list-style: none; margin: 16px 0 0; padding: 0; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+.item { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px 8px; }
+.item + .item { border-top: 1px solid var(--line); }
+.item.editing { padding-bottom: 12px; }
+.text { min-width: 0; line-height: 1.65; overflow-wrap: anywhere; }
+.meta { flex: none; font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+/* 每条下面：什么时候记的、从哪段对话记下的（点了打开），右边改、删 */
+.foot { display: flex; align-items: center; gap: 8px; min-height: 32px; min-width: 0; }
+.from { min-width: 0; line-height: 24px; font-size: 12px; color: var(--muted); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (hover: hover) { a.from:hover { color: var(--accent); text-decoration: underline; } }
+.from.gone { color: var(--faint); }
+.acts { margin-left: auto; display: flex; gap: 4px; flex: none; }
+.acts :global(.ws-icon-btn) { color: var(--faint); }
+@media (hover: hover) {
+  .acts :global(.ws-icon-btn):hover { color: var(--ink); }
+  .acts :global(.ws-icon-btn.danger):hover { color: var(--danger); background: var(--danger-soft); }
+}
+/* 改一条：就在那一条上改，框下面字数、取消、保存 */
+.edit { display: block; width: 100%; resize: none; overflow: hidden; border: 1px solid var(--accent-line); border-radius: var(--r-sm); padding: 8px 12px;
+  font: inherit; line-height: 1.65; color: var(--ink); background: var(--paper); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+.editBar { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.editBar :global(.ws-count) { margin-right: auto; }
+.editError { color: var(--danger); font-size: 13px; margin-top: 8px; }
+
+@media (max-width: 720px) {
+  .edit { font-size: 16px; } /* iOS 上聚焦不自动放大页面（M3） */
+  .editBar :global(.ws-btn), .status :global(.ws-btn), .head :global(.ws-btn) { height: 44px; padding: 0 16px; font-size: 14px; } /* 游客的登录、没取到时的再试一次 */
+  .foot { min-height: 44px; }
+  .from { padding: 12px 0; line-height: 20px; } /* 点按区 44 高 */
+}

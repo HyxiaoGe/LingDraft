@@ -6,6 +6,8 @@ import { IconClose, IconSearch } from "./icons.jsx";
 import { opener, useLayer } from "./layers.js";
 import { touch } from "./nav.jsx";
 import { ACTIVE, stamp } from "./research.js";
+import dialog from "./dialog.module.css";
+import styles from "./search.module.css";
 
 // 搜到的那几个字标出来（不分大小写）
 function Hit({ text, q }) {
@@ -63,42 +65,42 @@ export function SearchDialog({ threads, now, href, onOpen, onClose }) {
   const optId = (t) => `${id}-${t.thread_id}`;
 
   return (
-    <div className="ws-overlay find-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={box} className="ws-dialog find-dialog" role="dialog" aria-modal="true" aria-label="搜索对话" tabIndex={-1} onKeyDown={trap}>
-        <div className="find-head">
-          <div className="find-box" onMouseDown={(e) => { if (!e.target.closest("input, button")) { e.preventDefault(); input.current.focus(); } }}>
+    <div className={`${dialog.overlay} ${dialog.large}`} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={box} className={`${dialog.dialog} ${dialog.large} flex flex-col`} role="dialog" aria-modal="true" aria-label="搜索对话" tabIndex={-1} onKeyDown={trap}>
+        <div className={styles.head}>
+          <div className={styles.box} onMouseDown={(e) => { if (!e.target.closest("input, button")) { e.preventDefault(); input.current.focus(); } }}>
             <IconSearch size={16} />
-            <input ref={input} type="text" value={query} placeholder="搜索对话标题" aria-label="搜索对话标题" role="combobox" aria-expanded="true"
+            <input ref={input} data-find type="text" value={query} placeholder="搜索对话标题" aria-label="搜索对话标题" role="combobox" aria-expanded="true"
               aria-controls={`${id}-list`} aria-autocomplete="list" aria-activedescendant={pick >= 0 ? optId(rows[pick]) : undefined}
               enterKeyHint="go" autoComplete="off" spellCheck={false} onChange={(e) => setQuery(e.target.value)} onKeyDown={onKey} />
             {query && (
-              <button className="find-clear" aria-label="清空" onClick={() => { setQuery(""); input.current.focus(); }}><IconClose size={14} /></button>
+              <button className={styles.clear} aria-label="清空" onClick={() => { setQuery(""); input.current.focus(); }}><IconClose size={14} /></button>
             )}
           </div>
-          <button className="ws-dialog-close" aria-label="关闭" onClick={onClose}><IconClose size={16} /></button>
+          <button className={`${dialog.close} ${dialog.inline}`} aria-label="关闭" onClick={onClose}><IconClose size={16} /></button>
         </div>
-        <div className="find-body">
+        <div className={styles.body}>
           {rows === null ? (
-            <div className="find-skel" role="status" aria-label="正在取对话列表">
+            <div className={styles.skel} role="status" aria-label="正在取对话列表">
               {[62, 48, 70, 54, 66, 44].map((w) => <span key={w} className="ws-skel ws-skel-row" style={{ width: `${w}%` }} />)}
             </div>
           ) : rows.length === 0 ? (
-            <div className="find-empty">{q ? `没有标题里有“${query.trim()}”的对话。只搜标题，不搜对话内容。` : "还没有对话"}</div>
+            <div className={styles.empty}>{q ? `没有标题里有“${query.trim()}”的对话。只搜标题，不搜对话内容。` : "还没有对话"}</div>
           ) : (
             <>
-              <div className="find-label" id={`${id}-label`}>{q ? <>标题里有“{query.trim()}”<span>{rows.length}</span></> : "最近对话"}</div>
-              <div ref={list} className="find-list" id={`${id}-list`} role="listbox" aria-labelledby={`${id}-label`}>
+              <div className={styles.label} id={`${id}-label`}>{q ? <>标题里有“{query.trim()}”<span>{rows.length}</span></> : "最近对话"}</div>
+              <div ref={list} className="flex flex-col" id={`${id}-list`} role="listbox" aria-labelledby={`${id}-label`}>
                 {rows.map((t, i) => {
                   const s = stamp(t.updated_at, now);
                   const status = ACTIVE.has(t.status) ? "active" : t.status === "failed" ? "failed" : "";
                   return (
-                    <a key={t.thread_id} id={optId(t)} className="find-row" role="option" aria-selected={i === pick} tabIndex={-1} href={href(t.thread_id)}
+                    <a key={t.thread_id} id={optId(t)} className={styles.row} role="option" aria-selected={i === pick} tabIndex={-1} href={href(t.thread_id)}
                       onMouseMove={() => i !== pick && setAt(i)}
                       onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onOpen(t.thread_id); }}>
-                      <span className="title" title={t.title}><Hit text={t.title || "新对话"} q={q} /></span>
-                      {status && <span className={"dot " + status} title={status === "active" ? "进行中" : "没有完成"} />}
+                      <span className={styles.title} title={t.title}><Hit text={t.title || "新对话"} q={q} /></span>
+                      {status && <span className={styles.dot + " " + styles[status]} title={status === "active" ? "进行中" : "没有完成"} />}
                       {status && <span className="ws-sr">{status === "active" ? "，进行中" : "，没有完成"}</span>}
-                      <span className="time" title={s?.full}>{s?.text}</span>
+                      <span className={styles.time} title={s?.full}>{s?.text}</span>
                     </a>
                   );
                 })}
