@@ -1,10 +1,12 @@
 // 轮次目录：一段对话三轮起才有。每轮一行（用户那句话的第一行），只列轮次，不列回答里的小标题（2026-11-07 Sean 定）。
-// 正文右边放得下（见 timeline.jsx 的 RAIL_MIN）就放一栏；放不下顶栏右边一个“轮次”按钮，手机上点开是底部弹层，电脑上是下拉的浮层。
+// 正文右边放得下（见 timeline.jsx 的 RAIL_MIN）就放一栏；只放得下一列短横线（TICKS_MIN，要有鼠标）就放短横线，鼠标移上去展开；
+// 再窄是顶栏右边一个“轮次”按钮，手机上点开是底部弹层，电脑上是下拉的浮层。每一轮最多显示两行。
 // 跟着读到的位置高亮，点一行跳过去。跳的落点是 Turns 里每一轮的 section（data-turn 是第几轮，从 0 数）
 import { useContext, useEffect, useRef, useState } from "react";
 import { IconClose, IconList } from "./icons.jsx";
 import { useLayer } from "./layers.js";
 import { NavContext } from "./nav.jsx";
+import styles from "./turns.module.css";
 
 const MIN_TURNS = 3;
 
@@ -51,12 +53,12 @@ function useReading(scroller, count) {
 // 目录本身：rail 和浮层、弹层共用。onJump(i) 跳到第 i 轮；点了以后 onDone（浮层、弹层收起）
 function IndexList({ entries, at, onJump, onDone }) {
   return (
-    <ol className="ws-index-list">
+    <ol className={styles.list}>
       {entries.map((e) => (
         <li key={e.i}>
-          <button className={"ws-index-turn" + (e.i === at ? " on" : "")} aria-current={e.i === at ? "location" : undefined} title={e.text}
+          <button className={styles.turn + (e.i === at ? " " + styles.on : "")} aria-current={e.i === at ? "location" : undefined} title={e.text}
             onClick={() => { onJump(String(e.i)); onDone?.(); }}>
-            <span className="n">{e.i + 1}</span><span className="t">{e.text}</span>
+            <span className={styles.n}>{e.i + 1}</span><span className={styles.t}>{e.text}</span>
           </button>
         </li>
       ))}
@@ -64,13 +66,35 @@ function IndexList({ entries, at, onJump, onDone }) {
   );
 }
 
-// 宽屏：正文右边一栏，一直在
-export function TurnIndex({ entries, scroller, onJump }) {
+// 目录太长、自己在框里滚的时候：读到的那一轮跑出框了，把它滚进来（上下留 8px）。只滚这个框，不动页面。shape 变了（一栏和短横线互换）也对一次
+function useInView(box, at, shape) {
+  useEffect(() => {
+    const el = box.current;
+    const item = el?.querySelector('[aria-current="location"]');
+    if (!item) return;
+    const r = item.getBoundingClientRect();
+    const b = el.getBoundingClientRect();
+    const d = r.top < b.top + 8 ? r.top - b.top - 8 : r.bottom > b.bottom - 8 ? r.bottom - b.bottom + 8 : 0;
+    if (d) el.scrollBy({ top: d, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }, [box, at, shape]);
+}
+
+// 宽屏：正文右边一栏，一直在。mini：只放得下一列短横线，鼠标移上去（或 Tab 进来）在左边展开完整的目录
+export function TurnIndex({ entries, scroller, onJump, mini = false }) {
   const at = useReading(scroller, entries.length);
-  return (
-    <nav className="ws-rail" aria-label="轮次目录">
-      <div className="ws-rail-title">轮次</div>
+  const box = useRef(null);
+  useInView(box, at, mini);
+  const list = (
+    <>
+      <div className={styles.title}>轮次</div>
       <IndexList entries={entries} at={at} onJump={onJump} />
+    </>
+  );
+  if (!mini) return <nav ref={box} className={styles.rail} aria-label="轮次目录">{list}</nav>;
+  return (
+    <nav className={styles.mini} aria-label="轮次目录">
+      {entries.map((e) => <span key={e.i} className={styles.tick + (e.i === at ? " " + styles.on : "")} aria-hidden="true" />)}
+      <div ref={box} className={styles.panel}>{list}</div>
     </nav>
   );
 }
@@ -83,6 +107,7 @@ export function TurnIndexButton({ entries, scroller, onJump }) {
   const at = useReading(scroller, entries.length);
   const btn = useRef(null);
   const box = useRef(null);
+  useInView(box, at);
   const close = (refocus = true) => {
     setOpen(false);
     if (refocus) btn.current?.focus();
@@ -108,15 +133,15 @@ export function TurnIndexButton({ entries, scroller, onJump }) {
     else if (!e.shiftKey && i === els.length - 1) { e.preventDefault(); els[0]?.focus(); }
   };
   return (
-    <div className="ws-index-btn-box">
-      <button ref={btn} className="ws-icon-btn ws-index-btn" aria-label="轮次目录" title="轮次目录" aria-haspopup="dialog" aria-expanded={open}
+    <div className="relative flex">
+      <button ref={btn} className="ws-icon-btn w-auto gap-1 px-2 text-[13px] whitespace-nowrap phone:w-11 phone:px-0" aria-label="轮次目录" title="轮次目录" aria-haspopup="dialog" aria-expanded={open}
         onClick={() => (open ? close() : setOpen(true))}>
         <IconList size={18} />{!mobile && <span>轮次</span>}
       </button>
       {open && (mobile ? (
         <>
           <div className="ws-sheet-scrim" onClick={() => close()} aria-hidden="true" />
-          <div ref={box} className="ws-sheet ws-index-sheet" role="dialog" aria-modal="true" aria-label="轮次目录" onKeyDown={trap}>
+          <div ref={box} className={"ws-sheet " + styles.sheet} role="dialog" aria-modal="true" aria-label="轮次目录" onKeyDown={trap}>
             <div className="ws-sheet-head">
               <b>轮次</b>
               <button className="ws-icon-btn ws-sheet-close" aria-label="关闭" onClick={() => close()}><IconClose size={18} /></button>
@@ -125,9 +150,9 @@ export function TurnIndexButton({ entries, scroller, onJump }) {
           </div>
         </>
       ) : (
-        <div ref={box} className="ws-index-pop" role="dialog" aria-label="轮次目录">
-          <div className="ws-index-pop-head">
-            <b>轮次</b>
+        <div ref={box} className={styles.pop} role="dialog" aria-label="轮次目录">
+          <div className="flex items-center justify-between pb-1 pl-2 text-[13px]">
+            <b className="font-semibold">轮次</b>
             <button className="ws-icon-btn" aria-label="关闭" onClick={() => close()}><IconClose size={16} /></button>
           </div>
           {list}

@@ -30,8 +30,10 @@ const EXAMPLES = [
   "珠穆朗玛峰现在的官方高度是多少？",
 ];
 
-// 正文 832 宽居中（两边各留 28），右边空出来的那块放得下 184 宽的目录、离右边 16、离正文 24：滚动区至少这么宽才放右栏
+// 轮次目录放哪（见 turns.jsx）：正文 832 宽居中（两边各留 28），右边空出来的那块放得下 184 宽的目录、离右边 16、离正文 24：滚动区至少这么宽才放右栏；
+// 只放得下一列短横线（离右边 16、最宽 20，离正文 28）就放短横线，鼠标移上去展开，没有鼠标的（平板）不放；再窄放顶栏的按钮
 const RAIL_MIN = 1280;
+const TICKS_MIN = 960;
 
 // 阅读位置（第 45 条）：每个对话看到哪儿了记在这个标签页里（sessionStorage），离开（换对话、去海报页、登录后整页重载、刷新）
 // 再回来，回到原处。记的是“第几轮，视口上沿在这一轮顶上往下多少”；在底部就记“底部”，回来还在底部、接着跟。从没记过的照旧到底（最新一轮）
@@ -46,7 +48,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   const lastTop = useRef(0); // 上一次滚动时的位置：往上滚了才算用户离开底部
   const [away, setAway] = useState(false); // 离底部远了：输入框上面出“回到底部”
   const [more, setMore] = useState(false); // 离开底部以后下面又长出了内容：“回到底部”写上“有新内容”
-  const [wide, setWide] = useState(false); // 正文右边放得下轮次目录（见 RAIL_MIN）
+  const [rail, setRail] = useState(null); // 轮次目录在正文右边是一栏（"full"）、短横线（"ticks"），还是放顶栏的按钮（null），见 RAIL_MIN
   const runningRef = useRef(false); // 有一轮在跑：这时内容变高才算“有新内容”（用户自己点开收起的过程不算）
   const fresh = !tid && !live;
   const mobile = !!useContext(NavContext)?.mobile;
@@ -136,7 +138,10 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
     });
     ro.observe(el);
     ro.observe(el.firstElementChild);
-    const width = new ResizeObserver(() => setWide(el.clientWidth >= RAIL_MIN));
+    const width = new ResizeObserver(() => {
+      const w = el.clientWidth;
+      setRail(w >= RAIL_MIN ? "full" : w >= TICKS_MIN && matchMedia("(hover: hover)").matches ? "ticks" : null);
+    });
     width.observe(el);
     return () => {
       ro.disconnect();
@@ -226,7 +231,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   return (
     <section className={"ws-main" + (fresh ? " fresh" : "")} aria-label="对话">
       <HeadBar title={fresh ? "新对话" : title} edit={edit}
-        end={<>{index && !wide && <TurnIndexButton entries={entries} scroller={scrollRef} onJump={jumpTo} />}{headMenu}</>} />
+        end={<>{index && !rail && <TurnIndexButton entries={entries} scroller={scrollRef} onJump={jumpTo} />}{headMenu}</>} />
       {menuAt && manageable && <ActionMenu label="这段对话的操作" anchor={menuAt} mobile={mobile} items={menuItems} note={menuNote} onClose={closeMenu} />}
       <div className="ws-scroll" ref={scrollRef}
         onScroll={(e) => {
@@ -251,7 +256,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
             {error.login && picker.onLogin && <button className="ws-btn ws-error-act" onClick={picker.onLogin}>登录</button>}</div>}
         </div>
       </div>
-      {index && wide && <TurnIndex entries={entries} scroller={scrollRef} onJump={jumpTo} />}
+      {index && rail && <TurnIndex entries={entries} scroller={scrollRef} onJump={jumpTo} mini={rail === "ticks"} />}
       <div className="ws-sr" role="status" aria-live="polite">{said}</div>
       {mobile && starters}
       <div className="ws-dock">

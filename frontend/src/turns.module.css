@@ -1,0 +1,45 @@
+/* 轮次目录（turns.jsx），2026-11-07 从 workspace.css 迁过来。三种样子：
+   宽（正文区 ≥1280）：正文右边一栏，一直在；
+   中（≥960、有鼠标）：右边一列短横线，每轮一条，读到的那轮是长一点的蓝线；鼠标移上去、Tab 进来，在左边展开完整的目录；
+   窄：顶栏右边的“轮次”按钮，电脑上点开是按钮下面的浮层，手机上是底部弹层 */
+
+/* 一行一轮：序号 + 那句话的第一行，最多两行，再长截掉（鼠标停上去看全句） */
+.list { list-style: none; margin: 0; padding: 0; }
+.turn { width: 100%; display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; border: 0; border-radius: var(--r-sm); background: none; text-align: left;
+  font-size: 12.5px; line-height: 20px; color: var(--muted); transition: background .12s, color .12s; }
+.n { flex: none; min-width: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.t { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+@media (hover: hover) { .turn:hover { background: var(--hover); color: var(--ink); } }
+.turn.on { background: var(--accent-soft); color: var(--accent); }
+.turn.on .n { color: var(--accent); }
+.title { padding: 0 8px 8px; font-size: 12px; color: var(--faint); }
+
+/* 宽：正文右边一栏，从顶栏下面 24px 开始，太长自己滚（读到的那轮自己滚进来，见 useInView） */
+.rail { position: absolute; top: calc(58px + 24px); right: 16px; z-index: 1; width: 184px; max-height: calc(100% - 58px - 24px - 48px);
+  overflow-y: auto; overscroll-behavior: contain; }
+
+/* 中：一列短横线（离右边 16，不压着滚动条），轮次多了横线挨得更紧；左边留 12px 好让鼠标移上去 */
+.mini { position: absolute; top: calc(58px + 24px); right: 16px; z-index: 2; max-height: calc(100% - 58px - 24px - 48px);
+  display: flex; flex-direction: column; align-items: flex-end; padding: 4px 0 4px 12px; }
+.tick { flex: 0 1 8px; min-height: 4px; display: flex; align-items: center; }
+.tick::before { content: ""; width: 12px; height: 2px; border-radius: 1px; background: var(--line2); transition: width .15s var(--ease), background .15s var(--ease); }
+.tick.on::before { width: 20px; background: var(--accent); }
+/* 展开的目录：盖在正文上面，右边和横线对齐。没展开时看不见、也不挡鼠标，但还在 Tab 的顺序里：Tab 进来就展开 */
+.panel { position: absolute; top: -8px; right: 0; width: 280px; max-height: min(480px, calc(100vh - 160px)); max-height: min(480px, calc(100dvh - 160px));
+  overflow-y: auto; overscroll-behavior: contain; padding: 8px 4px 4px; background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r);
+  box-shadow: var(--lift); opacity: 0; transform: translateX(4px); pointer-events: none; transition: opacity .15s var(--ease), transform .15s var(--ease); }
+.mini:hover .panel, .mini:focus-within .panel { opacity: 1; transform: none; pointer-events: auto; transition-delay: .06s; }
+
+/* 窄：顶栏的按钮点开，按钮下面的浮层 */
+.pop { position: absolute; top: calc(100% + 8px); right: 0; z-index: 60; width: 320px; max-height: min(480px, 70vh); max-height: min(480px, 70dvh);
+  overflow-y: auto; overscroll-behavior: contain; padding: 4px; background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r);
+  box-shadow: var(--lift); animation: pop-in .12s var(--ease); }
+@keyframes pop-in { from { opacity: 0; transform: translateY(3px); } }
+
+/* 手机：底部弹层里一行至少 48px 高，字 16px */
+@media (max-width: 720px) {
+  .sheet .turn { min-height: 48px; padding: 12px; font-size: 16px; line-height: 24px; }
+  .sheet .n { min-width: 16px; }
+}
+
+@media print { .rail, .mini { display: none !important; } }
