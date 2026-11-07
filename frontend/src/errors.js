@@ -23,7 +23,7 @@ export function errorText(what, e, todo) {
 }
 
 // 额度用完了（429，detail.code 是 credits_exhausted，见后端 app.quota.Exhausted）：哪个额度、什么时候恢复（说法和 research.js 的 creditsLine 一样），
-// 游客再说登录后会怎样（detail.login、per_ask，见 loginLine）。所有游客合用的那份用完了要说清是为什么——不是这个人用多了（评审第 26 条）
+// 游客再说登录后会怎样（detail.login，见 loginLine）。所有游客合用的那份用完了要说清是为什么——不是这个人用多了（评审第 26 条）
 export function quotaText(d) {
   const when = new Date(d.resets_at);
   const day = Number.isNaN(when.getTime()) ? " " : `（${when.getMonth() + 1}月${when.getDate()}日）`;
