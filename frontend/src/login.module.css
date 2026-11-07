@@ -38,15 +38,17 @@
 .who b { font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ---------- 额度面板（第 27 条）：完整的一句在最上面，下面小字是哪来的额度、怎么估的；游客最下面是去登录的按钮（写着登录后会怎样，可能折行） ---------- */
-.usageMain { padding: 8px 12px 4px; font-size: 14px; line-height: 1.5; color: var(--ink); font-variant-numeric: tabular-nums; }
-.usageMain.warn { color: var(--warn); }
-.usageMain.out { color: var(--danger); }
-.when { display: block; font-size: 13px; color: var(--muted); }
-.when .sep { display: none; }
+/* ---------- 额度面板（login.jsx 的 UsagePanel）：两行，左边名目（淡）、右边数（墨色加粗、等宽数字）；快用完黄、用完红只染剩多少那个数。
+   游客最下面是去登录的按钮（写着登录后每天多少） ---------- */
+.usageRows { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px 8px; }
+.usageRow { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+.usageRow dd { font-size: 15px; font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usageRows.warn .usageRow:first-child dd { color: var(--warn); }
+.usageRows.out .usageRow:first-child dd { color: var(--danger); }
 /* 去登录的按钮：桌面上是浮层里的一项（.usage 是浮层），手机上是底部弹层里的一行（.usageSheet 是弹层） */
 .usage .usageLogin { height: auto; min-height: 32px; padding: 4px 12px; line-height: 1.5; color: var(--accent); }
 .usage .usageLogin svg, .usageSheet .usageLogin svg { color: var(--accent); }
 .usageSheet .usageLogin { color: var(--accent); }
-.usageSheet .usageMain { padding: 8px 12px 4px; font-size: 16px; }
-.usageSheet .when { font-size: 14px; }
+.usageSheet .usageRows { gap: 10px; padding: 8px 12px; }
+.usageSheet .usageRow { font-size: 15px; }
+.usageSheet .usageRow dd { font-size: 17px; }

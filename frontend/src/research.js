@@ -34,7 +34,7 @@ export function creditsText(n) {
   return n < 1 ? "不到 1 额度" : `${Math.round(n).toLocaleString("en-US")} 额度`;
 }
 
-// 额度里最紧的那个窗口（自己的：今天、这周；所有游客合计的那个不显示），加上剩多少、约可问几次、是不是该提醒（用了 warn_at 以上）、是不是用完了。
+// 额度里最紧的那个窗口（自己的：今天、这周；所有游客合计的那个不显示），加上剩多少、是不是该提醒（用了 warn_at 以上）、是不是用完了。
 // 只给最紧的那个：周额度只在它比今天剩的还少时才出现（2026-11-07 Sean 定，批次 E 第 27 条）。没取到、管理员不限是 null
 export function creditsLeft(credits) {
   const ws = (credits?.windows || []).filter((w) => (w.kind === "day" || w.kind === "week") && w.limit != null);
@@ -42,46 +42,36 @@ export function creditsLeft(credits) {
   const w = ws.reduce((a, b) => (b.limit - b.used < a.limit - a.used ? b : a));
   const remaining = Math.max(0, w.limit - w.used);
   const exhausted = w.used >= w.limit;
-  return { ...w, remaining, exhausted, warn: w.used >= w.limit * (credits.warn_at ?? 0.8), asks: exhausted ? 0 : asksOf(remaining, credits.per_ask, true),
+  return { ...w, remaining, exhausted, warn: w.used >= w.limit * (credits.warn_at ?? 0.8),
     span: w.kind === "week" ? "这周" : "今天", resetText: w.kind === "week" ? "下周一 0 点恢复" : "明天 0 点恢复" };
 }
 
 // 千分位整数（额度的数都这么写）
 export const num = (n) => Math.floor(n).toLocaleString("en-US");
 
-// 这么多额度约可问几次：按后端给的一次多少（per_ask，config.CREDITS_PER_ASK，2026-11-07 Sean 定固定 200）向下取整，和后端 quota.asks 一样。
-// left：说的是还剩的——只在开始前查（见后端 app.quota），还有剩就还能再问一次，所以至少算 1 次。没给 per_ask（后端还没更新）是 null，不写换算
-export function asksOf(n, perAsk, left = false) {
-  if (!(perAsk > 0)) return null;
-  const k = Math.floor(n / perAsk);
-  return left && n > 0 ? Math.max(1, k) : k;
-}
-
-// 额度在页面上的说法（第 27 条：任何地方看到的都是这一种）。left 是 creditsLeft 的结果：
-//   还有：“今天还剩 7,300 额度，约可问 36 次 · 明天 0 点恢复”；用完了：“今天的额度用完了 · 明天 0 点恢复”
+// 额度在页面上的说法（第 27 条：任何地方看到的都是这一种）。只说剩多少、什么时候恢复，不换算成次数、不加解释（2026-11-07 Sean 定：简单点）。
+// left 是 creditsLeft 的结果：还有：“今天还剩 7,300 额度 · 明天 0 点恢复”；用完了：“今天的额度用完了 · 明天 0 点恢复”
 export function creditsLine(left) {
   return left ? creditsParts(left).join(" · ") : null;
 }
 
-// 上面那句的两半：[还剩多少（或用完了）, 什么时候恢复]。额度面板分两行放，窄的地方不会在半截断开
-export function creditsParts(left) {
-  const amount = left.exhausted ? `${left.span}的额度用完了` : `${left.span}还剩 ${num(left.remaining)} 额度${left.asks != null ? `，约可问 ${left.asks} 次` : ""}`;
+// 上面那句的两半：[还剩多少（或用完了）, 什么时候恢复]
+function creditsParts(left) {
+  const amount = left.exhausted ? `${left.span}的额度用完了` : `${left.span}还剩 ${num(left.remaining)} 额度`;
   return [amount, left.resetText];
 }
 
-// 左下角额度按钮上那几个字：约可问 N 次；用完了写“用完了”；没有换算（后端还没更新）写剩多少
+// 左下角额度按钮上那几个字：剩多少；用完了写“额度用完了”
 export function creditsShort(left) {
-  if (left.exhausted) return "额度用完了";
-  return left.asks != null ? `约可问 ${left.asks} 次` : `剩 ${num(left.remaining)} 额度`;
+  return left.exhausted ? "额度用完了" : `剩 ${num(left.remaining)} 额度`;
 }
 
-// 游客登录以后会怎样：“登录后每天 10,000 额度，约可问 50 次”（login、per_ask 来自 /api/credits 或 429 的 detail，见后端 app.quota）。
+// 游客登录以后会怎样：“登录后每天 10,000 额度”（login 来自 /api/credits 或 429 的 detail，见后端 app.quota）。
 // 没有（已经登录、后端还没更新）是 null。prefix 为 false 时不带“登录”两个字（前面放的是登录按钮）
 export function loginLine(src, prefix = true) {
   const day = src?.login?.day;
   if (!day) return null;
-  const k = asksOf(day, src.per_ask);
-  return `${prefix ? "登录" : ""}后每天 ${num(day)} 额度${k ? `，约可问 ${k} 次` : ""}`;
+  return `${prefix ? "登录" : ""}后每天 ${num(day)} 额度`;
 }
 
 // 时间全站一种写法（批次 G 第 38 条）：今天“14:32”，昨天“昨天 14:32”，明天“明天 03:00”，今年别的天“11月5日 14:32”，往年“2025年11月5日”（不写钟点）。

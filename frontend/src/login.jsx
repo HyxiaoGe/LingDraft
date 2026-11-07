@@ -5,7 +5,7 @@ import { EmailLogin, checkSession, completeCallback, emailLoginAvailable, emailL
 import { IconClose, IconLock, IconLogin, IconSliders, Spinner } from "./icons.jsx";
 import { opener, useLayer } from "./layers.js";
 import { touch } from "./nav.jsx";
-import { asksOf, creditsLeft, creditsLine, creditsParts, creditsShort, loginLine, num } from "./research.js";
+import { creditsLeft, creditsLine, creditsShort, loginLine, num } from "./research.js";
 import { Sheet } from "./sheet.jsx";
 import dialog from "./dialog.module.css";
 import styles from "./login.module.css";
@@ -110,7 +110,7 @@ function usePopClose(on, box, btn, close) {
 // 弹层挂到 .ws 里：颜色等变量定义在 .ws 上；手机上左栏是带 transform 的抽屉，挂在里面 fixed 会跟着抽屉走
 const onWs = (node) => createPortal(node, document.querySelector(".ws") || document.body);
 
-// 左栏最下面常驻的额度按钮：小圆环画剩余比例，旁边写“约可问 N 次”（2026-11-07 Sean 定，第 27 条）；管理员写“额度不限”。
+// 左栏最下面常驻的额度按钮：小圆环画剩余比例，旁边写剩多少（2026-11-07 Sean 定：不换算成次数）；管理员写“额度不限”。
 // 显示最紧的那个额度，用到八成变黄、用完变红；没取到不显示。点开是额度面板（UsagePanel，手机上是底部弹层），完整那句在面板里
 export function CreditsFoot({ credits, guest, onLogin, onOpen, mobile }) {
   const [open, setOpen] = useState(false);
@@ -162,34 +162,43 @@ function Ring({ frac, size = 16 }) {
   );
 }
 
-// 额度面板：完整的一句（“今天还剩 7,300 额度，约可问 36 次 · 明天 0 点恢复”，和输入框上面的提醒、用完时的报错同一种说法），
-// 额度来源，怎么估的；游客下面是去登录的按钮，写着登录后会怎样。只写最紧的那个额度，日、周不并排列（第 27 条）
+// 离重置还有多久：“05:32:10”，一天以上前面加“2 天 ”；过了就是 00:00:00（面板开着时每秒走一下，额度随后会重新取）
+function countdown(iso, now) {
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return "—";
+  const s = Math.max(0, Math.floor((at - now) / 1000));
+  const pad = (n) => String(n).padStart(2, "0");
+  const d = Math.floor(s / 86400);
+  return `${d ? `${d} 天 ` : ""}${pad(Math.floor(s / 3600) % 24)}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`;
+}
+
+// 额度面板（2026-11-07 Sean 定：简单点，照他给的样子）：两行，左边是名目，右边是数——“今日所剩额度 7,300”“重置倒计时 05:32:10”。
+// 只写最紧的那个额度（周的更紧就写“本周所剩额度”，倒计时到下周一 0 点），不换算成次数、不写怎么估的；游客下面是去登录的按钮，写着登录后每天多少。
+// 管理员是今日、本周各用了多少
 function UsagePanel({ credits, left, guest, mobile, onLogin }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (credits.unlimited) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [credits.unlimited]);
+  const rows = (list, tone) => (
+    <dl className={styles.usageRows + (tone ? " " + styles[tone] : "")}>
+      {list.map(([k, v]) => <div key={k} className={styles.usageRow}><dt>{k}</dt><dd>{v}</dd></div>)}
+    </dl>
+  );
   if (credits.unlimited) {
     const used = usedBy(credits);
-    return (
-      <>
-        <div className={styles.usageMain}>额度不限</div>
-        <div className={menu.note}>管理员。今天用了 {num(used.day)} 额度，这周 {num(used.week)}；按北京时间算。</div>
-      </>
-    );
+    return rows([["今日已用额度", num(used.day)], ["本周已用额度", num(used.week)]]);
   }
   const after = guest ? loginLine(credits) : null;
-  const [amount, when] = creditsParts(left);
-  const [more, asks] = after ? after.split("，") : [];
   return (
     <>
-      {/* 和别处同一句，分两行：还剩多少 / 什么时候恢复（中间的“ · ”只是不显示，读屏、复制照旧是整句） */}
-      <div className={styles.usageMain + (left.exhausted ? " " + styles.out : left.warn ? " " + styles.warn : "")}>
-        {amount}<span className={styles.when}><span className={styles.sep}> · </span>{when}</span>
-      </div>
-      <div className={menu.note}>
-        {guest ? "游客试用的额度。" : "登录账号的额度。"}
-        {credits.per_ask > 0 && `按一次约 ${num(credits.per_ask)} 额度估算，联网查得多、开着深度思考的问题会用得多一些。`}按北京时间算。
-      </div>
+      {rows([[`${left.kind === "week" ? "本周" : "今日"}所剩额度`, num(left.remaining)], ["重置倒计时", countdown(left.resets_at, now)]],
+        left.exhausted ? "out" : left.warn ? "warn" : null)}
       {after && onLogin && (
         <button className={styles.usageLogin + (mobile ? " " + sheet.act : "")} onClick={onLogin}>
-          <IconLock size={mobile ? 18 : 14} /><span>{more}{asks && <>，<span className="whitespace-nowrap">{asks}</span></>}</span>
+          <IconLock size={mobile ? 18 : 14} /><span>{after}</span>
         </button>
       )}
     </>
@@ -265,10 +274,9 @@ export function LoginDialog({ open, onClose, crowded, want, credits }) {
     const n = els.length;
     els[i < 0 ? (e.shiftKey ? n - 1 : 0) : (i + (e.shiftKey ? n - 1 : 1)) % n].focus();
   };
-  const asks = asksOf(credits?.login?.day ?? crowded?.login?.day ?? 0, credits?.per_ask ?? crowded?.per_ask);
   const desc = crowded
-    ? `你所在的网络今天新来的游客太多了（防刷，同一网络每天最多 ${crowded.per_ip || 5} 个游客身份）。登录后不受这个限制${asks ? `，每天约可问 ${asks} 次` : "，马上能接着用"}。`
-    : `${want ? `登录后就能用 ${want.name}。` : ""}登录后能用全部模型${asks ? `，每天约可问 ${asks} 次` : ""}；对话和记忆按账号保存，现在的对话会一起并进账号。`;
+    ? `你所在的网络今天新来的游客太多了（防刷，同一网络每天最多 ${crowded.per_ip || 5} 个游客身份）。登录后不受这个限制，马上能接着用。`
+    : `${want ? `登录后就能用 ${want.name}。` : ""}登录后能用全部模型；对话和记忆按账号保存，现在的对话会一起并进账号。`;
   return (
     <div className={dialog.overlay} onMouseDown={(e) => e.target === e.currentTarget && !critical && onClose()}>
       <div ref={box} className={dialog.dialog} role="dialog" aria-modal="true" aria-labelledby="ws-login-title" aria-describedby="ws-login-desc" tabIndex={-1} onKeyDown={trap}>
