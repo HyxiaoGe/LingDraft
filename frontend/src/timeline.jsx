@@ -354,12 +354,12 @@ function greeting(who, at, roll) {
   return pool[Math.floor(((roll * 2) % 1) * pool.length)].t;
 }
 
-// who：登录了是名字（没填是空字符串），游客是 null，还没认出是谁是 undefined（先空着占好高度，认出来再写，不先闪一句别的）
+// who：登录了是名字（没填是空字符串），游客是 null。一打开就有（先按本机记着的，见 auth.localWho），不用等认人
 function Welcome({ who }) {
   const [at] = useState(() => ({ time: new Date(), roll: Math.random() }));
   return (
     <div className="ws-welcome">
-      <h2>{who === undefined ? "\u00a0" : greeting(who, at.time, at.roll)}</h2>
+      <h2>{greeting(who ?? null, at.time, at.roll)}</h2>
     </div>
   );
 }

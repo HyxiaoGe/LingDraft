@@ -4,7 +4,7 @@
 // 跨应用一处登出处处登出。SDK 的配置（auth 地址、client_id）从后端 /api/auth/config 取，后端没配就没有登录（login 为 false）。
 // 身份一变（登录成功、别处退出、换了账号）整页重载：页面上所有东西都是按人取的，重载最稳。
 import {
-  cancelAuthorization, clearLocalSessionIfCurrent, completeAuthorization, configure, getAccessToken, handleCallback, login as sdkLogin,
+  cancelAuthorization, clearLocalSessionIfCurrent, completeAuthorization, configure, createTokenStore, getAccessToken, handleCallback, login as sdkLogin,
   logout as sdkLogout, prepareAuthorization, reconcileSession, refresh, resumeSession, tokenStore,
 } from "auth-client-web";
 import { clearDrafts } from "./drafts.js";
@@ -26,6 +26,17 @@ const listeners = new Set();
 // 当前身份的快照：ready 是初始化做完了（这之前不显示登录入口）；login 是有没有登录功能；me 见上
 // crowded 是领游客身份被拒了（同一网络一天领得太多）：页面弹登录框说清为什么、登录后会怎样。
 // 是后端 429 的 detail（{per_ip, per_ask, login}，见后端 api.main 的 auth_guest），老后端只给一句话时是 {}；没被拒是 false
+// 本机记着的是谁，不等网络（欢迎语用：一打开就是带名字的那句，不先空着等认人）。有本地会话是登录名字（没填是空字符串），
+// 没有是 null（游客，或者没有登录功能的部署）。和 init 认出来的不一样时（比如会话在别处失效了），页面跟着 snapshot 改
+export function localWho() {
+  try {
+    const store = createTokenStore(STORAGE_KEYS);
+    return store.getSessionSnapshot() ? store.getUser()?.name || "" : null;
+  } catch {
+    return null;
+  }
+}
+
 export const snapshot = () => ({ ready: done, login: !!cfg?.login, me, crowded: !me && crowded });
 let crowded = false;
 export function subscribeAuth(fn) {

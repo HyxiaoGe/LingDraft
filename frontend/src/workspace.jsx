@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads,
   pinResearchThread, queueResearch, regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
 import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconPlus, IconSearch, IconTrash } from "./icons.jsx";
+import { localWho } from "./auth.js";
 import { setDraft } from "./drafts.js";
 import { AFTER_RUN_ERROR, errorText, quotaText } from "./errors.js";
 import { useLayer } from "./layers.js";
@@ -49,6 +50,7 @@ const leftover = (s) => [s.guided_message && "guided", s.queued_message && "queu
 
 export default function Workspace() {
   const auth = useAuth(); // 身份：游客还是登录了（见 auth.js）。身份一变整页重载，这里不用跟着改状态
+  const [earlyWho] = useState(localWho); // 认人做完之前，欢迎语先按本机记着的名字说（见 auth.localWho）
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginWant, setLoginWant] = useState(null); // 游客点了“登录后可用”里的哪个模型（登录弹窗说登录后就能用它，第 28 条）
   const [threads, setThreads] = useState(null);
@@ -673,7 +675,7 @@ export default function Workspace() {
         <Sidebar threads={shownThreads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={fromSide(select)} manage={manage}
           onSettings={fromSide(() => setSettings("settings"))} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
         <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
-          who={auth.ready ? (auth.me ? auth.me.name || "" : null) : undefined}
+          who={auth.ready ? (auth.me ? auth.me.name || "" : null) : earlyWho}
           models={models} credits={credits} manage={manage}
           picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />
         {search && (
