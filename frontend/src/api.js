@@ -34,7 +34,7 @@ async function sse(url, init, onEvent, signal) {
     const get = url.startsWith("/api/research/") ? authFetch : fetch; // 对话接口带身份（见 auth.js），海报的不带
     return await readSse(await get(url, { ...init, signal: ctl.signal }), onEvent, alive);
   } catch (e) {
-    if (signal?.aborted) throw Object.assign(new Error("已切到别的线程"), { aborted: true });
+    if (signal?.aborted) throw Object.assign(new Error("已切到别的对话"), { aborted: true });
     if (ctl.signal.aborted) throw new Error("连接长时间没有数据，已断开");
     throw e;
   } finally {

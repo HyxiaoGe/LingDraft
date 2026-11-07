@@ -7,7 +7,7 @@
 //   删的那一行没了以后焦点放在哪，由删的地方自己定（列表里放到下一行），不抢到提示上：抽屉开着时提示在抽屉外面，抢过来 Tab 就出了抽屉
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { IconUndo } from "./icons.jsx";
-import { NavContext } from "./nav.jsx";
+import { NavContext, touch } from "./nav.jsx";
 
 export const UNDO_MS = 5000;
 const MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -102,12 +102,12 @@ export function UndoToast({ undo }) {
   return (
     <div className="ws-toast-host" role="status" aria-live="polite" style={lift != null ? { bottom: lift + 8 } : undefined}>
       {it && (
-        <div className="ws-toast" onPointerEnter={undo.pause} onPointerLeave={undo.resume} onFocus={undo.pause}
+        <div className="ws-toast" data-esc onPointerEnter={undo.pause} onPointerLeave={undo.resume} onFocus={undo.pause}
           onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) undo.resume(); }}
           onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); undo.now(); } }}>
           <span className="text">{it.text}</span>
           <button className="ws-toast-act" title={`撤销（${UNDO_KEY}）`} aria-keyshortcuts={MAC ? "Meta+Z" : "Control+Z"} onClick={undo.undo}>
-            <IconUndo size={14} />撤销
+            <IconUndo size={14} />撤销{!touch() && <kbd className="ws-kbd" aria-hidden="true">{UNDO_KEY}</kbd>}
           </button>
         </div>
       )}

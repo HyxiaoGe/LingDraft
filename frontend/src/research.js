@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 
 export const ACTIVE = new Set(["queued", "running"]); // 服务器上还有执行没结束
-export const QUEUED = "排队中，前面的任务跑完就开始";
+export const QUEUED = "排队中，轮到了就开始";
 
 // 时钟：有执行在跑每秒走一次，显示“已用 2 分 05 秒”；没有就每分钟走一次，过了零点，今天的时间换成写日期
 export function useNow(active) {
@@ -20,20 +20,18 @@ export function elapsed(since, now) {
   return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${String(s % 60).padStart(2, "0")} 秒`;
 }
 
-// 今天的显示时刻，更早的显示日期
-// 时间的写法，左栏和对话里一样：今天的只写钟点“14:32”，别的天写日期“10月30日”，不是今年的带上年份。
-// 一句话、一条回答下面是 text：日期后面再跟钟点；full 精确到秒，放在悬停提示里
 // 每轮记下的模型（"厂商:模型"）显示成什么：能选的模型里用它的那个的名字（Auto 在第一个，跳过它，Auto 的那轮显示它实际用的）；
-// 列表里没有的（不再提供的）显示模型名本身
-export function modelName(models, ref) {
-  return models?.slice(1).find((m) => m.model === ref)?.name || ref.split(":").pop();
+// 列表里没有的（不再提供的）写“已不再提供的模型”，不露后端的模型代号（批次 G 第 40 条）；列表还没取到时先不写
+export function modelName(models, ref, gone = "已不再提供的模型") {
+  if (!models?.length) return null;
+  return models.slice(1).find((m) => m.model === ref)?.name || gone;
 }
 
 // 多少额度（后端按各模型的单价算好的 credits，1 credit = ¥0.001 成本；页面上叫“额度”，不露 credits，见规范术语表）：
-// 10 以上取整，以下留一位小数
+// 一律取整、千位加逗号，不到 1 写“不到 1 额度”，不换算成次数（2026-11-07 Sean 定，批次 G 第 39 条）
 export function creditsText(n) {
   if (n == null) return null;
-  return `${n >= 10 ? Math.round(n) : n >= 0.1 ? n.toFixed(1) : "<0.1"} 额度`;
+  return n < 1 ? "不到 1 额度" : `${Math.round(n).toLocaleString("en-US")} 额度`;
 }
 
 // 额度里最紧的那个窗口（自己的：今天、这周；所有游客合计的那个不显示），加上剩多少、约可问几次、是不是该提醒（用了 warn_at 以上）、是不是用完了。
@@ -86,6 +84,8 @@ export function loginLine(src, prefix = true) {
   return `${prefix ? "登录" : ""}后每天 ${num(day)} 额度${k ? `，约可问 ${k} 次` : ""}`;
 }
 
+// 时间全站一种写法（批次 G 第 38 条）：今天“14:32”，昨天“昨天 14:32”，明天“明天 03:00”，今年别的天“11月5日 14:32”，往年“2025年11月5日”（不写钟点）。
+// day 是哪天（今天为空串），hm 是钟点，text 是上面那种写法，full 精确到秒、放在悬停提示里
 export function stamp(iso, now = Date.now()) {
   if (!iso) return null;
   const d = new Date(iso);
@@ -94,14 +94,19 @@ export function stamp(iso, now = Date.now()) {
   const md = `${d.getMonth() + 1}月${d.getDate()}日`;
   const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
   const year = `${d.getFullYear()}年`;
-  const day = d.toDateString() === today.toDateString() ? "" : `${d.getFullYear() === today.getFullYear() ? "" : year}${md}`;
-  return { day, hm, text: day ? `${day} ${hm}` : hm, full: `${year}${md} ${hm}:${pad(d.getSeconds())}` };
+  const off = (n) => new Date(today.getFullYear(), today.getMonth(), today.getDate() + n).toDateString() === d.toDateString();
+  const other = d.getFullYear() !== today.getFullYear();
+  const day = off(0) ? "" : off(-1) ? "昨天" : off(1) ? "明天" : other ? `${year}${md}` : md;
+  return { day, hm, text: !day ? hm : other && !off(-1) && !off(1) ? day : `${day} ${hm}`, full: `${year}${md} ${hm}:${pad(d.getSeconds())}` };
 }
 
-// 左栏对话的时间：今天的写钟点，别的天只写日期
-export function when(iso, now = Date.now()) {
+// 写在一句话里的：今天的也说出“今天”（“今天 03:00 整理过”），别的同 text
+export const sayWhen = (s) => (s.day ? s.text : `今天 ${s.hm}`);
+
+// 左栏对话的时间：“今天”“昨天”两组里只写钟点（组名已经说了是哪天）；别的组和搜索结果只写哪天（今天、昨天、11月5日），一列里不混钟点和日期
+export function when(iso, now = Date.now(), group) {
   const s = stamp(iso, now);
-  return s ? s.day || s.hm : "";
+  return !s ? "" : group === "today" || group === "yesterday" ? s.hm : s.day || "今天";
 }
 
 export const domain = (url) => {

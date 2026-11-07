@@ -3,6 +3,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { EmailLogin, checkSession, completeCallback, emailLoginAvailable, emailLoginKnown, init, signIn, signOut, snapshot, subscribeAuth } from "./auth.js";
 import { IconClose, IconLock, Spinner } from "./icons.jsx";
+import { opener, useLayer } from "./layers.js";
+import { touch } from "./nav.jsx";
 import { asksOf, creditsLeft, creditsLine, creditsParts, creditsShort, loginLine, num } from "./research.js";
 import { Sheet } from "./sheet.jsx";
 
@@ -80,14 +82,10 @@ function usePopClose(on, box, btn, close) {
   useEffect(() => {
     if (!on) return;
     const down = (e) => !box.current?.contains(e.target) && !btn.current?.contains(e.target) && closing.current();
-    const key = (e) => e.key === "Escape" && (closing.current(), btn.current?.focus());
     addEventListener("mousedown", down);
-    addEventListener("keydown", key);
-    return () => {
-      removeEventListener("mousedown", down);
-      removeEventListener("keydown", key);
-    };
+    return () => removeEventListener("mousedown", down);
   }, [on, box, btn]);
+  useLayer(on, () => { closing.current(); btn.current?.focus(); });
 }
 
 // 弹层挂到 .ws 里：颜色等变量定义在 .ws 上；手机上左栏是带 transform 的抽屉，挂在里面 fixed 会跟着抽屉走
@@ -186,7 +184,6 @@ function Avatar({ me }) {
 }
 
 const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
-const touch = () => matchMedia("(pointer: coarse)").matches;
 
 // 登录弹窗（第 29 条，2026-11-07 Sean 定）：邮箱验证码在最上面、直接填；GitHub、Google 在“或者”下面，Google 标着要能打开它。
 // 邮箱能不能用页面起来时就问好了（auth.js 的 emailLoginAvailable），还没问到的那一会儿给邮箱那栏留着位置。
@@ -213,18 +210,10 @@ export function LoginDialog({ open, onClose, crowded, want, credits }) {
     setError(null);
     setAsked(null);
     emailLoginAvailable().then(setAsked);
-    const back = document.activeElement;
-    const key = (e) => {
-      if (e.key !== "Escape" || criticalRef.current) return;
-      e.preventDefault();
-      closing.current();
-    };
-    addEventListener("keydown", key);
-    return () => {
-      removeEventListener("keydown", key);
-      if (back?.isConnected && back !== document.body) back.focus({ preventScroll: true });
-    };
+    const back = opener(); // Safari 点按钮不给按钮焦点：用刚按下的那个按钮
+    return () => { if (back?.isConnected) back.focus({ preventScroll: true }); };
   }, [open]);
+  useLayer(open, () => { if (!criticalRef.current) closing.current(); }); // 验证码对了、正在换登录的那几秒不能关
   // 邮箱验证码能不能用：页面起来时多半已经问到了（emailLoginKnown），打开的第一下就用它，不先闪一下转圈；null 是还没问到
   const email = asked ?? emailLoginKnown();
   // 焦点进弹窗：打开时、邮箱那栏刚问到时，落到第一个能填能点的地方。用户自己挪过（不在弹窗放的地方了）就不动

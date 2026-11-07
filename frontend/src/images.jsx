@@ -1,8 +1,9 @@
 // 画的图：generate_image 的结果（图存在 image-service 里，后端按编号取，见 app/tools/image_mcp.py），照 Fusion 的图片卡片（GeneratedImages.tsx）：
-// 生成中按要的比例占好位置，出图后原位淡入；卡片下写明哪个模型画的，可以看描述、下载、再画一张，点图看大图。
+// 生成中按要的比例占好位置，出图后原位淡入；卡片下写明哪个模型画的，可以改这张、看描述、下载、再画一张，点图看大图。
 // 占位没照搬 Fusion 的点阵：灰底上一道斜光扫过，中间写正在生成和用了几秒（2026-10-31 Sean 定）
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { IconClose, IconDownload, IconLoop, Spinner } from "./icons.jsx";
+import { IconClose, IconDownload, IconEdit, IconLoop, Spinner } from "./icons.jsx";
+import { useLayer } from "./layers.js";
 
 const MAX_W = 640;
 const MAX_H = 560;
@@ -27,6 +28,9 @@ const MODEL_NAMES = {
 export const REGENERATE_REQUEST = "用同样的描述再生成一张";
 
 // 这一轮的画图调用，一次一张卡片：画好的是图，还在画的是占位；没画成的就地说明，后面又画了的（重试）由后一张接替
+// 画成了、图还在的那一步
+export const drawn = (s) => !!s.image && !s.message;
+
 export function imagesOf(items) {
   const calls = items.filter((i) => i.type === "step" && i.kind === "image");
   return calls.filter((s, k) => s.image || s.pending || k === calls.length - 1);
@@ -34,6 +38,35 @@ export function imagesOf(items) {
 
 export const imageUrl = (tid, img) => `/api/research/threads/${encodeURIComponent(tid)}/images/${encodeURIComponent(img.id)}`;
 const EXTENSIONS = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
+
+// 下载的文件名带上对话标题、是这段对话的第几张（批次 G 第 50 条）：“北京秋天的海报-2.png”。文件名里不能有的字符换成空格，太长截短；还没有标题的叫“灵稿的图”
+export function imageFileName(title, n, mime) {
+  const base = title && title !== "新对话" ? title.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim() : "";
+  const short = Array.from(base).slice(0, 40).join("").trim(); // 按字数截，不把表情这类两个码元的字切成半个
+  return `${short || "灵稿的图"}-${n}.${EXTENSIONS[mime] || "png"}`;
+}
+
+// 图片的替代文字（读屏念的）：描述开头一句、最多 40 字，不把整段描述当图片说明念一遍；整段在“查看描述”里
+const ALT_MAX = 40;
+export function imageAlt(prompt) {
+  const first = (prompt || "").trim().split(/(?<=[。！？!?；;])|\n|(?<=\.)\s/)[0].trim();
+  const text = Array.from(first);
+  return text.length ? `生成的图：${text.length > ALT_MAX ? text.slice(0, ALT_MAX).join("") + "…" : first}` : "生成的图";
+}
+
+// 改这张：把这张图取回来放进输入框当附件（和自己传的图走同一条路，大图在本机压一下，见 upload.js），接着说要怎么改、或照它画什么。
+// 输入框收到 ws-attach-image（见 timeline.jsx 的 Composer）；没取到时 detail 是 null，输入框下面说一声
+async function editThis(src, name) {
+  let file = null;
+  try {
+    const r = await fetch(src);
+    if (r.ok) {
+      const blob = await r.blob();
+      file = new File([blob], name, { type: blob.type });
+    }
+  } catch { /* 网络断了：照没取到说 */ }
+  dispatchEvent(new CustomEvent("ws-attach-image", { detail: file }));
+}
 
 function ratioOf(text) {
   const m = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(text || "");
@@ -60,14 +93,17 @@ function useElapsed(id, running) {
   return Math.max(0, Math.floor(((running ? Date.now() : end.current) - firstSeen.get(id)) / 1000));
 }
 
-export function ImageCards({ steps, tid, running, onRegenerate }) {
+// title、base：对话标题、这一轮之前已经有几张图，下载的文件名用（见 imageFileName）
+export function ImageCards({ steps, tid, running, onRegenerate, title, base = 0 }) {
   const [viewing, setViewing] = useState(null);
   if (!steps.length) return null;
+  let n = base;
   return (
     <div className="ws-images">
       {/* 画成了却带着说明的：以前的图已经不在了（见 history.IMAGE_GONE），照没画成的样子说一声 */}
-      {steps.map((s) => (s.image && !s.message
-        ? <ImageCard key={s.id} img={s.image} src={imageUrl(tid, s.image)} onOpen={(back) => setViewing({ img: s.image, back })} onRegenerate={onRegenerate} />
+      {steps.map((s) => (drawn(s)
+        ? <ImageCard key={s.id} img={s.image} src={imageUrl(tid, s.image)} name={imageFileName(title, ++n, s.image.mime_type)}
+          onOpen={(back) => setViewing({ img: s.image, back })} onRegenerate={onRegenerate} />
         : <PendingCard key={s.id} s={s} running={running} />))}
       {viewing && <Viewer img={viewing.img} src={imageUrl(tid, viewing.img)} onClose={() => { viewing.back?.focus(); setViewing(null); }} />}
     </div>
@@ -87,13 +123,13 @@ function PendingCard({ s, running: turnRunning }) {
           <div className="ws-image-wait" role="status">
             <Spinner size={13} /><span>正在生成图片</span><span className="secs" aria-hidden="true">· {secs} 秒</span>
           </div>
-        ) : <span className="ws-image-note">{s.pending ? "没画完" : s.message || "图片生成失败"}</span>}
+        ) : <span className="ws-image-note">{s.pending ? "没有画完" : s.message || "图片生成失败"}</span>}
       </div>
     </figure>
   );
 }
 
-function ImageCard({ img, src, onOpen, onRegenerate }) {
+function ImageCard({ img, src, name, onOpen, onRegenerate }) {
   const [state, setState] = useState("loading"); // loading → loaded / failed
   const [instant, setInstant] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -117,7 +153,7 @@ function ImageCard({ img, src, onOpen, onRegenerate }) {
           </div>
         ) : (
           <button className="ws-image-open" aria-label="看大图" onClick={(e) => onOpen(e.currentTarget)}>
-            <img ref={imgRef} key={attempt} src={attempt ? `${src}?retry=${attempt}` : src} alt={img.prompt} data-loaded={state === "loaded"}
+            <img ref={imgRef} key={attempt} src={attempt ? `${src}?retry=${attempt}` : src} alt={imageAlt(img.prompt)} data-loaded={state === "loaded"}
               data-instant={instant || undefined} onLoad={() => setState("loaded")} onError={() => setState("failed")} />
           </button>
         )}
@@ -125,8 +161,9 @@ function ImageCard({ img, src, onOpen, onRegenerate }) {
       <figcaption className="ws-image-cap">
         <div className="row">
           <span className="by">{model ? `本次生图由 ${model} 提供` : ""}</span>
+          <button className="ws-image-act text" onClick={() => editThis(src, name)}><IconEdit size={14} />改这张</button>
           <button className="ws-image-act text" aria-expanded={promptOpen} onClick={() => setPromptOpen(!promptOpen)}>{promptOpen ? "收起描述" : "查看描述"}</button>
-          <a className="ws-image-act" href={src} download={`lingdraft-image-${img.id.slice(0, 8)}.${EXTENSIONS[img.mime_type] || "png"}`} aria-label="下载" title="下载">
+          <a className="ws-image-act" href={src} download={name} aria-label="下载" title="下载">
             <IconDownload size={14} />
           </a>
           {onRegenerate && (
@@ -139,14 +176,14 @@ function ImageCard({ img, src, onOpen, onRegenerate }) {
   );
 }
 
-// 看大图：盖住整个页面，点空白处、按 Esc 或点关闭都收起。光标先放到关闭按钮上，Esc 归这里，不会去停止回答
+// 看大图：盖住整个页面，点空白处、按 Esc 或点关闭都收起。光标先放到关闭按钮上，Esc 收的是这一层，不会去停止回答
 export function Viewer({ img, src, onClose }) {
   const close = useRef(null);
   useEffect(() => { close.current?.focus(); }, []);
+  useLayer(true, onClose);
   return (
-    <div className="ws-viewer" role="dialog" aria-modal="true" aria-label="图片" onClick={onClose}
-      onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}>
-      <img src={src} alt={img.prompt} onClick={(e) => e.stopPropagation()} />
+    <div className="ws-viewer" role="dialog" aria-modal="true" aria-label="图片" onClick={onClose}>
+      <img src={src} alt={img.alt ?? imageAlt(img.prompt)} onClick={(e) => e.stopPropagation()} />
       <button ref={close} className="ws-viewer-close" aria-label="关闭" onClick={onClose}><IconClose size={20} /></button>
     </div>
   );

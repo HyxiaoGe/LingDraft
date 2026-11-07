@@ -3,6 +3,7 @@
 import React, { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { IconChevron, IconClose, IconExternal } from "./icons.jsx";
+import { useLayer } from "./layers.js";
 import { NavContext } from "./nav.jsx";
 import { Sheet } from "./sheet.jsx";
 import { domain, sourceName } from "./research.js";
@@ -66,21 +67,24 @@ function usePop(mobile) {
       if (r.bottom < view.top || r.top > view.bottom) return close();
       setPop((o) => (o ? { ...o, rect: r } : o));
     };
-    const esc = (e) => e.key === "Escape" && !e.defaultPrevented && close(); // 焦点在别处（比如输入框）时按 Esc 也收，光标不动
     const moved = (e) => !box.current?.contains(e.target) && !mark.current?.contains(e.target) && close(); // Tab 到了卡和角标以外：钉住的也收
     addEventListener("pointerdown", down);
     addEventListener("scroll", follow, true);
     addEventListener("resize", follow);
-    addEventListener("keydown", esc);
     addEventListener("focusin", moved);
     return () => {
       removeEventListener("pointerdown", down);
       removeEventListener("scroll", follow, true);
       removeEventListener("resize", follow);
-      removeEventListener("keydown", esc);
       removeEventListener("focusin", moved);
     };
   }, [open, mobile]);
+  // Esc：焦点在卡里或角标上，收起并回到角标；在别处（比如输入框），只收起，光标不动。手机上是底部弹层，由它自己管
+  useLayer(open && !mobile, () => {
+    const at = document.activeElement;
+    if (box.current?.contains(at) || at === mark.current) back();
+    else close();
+  });
   const mouse = (e) => e.pointerType === "mouse" && !mobile;
   return {
     open,
@@ -91,12 +95,6 @@ function usePop(mobile) {
       onPointerLeave: (e) => mouse(e) && hide(),
       onFocus: (e) => !mobile && !quiet.current && e.target.matches(":focus-visible") && show(false),
       onBlur: () => !mobile && hide(),
-      onKeyDown: (e) => {
-        if (e.key === "Escape" && pop && !mobile) {
-          e.preventDefault();
-          back();
-        }
-      },
       onClick: (e) => {
         if (mobile) return setPop({ sheet: true });
         if (e.detail === 0) { // 键盘按的回车或空格：钉住，把焦点移进卡里，“打开原文”才按得到
@@ -154,7 +152,7 @@ function SourceBody({ s, n, onClose }) {
 function SourcePop({ boxRef, rect, s, n, onEnter, onLeave, onClose }) {
   return layer(
     <div ref={boxRef} className="ws-pop" style={floatStyle(rect, 340, 220)} role="dialog" aria-label={`来源 ${n}`}
-      onMouseEnter={onEnter} onMouseLeave={onLeave} onFocus={onEnter} onBlur={onLeave} onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } }}>
+      onMouseEnter={onEnter} onMouseLeave={onLeave} onFocus={onEnter} onBlur={onLeave}>
       <SourceBody s={s} n={n} onClose={onClose} />
     </div>,
   );

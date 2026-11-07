@@ -2,6 +2,7 @@
 // 打开时光标落在关闭钮上（里面的内容要换焦点的自己再挪），Tab 在里面转。样式和选模型的弹层同一套（.ws-sheet）
 import { useEffect, useRef } from "react";
 import { IconClose } from "./icons.jsx";
+import { opener, useLayer } from "./layers.js";
 
 const FOCUSABLE = 'a[href], button:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
@@ -10,17 +11,12 @@ export function Sheet({ title, onClose, className = "", children }) {
   const closing = useRef(onClose);
   closing.current = onClose;
   useEffect(() => {
-    const back = document.activeElement;
+    const back = opener(); // Safari 点按钮不给按钮焦点：用刚按下的那个按钮（待确认第 24 条）
     ref.current?.querySelector(".ws-sheet-close")?.focus();
     return () => { if (back?.isConnected) back.focus({ preventScroll: true }); };
   }, []);
+  useLayer(true, () => closing.current()); // Esc（外接键盘）
   const keys = (e) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      e.stopPropagation();
-      closing.current();
-      return;
-    }
     if (e.key !== "Tab") return;
     e.stopPropagation(); // 开在抽屉上面时（抽屉里一行的菜单）：Tab 只在弹层里转，不让抽屉再转一次
     const els = [...ref.current.querySelectorAll(FOCUSABLE)];
