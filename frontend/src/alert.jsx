@@ -21,14 +21,26 @@ export const permission = () => (typeof Notification === "undefined" ? "unsuppor
 // 用户没在看这个页面：切去了别的标签页，或者在别的应用里
 const away = () => document.hidden || !document.hasFocus();
 
-// ---- 网站图标加点：拿原来的 favicon.svg，右上角画一个靛青点，描一圈纸色的边（深色底上看得清）。颜色取页面的设计变量 ----
+// ---- 网站图标加点：拿 32 像素的网站图标，右上角画一个靛青点，描一圈纸色的边。颜色取页面的设计变量 ----
 let dotted = null;
 async function dottedIcon() {
   if (dotted) return dotted;
   const css = getComputedStyle(document.querySelector(".ws") || document.documentElement);
-  const text = await (await fetch("/favicon.svg")).text();
-  const dot = `<circle cx="50" cy="14" r="12" fill="${css.getPropertyValue("--accent").trim()}" stroke="${css.getPropertyValue("--paper").trim()}" stroke-width="4"/>`;
-  dotted = "data:image/svg+xml," + encodeURIComponent(text.replace("</svg>", `${dot}</svg>`));
+  const img = new Image();
+  img.src = "/icon-32.png";
+  await img.decode();
+  const c = document.createElement("canvas");
+  c.width = c.height = 32;
+  const g = c.getContext("2d");
+  g.drawImage(img, 0, 0, 32, 32);
+  g.beginPath();
+  g.arc(25, 7, 6, 0, 2 * Math.PI);
+  g.fillStyle = css.getPropertyValue("--accent").trim();
+  g.fill();
+  g.lineWidth = 2;
+  g.strokeStyle = css.getPropertyValue("--paper").trim();
+  g.stroke();
+  dotted = c.toDataURL("image/png");
   return dotted;
 }
 function setIcon(url) {
@@ -38,7 +50,7 @@ function setIcon(url) {
       l.dataset.wasType = l.getAttribute("type") || "";
     }
     l.setAttribute("href", url || l.dataset.was);
-    l.setAttribute("type", url ? "image/svg+xml" : l.dataset.wasType);
+    l.setAttribute("type", url ? "image/png" : l.dataset.wasType);
   }
 }
 

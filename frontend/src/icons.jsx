@@ -70,3 +70,19 @@ export const Spinner = ({ size = 16, className = "" }) => (
     <path d="M12 4a8 8 0 0 1 8 8" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
   </svg>
 );
+
+// 灵稿的标志（和网站图标同一个，设计稿 ~/Sync/lingdraft-icon 的 icon.js 照搬成 SVG）：紫色圆角方块里一个折了角的 L，右上角一颗青柠色星。
+// 设计稿规定 32 像素以下不画折角里的浅紫块、星画大一点；左栏 28px 照这个画
+export const Logo = ({ size = 28, className = "" }) => (
+  <svg width={size} height={size} viewBox="0 0 512 512" className={className} aria-hidden="true">
+    <defs>
+      <linearGradient id="ld-logo-bg" x1="30" y1="0" x2="475" y2="512" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stopColor="#7260ED" />
+        <stop offset="1" stopColor="#34246E" />
+      </linearGradient>
+    </defs>
+    <rect width="512" height="512" rx="116" fill="url(#ld-logo-bg)" />
+    <path d="M164 128H238L280 170V274Q280 292 298 292H364V364Q364 384 344 384H174Q144 384 144 354V148Q144 128 164 128Z" fill="#FAF9FF" />
+    <path d="M359 142Q369.81 178.19 406 189Q369.81 199.81 359 236Q348.19 199.81 312 189Q348.19 178.19 359 142Z" fill="#D5F783" />
+  </svg>
+);
