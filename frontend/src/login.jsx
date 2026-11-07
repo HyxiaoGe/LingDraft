@@ -312,7 +312,8 @@ export function LoginDialog({ open, onClose, crowded, want, credits }) {
 
 // 邮箱验证码：填邮箱 → 发码 → 填码。填邮箱那步就在弹窗最上面（phase 是 start），发出去以后整个弹窗换成填验证码（phase 是 code）。
 // 两个框都有看得见的标签（第 33 条：只靠占位符，填完就不知道这框是什么，读屏也会丢字段名），出错的那句连在框上（aria-describedby）。
-// 重发有间隔；验证码对了换登录的那几秒告诉弹窗别关；换好了整页重载（身份变了，按新身份重取）
+// 重发有间隔；验证码对了换登录的那几秒告诉弹窗别关；换好了整页重载（身份变了，按新身份重取）。
+// 验证码填满位数（打字、粘贴、iOS 从短信/邮件自动填）就直接登录，不用再点“登录”；没对的话光标回到框里、全选，直接重打就行
 function EmailFlow({ phase, setPhase, setCritical, blocked }) {
   const [addr, setAddr] = useState("");
   const [code, setCode] = useState("");
@@ -375,14 +376,29 @@ function EmailFlow({ phase, setPhase, setCritical, blocked }) {
     const r = await flow.current.resend(signal);
     setSent({ ...r, resendAt: Date.now() + r.resendAfter * 1000 });
   });
-  const verify = (e) => {
-    e.preventDefault();
-    if (code.length !== (sent?.codeLength || 6)) return undefined;
+  const submit = (value) => {
+    if (value.length !== (sent?.codeLength || 6)) return undefined;
     return run(async (signal) => {
-      await flow.current.verify(code, signal);
+      await flow.current.verify(value, signal);
       location.reload(); // 身份变了，整页按新身份重取
     }, true);
   };
+  const verify = (e) => {
+    e.preventDefault();
+    return submit(code);
+  };
+  const typed = (e) => {
+    const v = e.target.value.replace(/\D/g, "").slice(0, sent.codeLength); // 粘贴“123 456”这种带空格的也认
+    setCode(v);
+    if (v.length === sent.codeLength && v !== code) submit(v);
+  };
+  useEffect(() => { // 验证码没对：框在核对时是禁用的、丢了焦点，放回去并全选
+    if (!busy && error && phase === "code") {
+      input.current?.focus();
+      input.current?.select();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
   const wait = sent ? Math.max(0, Math.ceil((sent.resendAt - now) / 1000)) : 0;
   const err = error && <div id={ids + "err"} className={ERR} role="alert">{error}</div>;
   if (phase !== "code" || !sent) {
@@ -402,9 +418,8 @@ function EmailFlow({ phase, setPhase, setCritical, blocked }) {
       <h2 id="ws-login-title" className={styles.title}>输入验证码</h2>
       <p id="ws-login-desc" className={styles.desc}>验证码已发到 {sent.masked}{sent.expiresIn > 0 && `，${Math.max(1, Math.round(sent.expiresIn / 60))} 分钟内有效`}。</p>
       <label className={styles.label} htmlFor={ids + "code"}>验证码<span>{sent.codeLength} 位数字</span></label>
-      <input ref={input} id={ids + "code"} className={styles.field + " " + styles.code} inputMode="numeric" autoComplete="one-time-code" maxLength={sent.codeLength}
-        value={code} disabled={busy} aria-invalid={error ? true : undefined} aria-describedby={error ? ids + "err" : undefined}
-        onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
+      <input ref={input} id={ids + "code"} className={styles.field + " " + styles.code} inputMode="numeric" autoComplete="one-time-code"
+        value={code} disabled={busy} aria-invalid={error ? true : undefined} aria-describedby={error ? ids + "err" : undefined} onChange={typed} />
       {err}
       <div className={styles.actions}>
         <button type="button" className="ws-btn ghost" disabled={busy} onClick={() => { setPhase("start"); setCode(""); setError(null); }}>换个邮箱</button>
