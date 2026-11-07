@@ -86,9 +86,11 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
     }
   };
   const rows = withCurrent(threads || [], current, st, live, busy);
-  // 标题一样的几条（比如两个“广州今日天气”）：下面多一行日期和钟点，好分清
+  // 标题一样、右边的时间也一样的几条（比如更早的两个“广州今日天气”，右边都只写日期）：下面多一行日期和钟点，好分清。
+  // 右边的时间已经分得清（今天、昨天的写到钟点）就不再多写一行
+  const twinKey = (t) => `${t.title}\n${when(t.updated_at, now, groupOf(t, now))}`;
   const seen = {};
-  for (const t of rows) seen[t.title] = (seen[t.title] || 0) + 1;
+  for (const t of rows) seen[twinKey(t)] = (seen[twinKey(t)] || 0) + 1;
   const groups = GROUPS.map(([key, name]) => {
     const items = rows.filter((t) => groupOf(t, now) === key);
     items.sort(key === "pinned" ? (a, b) => Date.parse(b.pinned_at) - Date.parse(a.pinned_at) : newest(now));
@@ -120,7 +122,7 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
     const sel = t.thread_id === current;
     const open = menu?.id === t.thread_id;
     const status = ACTIVE.has(t.status) ? "active" : t.status === "failed" ? "failed" : "idle";
-    const twin = seen[t.title] > 1 && stamp(t.updated_at, now);
+    const twin = seen[twinKey(t)] > 1 && stamp(t.updated_at, now);
     const sub = rowSub(t, now) || (twin ? sayWhen(twin) : "");
     return (
       <div key={t.thread_id} className={cx(styles.row, sel && styles.sel, open && styles.menu)} onPointerEnter={marquee} onFocus={marquee}>
