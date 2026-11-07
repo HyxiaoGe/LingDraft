@@ -7,7 +7,7 @@ import { IconArrowDown, IconArrowUp, IconBulb, IconCheck, IconChevron, IconClose
 import { Viewer } from "./images.jsx";
 import { useLayer } from "./layers.js";
 import { NavContext, byKeyboard, touch } from "./nav.jsx";
-import { QUEUED, creditsLeft, creditsLine, loginLine, modelName } from "./research.js";
+import { QUEUED, creditsLeft, creditsLine, loginLine } from "./research.js";
 import { IMAGE_ACCEPT, ImageError, prepareImage } from "./upload.js";
 import styles from "./composer.module.css";
 import menu from "./menu.module.css";
@@ -428,7 +428,7 @@ function Attachment({ att, onRemove }) {
 
 // 输入框里发送按钮左边：深度思考开关（选的模型能开关才有）和选模型。新对话随便选；对话开始后模型定下不换，
 // 点开只说明一句、列出能选的给开新对话时参考。思考开关每句话都能改，按下去不抢光标（输入框里的字和光标都留着）。
-// 模型分三组：推荐（Auto，写明它现在用哪个：按接口给的 model 对出名字，不写死）、可用、登录后可用（游客锁着的，默认收起）。
+// 模型分三组：推荐（自动，只写名字，不写它现在用哪个、不加说明：2026-11-07 Sean 定）、可用、登录后可用（游客锁着的，默认收起）。
 // 桌面是菜单：往放得下的那边开（新对话的输入框在页面中间，往下开），高度按那边剩下的空间，再多就在里面滚，第一项不会被切掉。
 // 窄屏是底部弹层：最高 70dvh、里面滚，深度思考的开关和说明也在里面（输入框里只放模型名，能开关思考的名字前有个灯泡，亮着是开）。
 // 菜单、弹层打开时光标在里面：Esc 只收起它们，不会停掉正在跑的这一轮（见 Composer 的 Esc）；点外面、关闭钮也能收起。
@@ -608,8 +608,6 @@ function ModelList({ models, current, locked, onLogin, onChoose }) {
     const top = box.scrollTop + t.getBoundingClientRect().top - box.getBoundingClientRect().top - 4;
     box.scrollTo({ top, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   }, [showShut]);
-  const actual = auto.model ? modelName(models, auto.model, null) : null;
-  const autoNote = [auto.description, actual && `现在用 ${actual}`].filter(Boolean).join("，");
   const row = (m, note) => (
     <button key={m.id} role="menuitemradio" aria-checked={m.id === current} className={styles.row + (m.locked ? " " + styles.locked : "")}
       disabled={m.locked ? !onLogin : locked && m.id !== current} onClick={() => onChoose(m)}>
@@ -630,7 +628,7 @@ function ModelList({ models, current, locked, onLogin, onChoose }) {
     <div className="flex flex-col" role="menu" aria-label="选模型" onKeyDown={move}>
       <div role="group" aria-label="推荐">
         <div className={styles.group} aria-hidden="true">推荐</div>
-        {row(auto, autoNote)}
+        {row(auto, null)}
       </div>
       {free.length > 0 && (
         <div role="group" aria-label="可用">
