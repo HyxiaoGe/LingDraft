@@ -19,7 +19,7 @@ function lastText(d, now) {
   return d.ended_at ? `${at} 整理过。` : `${at} 开始的那次整理没有做完，下次接着整理。`;
 }
 
-// 放在设置窗口里（2026-11-07 Sean 定：设置是个弹出的窗口，记忆只从设置窗口里的记忆卡进，切过来还在同一个窗口里，后面的对话不动）。
+// 放在设置窗口里（2026-11-07 Sean 定：设置是个弹出的窗口，记忆是窗口左边的一类，只从这里进，后面的对话不动）。
 // undo：对话页的撤销（同一条提示，见 undo.jsx）；threads：对话列表（对出每条记忆是从哪段对话记下的）；onOpen(id)：关掉窗口、打开那段对话
 export function MemoryPanel({ auth, onLogin, undo, threads, onOpen }) {
   const [data, setData] = useState(null);

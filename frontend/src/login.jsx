@@ -186,7 +186,7 @@ function UsagePanel({ credits, left, guest, mobile, onLogin }) {
   );
 }
 
-function Avatar({ me }) {
+export function Avatar({ me }) {
   const [broken, setBroken] = useState(false);
   if (me.avatar && !broken) return <img className="ws-avatar" src={me.avatar} alt="" referrerPolicy="no-referrer" onError={() => setBroken(true)} />;
   return <span className="ws-avatar">{(me.name || me.email || "?").trim()[0].toUpperCase()}</span>;

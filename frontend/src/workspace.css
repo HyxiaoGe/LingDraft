@@ -1045,47 +1045,73 @@
 .mem-edit-error { color: var(--danger); font-size: 13px; margin-top: 8px; }
 .mem .ws-error { margin: 0 0 16px; }
 /* ---------- 设置窗口（2026-11-07 Sean 定） ---------- */
-/* 弹出的窗口：桌面上靠上居中（切到记忆列表变高时只往下长，顶上那行不跳），手机上从底部升起。顶上一行是标题和关闭，下面自己滚 */
-.set-overlay { align-items: flex-start; padding-top: 48px; }
-.set-dialog { max-width: 560px; max-height: calc(100dvh - 96px); padding: 0; display: flex; flex-direction: column; overflow: hidden; }
-.set-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 12px 12px 24px; border-bottom: 1px solid var(--line); }
-.set-head.sub { padding-left: 12px; }
-.set-title { flex: 1; min-width: 0; margin: 0; font-size: 16px; font-weight: 600; }
-.set-head .ws-dialog-close { position: static; flex: none; }
-.set-back { gap: 4px; padding: 0 8px; } /* 记忆列表左上角的“设置”：切回设置 */
+/* 照豆包的设置窗口：大的两栏窗口，宽 800、高 720（矮屏是屏高的八成），居中，换哪一类大小都不变。
+   左边是“设置”、谁、几类（一类一项设置）；右边是那一类的标题和一组组的行：组名小字在上，几行在圆角框里（一行 48 高），说明写在框下面 */
+.set-overlay { padding: 24px; }
+.set-dialog { display: flex; max-width: 800px; background: var(--side); height: min(720px, 80vh); height: min(720px, 80dvh); max-height: none; padding: 0; overflow: hidden; }
+.set-nav { flex: none; width: 220px; display: flex; flex-direction: column; overflow-y: auto; border-right: 1px solid var(--line); }
+.set-head { flex: none; display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 12px 0 24px; }
+.set-pane .set-head { display: grid; grid-template-columns: 1fr auto 1fr; padding: 0 12px; } /* 标题居中，左边手机上放返回，右边关闭 */
+.set-title { min-width: 0; margin: 0; font-size: 16px; font-weight: 600; }
+.set-nav .set-title { flex: 1; }
+.set-pane .set-title { grid-column: 2; }
+.set-head .ws-dialog-close { position: static; flex: none; grid-column: 3; justify-self: end; }
+.set-back { justify-self: start; gap: 4px; padding: 0 8px; }
 .set-back .back { transform: rotate(90deg); }
+.set-me { display: flex; align-items: center; gap: 12px; margin: 0 16px 16px; }
+.set-me .ws-avatar { width: 32px; height: 32px; font-size: 14px; line-height: 32px; }
+.set-me-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.set-me-text b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-me-text small { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-nav-list { display: flex; flex-direction: column; gap: 4px; padding: 0 12px 16px; }
+.set-nav-item { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border: 0; border-radius: var(--r); background: none;
+  color: var(--ink2); font-weight: 500; text-align: left; }
+.set-nav-item svg { flex: none; color: var(--muted); }
+.set-nav-item .chev { margin-left: auto; transform: rotate(-90deg); }
+@media (hover: hover) { .set-nav-item:hover { background: var(--hover); } }
+.set-nav-item[aria-current] { background: var(--paper); color: var(--ink); box-shadow: 0 0 0 1px var(--line); }
+.set-nav-item[aria-current] svg { color: var(--ink); }
+.set-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .set-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px 24px 24px; }
-.set-body .mem { padding-top: 16px; }
-/* 主题、答完通知、深度思考一行一项，下面是记忆的入口卡 */
-.set-row { display: flex; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line); }
-.set-text { flex: 1; min-width: 0; }
-.set-name { display: block; font-weight: 500; color: var(--ink); }
-.set-desc { display: block; margin-top: 4px; font-size: 13px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
-.set-ctl { flex: none; }
-.set-switch { display: inline-flex; align-items: center; height: 32px; padding: 0 4px; border: 0; border-radius: 999px; background: none; }
-.set-switch:disabled .ws-switch { background: var(--line); }
-.set-switch:disabled .ws-switch::after { background: var(--side); }
-.set-card { display: flex; align-items: center; gap: 16px; width: 100%; margin-top: 24px; padding: 16px; border: 1px solid var(--line2); border-radius: var(--r); background: none;
-  text-align: left; color: var(--ink); }
-.set-card.link { transition: background .12s; }
-.set-card .chev { flex: none; transform: rotate(-90deg); color: var(--muted); }
-@media (hover: hover) { .set-card.link:hover { background: var(--hover); } }
-@media (hover: none) { .set-card.link:active { background: var(--hover); } }
+.set-group + .set-group { margin-top: 24px; }
+.set-group-label { padding: 0 16px 8px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.set-rows { background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+.set-row { display: flex; align-items: center; gap: 16px; width: 100%; min-height: 48px; padding: 12px 16px; border: 0; background: none; color: var(--ink); text-align: left; }
+.set-row + .set-row { border-top: 1px solid var(--line); }
+.ws .set-row:focus-visible { outline-offset: -2px; } /* 框是 overflow: hidden，外圈画在里面才看得见 */
+.set-name { flex: 1; min-width: 0; font-weight: 500; }
+.set-row .check { flex: none; color: var(--accent); }
+@media (hover: hover) { .set-row:not(:disabled):hover { background: var(--hover); } }
+.set-row:disabled .ws-switch { background: var(--line); }
+.set-row:disabled .ws-switch::after { background: var(--side); }
+.set-foot { margin: 8px 16px 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
+.set-body .mem { padding-top: 8px; }
+/* 记忆列表在设置窗口里也是一张圆角白框，和别的几类一样 */
+.set-body .mem-list, .set-body .mem-empty { background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.set-body .mem-list { overflow: hidden; }
+.set-body .mem-list li { padding: 12px 16px 8px; }
+.set-body .mem-list li:last-child { border-bottom: 0; }
+.set-body .mem-empty { padding: 24px 16px; }
 @media (max-width: 720px) {
   .mem-edit textarea { font-size: 16px; }
   .mem-edit-bar .ws-btn { height: 44px; padding: 0 16px; font-size: 14px; }
   .mem-foot { min-height: 44px; }
+  .mem-status .ws-btn { height: 44px; padding: 0 16px; font-size: 14px; } /* 游客的登录、没取到时的再试一次 */
   .mem-from { padding: 12px 0; line-height: 20px; } /* 点按区 44 高 */
+  /* 设置窗口：从底部升起，占九成高。先是分类列表（一类一行，48 高），点进去换成那一类，左上角“设置”回来 */
   .set-overlay { align-items: flex-end; padding: 0; }
-  .set-dialog { max-width: none; max-height: 90vh; max-height: 90dvh; padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left); border-width: 1px 0 0;
-    border-radius: var(--r-lg) var(--r-lg) 0 0; animation: ws-sheet-up .2s var(--ease); }
-  .set-head { padding: 4px 4px 4px 16px; }
-  .set-head.sub { padding-left: 4px; }
-  .set-body { padding: 8px 16px calc(24px + env(safe-area-inset-bottom)); }
-  .set-row.stack { flex-direction: column; align-items: stretch; gap: 12px; } /* 主题三个选项放到说明下面，一排铺满 */
-  .set-row.stack .ws-seg { display: flex; }
-  .set-row.stack .ws-seg-opt { flex: 1; justify-content: center; }
-  .set-switch { height: 44px; }
-  .set-card .ws-btn { height: 44px; padding: 0 16px; font-size: 14px; }
+  .set-dialog { flex-direction: column; max-width: none; height: 90vh; height: 90dvh; padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    border-width: 1px 0 0; border-radius: var(--r-lg) var(--r-lg) 0 0; animation: ws-sheet-up .2s var(--ease); }
+  .set-nav { flex: 1; width: auto; border-right: 0; }
+  .set-head { height: auto; padding: 4px 4px 4px 16px; border-bottom: 1px solid var(--line); }
+  .set-pane .set-head { padding: 4px; }
+  .set-me { margin: 16px 16px 8px; }
+  .set-me .ws-btn { height: 44px; padding: 0 16px; font-size: 14px; }
+  .set-nav-list { gap: 0; margin: 8px 16px 24px; padding: 0; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+  .set-nav-item { height: 48px; padding: 0 16px; border-radius: 0; font-size: 16px; }
+  .set-nav-item + .set-nav-item { border-top: 1px solid var(--line); }
+  .ws .set-nav-item:focus-visible { outline-offset: -2px; }
+  .set-body { padding: 16px 16px 24px; }
+  .set-row { font-size: 16px; }
   .ws-btn.set-back { height: 44px; font-size: 14px; }
 }

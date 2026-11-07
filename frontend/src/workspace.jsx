@@ -52,7 +52,7 @@ export default function Workspace() {
   const [loginWant, setLoginWant] = useState(null); // 游客点了“登录后可用”里的哪个模型（登录弹窗说登录后就能用它，第 28 条）
   const [threads, setThreads] = useState(null);
   const [tid, setTid] = useState(routeId);
-  const [settings, setSettings] = useState(oldPage); // 设置窗口开着时是窗口里的那一页："settings"、"memory"；关着是 null
+  const [settings, setSettings] = useState(oldPage); // 设置窗口开着时是窗口里的哪一类（见 settings.jsx，"settings" 是刚打开）；关着是 null
   const [theme, setTheme, dark] = useTheme(); // 主题（设置窗口里选，存本机）：跟随系统、浅色、深色
   const [st, setSt] = useState(null);
   // 这个页面发起或接上的那次执行：{said, image, sentAt, turnsAtStart, items, stage, phase, title, stopping, hidden, edit}
@@ -679,7 +679,7 @@ export default function Workspace() {
           models={models} credits={credits} manage={manage}
           picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />
         {settings && (
-          <SettingsDialog view={settings} onView={setSettings} onClose={() => setSettings(null)} auth={auth}
+          <SettingsDialog view={settings} onView={setSettings} onClose={() => setSettings(null)} mobile={mobile} auth={auth}
             onLogin={onLogin && (() => { setSettings(null); onLogin(); })}
             theme={theme} onTheme={setTheme} think={thinkOn} onThink={changeThinkDefault}
             undo={undo} threads={shownThreads} onOpen={(id) => { setSettings(null); select(id); }} />
