@@ -9,11 +9,12 @@ import { createResearchThread, deleteResearchThread, editResearchThread, followR
 import { IconBook, IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconPlus, IconSearch, IconTrash } from "./icons.jsx";
 import { setDraft } from "./drafts.js";
 import { AFTER_RUN_ERROR, errorText, quotaText } from "./errors.js";
+import { useLayer } from "./layers.js";
 import { CreditsFoot, LoginDialog, UserFoot, useAuth } from "./login.jsx";
 import { MemoryPage } from "./memory.jsx";
 import { ActionMenu, TitleInput } from "./menu.jsx";
 import { MOBILE, NavContext, SEARCH_ARIA_KEY, SEARCH_KEY, SIDE_ARIA_KEY, SIDE_KEY, isSearchKey, isSideKey, useMedia } from "./nav.jsx";
-import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, stamp, threadMarkdown, useNow, when } from "./research.js";
+import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, sayWhen, stamp, threadMarkdown, useNow, when } from "./research.js";
 import { useDoneAlert } from "./alert.jsx";
 import { Conversation, forgetReading } from "./timeline.jsx";
 import { UndoToast, useUndo } from "./undo.jsx";
@@ -129,6 +130,13 @@ export default function Workspace() {
     document.title = (done ? `（${done}）` : "") + base;
   }, [title, tid, memory, done]);
 
+  // 深色（批次 G 第 16 条）：系统是深色时浏览器顶栏跟着深；只在对话页加，海报页还是浅色（index.html 里那条白的）
+  useEffect(() => {
+    const m = Object.assign(document.createElement("meta"), { name: "theme-color", content: "#1b1f24" });
+    m.media = "(prefers-color-scheme: dark)";
+    document.head.prepend(m); // 好几条都对得上时浏览器用最前面那条
+    return () => m.remove();
+  }, []);
   useEffect(() => { listModels().then(setModels).catch(() => setModels([])); }, []);
   // 身份定了取一次额度；每轮结束（busy 回到 false）再取：这一轮花的已经记上了
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -695,7 +703,7 @@ const newest = (now) => (a, b) => timeOf(b, now) - timeOf(a, now);
 function rowSub(t, now) {
   if (t.status === "queued") return "排队中";
   if (t.status === "running") return t.running_since ? `进行中，已用 ${elapsed(t.running_since, now)}` : "进行中";
-  if (t.status === "failed") return "没跑完，可以重试";
+  if (t.status === "failed") return "没有完成，可以重试";
   return "";
 }
 
@@ -717,13 +725,10 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
   const box = useRef(null);
   const modal = nav.mobile && nav.drawer;
   useEffect(() => { if (modal) box.current?.querySelector('[data-nav="close"]')?.focus(); }, [modal]);
+  useLayer(modal, () => nav.closeDrawer()); // 抽屉上又开了菜单、弹层时，Esc 先收那些（它们在这一层上面）
   const onKeyDown = (e) => {
     if (!modal) return;
-    if (e.key === "Escape" && !e.nativeEvent.isComposing) {
-      if (menu || e.target.closest?.(".ws-menu, .ws-rename") || box.current?.querySelector('[aria-expanded="true"]')) return;
-      e.preventDefault();
-      nav.closeDrawer();
-    } else if (e.key === "Tab") {
+    if (e.key === "Tab") {
       const all = [...box.current.querySelectorAll(FOCUSABLE)].filter((el) => el.offsetParent !== null);
       if (!all.length) return;
       const [first, last] = [all[0], all.at(-1)];
@@ -762,7 +767,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
   const menuRow = menu && rows.find((t) => t.thread_id === menu.id); // 菜单开着时那一行变了（开始回答了）按新的
   const sz = nav.mobile ? 18 : 14;
 
-  const row = (t) => {
+  const row = (t, group) => {
     if (renaming === t.thread_id) {
       return (
         <div key={t.thread_id} className="ws-task renaming">
@@ -778,7 +783,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
     const open = menu?.id === t.thread_id;
     const status = ACTIVE.has(t.status) ? "active" : t.status === "failed" ? "failed" : "idle";
     const twin = seen[t.title] > 1 && stamp(t.updated_at, now);
-    const sub = rowSub(t, now) || (twin ? `${twin.day || "今天"} ${twin.hm}` : "");
+    const sub = rowSub(t, now) || (twin ? sayWhen(twin) : "");
     return (
       <div key={t.thread_id} className={"ws-task" + (sel ? " sel" : "") + (open ? " menu" : "")}>
         <a href={chatPath(t.thread_id)} data-id={t.thread_id} className="ws-task-link" aria-current={sel ? "page" : undefined}
@@ -788,7 +793,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
             <span className="title" title={t.title}><Hit text={t.title} q={q} /></span>
             {sub && <span className="sub">{sub}</span>}
           </span>
-          <span className="time">{when(t.updated_at, now)}</span>
+          <span className="time">{when(t.updated_at, now, group)}</span>
         </a>
         <button className="more" aria-label={`“${t.title}”的更多操作`} aria-haspopup={nav.mobile ? "dialog" : "menu"} aria-expanded={open}
           onClick={(e) => setMenu(open ? null : { id: t.thread_id, anchor: e.currentTarget })}>
@@ -825,7 +830,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
       <div className="ws-search" role="search"
         onMouseDown={(e) => { if (!e.target.closest("input, button")) { e.preventDefault(); e.currentTarget.querySelector("input").focus(); } }}>
         <IconSearch size={15} />
-        <input type="search" data-nav="search" value={query} placeholder="搜索对话标题" aria-label="搜索对话标题" aria-keyshortcuts={SEARCH_ARIA_KEY}
+        <input type="search" data-nav="search" data-esc={query ? "" : undefined} value={query} placeholder="搜索对话标题" aria-label="搜索对话标题" aria-keyshortcuts={SEARCH_ARIA_KEY}
           enterKeyHint="search" autoComplete="off" onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
@@ -857,13 +862,13 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
         {hits ? (hits.length ? (
           <div className="ws-group" role="group" aria-label="搜索结果">
             <div className="ws-group-name">标题里有“{query.trim()}”<span>{hits.length}</span></div>
-            {hits.map(row)}
+            {hits.map((t) => row(t))}
           </div>
         ) : threads !== null && <div className="ws-side-empty">没有标题里有“{query.trim()}”的对话。只搜标题，不搜对话内容。</div>)
           : groups.map(([key, name, items]) => (
             <div className="ws-group" key={key} role="group" aria-label={name}>
               <div className="ws-group-name" aria-hidden="true">{name}<span>{items.length}</span></div>
-              {items.map(row)}
+              {items.map((t) => row(t, key))}
             </div>
           ))}
       </nav>
@@ -891,7 +896,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, memo
 // 一行对话的菜单：置顶、重命名、导出、删除。删除不再先确认，删了 5 秒内能撤销（第 44 条）；正在回答的不能改名、删除，没跑完的不能改名
 function RowMenu({ t, anchor, mobile, size, onClose, onPin, onRename, onExport, onDelete }) {
   const running = ACTIVE.has(t.status);
-  const note = running ? "正在回答，答完或停下后才能改名、删除" : t.status === "failed" ? "这段对话没跑完，重试以后才能改名" : null;
+  const note = running ? "正在回答，答完或停下后才能改名、删除" : t.status === "failed" ? "这段对话没有完成，重试以后才能改名" : null;
   const items = [
     { key: "pin", icon: <IconPinTop size={size} />, text: t.pinned_at ? "取消置顶" : "置顶", onClick: onPin },
     { key: "rename", icon: <IconEdit size={size} />, text: "重命名", disabled: t.status !== "idle", onClick: onRename },

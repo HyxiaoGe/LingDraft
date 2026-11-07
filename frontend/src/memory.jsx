@@ -7,20 +7,17 @@ import { deleteMemory, editMemory, getMemory } from "./api.js";
 import { errorText } from "./errors.js";
 import { IconEdit, IconTrash } from "./icons.jsx";
 import { HeadBar } from "./nav.jsx";
-import { stamp } from "./research.js";
+import { sayWhen, stamp } from "./research.js";
 
 const TEXT_MAX = 200; // 后端 memory.TEXT_MAX：超过了 400
 const tidy = (s) => s.replace(/\s+/g, " ").trim(); // 后端存之前也这样收拾
 
-// 上次整理的结果，一句话
+// 上次整理：只写时间。后端记的看了几段、新记几条是那次整理所有人合起来的数，放在个人页面上会被当成自己的，不写（2026-11-07 Sean 定，待确认第 25 条）
 function lastText(d, now) {
   if (!d) return "还没整理过。";
   const s = stamp(d.started_at, now);
-  const at = s ? (s.day ? s.text : `今天 ${s.hm}`) : "";
-  if (!d.ended_at) return `${at} 开始的那次整理没有做完，下次接着整理。`;
-  const counts = [["新记", d.added], ["改了", d.updated], ["删了", d.deleted]].filter(([, n]) => n).map(([w, n]) => `${w} ${n} 条`);
-  const did = d.threads ? `看了 ${d.threads} 段对话，${counts.length ? counts.join("，") : "没有要记的"}` : "没有新的对话";
-  return `${at} 整理过：${did}${d.failed ? `；有 ${d.failed} 段没整理成，下次再试` : ""}。`;
+  const at = s ? sayWhen(s) : "";
+  return d.ended_at ? `${at} 整理过。` : `${at} 开始的那次整理没有做完，下次接着整理。`;
 }
 
 // undo：对话页的撤销（同一条提示，见 undo.jsx）；threads：对话列表（对出每条记忆是从哪段对话记下的）；onOpen(id)：打开那段对话
@@ -87,7 +84,7 @@ export function MemoryPage({ auth, onLogin, undo, threads, onOpen }) {
             <>
               <div className="mem-status">
                 {lastText(data.last_dream, now)}
-                {next ? ` 下次整理：${next.day ? next.text : `今天 ${next.hm}`}。` : " 按时整理没有开。"}
+                {next ? ` 下次整理：${sayWhen(next)}。` : " 按时整理没有开。"}
               </div>
               {failed && <div className="ws-error" role="alert">{failed}</div>}
               {data.memories.length === 0 ? <div className="mem-empty">{guest ? "登录后这里会有记忆。" : "还没有记忆。"}</div> : (
@@ -170,7 +167,7 @@ function MemoryEdit({ m, onDone, onSaved }) {
   };
   return (
     <div className="mem-edit">
-      <textarea ref={ref} value={v} maxLength={TEXT_MAX} rows={1} aria-label="记忆内容" disabled={busy}
+      <textarea ref={ref} value={v} data-esc maxLength={TEXT_MAX} rows={1} aria-label="记忆内容" disabled={busy}
         onChange={(e) => setV(e.target.value)}
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing) return;

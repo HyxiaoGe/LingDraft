@@ -2,6 +2,7 @@
 // 还有改标题的输入框：左栏的行里、顶栏标题处都用，右边写着字数和上限（第 14 条之外顺带的“重命名显示字数上限”）
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useLayer } from "./layers.js";
 import { Sheet } from "./sheet.jsx";
 
 export const TITLE_MAX = 40; // 后端 TITLE_MAX：超过了 400
@@ -33,23 +34,16 @@ function PopMenu({ label, anchor, items, note, onClose }) {
   useEffect(() => {
     const close = () => closing.current();
     const down = (e) => !box.current?.contains(e.target) && !anchor?.contains(e.target) && close();
-    const key = (e) => {
-      if (e.key !== "Escape") return;
-      e.stopPropagation();
-      anchor?.focus();
-      close();
-    };
     addEventListener("mousedown", down);
-    addEventListener("keydown", key, true);
     addEventListener("scroll", close, true); // 列表滚动、窗口变化时菜单跟不上按钮，收起
     addEventListener("resize", close);
     return () => {
       removeEventListener("mousedown", down);
-      removeEventListener("keydown", key, true);
       removeEventListener("scroll", close, true);
       removeEventListener("resize", close);
     };
   }, [anchor]);
+  useLayer(true, () => { anchor?.focus(); closing.current(); }); // Esc：收起，焦点回到打开它的按钮
   // 上下键在几项之间走（跳过点不了的），Tab 照常离开
   const arrows = (e) => {
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
@@ -89,7 +83,7 @@ export function TitleInput({ value, className = "", onDone }) {
   };
   return (
     <span className={"ws-title-input " + className}>
-      <input ref={ref} className="ws-rename" value={v} maxLength={TITLE_MAX} aria-label="对话标题" aria-describedby={id}
+      <input ref={ref} className="ws-rename" data-esc value={v} maxLength={TITLE_MAX} aria-label="对话标题" aria-describedby={id}
         onChange={(e) => setV(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); finish(v.trim(), "enter"); }

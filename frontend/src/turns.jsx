@@ -3,6 +3,7 @@
 // 跟着读到的位置高亮，点一行跳过去。跳的落点是 Turns 里每一轮的 section（data-turn 是第几轮，从 0 数）
 import { useContext, useEffect, useRef, useState } from "react";
 import { IconClose, IconList } from "./icons.jsx";
+import { useLayer } from "./layers.js";
 import { NavContext } from "./nav.jsx";
 import { CITE, FENCE, closesFence, mergeItems, splitTurn } from "./research.js";
 
@@ -149,16 +150,12 @@ export function TurnIndexButton({ entries, scroller, onJump }) {
   useEffect(() => {
     if (!open) return;
     (box.current?.querySelector('[aria-current="location"]') || box.current?.querySelector("button"))?.focus();
-    const key = (e) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
     const down = (e) => { if (!box.current?.contains(e.target) && !btn.current?.contains(e.target)) close(false); };
-    addEventListener("keydown", key, true);
     addEventListener("mousedown", down);
-    return () => {
-      removeEventListener("keydown", key, true);
-      removeEventListener("mousedown", down);
-    };
+    return () => removeEventListener("mousedown", down);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+  useLayer(open, () => close()); // Esc：收起，焦点回到按钮
   useEffect(() => { setOpen(false); }, [mobile]);
   // 跳过去以后光标落在那一轮上（见 Conversation 的 jumpTo），不回按钮
   const done = () => setOpen(false);

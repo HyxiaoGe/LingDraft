@@ -10,12 +10,13 @@ import { listInspirations } from "./api.js";
 import { getDraft, setDraft } from "./drafts.js";
 import { failureText } from "./errors.js";
 import { IconArrowDown, IconArrowUp, IconBook, IconBulb, IconCheck, IconChevron, IconClose, IconCloudSun, IconCopy, IconDownload, IconEdit, IconFork, IconImage, IconInsert, IconList, IconLock, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconSparkle, IconStop, IconTicket, IconTrain, IconTrash, IconUndo, IconWarn, Spinner } from "./icons.jsx";
-import { ImageCards, Viewer, imageUrl, imagesOf } from "./images.jsx";
+import { ImageCards, Viewer, drawn, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
+import { useLayer } from "./layers.js";
 import { Markdown } from "./markdown.jsx";
 import { ActionMenu } from "./menu.jsx";
-import { HeadBar, NavContext } from "./nav.jsx";
+import { HeadBar, NavContext, byKeyboard, touch } from "./nav.jsx";
 import { ACTIVE, QUEUED, answerText, citeNumbers, copyText, creditsLeft, creditsLine, creditsText, cutPartialCite, domain, elapsed, loginLine, mergeItems, modelName, splitTurn, stamp, tidyTyping } from "./research.js";
 import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
 import { TurnIndex, TurnIndexButton, turnEntries } from "./turns.jsx";
@@ -200,7 +201,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
         else focusInput();
       } },
   ];
-  const menuNote = running ? "正在回答，答完或停下后才能改名、删除" : status === "failed" ? "这段对话没跑完，重试以后才能改名" : null;
+  const menuNote = running ? "正在回答，答完或停下后才能改名、删除" : status === "failed" ? "这段对话没有完成，重试以后才能改名" : null;
   const edit = renaming && manageable ? {
     value: title || "",
     onDone: (t, how) => {
@@ -246,7 +247,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
         }}>
         <div className="ws-flow">
           {!fresh && !opening && <h1 className="ws-print-title">{title}</h1>/* 只在打印时出现：屏幕上标题在顶栏，打印不印顶栏（第 49 条） */}
-          {fresh ? <Welcome /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} />}
+          {fresh ? <Welcome /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} title={title} />}
           {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error.text ?? error}</span>
             {error.login && picker.onLogin && <button className="ws-btn ws-error-act" onClick={picker.onLogin}>登录</button>}</div>}
         </div>
@@ -430,20 +431,23 @@ function Inspirations({ onPick }) {
 
 // ---------------- 一轮一轮 ----------------
 
-function Turns({ st, live, busy, suggesting, stopping, now, act, models }) {
+function Turns({ st, live, busy, suggesting, stopping, now, act, models, title }) {
   const turns = st?.turns || [];
   const running = busy || ACTIVE.has(st?.status);
   // 刚说的话还没出现在存下来的对话里：先按页面手上的显示
   const pending = live?.said && turns.length <= (live.turnsAtStart ?? 0) ? { id: "pending", user: live.said, items: [], record: null, local: live.image?.url } : null;
   const all = pending ? [...turns, pending] : turns;
+  let shots = 0;
   // 每一轮一个 section：轮次目录跳过来的落点（data-turn 是第几轮，从 0 数；正在发的那句还没 id，按位置记），这一轮在跑时 aria-busy
   return (
     <>
       {all.map((t, i) => {
         const last = i === all.length - 1;
+        const images = shots; // 这一轮之前画成了几张：下载的文件名按整段对话数第几张
+        shots += imagesOf(t.items).filter(drawn).length;
         return (
           <section key={t.id} className="ws-turn" data-turn={i} tabIndex={-1} aria-label={`第 ${i + 1} 轮`} aria-busy={last && running ? true : undefined}>
-            <Turn t={t} k={`${st?.thread_id}:${i}`} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} models={models} />
+            <Turn t={t} k={`${st?.thread_id}:${i}`} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} models={models} title={title} images={images} />
           </section>
         );
       })}
@@ -452,7 +456,7 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models }) {
 }
 
 // k：这一轮在页面上的记号（对话 id + 第几轮）。正在发的这一轮存下来以后 id 会变（见 Turns 的 pending），过程展开没展开按 k 记，不跟着重来
-function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, models }) {
+function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, models, title, images }) {
   const items = mergeItems(t.items, live);
   const { process, answer } = splitTurn(items);
   const texts = items.filter((i) => i.type === "text").map((i) => i.text);
@@ -474,7 +478,7 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
         {mapsOf(items).map((card) => <MapCard key={card.key} card={card} />)}
         {travelOf(items).map((card) => <TravelCard key={card.key} card={card} />)}
         {itinerariesOf(items).map((card) => <ItineraryCard key={card.key} card={card} />)}
-        <ImageCards steps={imagesOf(items)} tid={st?.thread_id} running={running} onRegenerate={last && idle ? act.say : null} />
+        <ImageCards steps={imagesOf(items)} tid={st?.thread_id} running={running} onRegenerate={last && idle ? act.say : null} title={title} base={images} />
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
         {running && <LiveLine live={live} items={items} stopping={stopping} now={now} since={Date.parse(st?.running_since || rec?.started_at || "") || null} />}
         {!running && <AnswerSources nums={nums} sources={st?.sources} />}
@@ -483,7 +487,7 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
         {!running && (replied || rec?.ended_at || (last && idle)) && (
           <div className={"ws-ai-foot" + (last ? "" : " quiet")}>
             <Stamp iso={rec?.ended_at} now={now} />
-            {rec?.model && <span className="ws-ai-model">{modelName(models, rec.model.ref)}</span>}
+            {rec?.model && models?.length > 0 && <span className="ws-ai-model">{modelName(models, rec.model.ref)}</span>}
             {rec?.credits != null && <span className="ws-ai-model">本轮 {creditsText(rec.credits)}</span>}
             {replied && <CopyButton text={() => answerText(items, st?.sources)} />}
             {last && idle && <button className="ws-btn ghost sm" onClick={act.regenerate}><IconLoop size={13} />重新回答</button>}
@@ -524,7 +528,7 @@ function UserImage({ img, src }) {
           <img src={src} alt="发的图" onError={() => setFailed(true)} />
         </button>
       )}
-      {viewing && <Viewer img={{ prompt: "发的图" }} src={src} onClose={() => { viewing.focus(); setViewing(null); }} />}
+      {viewing && <Viewer img={{ alt: "发的图" }} src={src} onClose={() => { viewing.focus(); setViewing(null); }} />}
     </div>
   );
 }
@@ -560,7 +564,7 @@ function Pending({ st, act }) {
       {rows.map((r) => (
         <div key={r.key} className="ws-pending-row">
           <div className="ws-pending-main">
-            <div className="ws-pending-note">{r.note}</div>
+            <div className="ws-pending-note">{r.note}{!touch() && <span className="key" aria-hidden="true">，输入框最前面按 <kbd className="ws-kbd">↑</kbd>也能撤回</span>}</div>
             <div className="ws-pending-text" title={r.text}>{r.text}</div>
           </div>
           <div className="ws-pending-acts">
@@ -587,7 +591,7 @@ function EditBox({ text, onCancel, onSend }) {
   const send = () => changed && onSend(v.trim());
   return (
     <div className="ws-edit">
-      <textarea ref={ref} rows={1} value={v} aria-label="改这句话" onChange={(e) => setV(e.target.value)}
+      <textarea ref={ref} rows={1} value={v} data-esc aria-label="改这句话" onChange={(e) => setV(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
           else if (e.key === "Escape") onCancel();
@@ -705,7 +709,7 @@ function TaskCard({ s, st, nums, running }) {
   const live = running && s.pending;
   const done = (k) => sub.filter((i) => i.type === "step" && i.kind === k && !i.pending).length;
   const did = [done("search") && `搜了 ${done("search")} 次`, done("read") && `读了 ${done("read")} 页`].filter(Boolean).join("、");
-  const status = live ? taskActivity(s) : s.pending ? "没做完" : !s.ok ? s.message || "没做成" : did || "已完成";
+  const status = live ? taskActivity(s) : s.pending ? "没有完成" : !s.ok ? s.message || "没做成" : did || "已完成";
   return (
     <div className={"ws-task" + (live ? " live" : !s.pending && !s.ok ? " bad" : "")}>
       <button className="ws-task-head" aria-expanded={open} onClick={toggle}>
@@ -803,7 +807,7 @@ function Thinking({ it, running, thinking }) {
   );
 }
 
-// 还没有结果的一步（pending）：这一轮在跑就是还在做；没在跑了（这一轮出错停在这一步）就是没做完，和子任务卡一样说
+// 还没有结果的一步（pending）：这一轮在跑就是还在做；没在跑了（这一轮出错停在这一步）就是没有完成，和子任务卡一样说
 function ToolRow({ s, running }) {
   const Icon = { read: IconPage, weather: IconCloudSun, place: IconPin, route: IconRoute, flight: IconPlane, train: IconTrain, itinerary: IconTicket,
     image: IconImage, docs: IconBook }[s.kind] || IconSearch;
@@ -846,7 +850,7 @@ function ToolRow({ s, running }) {
     sub = s.pending ? "搜索中…" : s.ok ? `${s.hits} 条结果${s.message ? `（${s.message}）` : ""}` : `没搜成：${s.message || "出错了"}`;
   }
   if (s.pending && !busy) {
-    sub = "没做完";
+    sub = "没有完成";
     bad = false;
   }
   return (
@@ -902,6 +906,7 @@ function LiveLine({ live, items, stopping, now, since }) {
     <div className="ws-live">
       {stage && <><Spinner size={14} /><span className="stage">{stage}</span></>}
       {secs > 0 && <span className="secs">{secs} 秒</span>}
+      {secs > 0 && !touch() && <span className="key" aria-hidden="true"><kbd className="ws-kbd">Esc</kbd>停止</span>}
       {secs * 1000 >= SLOW && <span className="slow">这一步比平常慢，可以接着等，也可以停止</span>}
       {!stopping && <NotifyToggle since={since ?? born.current} now={now} />}
     </div>
@@ -951,7 +956,7 @@ const PLACEHOLDER = {
   idle: "接着问…",
   busy: "正在回答，最多先排一句，这一轮答完就发",
   queued: QUEUED,
-  failed: "这一轮没跑完，点上面的“重试”",
+  failed: "这一轮没有完成，点上面的“重试”",
 };
 const HELD = "上面那句发出去以后才能再发，也可以撤回它一起改";
 const WITH_IMAGE = "说说要怎么改这张图，或照着它画什么";
@@ -1038,11 +1043,14 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 光标放回输入框：换了对话（包括刚打开页面）一定放；能说话了、切回这个窗口时，光标不在别处、也没选中文字才放
+  // 光标放回输入框（批次 G 第 42 条，2026-11-07 Sean 定）：
+  // - 触屏上一律不放，不自己弹出键盘；
+  // - 桌面上打开页面、新对话、用鼠标点开一段对话一定放；用键盘选的对话不放，焦点留在左栏那一行；
+  // - 能说话了、按钮点完焦点掉到页面上时，光标不在别处、也没选中文字才放；切回这个窗口不动光标。
   const focus = (always) => {
     const el = ref.current;
     const at = document.activeElement;
-    if (!el || at === el) return;
+    if (!el || at === el || touch()) return;
     if (!always && ((at && at !== document.body) || getSelection()?.toString())) return;
     el.focus({ preventScroll: true });
   };
@@ -1053,6 +1061,7 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
       focus(true);
       return;
     }
+    const keyed = byKeyboard() && thread !== "new";
     clearTimeout(saveTimer.current);
     if (was === "new" && carry) { // 同一个对话：等回答时写的字、选的图留着，光标也不动；草稿挪到这个对话名下
       setDraft("new", "");
@@ -1064,7 +1073,7 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
     setText(getDraft(thread));
     setImage(attachments.get(thread) || null);
     setImageError(null);
-    focus(true);
+    if (!keyed) focus(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread]);
   useEffect(() => { if (enabled) focus(false); }, [enabled]);
@@ -1101,16 +1110,24 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
       setText((cur) => (!cur.trim() || cur === prev ? t : `${t}\n${cur}`));
       filled.current = t;
       const el = ref.current;
-      if (!el) return;
+      if (!el || touch()) return; // 触屏上只把字放进去，不弹键盘
       el.focus({ preventScroll: true });
       requestAnimationFrame(() => el.setSelectionRange(t.length, t.length));
     };
     const pick = () => fileRef.current?.click();
+    // 图上点了“改这张”（见 images.jsx）：当成选了这张图，桌面上光标进输入框好接着说
+    const take = (e) => {
+      if (!e.detail) return setImageError("没取到这张图，再点一次“改这张”");
+      attachRef.current(e.detail);
+      focus(true);
+    };
     addEventListener("ws-fill-input", fill);
     addEventListener("ws-pick-image", pick);
+    addEventListener("ws-attach-image", take);
     return () => {
       removeEventListener("ws-fill-input", fill);
       removeEventListener("ws-pick-image", pick);
+      removeEventListener("ws-attach-image", take);
     };
   }, []);
   useEffect(() => {
@@ -1123,11 +1140,9 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
       if (at && at !== document.body && at !== ref.current) return;
       stopNow.current();
     };
-    addEventListener("focus", back); // 切回这个窗口
     addEventListener("ws-focus-input", back); // 见 focusInput
     addEventListener("keydown", esc, true);
     return () => {
-      removeEventListener("focus", back);
       removeEventListener("ws-focus-input", back);
       removeEventListener("keydown", esc, true);
     };
@@ -1152,6 +1167,8 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
       setImageError(e instanceof ImageError ? e.message : "这张图读不出来，换一张再试");
     }
   };
+  const attachRef = useRef(attach);
+  attachRef.current = attach;
   const removeImage = () => {
     attachSeq.current += 1;
     setImage(null);
@@ -1190,7 +1207,9 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
   return (
     <div className="ws-composer">
       {above}
+      {/* 点输入框这一块的空白处（四周留白、按钮之间）也把光标放进去：可点的是整块，不只是一行高的 textarea（第 31 条） */}
       <div className={"ws-input" + (drag ? " drop" : "")}
+        onClick={(e) => { if (e.target === e.currentTarget || e.target.classList.contains("ws-input-bar") || e.target.classList.contains("ws-input-tools")) ref.current?.focus(); }}
         onDragOver={(e) => { if (dragging(e)) { e.preventDefault(); setDrag(true); } }}
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setDrag(false); }}
         onDrop={(e) => { if (!dragging(e)) return; e.preventDefault(); setDrag(false); attach(e.dataTransfer.files[0]); }}>
@@ -1244,7 +1263,7 @@ function Attachment({ att, onRemove }) {
         <button className="ws-attach-remove" aria-label="去掉这张图" onMouseDown={(e) => e.preventDefault()} onClick={onRemove}><IconClose size={12} /></button>
       </div>
       <span className="ws-attach-note" role="status">{att.url ? "可以让它改这张图、照着它画；它看不到图里的内容" : "正在处理图片…"}</span>
-      {viewing && <Viewer img={{ prompt: "要发的图" }} src={att.url} onClose={() => { viewing.focus(); setViewing(null); }} />}
+      {viewing && <Viewer img={{ alt: "要发的图" }} src={att.url} onClose={() => { viewing.focus(); setViewing(null); }} />}
     </div>
   );
 }
@@ -1274,15 +1293,11 @@ function ModelTools({ models, loading, current, locked, onPick, thinking, onThin
   useEffect(() => {
     if (!open) return undefined;
     const down = (e) => !box.current?.contains(e.target) && setOpen(false);
-    const key = (e) => e.key === "Escape" && close();
     addEventListener("mousedown", down);
-    addEventListener("keydown", key);
-    return () => {
-      removeEventListener("mousedown", down);
-      removeEventListener("keydown", key);
-    };
+    return () => removeEventListener("mousedown", down);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+  useLayer(open, close);
   useEffect(() => { setOpen(false); }, [mobile]); // 窗口拉宽、变窄：菜单和弹层不是一个东西
   const opt = models?.find((m) => m.id === current);
   if (loading) return <span className="ws-skel ws-skel-model" aria-hidden="true" />;
@@ -1322,11 +1337,11 @@ const THINK_OFF = "关：直接答，更快更省";
 // 桌面的思考开关：悬停或用键盘移到上面时，在上方说明开、关的差别（不用浏览器自带的 title：出得慢、键盘看不到）。Esc 收起说明
 function ThinkToggle({ on, onChange }) {
   const [tip, setTip] = useState(false);
+  useLayer(tip, () => setTip(false)); // 说明浮着时 Esc 先收说明（光标在输入框里也是），再按才停止回答
   return (
     <span className="ws-think-wrap" onMouseEnter={() => setTip(true)} onMouseLeave={() => setTip(false)}>
       <button className={"ws-think-toggle" + (on ? " on" : "")} aria-pressed={on} aria-describedby="ws-think-tip" onMouseDown={(e) => e.preventDefault()} onClick={() => onChange(!on)}
-        onFocus={(e) => { if (e.currentTarget.matches(":focus-visible")) setTip(true); }} onBlur={() => setTip(false)}
-        onKeyDown={(e) => { if (e.key === "Escape" && tip) setTip(false); }}>
+        onFocus={(e) => { if (e.currentTarget.matches(":focus-visible")) setTip(true); }} onBlur={() => setTip(false)}>
         <IconBulb size={14} />深度思考
       </button>
       <span id="ws-think-tip" role="tooltip" className={"ws-tip" + (tip ? " show" : "")}>
@@ -1435,7 +1450,7 @@ function ModelList({ models, current, locked, onLogin, onChoose }) {
     const top = box.scrollTop + t.getBoundingClientRect().top - box.getBoundingClientRect().top - 4;
     box.scrollTo({ top, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   }, [showShut]);
-  const actual = auto.model ? modelName(models, auto.model) : null;
+  const actual = auto.model ? modelName(models, auto.model, null) : null;
   const autoNote = [auto.description, actual && `现在用 ${actual}`].filter(Boolean).join("，");
   const row = (m, note) => (
     <button key={m.id} role="menuitemradio" aria-checked={m.id === current} className={"ws-model-row" + (m.locked ? " locked" : "")}

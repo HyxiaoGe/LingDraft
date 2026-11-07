@@ -8,6 +8,14 @@ export const NavContext = createContext(null);
 
 export const MOBILE = "(max-width: 720px)";
 
+// 触屏（手指点的）：程序不把光标放进输入框，免得自己弹出键盘（批次 G 第 42 条）
+export const touch = () => matchMedia("(pointer: coarse)").matches;
+// 最近一次是用键盘还是用鼠标、手指：键盘选的对话焦点留在左栏那一行，鼠标点开的光标进输入框（批次 G 第 42 条）
+let keyed = false;
+addEventListener("keydown", (e) => { if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) keyed = true; }, true);
+addEventListener("pointerdown", () => { keyed = false; }, true);
+export const byKeyboard = () => keyed;
+
 // 媒体查询现在对不对得上，窗口变了跟着变
 export function useMedia(query) {
   const [on, setOn] = useState(() => matchMedia(query).matches);
