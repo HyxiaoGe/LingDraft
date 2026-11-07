@@ -61,11 +61,6 @@ function creditsParts(left) {
   return [amount, left.resetText];
 }
 
-// 左下角额度按钮上那几个字：剩多少；用完了写“额度用完了”
-export function creditsShort(left) {
-  return left.exhausted ? "额度用完了" : `剩 ${num(left.remaining)} 额度`;
-}
-
 // 游客登录以后会怎样：“登录后每天 10,000 额度”（login 来自 /api/credits 或 429 的 detail，见后端 app.quota）。
 // 没有（已经登录、后端还没更新）是 null。prefix 为 false 时不带“登录”两个字（前面放的是登录按钮）
 export function loginLine(src, prefix = true) {

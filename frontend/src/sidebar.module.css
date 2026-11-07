@@ -72,16 +72,18 @@
 @keyframes fade { from { opacity: 0; } }
 @media print { .scrim { display: none !important; } }
 
-/* 最下面的额度按钮（login.jsx 的 CreditsFoot）：小圆环（剩余比例）+“约可问 N 次”，和头像并排；点开是额度面板。用到八成变黄、用完变红 */
-.credits { display: inline-flex; align-items: center; gap: 6px; height: 24px; margin: -4px 0; padding: 0 9px 0 6px; border: 1px solid var(--line2); border-radius: 999px;
-  background: var(--paper); font: inherit; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; cursor: pointer; transition: border-color .15s, color .15s; }
-.credits .ring { color: var(--accent); flex: none; }
+/* 最下面的额度按钮（login.jsx 的 CreditsFoot）：小圆环（剩余比例）+“额度”，和头像并排，不缩、不折行；点开是额度面板。
+   圆环的颜色按剩多少：剩一半以上绿（ok），一半以下黄（mid），快用完、用完红（low、out，按钮也染红） */
+.credits { flex: none; white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; height: 24px; margin: -4px 0; padding: 0 9px 0 6px;
+  border: 1px solid var(--line2); border-radius: 999px; background: var(--paper); font: inherit; font-size: 12px; color: var(--muted); cursor: pointer;
+  transition: border-color .15s, color .15s; }
+.credits .ring { flex: none; transition: color .3s; }
+.credits.ok .ring { color: var(--ok); }
+.credits.mid .ring { color: var(--warn); }
+.credits.low, .credits.out, .credits.low .ring, .credits.out .ring { color: var(--danger); }
+.credits.low, .credits.out { border-color: var(--danger-line); background: var(--danger-soft); }
 .credits[aria-expanded="true"] { color: var(--ink); border-color: var(--ink); }
 @media (hover: hover) { .credits:hover { color: var(--ink); border-color: var(--ink); } }
-.credits.warn, .credits.warn .ring { color: var(--warn); }
-.credits.warn { border-color: var(--warn-line); background: var(--warn-soft); }
-.credits.out, .credits.out .ring { color: var(--danger); }
-.credits.out { border-color: var(--danger-line); background: var(--danger-soft); }
 /* 手机：看得见的 28px 高，上下用透明的点按区补到 44px */
 @media (max-width: 720px) {
   .credits { position: relative; height: 28px; margin: 0; }
