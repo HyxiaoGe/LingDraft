@@ -34,7 +34,7 @@ const EXAMPLES = [
 // 正文 680 居中，右边空出来的那块放得下 184 宽的目录加两边各 16 的空：滚动区至少这么宽才放右栏
 const RAIL_MIN = 1120;
 
-// 阅读位置（第 45 条）：每个对话看到哪儿了记在这个标签页里（sessionStorage），离开（换对话、去记忆页、去海报页、登录后整页重载、刷新）
+// 阅读位置（第 45 条）：每个对话看到哪儿了记在这个标签页里（sessionStorage），离开（换对话、去海报页、登录后整页重载、刷新）
 // 再回来，回到原处。记的是“第几轮，视口上沿在这一轮顶上往下多少”；在底部就记“底部”，回来还在底部、接着跟。从没记过的照旧到底（最新一轮）
 const READING = "lingdraft.reading.";
 const readingOf = (id) => { try { return JSON.parse(sessionStorage.getItem(READING + id)); } catch { return null; } };
@@ -117,7 +117,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   }, []);
   useEffect(() => {
     addEventListener("pagehide", keepReading);
-    return () => { // 去记忆页、海报页：这个对话看到哪儿写下
+    return () => { // 去海报页：这个对话看到哪儿写下
       removeEventListener("pagehide", keepReading);
       keepReading();
     };
@@ -977,7 +977,7 @@ function CreditsNote({ credits, onLogin }) {
   );
 }
 
-// 每个对话选好、还没发的图（{file, url}，见 upload.js）：存不进本机，只在这次打开的页面里留着——切对话、去记忆页再回来还在，刷新就没了
+// 每个对话选好、还没发的图（{file, url}，见 upload.js）：存不进本机，只在这次打开的页面里留着——切对话再回来还在，刷新就没了
 const attachments = new Map();
 const keepImage = (key, att) => (att?.url ? attachments.set(key, att) : attachments.delete(key));
 // 发出去的图在本机的地址（图的编号 → blob 地址）：存下来的对话回来以后接着用它显示，不用再从服务器取一遍
@@ -989,7 +989,7 @@ const pickImage = () => dispatchEvent(new Event("ws-pick-image"));
 // held：已经有一句没发出去（排着或等着插进这一轮）。没发出去的话最多一句：这时还能打字，但发不出去，要先撤回那句、改好一起发。
 // 带图的话排不了（排着的话只有字），要等这一轮答完再发。
 // 图：点左下角选、粘贴、拖进来都行，一次一张（再选换掉），大图在本机先压到 4 MB 以内（见 upload.js）。
-// 没发出去的字每个对话各存一份在本机（见 drafts.js）：切走、去记忆页、刷新、登录回来都在，发出去就清掉；图只在这次打开的页面里留着（见 attachments）。
+// 没发出去的字每个对话各存一份在本机（见 drafts.js）：切走、刷新、登录回来都在，发出去就清掉；图只在这次打开的页面里留着（见 attachments）。
 // carry：新对话刚发出去、拿到了 id，thread 从 "new" 换成 id，还是同一个对话
 // putBack：放回输入框的话（撤回的、没发出去的，可能带着图）：放在已经写着的字前面、空一行，放回来的那段选中，看得出哪段是放回来的
 //   （被拒的那句还原样留着就换掉它，不叠加）；不是正在看的对话，放进那个对话的草稿
@@ -1022,7 +1022,7 @@ function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSe
     if (r) ref.current?.setSelectionRange(r[0], r[1]);
   }, [text]);
 
-  // 存草稿：打字停 300ms 存一次；换对话、页面要关（pagehide）、输入框撤掉（去记忆页、海报页）时马上存
+  // 存草稿：打字停 300ms 存一次；换对话、页面要关（pagehide）、输入框撤掉（去海报页）时马上存
   const saveTimer = useRef(null);
   const save = () => {
     clearTimeout(saveTimer.current);

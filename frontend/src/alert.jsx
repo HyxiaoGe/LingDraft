@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { IconBell } from "./icons.jsx";
 
-// ---- 要不要发系统通知：点了“答完通知我”、或在设置页打开，记在本机（存不了就只记在这个页面里）。设置页（settings.jsx）也用这几个 ----
+// ---- 要不要发系统通知：点了“答完通知我”、或在设置窗口里打开，记在本机（存不了就只记在这个页面里）。设置窗口（settings.jsx）也用这几个 ----
 const PREF = "ws-notify-done";
 let wanted = null;
 export function wants() {

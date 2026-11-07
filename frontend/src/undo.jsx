@@ -1,5 +1,5 @@
 // 删了能撤销（评审第 44 条）：点删除马上从页面上拿掉，底部出“已删除……　撤销”，5 秒内点撤销原样放回；过了 5 秒才真的去删，
-// 所以撤销是完整恢复，不用后端再存一份。对话列表、顶栏、记忆页共用一个（同一时间只有一条提示）。
+// 所以撤销是完整恢复，不用后端再存一份。对话列表、顶栏、记忆列表共用一个（同一时间只有一条提示）。
 // - 鼠标停在提示上、键盘焦点在提示里时不走表，移开接着走（剩多少接着走多少）；
 // - 又删了一条：上一条马上删掉，提示换成新的这条；
 // - 关页面、整页刷新、离开对话页（去海报页）时还没过期的照样删，用 keepalive 发出去；
@@ -59,7 +59,7 @@ export function useUndo() {
         c.item.undo();
       },
       now: (keepalive = false) => commit(cur.current, keepalive), // 不撤销了：马上删
-      flush(kind) { if (cur.current?.item.kind === kind) commit(cur.current); }, // 离开记忆页：记忆的不等了（回来再取时它还在后端，会又冒出来）
+      flush(kind) { if (cur.current?.item.kind === kind) commit(cur.current); }, // 离开记忆列表（切回设置、关窗口）：记忆的不等了（回来再取时它还在后端，会又冒出来）
       pause: () => cur.current && stopClock(cur.current),
       resume: () => cur.current && startClock(cur.current),
     };
@@ -83,7 +83,7 @@ export function useUndo() {
   return { ...api.current, item };
 }
 
-// 提示本身：桌面上在左下角；手机上在输入框上面（抽屉开着、记忆页没有输入框时贴底）。
+// 提示本身：桌面上在左下角；手机上在输入框上面（抽屉开着时贴底）。
 // 外面这层一直在（读屏的播报区要先在页面上，换了内容才会念），有要撤销的才有内容
 export function UndoToast({ undo }) {
   const it = undo.item;

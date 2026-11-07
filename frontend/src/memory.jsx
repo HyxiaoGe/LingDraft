@@ -1,4 +1,4 @@
-// 记忆页：灵稿每天在后台把对话整理成关于用户的记忆（见后端 graph/research/memory.py），回答时放进系统提示词。
+// 记忆：灵稿每天在后台把对话整理成关于用户的记忆（见后端 graph/research/memory.py），回答时放进系统提示词。
 // 记忆按账号分（2026-11-06）：游客的对话不整理，登录后才有。
 // 能改、能删（评审第 15 条，2026-11-07 Sean 定，推翻 11-03 的“只能看”）：改就在那一条上改（最多 200 字）；删了 5 秒内能撤销（见 undo.jsx），
 // 页面上写明删了以后不再参考、但之后的对话里再说起可能又记下。每条写着从哪段对话记下的，点了打开那段对话。不能手动新加
@@ -6,7 +6,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { deleteMemory, editMemory, getMemory } from "./api.js";
 import { errorText } from "./errors.js";
 import { IconEdit, IconTrash } from "./icons.jsx";
-import { HeadBar } from "./nav.jsx";
 import { sayWhen, stamp } from "./research.js";
 
 const TEXT_MAX = 200; // 后端 memory.TEXT_MAX：超过了 400
@@ -20,9 +19,9 @@ function lastText(d, now) {
   return d.ended_at ? `${at} 整理过。` : `${at} 开始的那次整理没有做完，下次接着整理。`;
 }
 
-// undo：对话页的撤销（同一条提示，见 undo.jsx）；threads：对话列表（对出每条记忆是从哪段对话记下的）；onOpen(id)：打开那段对话；
-// onBack：回设置页（2026-11-07 Sean 定记忆只从设置页进，左栏、头像菜单里都不放）
-export function MemoryPage({ auth, onLogin, undo, threads, onOpen, onBack }) {
+// 放在设置窗口里（2026-11-07 Sean 定：设置是个弹出的窗口，记忆只从设置窗口里的记忆卡进，切过来还在同一个窗口里，后面的对话不动）。
+// undo：对话页的撤销（同一条提示，见 undo.jsx）；threads：对话列表（对出每条记忆是从哪段对话记下的）；onOpen(id)：关掉窗口、打开那段对话
+export function MemoryPanel({ auth, onLogin, undo, threads, onOpen }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [editing, setEditing] = useState(null); // 正在改的那一条的 id
@@ -33,7 +32,7 @@ export function MemoryPage({ auth, onLogin, undo, threads, onOpen, onBack }) {
     getMemory().then(setData).catch((e) => setError(errorText("没取到记忆", e, "可以再试一次")));
   };
   useEffect(load, []);
-  useEffect(() => () => undo?.flush("memory"), []); // eslint-disable-line react-hooks/exhaustive-deps -- 离开记忆页：删了的不等了
+  useEffect(() => () => undo?.flush("memory"), []); // eslint-disable-line react-hooks/exhaustive-deps -- 切回设置、关掉窗口：删了的不等了
   const now = Date.now();
   const next = data?.next_dream ? stamp(data.next_dream, now) : null;
   const guest = auth?.ready && !auth.me; // 游客：没有记忆，说明登录了才有
@@ -60,49 +59,44 @@ export function MemoryPage({ auth, onLogin, undo, threads, onOpen, onBack }) {
   };
 
   return (
-    <section className="ws-main" aria-label="记忆">
-      <HeadBar title="记忆" back={onBack && { label: "设置", onClick: onBack }} />
-      <div className="ws-scroll">
-        <div className="ws-flow mem">
-          <p className="mem-intro">
-            灵稿每天{next ? ` ${next.hm} ` : ""}在后台把有新内容的对话整理一遍，记下关于你的事，之后回答时会参考。记忆按账号分，只有你自己看得到。
-          </p>
-          <p className="mem-intro sub">
-            记得不对的可以改，不想让它记的可以删。删掉的以后回答时不再参考，但之后的对话里再说起，整理时可能又会记下。
-          </p>
-          {guest && (
-            <div className="mem-status">
-              没登录的对话不整理，登录后才有记忆。{onLogin && <button className="ws-btn sm" onClick={onLogin}>登录</button>}
-            </div>
-          )}
-          {error && (
-            <div className="mem-status">
-              {error} <button className="ws-btn sm" onClick={load}>再试一次</button>
-            </div>
-          )}
-          {!error && !data && <div className="mem-status">正在取记忆…</div>}
-          {data && (
-            <>
-              <div className="mem-status">
-                {lastText(data.last_dream, now)}
-                {next ? ` 下次整理：${sayWhen(next)}。` : " 按时整理没有开。"}
-              </div>
-              {failed && <div className="ws-error" role="alert">{failed}</div>}
-              {data.memories.length === 0 ? <div className="mem-empty">{guest ? "登录后这里会有记忆。" : "还没有记忆。"}</div> : (
-                <ul className="mem-list" ref={list}>
-                  {data.memories.map((m) => (
-                    <MemoryItem key={m.id} m={m} now={now} threads={threads} onOpen={onOpen} editing={editing === m.id}
-                      onEdit={() => setEditing(m.id)} onDone={() => setEditing(null)}
-                      onSaved={(row) => put((ms) => ms.map((x) => (x.id === m.id ? { ...x, ...row } : x)))}
-                      onDelete={() => remove(m)} />
-                  ))}
-                </ul>
-              )}
-            </>
-          )}
+    <div className="mem">
+      <p className="mem-intro">
+        灵稿每天{next ? ` ${next.hm} ` : ""}在后台把有新内容的对话整理一遍，记下关于你的事，之后回答时会参考。记忆按账号分，只有你自己看得到。
+      </p>
+      <p className="mem-intro sub">
+        记得不对的可以改，不想让它记的可以删。删掉的以后回答时不再参考，但之后的对话里再说起，整理时可能又会记下。
+      </p>
+      {guest && (
+        <div className="mem-status">
+          没登录的对话不整理，登录后才有记忆。{onLogin && <button className="ws-btn sm" onClick={onLogin}>登录</button>}
         </div>
-      </div>
-    </section>
+      )}
+      {error && (
+        <div className="mem-status">
+          {error} <button className="ws-btn sm" onClick={load}>再试一次</button>
+        </div>
+      )}
+      {!error && !data && <div className="mem-status">正在取记忆…</div>}
+      {data && (
+        <>
+          <div className="mem-status">
+            {lastText(data.last_dream, now)}
+            {next ? ` 下次整理：${sayWhen(next)}。` : " 按时整理没有开。"}
+          </div>
+          {failed && <div className="ws-error" role="alert">{failed}</div>}
+          {data.memories.length === 0 ? <div className="mem-empty">{guest ? "登录后这里会有记忆。" : "还没有记忆。"}</div> : (
+            <ul className="mem-list" ref={list}>
+              {data.memories.map((m) => (
+                <MemoryItem key={m.id} m={m} now={now} threads={threads} onOpen={onOpen} editing={editing === m.id}
+                  onEdit={() => setEditing(m.id)} onDone={() => setEditing(null)}
+                  onSaved={(row) => put((ms) => ms.map((x) => (x.id === m.id ? { ...x, ...row } : x)))}
+                  onDelete={() => remove(m)} />
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

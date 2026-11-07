@@ -1,7 +1,7 @@
 // 对话页的导航：桌面上左栏能整栏收起（收起后顶栏左边出展开钮和新对话），窄屏（≤720px）左栏改成从左边滑出的抽屉，
-// 顶栏是“抽屉钮 + 标题 + 新对话”。对话页、设置页、记忆页共用这条顶栏，状态由 Workspace 经 NavContext 给。
+// 顶栏是“抽屉钮 + 标题 + 新对话”。对话页用这条顶栏，状态由 Workspace 经 NavContext 给。
 import { createContext, useContext, useEffect, useState } from "react";
-import { IconChevron, IconMenu, IconPanel, IconPlus } from "./icons.jsx";
+import { IconMenu, IconPanel, IconPlus } from "./icons.jsx";
 import { TitleInput } from "./menu.jsx";
 
 export const NavContext = createContext(null);
@@ -42,8 +42,7 @@ export const isSearchKey = (e) => (MAC ? e.metaKey : e.ctrlKey) && !e.shiftKey &
 // 顶栏：左边是导航按钮，中间标题（和正文同宽、居中），右边窄屏时是新对话。title 为 null 是还不知道标题（打开中），显示一条占位。
 // end：右边再放的（对话页三轮起的轮次目录按钮，见 turns.jsx；这个对话的“⋯”菜单，见 timeline.jsx）。
 // edit：在顶栏上改标题时是 {value, onDone}，标题换成输入框
-// back：标题左边的返回（记忆页回设置页）：{label, onClick}
-export function HeadBar({ title, end, edit, back }) {
+export function HeadBar({ title, end, edit }) {
   const nav = useContext(NavContext);
   const side = nav?.mobile ? (
     <button className="ws-icon-btn" data-nav="drawer" aria-label="打开对话列表" aria-controls="ws-side" aria-expanded={nav.drawer} onClick={nav.openDrawer}>
@@ -59,10 +58,7 @@ export function HeadBar({ title, end, edit, back }) {
   ) : null;
   return (
     <header className="ws-head">
-      <div className="ws-head-side">
-        {side}
-        {back && <button className="ws-btn ghost sm ws-head-back" aria-label={`返回${back.label}`} onClick={back.onClick}><IconChevron size={14} className="back" />{back.label}</button>}
-      </div>
+      <div className="ws-head-side">{side}</div>
       {edit ? <TitleInput value={edit.value} className="head" onDone={edit.onDone} /> : (
         <div className="ws-head-title" title={title || undefined}>
           {title ?? <span className="ws-skel ws-skel-title" aria-label="正在打开对话" role="status" />}

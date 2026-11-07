@@ -28,7 +28,7 @@ export function useAuth() {
 
 // 左栏下面：头像和名字，点开是账号菜单。手机上是底部弹层（规范：菜单用 bottom sheet）。
 // 设置（2026-11-07 Sean 定）：登录了是“谁、设置、退出登录”；游客也有一个“游客”头像，菜单里是“登录、设置”。
-// 记忆只从设置页进，这里和左栏都不放。没有登录功能的部署没有账号，只留一个“设置”
+// 记忆只从设置窗口里进，这里和左栏都不放。没有登录功能的部署没有账号，只留一个“设置”
 export function UserFoot({ auth, onLogin, onSettings, mobile }) {
   const [open, setOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -40,7 +40,8 @@ export function UserFoot({ auth, onLogin, onSettings, mobile }) {
   const { me } = auth;
   const label = me ? me.name || me.email || "已登录" : "游客";
   const close = () => setOpen(false);
-  const pick = (fn) => () => { close(); fn?.(); };
+  // 点了一项：菜单收起，焦点先回头像按钮，再打开的窗口（设置、登录）关上以后就回到这里（桌面；手机上底部弹层自己把焦点还回去）
+  const pick = (fn) => () => { close(); if (!mobile) btn.current?.focus({ preventScroll: true }); fn?.(); };
   const leave = () => { setLeaving(true); signOut().catch(() => setLeaving(false)); };
   const note = "退出后在 Fusion 等其他应用也会退出。";
   const who = me && (

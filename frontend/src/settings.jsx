@@ -1,41 +1,83 @@
-// 设置页（2026-11-07 Sean 定）：头像菜单里的“设置”打开，和记忆页同级（/settings）。只放这几项，不加别的：
+// 设置（2026-11-07 Sean 定）：头像菜单里的“设置”打开一个弹出的窗口。点窗口外、按 Esc、点右上角的关闭都能关；后面开着的对话不动（不换地址、不断开）。只放这几项，不加别的：
 // - 主题：跟随系统 / 浅色 / 深色，存本机（prefs.js），默认跟随系统；
 // - 答完通知：现在浏览器允不允许、开没开，能开能关；浏览器拒绝了说清去哪改（评审第 46 条的尾巴）。和等待行旁边的“答完通知我”是同一个开关（alert.jsx）；
 // - 深度思考：新对话默认开还是关，存本机，默认开；
-// - 记忆：一行摘要，点进去是记忆页。游客写现在那句登录说明；没有登录功能的部署谁都没有记忆，不放。
-// 游客也能进来，主题、深度思考对游客一样生效
-import { useEffect, useId, useState } from "react";
+// - 记忆：一行摘要，点了窗口里换成记忆列表（memory.jsx），左上角“设置”切回来。游客写现在那句登录说明；没有登录功能的部署谁都没有记忆，不放。
+// 游客也能打开，主题、深度思考对游客一样生效。手机上从底部升起
+import { useEffect, useId, useRef, useState } from "react";
 import { permission, setWants, wants } from "./alert.jsx";
 import { getMemory } from "./api.js";
-import { IconChevron } from "./icons.jsx";
-import { HeadBar } from "./nav.jsx";
+import { IconChevron, IconClose } from "./icons.jsx";
+import { opener, useLayer } from "./layers.js";
+import { MemoryPanel } from "./memory.jsx";
 import { THEMES } from "./prefs.js";
 import { sayWhen, stamp } from "./research.js";
 
-// theme、onTheme：主题（见 prefs.useTheme）；think、onThink：新对话默认开不开深度思考；onMemory：打开记忆页
-export function SettingsPage({ auth, onLogin, theme, onTheme, think, onThink, onMemory }) {
+const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+
+// view：窗口里是 "settings" 还是 "memory"；onView 换；onClose 关窗口。
+// theme、onTheme：主题（见 prefs.useTheme）；think、onThink：新对话默认开不开深度思考；
+// onLogin：游客去登录（先关这个窗口再开登录窗口）；undo、threads、onOpen：给记忆列表（删了能撤销、对出出处、点出处关窗口打开那段对话）
+export function SettingsDialog({ view, onView, onClose, auth, onLogin, theme, onTheme, think, onThink, undo, threads, onOpen }) {
+  const box = useRef(null);
+  const body = useRef(null);
+  const closing = useRef(onClose);
+  closing.current = onClose;
+  const titleId = useId();
+  useEffect(() => {
+    const back = opener(); // 关上以后焦点回去（Safari 点按钮不给按钮焦点：用刚按下的那个按钮）
+    box.current?.focus({ preventScroll: true });
+    return () => { if (back?.isConnected) back.focus({ preventScroll: true }); };
+  }, []);
+  useLayer(true, () => closing.current());
+  // 换页：滚回顶上；从记忆切回设置，焦点落回记忆卡，切去记忆落在窗口上（读屏念新标题）
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) { first.current = false; return; }
+    if (body.current) body.current.scrollTop = 0;
+    (view === "settings" && box.current?.querySelector(".set-card.link") || box.current)?.focus({ preventScroll: true });
+  }, [view]);
+  // Tab 每一下都自己挪，只在窗口里转（和登录窗口一样：Safari 默认 Tab 跳过按钮）
+  const trap = (e) => {
+    if (e.key !== "Tab") return;
+    const els = [...box.current.querySelectorAll(FOCUSABLE)].filter((x) => x.offsetParent !== null);
+    if (!els.length) return;
+    e.preventDefault();
+    const i = els.indexOf(document.activeElement);
+    const n = els.length;
+    els[i < 0 ? (e.shiftKey ? n - 1 : 0) : (i + (e.shiftKey ? n - 1 : 1)) % n].focus();
+  };
+  const memory = view === "memory";
   return (
-    <section className="ws-main" aria-label="设置">
-      <HeadBar title="设置" />
-      <div className="ws-scroll">
-        <div className="ws-flow set">
-          <div className="set-list">
-            <Row name="主题" desc="存在这台设备上。" stack>
-              <div className="ws-seg" role="radiogroup" aria-label="主题">
-                {THEMES.map(([v, label]) => (
-                  <button key={v} className={"ws-seg-opt" + (theme === v ? " on" : "")} role="radio" aria-checked={theme === v} onClick={() => onTheme(v)}>{label}</button>
-                ))}
+    <div className="ws-overlay set-overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={box} className="ws-dialog set-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onKeyDown={trap}>
+        <div className={"set-head" + (memory ? " sub" : "")}>
+          {memory && <button className="ws-btn ghost sm set-back" aria-label="返回设置" onClick={() => onView("settings")}><IconChevron size={14} className="back" />设置</button>}
+          <h2 id={titleId} className="set-title">{memory ? "记忆" : "设置"}</h2>
+          <button className="ws-dialog-close" aria-label="关闭" onClick={onClose}><IconClose size={16} /></button>
+        </div>
+        <div className="set-body" ref={body}>
+          {memory ? <MemoryPanel auth={auth} onLogin={onLogin} undo={undo} threads={threads} onOpen={onOpen} /> : (
+            <>
+              <div className="set-list">
+                <Row name="主题" desc="存在这台设备上。" stack>
+                  <div className="ws-seg" role="radiogroup" aria-label="主题">
+                    {THEMES.map(([v, label]) => (
+                      <button key={v} className={"ws-seg-opt" + (theme === v ? " on" : "")} role="radio" aria-checked={theme === v} onClick={() => onTheme(v)}>{label}</button>
+                    ))}
+                  </div>
+                </Row>
+                <NotifyRow />
+                <Row name="深度思考" desc={`新对话默认${think ? "开" : "关"}，对话里随时能切；只对能开关思考的模型有效。存在这台设备上。`}>
+                  {(ids) => <Switch on={think} onChange={onThink} ids={ids} />}
+                </Row>
               </div>
-            </Row>
-            <NotifyRow />
-            <Row name="深度思考" desc={`新对话默认${think ? "开" : "关"}，对话里随时能切；只对能开关思考的模型有效。存在这台设备上。`}>
-              {(ids) => <Switch on={think} onChange={onThink} ids={ids} />}
-            </Row>
-          </div>
-          {(auth.login || auth.me) && <MemoryCard auth={auth} onLogin={onLogin} onOpen={onMemory} />}
+              {(auth.login || auth.me) && <MemoryCard auth={auth} onLogin={onLogin} onOpen={() => onView("memory")} />}
+            </>
+          )}
         </div>
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -105,7 +147,7 @@ function NotifyRow() {
   );
 }
 
-// 记忆：登录了写“已记住 N 条 · 上次整理：今天 03:00”，点进去是记忆页；游客写现在记忆页上那句登录说明
+// 记忆：登录了写“已记住 N 条 · 上次整理：今天 03:00”，点了窗口里换成记忆列表；游客写记忆列表上那句登录说明
 function MemoryCard({ auth, onLogin, onOpen }) {
   const [data, setData] = useState(null);
   const [failed, setFailed] = useState(false);

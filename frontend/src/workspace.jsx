@@ -1,4 +1,4 @@
-// 对话页：左侧对话列表（能搜标题，每条能置顶、改名、导出、删除），右侧对话；头像菜单里的“设置”在右侧换成设置页（/settings），设置页里点“记忆”换成记忆页（/memory）。
+// 对话页：左侧对话列表（能搜标题，每条能置顶、改名、导出、删除），右侧对话；头像菜单里的“设置”弹出设置窗口（记忆也在里面），后面的对话不动。
 // 页面以服务器上的线程状态为准：对话和来源都从状态里取。执行中的事件（思考和正文的逐字片段、工具步骤）
 // 叠在存下来的对话上实时显示，并提示该重新取一次状态了；所以刷新、换个页面打开、或者中途断线重连，看到的都一样。
 // 回答时又说的话排在服务器上，这一轮答完或停下就接着发成新的一轮：这一轮的事件流结束时线程又在跑了，页面接着读下一次执行的。
@@ -11,9 +11,8 @@ import { setDraft } from "./drafts.js";
 import { AFTER_RUN_ERROR, errorText, quotaText } from "./errors.js";
 import { useLayer } from "./layers.js";
 import { CreditsFoot, LoginDialog, UserFoot, useAuth } from "./login.jsx";
-import { MemoryPage } from "./memory.jsx";
 import { saveThinkDefault, thinkDefault, useTheme } from "./prefs.js";
-import { SettingsPage } from "./settings.jsx";
+import { SettingsDialog } from "./settings.jsx";
 import { ActionMenu, TitleInput } from "./menu.jsx";
 import { MOBILE, NavContext, SEARCH_ARIA_KEY, SEARCH_KEY, SIDE_ARIA_KEY, SIDE_KEY, isSearchKey, isSideKey, useMedia } from "./nav.jsx";
 import { ACTIVE, QUEUED, addLive, elapsed, itemKey, saveFile, sayWhen, stamp, threadMarkdown, useNow, when } from "./research.js";
@@ -27,9 +26,8 @@ import "./workspace.css";
 // 线程 id 只有字母、数字、- 和 _（后端校验），地址里不用编码；对不上的 id 后端回 404，页面换成新对话
 const NEW_PATH = "/chat/new";
 const chatPath = (id) => (id ? `/chat/${id}` : NEW_PATH);
-// 和对话同级的页：设置、记忆（右侧换成这一页，这时没有选中的对话）
-const PAGES = { settings: "/settings", memory: "/memory" };
-const pageOfPath = () => Object.keys(PAGES).find((k) => new RegExp(`^${PAGES[k]}/?$`).test(location.pathname)) || null;
+// 以前的设置页、记忆页地址（/settings、/memory，11-07 改成窗口之前）：打开的话弹出设置窗口的那一页，地址换成对话的
+const oldPage = () => location.pathname.match(/^\/(settings|memory)\/?$/)?.[1] || null;
 const routeId = () => {
   const m = location.pathname.match(/^\/chat\/([^/]+)\/?$/);
   return m && m[1] !== "new" ? m[1] : null;
@@ -54,13 +52,8 @@ export default function Workspace() {
   const [loginWant, setLoginWant] = useState(null); // 游客点了“登录后可用”里的哪个模型（登录弹窗说登录后就能用它，第 28 条）
   const [threads, setThreads] = useState(null);
   const [tid, setTid] = useState(routeId);
-  const [page, setPageState] = useState(pageOfPath); // 右侧是哪一页："settings"、"memory"，对话是 null
-  const pageRef = useRef(page);
-  const setPage = (p) => {
-    pageRef.current = p;
-    setPageState(p);
-  };
-  const [theme, setTheme, dark] = useTheme(); // 主题（设置页，存本机）：跟随系统、浅色、深色
+  const [settings, setSettings] = useState(oldPage); // 设置窗口开着时是窗口里的那一页："settings"、"memory"；关着是 null
+  const [theme, setTheme, dark] = useTheme(); // 主题（设置窗口里选，存本机）：跟随系统、浅色、深色
   const [st, setSt] = useState(null);
   // 这个页面发起或接上的那次执行：{said, image, sentAt, turnsAtStart, items, stage, phase, title, stopping, hidden, edit}
   // image：这句话带的图（{file, url}），存下来之前先按本机的显示
@@ -74,9 +67,9 @@ export default function Workspace() {
   const [models, setModels] = useState(null);
   // 新对话选的模型：null 是 Auto；开新对话时还是上次选的，刷新页面回到 Auto。开始的对话以它定下的为准（st.model）
   const [pick, setPick] = useState(null);
-  // 深度思考开关：每句话发的时候带上（选的模型能开关才带）。新对话（包括刷新）按设置页的默认（存本机，默认开）；
+  // 深度思考开关：每句话发的时候带上（选的模型能开关才带）。新对话（包括刷新）按设置里的默认（存本机，默认开）；
   // 在一段对话里手动切了只管这段对话，记在 thinkSet 里（这次打开的页面里），回到这段对话还是切过的，开新对话又回到默认（2026-11-07 Sean 定）
-  const [thinkOn, setThinkOn] = useState(thinkDefault); // 设置页里的默认
+  const [thinkOn, setThinkOn] = useState(thinkDefault); // 设置里的默认
   const thinkOnRef = useRef(thinkOn);
   thinkOnRef.current = thinkOn;
   const [thinking, setThinkingState] = useState(thinkOn);
@@ -114,14 +107,17 @@ export default function Workspace() {
 
   useEffect(() => {
     refreshList();
-    if (!page) navigate(chatPath(tid), false);
+    navigate(chatPath(tid), false);
     if (tid) restore(tid, gen.current);
     // 浏览器前进后退、手动改了地址：地址栏已经是了，只换页面（去海报页时这个页面会被换掉，不用管）
     const onPop = () => {
       if (location.hash === "#poster") return;
-      const p = pageOfPath();
-      if (p) return openPage(p, "none");
-      if (pageRef.current || routeId() !== tidRef.current) select(routeId(), "none");
+      const p = oldPage();
+      if (p) { // 后退到以前的设置页、记忆页地址：弹出窗口，对话不动
+        setSettings(p);
+        return navigate(chatPath(tidRef.current), false);
+      }
+      if (routeId() !== tidRef.current) select(routeId(), "none");
     };
     addEventListener("popstate", onPop);
     return () => { // 切去别的页：断开连接，旧的回调不再改页面
@@ -140,11 +136,11 @@ export default function Workspace() {
   const title = live?.title || st?.title; // 执行中起好的标题跟着事件来，库里一轮跑完才有（之前是用户的原话）
   const done = useDoneAlert(tid, busy || ACTIVE.has(st?.status), st, title); // 用户没在看时答完了：标题前加“（答完了）”，见 alert.jsx
   useEffect(() => {
-    const base = page === "memory" ? "灵稿 · 记忆" : page === "settings" ? "灵稿 · 设置" : title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : "灵稿 · 新对话";
+    const base = title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : "灵稿 · 新对话";
     document.title = (done ? `（${done}）` : "") + base;
-  }, [title, tid, page, done]);
+  }, [title, tid, done]);
 
-  // 深色（批次 G 第 16 条；设置页能选跟随系统、浅色、深色）：深色时浏览器顶栏跟着深；只在对话页加，海报页还是浅色（index.html 里那条白的）
+  // 深色（批次 G 第 16 条；设置窗口里能选跟随系统、浅色、深色）：深色时浏览器顶栏跟着深；只在对话页加，海报页还是浅色（index.html 里那条白的）
   useEffect(() => {
     if (!dark) return undefined;
     const m = Object.assign(document.createElement("meta"), { name: "theme-color", content: "#1b1f24" });
@@ -178,8 +174,7 @@ export default function Workspace() {
 
   // how：push 记进浏览器历史（点左栏的对话、新对话）；replace 换掉当前这条（当前对话删了、打不开）；none 地址栏已经是了
   const select = (id, how = "push") => {
-    if (id === tidRef.current && id && !pageRef.current) return;
-    setPage(null);
+    if (id === tidRef.current && id) return;
     if (!id) thinkSet.current.delete("new"); // 新对话：深度思考回到默认
     setThinkingState(thinkSet.current.get(id ?? "new") ?? thinkOnRef.current);
     ctl.current.abort();
@@ -199,12 +194,11 @@ export default function Workspace() {
     if (id) restore(id, gen.current);
   };
 
-  // 打开设置页、记忆页：先像点了新对话那样放下当前对话（连接断开，服务器上的执行照常跑），再换成那一页
-  const openPage = (p, how = "push") => {
-    if (pageRef.current === p) return;
-    if (!pageRef.current) select(null, "none");
-    setPage(p);
-    if (how !== "none") navigate(PAGES[p], how === "push");
+  // 设置里改了深度思考的默认：之后的新对话按它；正开着一个还没发、也没手动切过的新对话，这个也跟着变（关了窗口看到的就是新默认）
+  const changeThinkDefault = (v) => {
+    saveThinkDefault(v);
+    setThinkOn(v);
+    if (tidRef.current === null && !busyRef.current && !thinkSet.current.has("new")) setThinkingState(v);
   };
 
   // 打开一个线程：取状态；服务器上还在跑，就接上这次执行的事件流（从这次执行的头一个事件补发）
@@ -579,7 +573,7 @@ export default function Workspace() {
         },
         undo: () => {
           unhide(id);
-          if (open && tidRef.current === null && !pageRef.current && !busyRef.current) select(id);
+          if (open && tidRef.current === null && !busyRef.current) select(id);
         },
       });
     },
@@ -601,7 +595,7 @@ export default function Workspace() {
   // 执行中这一轮的来源跟着事件来（库里一轮跑完才有），叠在已存的来源上：正文里的引用据此显示成编号
   const shown = st && live?.sources ? { ...st, sources: { ...st.sources, ...live.sources } } : st;
 
-  // 游客开登录弹窗（左栏、额度、设置页和记忆页、报错里的登录，点“登录后可用”的模型）。点模型进来的带着那个模型；从按钮直接进来的参数是点击事件，不算
+  // 游客开登录弹窗（左栏、额度、设置窗口、报错里的登录，点“登录后可用”的模型）。点模型进来的带着那个模型；从按钮直接进来的参数是点击事件，不算
   const onLogin = auth.login && !auth.me ? (want) => {
     const m = want?.id && want.locked ? want : null;
     setLoginWant(m);
@@ -680,13 +674,16 @@ export default function Workspace() {
       <div className={"ws" + (sideOff ? " side-off" : "") + (mobile && drawer ? " drawer" : "")} data-theme={dark ? "dark" : "light"}>
         {mobile && drawer && <div className="ws-scrim" onClick={closeDrawer} aria-hidden="true" />}
         <Sidebar threads={shownThreads} current={tid} st={st} live={live} busy={busy} now={now} onSelect={fromSide(select)} manage={manage}
-          page={page} onSettings={fromSide(() => openPage("settings"))} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
-        {page === "memory" ? <MemoryPage auth={auth} onLogin={onLogin} undo={undo} threads={shownThreads} onOpen={(id) => select(id)} onBack={() => openPage("settings")} />
-          : page === "settings" ? <SettingsPage auth={auth} onLogin={onLogin} theme={theme} onTheme={setTheme} think={thinkOn}
-            onThink={(v) => { saveThinkDefault(v); setThinkOn(v); }} onMemory={() => openPage("memory")} />
-          : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
-            models={models} credits={credits} manage={manage}
-            picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />}
+          onSettings={fromSide(() => setSettings("settings"))} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
+        <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
+          models={models} credits={credits} manage={manage}
+          picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />
+        {settings && (
+          <SettingsDialog view={settings} onView={setSettings} onClose={() => setSettings(null)} auth={auth}
+            onLogin={onLogin && (() => { setSettings(null); onLogin(); })}
+            theme={theme} onTheme={setTheme} think={thinkOn} onThink={changeThinkDefault}
+            undo={undo} threads={shownThreads} onOpen={(id) => { setSettings(null); select(id); }} />
+        )}
         <LoginDialog open={loginOpen} crowded={auth.crowded} want={loginWant} credits={credits} onClose={closeLogin} />
         <UndoToast undo={undo} />
       </div>
@@ -740,7 +737,7 @@ function Hit({ text, q }) {
 // 抽屉里的菜单、改名框开着、搜索框里有字时，Esc 先归它们
 const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
-function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, page, onSettings, auth, onLogin, credits, onCredits, nav }) {
+function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, onSettings, auth, onLogin, credits, onCredits, nav }) {
   const [menu, setMenu] = useState(null); // 打开菜单的那一行：{id, anchor: 那一行的“⋯”}
   const [renaming, setRenaming] = useState(null); // 正在改名的线程 id
   const [query, setQuery] = useState(""); // 搜索框里的字
@@ -838,7 +835,7 @@ function Sidebar({ threads, current, st, live, busy, now, onSelect, manage, page
             onClick={nav.toggleSide}><IconPanel size={18} /></button>}
       </div>
       <div className="ws-side-top">
-        <button className="ws-new" onClick={() => onSelect(null)} aria-current={!current && !page ? "page" : undefined}>
+        <button className="ws-new" onClick={() => onSelect(null)} aria-current={!current ? "page" : undefined}>
           <IconPlus size={15} /> 新对话
         </button>
       </div>

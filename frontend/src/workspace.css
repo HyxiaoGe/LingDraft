@@ -28,7 +28,7 @@
 }
 .md { font-variant-numeric: normal; }
 .md table { font-variant-numeric: tabular-nums; }
-/* 深色（批次 G 第 16 条）：设置页能选跟随系统、浅色、深色（2026-11-07 Sean 定），页面算好以后写在 .ws 的 data-theme 上（见 prefs.js）。
+/* 深色（批次 G 第 16 条）：设置窗口里能选跟随系统、浅色、深色（2026-11-07 Sean 定），页面算好以后写在 .ws 的 data-theme 上（见 prefs.js）。
    只换颜色变量，变量挂在 .ws 上，海报页不受影响；只管屏幕，打印照旧是浅色。
    新加的颜色值都在批次 G 对照清单里逐个报备；--paper 用的是浅色的 --ink，--line2 用的是浅色的 --ink2。
    墨色、靛青、红色底上的字一律写 var(--paper)：浅色时是白，深色时是深底色，底色变浅了字跟着变深 */
@@ -293,8 +293,6 @@
 .ws-head { padding: 0 12px; border-bottom: 1px solid var(--line); height: 58px; flex: none; display: grid; grid-template-columns: 1fr minmax(0, 624px) 1fr; align-items: center; gap: 8px; }
 .ws-head-side { display: flex; align-items: center; gap: 4px; } /* 至少放得下自己的按钮：正文区窄、标题长时中间一栏让出来，按钮不被挤出去 */
 .ws-head-side.end { justify-content: flex-end; }
-.ws-head-back { gap: 4px; padding: 0 8px; } /* 记忆页左上角的“设置”：回设置页 */
-.ws-head-back .back { transform: rotate(90deg); }
 .ws-head-title { min-width: 0; font-weight: 600; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ws-scroll { flex: 1; overflow-y: auto; container-type: inline-size; }
 /* 正文一行四十来个字。--pad 是两边留白，--text 是正文实际的宽 */
@@ -1021,7 +1019,7 @@
   .ws *:not(.spin), .ws *::before, .ws *::after { animation: none !important; transition: none !important; }
 }
 
-/* ---------- 记忆页 ---------- */
+/* ---------- 记忆列表（在设置窗口里） ---------- */
 .mem-intro { color: var(--ink2); margin: 0 0 12px; }
 .mem-intro.sub { color: var(--muted); font-size: 13px; line-height: 1.6; margin-bottom: 16px; }
 .mem-status { color: var(--muted); font-size: 13px; margin: 0 0 20px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -1046,11 +1044,23 @@
 .mem-edit-bar .ws-count { margin-right: auto; }
 .mem-edit-error { color: var(--danger); font-size: 13px; margin-top: 8px; }
 .mem .ws-error { margin: 0 0 16px; }
-/* 设置页（2026-11-07 Sean 定）：主题、答完通知、深度思考一行一项，下面是记忆的入口卡；和记忆页一样安静 */
+/* ---------- 设置窗口（2026-11-07 Sean 定） ---------- */
+/* 弹出的窗口：桌面上靠上居中（切到记忆列表变高时只往下长，顶上那行不跳），手机上从底部升起。顶上一行是标题和关闭，下面自己滚 */
+.set-overlay { align-items: flex-start; padding-top: 48px; }
+.set-dialog { max-width: 560px; max-height: calc(100dvh - 96px); padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.set-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 12px 12px 24px; border-bottom: 1px solid var(--line); }
+.set-head.sub { padding-left: 12px; }
+.set-title { flex: 1; min-width: 0; margin: 0; font-size: 16px; font-weight: 600; }
+.set-head .ws-dialog-close { position: static; flex: none; }
+.set-back { gap: 4px; padding: 0 8px; } /* 记忆列表左上角的“设置”：切回设置 */
+.set-back .back { transform: rotate(90deg); }
+.set-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px 24px 24px; }
+.set-body .mem { padding-top: 16px; }
+/* 主题、答完通知、深度思考一行一项，下面是记忆的入口卡 */
 .set-row { display: flex; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--line); }
 .set-text { flex: 1; min-width: 0; }
 .set-name { display: block; font-weight: 500; color: var(--ink); }
-.set-desc { display: block; margin-top: 4px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.set-desc { display: block; margin-top: 4px; font-size: 13px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
 .set-ctl { flex: none; }
 .set-switch { display: inline-flex; align-items: center; height: 32px; padding: 0 4px; border: 0; border-radius: 999px; background: none; }
 .set-switch:disabled .ws-switch { background: var(--line); }
@@ -1066,10 +1076,16 @@
   .mem-edit-bar .ws-btn { height: 44px; padding: 0 16px; font-size: 14px; }
   .mem-foot { min-height: 44px; }
   .mem-from { padding: 12px 0; line-height: 20px; } /* 点按区 44 高 */
+  .set-overlay { align-items: flex-end; padding: 0; }
+  .set-dialog { max-width: none; max-height: 90vh; max-height: 90dvh; padding: 0 env(safe-area-inset-right) 0 env(safe-area-inset-left); border-width: 1px 0 0;
+    border-radius: var(--r-lg) var(--r-lg) 0 0; animation: ws-sheet-up .2s var(--ease); }
+  .set-head { padding: 4px 4px 4px 16px; }
+  .set-head.sub { padding-left: 4px; }
+  .set-body { padding: 8px 16px calc(24px + env(safe-area-inset-bottom)); }
   .set-row.stack { flex-direction: column; align-items: stretch; gap: 12px; } /* 主题三个选项放到说明下面，一排铺满 */
   .set-row.stack .ws-seg { display: flex; }
   .set-row.stack .ws-seg-opt { flex: 1; justify-content: center; }
   .set-switch { height: 44px; }
   .set-card .ws-btn { height: 44px; padding: 0 16px; font-size: 14px; }
-  .ws-btn.ws-head-back { height: 44px; font-size: 14px; }
+  .ws-btn.set-back { height: 44px; font-size: 14px; }
 }
