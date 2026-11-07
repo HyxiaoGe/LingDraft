@@ -1,12 +1,17 @@
-// 登录：左栏下面的登录入口和账号菜单、额度按钮和面板、登录弹窗（邮箱验证码、GitHub、Google）、/auth/callback 页。身份本身见 auth.js。
+// 登录：左栏下面的账号菜单（游客的有登录、设置）、额度按钮和面板、登录弹窗（邮箱验证码、GitHub、Google）、/auth/callback 页。身份本身见 auth.js。
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { EmailLogin, checkSession, completeCallback, emailLoginAvailable, emailLoginKnown, init, signIn, signOut, snapshot, subscribeAuth } from "./auth.js";
-import { IconClose, IconLock, Spinner } from "./icons.jsx";
+import { IconClose, IconLock, IconLogin, IconSliders, Spinner } from "./icons.jsx";
 import { opener, useLayer } from "./layers.js";
 import { touch } from "./nav.jsx";
 import { asksOf, creditsLeft, creditsLine, creditsParts, creditsShort, loginLine, num } from "./research.js";
 import { Sheet } from "./sheet.jsx";
+import dialog from "./dialog.module.css";
+import styles from "./login.module.css";
+import menu from "./menu.module.css";
+import sheet from "./sheet.module.css";
+import side from "./sidebar.module.css";
 
 // 当前身份：{ready, login, me}（见 auth.snapshot）。回到这个标签页时和 auth 服务对一下账（别处退出了就跟着退）
 export function useAuth() {
@@ -26,49 +31,63 @@ export function useAuth() {
   return s;
 }
 
-// 左栏下面：游客看到“登录”，登录了看到头像和名字，点开是账号菜单（谁、退出登录）。手机上是底部弹层（规范：菜单用 bottom sheet）。
-// 记忆不在这里：2026-11-07 Sean 定放回左栏“新对话”下面一行，游客也看得见（推翻 11-06 收进这里的做法，评审第 30 条）
-export function UserFoot({ auth, onLogin, mobile }) {
+// 左栏下面：头像和名字，点开是账号菜单。手机上是底部弹层。
+// 设置（2026-11-07 Sean 定）：登录了是“谁、设置、退出登录”；游客也有一个“游客”头像，菜单里是“登录、设置”。
+// 记忆只从设置窗口里进，这里和左栏都不放。没有登录功能的部署没有账号，只留一个“设置”
+export function UserFoot({ auth, onLogin, onSettings, mobile }) {
   const [open, setOpen] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const btn = useRef(null);
   const box = useRef(null);
   usePopClose(open && !mobile, box, btn, () => setOpen(false));
-  if (!auth.ready || !auth.login) return null;
-  if (!auth.me) return <button className="ws-login-link" onClick={onLogin}>登录</button>;
+  if (!auth.ready) return null;
+  if (!auth.login) {
+    return <button className="min-h-6 border-0 bg-transparent p-0 text-[12px] text-accent hover:underline hover:underline-offset-3 phone:min-h-11 phone:min-w-11 phone:px-2"
+      onClick={onSettings}>设置</button>;
+  }
   const { me } = auth;
-  const label = me.name || me.email || "已登录";
+  const label = me ? me.name || me.email || "已登录" : "游客";
   const close = () => setOpen(false);
+  // 点了一项：菜单收起，焦点先回头像按钮，再打开的窗口（设置、登录）关上以后就回到这里（桌面；手机上底部弹层自己把焦点还回去）
+  const pick = (fn) => () => { close(); if (!mobile) btn.current?.focus({ preventScroll: true }); fn?.(); };
   const leave = () => { setLeaving(true); signOut().catch(() => setLeaving(false)); };
   const note = "退出后在 Fusion 等其他应用也会退出。";
-  const who = (
-    <div className="ws-menu-note ws-user-note">
+  const who = me && (
+    <div className={menu.note + " " + styles.who}>
       <b>{me.name || me.email}</b>
       {me.name && me.email && <span>{me.email}</span>}
       {me.tier === "admin" && <span>管理员</span>}
     </div>
   );
+  // 每一项：[图标, 字, 点了做什么, 正在退出时转圈]
+  const items = me
+    ? [[IconSliders, "设置", pick(onSettings)], [IconClose, "退出登录", leave, leaving]]
+    : [[IconLogin, "登录", pick(onLogin)], [IconSliders, "设置", pick(onSettings)]];
   const rect = open && !mobile ? btn.current?.getBoundingClientRect() : null;
   return (
     <>
-      <button ref={btn} className="ws-user-btn" aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={open} title={mobile ? undefined : me.email} onClick={() => setOpen(!open)}>
+      <button ref={btn} className={"-my-1 -mr-1 ml-0 flex h-6 max-w-[120px] min-w-0 items-center gap-1.5 rounded-sm border-0 bg-transparent px-1 py-0 text-[12px] text-muted"
+        + " hover:bg-hover hover:text-ink aria-expanded:bg-hover aria-expanded:text-ink phone:m-0 phone:h-11"}
+        aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={open} title={mobile || !me ? undefined : me.email} onClick={() => setOpen(!open)}>
         <Avatar me={me} />
-        <span className="ws-user-name">{label}</span>
+        <span className="min-w-0 truncate">{label}</span>
       </button>
       {open && mobile && onWs(
-        <Sheet title="账号" onClose={close} className="ws-act-sheet">
+        <Sheet title="账号" onClose={close}>
           {who}
-          <button className="ws-sheet-act" disabled={leaving} onClick={leave}>{leaving ? <Spinner size={18} /> : <IconClose size={18} />}退出登录</button>
-          <div className="ws-menu-note">{note}</div>
+          {items.map(([Icon, text, fn, busy]) => (
+            <button key={text} className={sheet.act} disabled={leaving} onClick={fn}>{busy ? <Spinner size={18} /> : <Icon size={18} />}{text}</button>
+          ))}
+          {me && <div className={menu.note}>{note}</div>}
         </Sheet>,
       )}
       {rect && (
-        <div ref={box} className="ws-menu ws-user-menu" role="menu" aria-label="账号" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: 232 }}>
+        <div ref={box} className={menu.menu} role="menu" aria-label="账号" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: me ? 232 : 160 }}>
           {who}
-          <button role="menuitem" disabled={leaving} onClick={leave}>
-            {leaving ? <Spinner size={14} /> : <IconClose size={14} />}退出登录
-          </button>
-          <div className="ws-menu-note">{note}</div>
+          {items.map(([Icon, text, fn, busy]) => (
+            <button key={text} role="menuitem" disabled={leaving} onClick={fn}>{busy ? <Spinner size={14} /> : <Icon size={14} />}{text}</button>
+          ))}
+          {me && <div className={menu.note}>{note}</div>}
         </div>
       )}
     </>
@@ -102,7 +121,7 @@ export function CreditsFoot({ credits, guest, onLogin, onOpen, mobile }) {
   const left = credits.unlimited ? null : creditsLeft(credits);
   if (!credits.unlimited && !left) return null;
   const frac = left ? Math.max(0, Math.min(1, left.remaining / left.limit)) : 1;
-  const cls = "ws-credits-btn" + (left?.exhausted ? " out" : left?.warn ? " warn" : "");
+  const cls = side.credits + (left?.exhausted ? " " + side.out : left?.warn ? " " + side.warn : "");
   const line = credits.unlimited ? `额度不限，今天用了 ${num(usedBy(credits).day)} 额度` : creditsLine(left);
   const close = () => setOpen(false);
   const panel = <UsagePanel credits={credits} left={left} guest={guest} mobile={mobile} onLogin={onLogin && (() => { close(); onLogin(); })} />;
@@ -114,9 +133,9 @@ export function CreditsFoot({ credits, guest, onLogin, onOpen, mobile }) {
         <Ring frac={frac} />
         <span>{credits.unlimited ? "额度不限" : creditsShort(left)}</span>
       </button>
-      {open && mobile && onWs(<Sheet title="额度" onClose={close} className="ws-usage-sheet">{panel}</Sheet>)}
+      {open && mobile && onWs(<Sheet title="额度" onClose={close} className={styles.usageSheet}>{panel}</Sheet>)}
       {rect && (
-        <div ref={box} className="ws-menu ws-usage" role="dialog" aria-label="额度" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: 264 }}>
+        <div ref={box} className={menu.menu + " " + styles.usage} role="dialog" aria-label="额度" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: 264 }}>
           {panel}
         </div>
       )}
@@ -135,7 +154,7 @@ function Ring({ frac, size = 16 }) {
   const r = (size - 3) / 2;
   const c = 2 * Math.PI * r;
   return (
-    <svg className="ws-ring" width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
+    <svg className={side.ring} width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="currentColor" strokeOpacity=".18" strokeWidth="2.5" />
       <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"
         strokeDasharray={c} strokeDashoffset={c * (1 - frac)} transform={`rotate(-90 ${size / 2} ${size / 2})`} />
@@ -150,8 +169,8 @@ function UsagePanel({ credits, left, guest, mobile, onLogin }) {
     const used = usedBy(credits);
     return (
       <>
-        <div className="ws-usage-main">额度不限</div>
-        <div className="ws-menu-note">管理员。今天用了 {num(used.day)} 额度，这周 {num(used.week)}；按北京时间算。</div>
+        <div className={styles.usageMain}>额度不限</div>
+        <div className={menu.note}>管理员。今天用了 {num(used.day)} 额度，这周 {num(used.week)}；按北京时间算。</div>
       </>
     );
   }
@@ -161,29 +180,33 @@ function UsagePanel({ credits, left, guest, mobile, onLogin }) {
   return (
     <>
       {/* 和别处同一句，分两行：还剩多少 / 什么时候恢复（中间的“ · ”只是不显示，读屏、复制照旧是整句） */}
-      <div className={"ws-usage-main" + (left.exhausted ? " out" : left.warn ? " warn" : "")}>
-        {amount}<span className="ws-usage-when"><span className="sep"> · </span>{when}</span>
+      <div className={styles.usageMain + (left.exhausted ? " " + styles.out : left.warn ? " " + styles.warn : "")}>
+        {amount}<span className={styles.when}><span className={styles.sep}> · </span>{when}</span>
       </div>
-      <div className="ws-menu-note">
+      <div className={menu.note}>
         {guest ? "游客试用的额度。" : "登录账号的额度。"}
         {credits.per_ask > 0 && `按一次约 ${num(credits.per_ask)} 额度估算，联网查得多、开着深度思考的问题会用得多一些。`}按北京时间算。
       </div>
       {after && onLogin && (
-        <button className={"ws-usage-login" + (mobile ? " ws-sheet-act" : "")} onClick={onLogin}>
-          <IconLock size={mobile ? 18 : 14} /><span>{more}{asks && <>，<span className="ws-keep">{asks}</span></>}</span>
+        <button className={styles.usageLogin + (mobile ? " " + sheet.act : "")} onClick={onLogin}>
+          <IconLock size={mobile ? 18 : 14} /><span>{more}{asks && <>，<span className="whitespace-nowrap">{asks}</span></>}</span>
         </button>
       )}
     </>
   );
 }
 
-function Avatar({ me }) {
+// 头像：有图用图（取不到退回首字母），没有图写名字或邮箱的首字母；游客（me 是 null）是浅一档的“游”。large：设置窗口左上角那个大的
+export function Avatar({ me, large }) {
   const [broken, setBroken] = useState(false);
-  if (me.avatar && !broken) return <img className="ws-avatar" src={me.avatar} alt="" referrerPolicy="no-referrer" onError={() => setBroken(true)} />;
-  return <span className="ws-avatar">{(me.name || me.email || "?").trim()[0].toUpperCase()}</span>;
+  const cls = styles.avatar + (me ? "" : " " + styles.guest) + (large ? " " + styles.large : "");
+  if (!me) return <span className={cls} aria-hidden="true">游</span>;
+  if (me.avatar && !broken) return <img className={cls} src={me.avatar} alt="" referrerPolicy="no-referrer" onError={() => setBroken(true)} />;
+  return <span className={cls}>{(me.name || me.email || "?").trim()[0].toUpperCase()}</span>;
 }
 
 const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
+const ERR = "mt-2 text-[13px] leading-[1.5] text-danger"; // 出错的那句（弹窗里、邮箱那栏下面）
 
 // 登录弹窗（第 29 条，2026-11-07 Sean 定）：邮箱验证码在最上面、直接填；GitHub、Google 在“或者”下面，Google 标着要能打开它。
 // 邮箱能不能用页面起来时就问好了（auth.js 的 emailLoginAvailable），还没问到的那一会儿给邮箱那栏留着位置。
@@ -222,7 +245,7 @@ export function LoginDialog({ open, onClose, crowded, want, credits }) {
     if (!open || !el || phase !== "start") return;
     const a = document.activeElement;
     if (el.contains(a) && a !== el && a !== autoFocused.current) return;
-    const to = touch() ? el : el.querySelector("input:not(:disabled), .ws-login-btn:not(:disabled)") || el;
+    const to = touch() ? el : el.querySelector("input:not(:disabled), [data-method]:not(:disabled)") || el;
     autoFocused.current = to;
     to.focus({ preventScroll: true });
   }, [open, email, phase]);
@@ -247,27 +270,27 @@ export function LoginDialog({ open, onClose, crowded, want, credits }) {
     ? `你所在的网络今天新来的游客太多了（防刷，同一网络每天最多 ${crowded.per_ip || 5} 个游客身份）。登录后不受这个限制${asks ? `，每天约可问 ${asks} 次` : "，马上能接着用"}。`
     : `${want ? `登录后就能用 ${want.name}。` : ""}登录后能用全部模型${asks ? `，每天约可问 ${asks} 次` : ""}；对话和记忆按账号保存，现在的对话会一起并进账号。`;
   return (
-    <div className="ws-overlay" onMouseDown={(e) => e.target === e.currentTarget && !critical && onClose()}>
-      <div ref={box} className="ws-dialog" role="dialog" aria-modal="true" aria-labelledby="ws-login-title" aria-describedby="ws-login-desc" tabIndex={-1} onKeyDown={trap}>
-        {!critical && <button className="ws-dialog-close" aria-label="关闭" onClick={onClose}><IconClose size={16} /></button>}
+    <div className={dialog.overlay} onMouseDown={(e) => e.target === e.currentTarget && !critical && onClose()}>
+      <div ref={box} className={dialog.dialog} role="dialog" aria-modal="true" aria-labelledby="ws-login-title" aria-describedby="ws-login-desc" tabIndex={-1} onKeyDown={trap}>
+        {!critical && <button className={dialog.close} aria-label="关闭" onClick={onClose}><IconClose size={16} /></button>}
         {phase === "start" && (
           <>
-            <h2 id="ws-login-title" className="ws-dialog-title">{crowded ? "登录后接着用" : "登录灵稿"}</h2>
-            <p id="ws-login-desc" className="ws-dialog-desc">{desc}</p>
+            <h2 id="ws-login-title" className={styles.title}>{crowded ? "登录后接着用" : "登录灵稿"}</h2>
+            <p id="ws-login-desc" className={styles.desc}>{desc}</p>
           </>
         )}
-        {email === null && phase === "start" && <div className="ws-login-wait" role="status"><Spinner size={14} />正在准备邮箱登录…</div>}
+        {email === null && phase === "start" && <div className="flex min-h-[144px] items-center justify-center gap-2 text-[13px] text-muted phone:min-h-[152px]" role="status"><Spinner size={14} />正在准备邮箱登录…</div>}
         {email && <EmailFlow phase={phase} setPhase={setPhase} setCritical={setCritical} blocked={!!going} />}
         {phase === "start" && (
           <>
-            {email !== false && <div className="ws-login-or">或者</div>}
-            <div className="ws-login-methods">
-              <button className="ws-login-btn" disabled={!!going} onClick={() => go("github")}>{going === "github" ? <Spinner size={15} /> : <GitHubMark />}用 GitHub 登录</button>
-              <button className="ws-login-btn" disabled={!!going} onClick={() => go("google")}>
+            {email !== false && <div className={styles.or}>或者</div>}
+            <div className="flex flex-col gap-2">
+              <button className={styles.method} data-method="github" disabled={!!going} onClick={() => go("github")}>{going === "github" ? <Spinner size={15} /> : <GitHubMark />}用 GitHub 登录</button>
+              <button className={styles.method} data-method="google" disabled={!!going} onClick={() => go("google")}>
                 {going === "google" ? <Spinner size={15} /> : <GoogleMark />}用 Google 登录<small>需要能打开 Google</small>
               </button>
             </div>
-            {error && <div className="ws-login-err" role="alert">{error}</div>}
+            {error && <div className={ERR} role="alert">{error}</div>}
           </>
         )}
       </div>
@@ -349,29 +372,29 @@ function EmailFlow({ phase, setPhase, setCritical, blocked }) {
     }, true);
   };
   const wait = sent ? Math.max(0, Math.ceil((sent.resendAt - now) / 1000)) : 0;
-  const err = error && <div id={ids + "err"} className="ws-login-err" role="alert">{error}</div>;
+  const err = error && <div id={ids + "err"} className={ERR} role="alert">{error}</div>;
   if (phase !== "code" || !sent) {
     return (
-      <form className="ws-login-email" onSubmit={start} noValidate>
-        <label className="ws-field-label" htmlFor={ids + "addr"}>邮箱</label>
-        <input ref={input} id={ids + "addr"} className="ws-field" type="email" autoComplete="email" inputMode="email" placeholder="name@example.com" value={addr} disabled={busy}
+      <form className="flex flex-col" onSubmit={start} noValidate>
+        <label className={styles.label} htmlFor={ids + "addr"}>邮箱</label>
+        <input ref={input} id={ids + "addr"} className={styles.field} type="email" autoComplete="email" inputMode="email" placeholder="name@example.com" value={addr} disabled={busy}
           aria-invalid={error ? true : undefined} aria-describedby={error ? ids + "err" : undefined} onChange={(e) => setAddr(e.target.value)} />
         {err}
-        <button type="submit" className="ws-btn primary ws-login-send" disabled={busy || blocked || !addr.trim()}>{busy && <Spinner size={14} />}发送验证码</button>
-        <div className="ws-login-tip">没有账号会直接注册。</div>
+        <button type="submit" className={"ws-btn primary " + styles.send} disabled={busy || blocked || !addr.trim()}>{busy && <Spinner size={14} />}发送验证码</button>
+        <div className="mt-2 text-center text-[12px] text-muted">没有账号会直接注册。</div>
       </form>
     );
   }
   return (
     <form onSubmit={verify} noValidate>
-      <h2 id="ws-login-title" className="ws-dialog-title">输入验证码</h2>
-      <p id="ws-login-desc" className="ws-dialog-desc">验证码已发到 {sent.masked}{sent.expiresIn > 0 && `，${Math.max(1, Math.round(sent.expiresIn / 60))} 分钟内有效`}。</p>
-      <label className="ws-field-label" htmlFor={ids + "code"}>验证码<span>{sent.codeLength} 位数字</span></label>
-      <input ref={input} id={ids + "code"} className="ws-field code" inputMode="numeric" autoComplete="one-time-code" maxLength={sent.codeLength}
+      <h2 id="ws-login-title" className={styles.title}>输入验证码</h2>
+      <p id="ws-login-desc" className={styles.desc}>验证码已发到 {sent.masked}{sent.expiresIn > 0 && `，${Math.max(1, Math.round(sent.expiresIn / 60))} 分钟内有效`}。</p>
+      <label className={styles.label} htmlFor={ids + "code"}>验证码<span>{sent.codeLength} 位数字</span></label>
+      <input ref={input} id={ids + "code"} className={styles.field + " " + styles.code} inputMode="numeric" autoComplete="one-time-code" maxLength={sent.codeLength}
         value={code} disabled={busy} aria-invalid={error ? true : undefined} aria-describedby={error ? ids + "err" : undefined}
         onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))} />
       {err}
-      <div className="ws-dialog-actions">
+      <div className={styles.actions}>
         <button type="button" className="ws-btn ghost" disabled={busy} onClick={() => { setPhase("start"); setCode(""); setError(null); }}>换个邮箱</button>
         <button type="button" className="ws-btn ghost" disabled={busy || wait > 0} onClick={resend}>{wait > 0 ? `重新发送（${wait} 秒）` : "重新发送"}</button>
         <button type="submit" className="ws-btn primary" disabled={busy || code.length !== sent.codeLength}>{busy && <Spinner size={14} />}登录</button>
@@ -392,14 +415,14 @@ export function AuthCallbackPage() {
   }, []);
   const interactive = new URLSearchParams(location.search).has("code");
   return (
-    <div className="ws ws-callback">
+    <div className="ws flex items-center justify-center">
       {error ? (
-        <div className="ws-callback-box" role="alert">
+        <div className="flex flex-col items-center gap-2.5 text-ink" role="alert">
           <div>{error}</div>
           <a href="/">回到首页</a>
         </div>
       ) : (
-        <div className="ws-callback-box"><Spinner size={22} />{interactive && <span>正在完成登录…</span>}</div>
+        <div className="flex items-center gap-3 text-muted"><Spinner size={22} />{interactive && <span>正在完成登录…</span>}</div>
       )}
     </div>
   );

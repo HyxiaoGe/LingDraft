@@ -7,6 +7,7 @@ import { useLayer } from "./layers.js";
 import { NavContext } from "./nav.jsx";
 import { Sheet } from "./sheet.jsx";
 import { domain, sourceName } from "./research.js";
+import styles from "./sources.module.css";
 
 // 来源网站的图标，后端代取（/api/favicon/域名）；取不到显示域名首字母。取不到的域名记下来，这个页面里不再请求
 const noIcon = new Set();
@@ -20,8 +21,8 @@ const hostOf = (url) => {
 function Favicon({ url }) {
   const host = hostOf(url);
   const [failed, setFailed] = useState(null);
-  if (!host || noIcon.has(host) || failed === host) return <span className="ws-fav letter" aria-hidden="true">{(domain(url) || "?")[0].toUpperCase()}</span>;
-  return <img className="ws-fav" src={`/api/favicon/${host}`} alt="" loading="lazy" onError={() => { noIcon.add(host); setFailed(host); }} />;
+  if (!host || noIcon.has(host) || failed === host) return <span className={styles.fav + " " + styles.letter} aria-hidden="true">{(domain(url) || "?")[0].toUpperCase()}</span>;
+  return <img className={styles.fav} src={`/api/favicon/${host}`} alt="" loading="lazy" onError={() => { noIcon.add(host); setFailed(host); }} />;
 }
 
 // 一个角标的来源卡（桌面）：悬停或键盘移上去是预览，移开就收；点一下钉住：滚动时跟着角标走（评审第 21 条：查来源常在滚动着读的时候），
@@ -63,7 +64,7 @@ function usePop(mobile) {
       const el = mark.current;
       if (!el?.isConnected) return close();
       const r = el.getBoundingClientRect();
-      const view = el.closest(".ws-scroll")?.getBoundingClientRect() || { top: 0, bottom: innerHeight };
+      const view = el.closest("[data-scroll]")?.getBoundingClientRect() || { top: 0, bottom: innerHeight };
       if (r.bottom < view.top || r.top > view.bottom) return close();
       setPop((o) => (o ? { ...o, rect: r } : o));
     };
@@ -99,7 +100,7 @@ function usePop(mobile) {
         if (mobile) return setPop({ sheet: true });
         if (e.detail === 0) { // 键盘按的回车或空格：钉住，把焦点移进卡里，“打开原文”才按得到
           show(true);
-          requestAnimationFrame(() => box.current?.querySelector(".ws-pop-actions a")?.focus());
+          requestAnimationFrame(() => box.current?.querySelector("[data-source-link]")?.focus());
         } else if (pop?.pinned) close();
         else show(true);
       },
@@ -120,7 +121,7 @@ const layer = (node) => createPortal(node, document.querySelector(".ws") || docu
 const EXCERPT_BADGES = { body: "已读全文", docs: "文档摘录", summary: "仅摘要" };
 
 // 网址写成“域名 + 路径的开头”：同一个网站的几篇靠它分得清
-export function where(url) {
+function where(url) {
   try {
     const u = new URL(url);
     const path = decodeURI(u.pathname).replace(/\/$/, "");
@@ -134,16 +135,16 @@ export function where(url) {
 function SourceBody({ s, n, onClose }) {
   return (
     <>
-      <div className="ws-pop-top">
-        <span className="lb">{n}</span>
-        <span className={"ws-badge " + (s.excerpt_kind === "summary" ? "summary" : "body")}>{EXCERPT_BADGES[s.excerpt_kind] || EXCERPT_BADGES.summary}</span>
-        {onClose && <button className="ws-icon-btn ws-pop-close" aria-label="关闭" onClick={onClose}><IconClose size={14} /></button>}
+      <div className={styles.top}>
+        <span className={styles.lb}>{n}</span>
+        <span className={styles.badge + " " + (s.excerpt_kind === "summary" ? styles.summary : styles.full)}>{EXCERPT_BADGES[s.excerpt_kind] || EXCERPT_BADGES.summary}</span>
+        {onClose && <button className={"ws-icon-btn " + styles.close} aria-label="关闭" onClick={onClose}><IconClose size={14} /></button>}
       </div>
-      <div className="ws-pop-title">{sourceName(s)}</div>
-      <div className="ws-pop-meta"><Favicon url={s.url} />{where(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""}</div>
-      {s.excerpt && <div className="ws-pop-excerpt">{s.excerpt.length > 180 ? s.excerpt.slice(0, 180) + "…" : s.excerpt}</div>}
-      <div className="ws-pop-actions">
-        <a href={s.url} target="_blank" rel="noreferrer" className="ws-btn ghost sm"><IconExternal size={13} />打开原文</a>
+      <div className={styles.name}>{sourceName(s)}</div>
+      <div className={styles.site}><Favicon url={s.url} />{where(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""}</div>
+      {s.excerpt && <div className={styles.excerpt}>{s.excerpt.length > 180 ? s.excerpt.slice(0, 180) + "…" : s.excerpt}</div>}
+      <div className={styles.actions}>
+        <a href={s.url} target="_blank" rel="noreferrer" className="ws-btn ghost sm" data-source-link><IconExternal size={13} />打开原文</a>
       </div>
     </>
   );
@@ -151,7 +152,7 @@ function SourceBody({ s, n, onClose }) {
 
 function SourcePop({ boxRef, rect, s, n, onEnter, onLeave, onClose }) {
   return layer(
-    <div ref={boxRef} className="ws-pop" style={floatStyle(rect, 340, 220)} role="dialog" aria-label={`来源 ${n}`}
+    <div ref={boxRef} className={styles.pop} style={floatStyle(rect, 340, 220)} role="dialog" aria-label={`来源 ${n}`}
       onMouseEnter={onEnter} onMouseLeave={onLeave} onFocus={onEnter} onBlur={onLeave}>
       <SourceBody s={s} n={n} onClose={onClose} />
     </div>,
@@ -172,18 +173,18 @@ function SourceSheet({ n, nums, sources, onClose }) {
       return;
     }
     if (!body.current) return;
-    (list ? body.current.querySelector('[aria-current="true"]') : body.current.querySelector(".ws-pop-actions a"))?.focus();
+    (list ? body.current.querySelector('[aria-current="true"]') : body.current.querySelector("[data-source-link]"))?.focus();
   }, [list, cur]);
   return layer(
-    <Sheet title={list ? `这一轮的全部 ${all.length} 个来源` : `来源 ${cur}`} onClose={onClose} className="ws-src-sheet">
+    <Sheet title={list ? `这一轮的全部 ${all.length} 个来源` : `来源 ${cur}`} onClose={onClose} className={styles.sheet} roomy>
       <div ref={body}>
         {list ? (
-          <ol className="ws-src-list">
+          <ol className={styles.list}>
             {all.map(([k, x]) => (
               <li key={x.id}>
                 <button aria-current={k === cur ? "true" : undefined} onClick={() => { setCur(k); setList(false); }}>
-                  <span className="lb">{k}</span>
-                  <span className="txt"><span className="t">{sourceName(x)}</span><span className="meta">{where(x.url)}{x.published_at ? ` · ${x.published_at.slice(0, 10)}` : ""}</span></span>
+                  <span className={styles.lb}>{k}</span>
+                  <span className={styles.txt}><span className={styles.t}>{sourceName(x)}</span><span className={styles.meta}>{where(x.url)}{x.published_at ? ` · ${x.published_at.slice(0, 10)}` : ""}</span></span>
                 </button>
               </li>
             ))}
@@ -191,7 +192,7 @@ function SourceSheet({ n, nums, sources, onClose }) {
         ) : s && (
           <>
             <SourceBody s={s} n={cur} />
-            {all.length > 1 && <button className="ws-btn ghost ws-src-all" onClick={() => setList(true)}>这一轮的全部 {all.length} 个来源</button>}
+            {all.length > 1 && <button className={"ws-btn ghost " + styles.all} onClick={() => setList(true)}>这一轮的全部 {all.length} 个来源</button>}
           </>
         )}
       </div>
@@ -204,10 +205,10 @@ function SourceSheet({ n, nums, sources, onClose }) {
 export function Mark({ n, s, nums, sources }) {
   const mobile = !!useContext(NavContext)?.mobile;
   const pop = usePop(mobile);
-  if (!s) return <span className="ws-mark off" title="这个来源不在搜索、读页的结果里">?</span>;
+  if (!s) return <span className={styles.mark + " " + styles.off} title="这个来源不在搜索、读页的结果里">?</span>;
   return (
     <>
-      <button className={"ws-mark" + (pop.open ? " on" : "")} aria-label={`来源 ${n}`} aria-haspopup="dialog" {...pop.trigger}>{n}</button>
+      <button className={styles.mark + (pop.open ? " " + styles.on : "")} aria-label={`来源 ${n}`} aria-haspopup="dialog" {...pop.trigger}>{n}</button>
       {pop.open && (mobile ? <SourceSheet n={n} nums={nums || { [s.id]: n }} sources={sources || { [s.id]: s }} onClose={pop.close} /> : <SourcePop {...pop.box} s={s} n={n} />)}
     </>
   );
@@ -258,9 +259,9 @@ export function AnswerSources({ nums, sources }) {
   if (!used.length) return null;
   const sites = [...new Map(used.map(([, s]) => [hostOf(s.url), s.url])).values()].slice(0, 6); // 同一个网站只放一个图标
   return (
-    <div className="ws-cited">
-      <button className="ws-cited-head" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span className="sites" aria-hidden="true">{sites.map((url) => <Favicon key={url} url={url} />)}</span>
+    <div className={styles.cited}>
+      <button className={styles.citedHead} aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className={styles.sites} aria-hidden="true">{sites.map((url) => <Favicon key={url} url={url} />)}</span>
         {used.length} 个来源
         <IconChevron size={13} className={"chev" + (open ? " up" : "")} />
       </button>
@@ -268,11 +269,11 @@ export function AnswerSources({ nums, sources }) {
         <ol aria-label="这条回答用到的来源">
           {used.map(([n, s]) => (
             <li key={s.id}>
-              <span className="lb">{n}</span>
-              <span className="txt">
+              <span className={styles.lb}>{n}</span>
+              <span className={styles.txt}>
                 <a href={s.url} target="_blank" rel="noreferrer" title={s.title ? `${s.title}\n${s.url}` : s.url}>{sourceName(s)}</a>
-                <span className="meta"><Favicon url={s.url} />{where(s.url)}{s.published_at ? ` · ${s.published_at.slice(0, 10)}` : ""}</span>
-                <span className="url">{s.url}</span>{/* 只在打印时出现：纸上点不了链接，印出网址 */}
+                <span className={styles.meta}><Favicon url={s.url} />{where(s.url)}{s.published_at ? ` · ${s.published_at.slice(0, 10)}` : ""}</span>
+                <span className={styles.url}>{s.url}</span>{/* 只在打印时出现：纸上点不了链接，印出网址 */}
               </span>
             </li>
           ))}

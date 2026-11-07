@@ -1,0 +1,58 @@
+/* 一轮的过程（timeline.jsx）：收起来的一行、思考、工具步骤、中途说的话、插的话、最下面在等什么；
+   子任务卡见 task.module.css */
+
+/* 一行“已完成 25 秒”，点开是每一步，左边一道线把它们归在这一行下面 */
+.head { align-self: flex-start; padding: 2px 0; display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--muted);
+  font-variant-numeric: tabular-nums; }
+@media (hover: hover) { button.head:hover { color: var(--ink); } }
+.body { margin: 6px 0 0 2px; padding: 2px 0 2px 14px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+.text { font-size: 13px; line-height: 1.7; color: var(--ink2); overflow-wrap: anywhere; } /* 中途说的话 */
+
+/* 工具步骤：图标、做了什么、结果 */
+.tool { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; line-height: 24px; color: var(--ink2); animation: rise .25s var(--ease); }
+.tool > svg { flex: none; color: var(--faint); transform: translateY(2px); }
+.main { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.main a { padding: 4px 0; } /* 读的那页：点按区到行高 24（第 31 条） */
+.sub { color: var(--muted); flex: none; font-size: 12px; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lim { font-size: 11px; color: var(--muted); background: var(--hover); border-radius: 4px; padding: 0 5px; margin-left: 6px; }
+.tool.bad .sub { color: var(--warn); }
+.tool.pending { color: var(--accent); }
+.tool.pending :global(.spin) { transform: translateY(2px); }
+
+/* 思考：一行“思考了 12 秒”，点开是原文 */
+.thinkHead { padding: 2px 6px 2px 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); border-radius: var(--r-sm); }
+@media (hover: hover) { .thinkHead:hover { color: var(--ink); } }
+.think.live .thinkHead { color: var(--accent); }
+.thinkText { margin: 4px 0 2px; padding: 8px 12px; background: var(--side); border-radius: var(--r-sm); font-size: 12.5px; line-height: 1.7; color: var(--muted);
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; }
+
+/* 用户插进这一轮的话 */
+.guide { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; margin: 4px 0; animation: rise .25s var(--ease); }
+.guideTag { font-size: 11.5px; color: var(--faint); }
+.guideText { max-width: 85%; font-size: 13px; line-height: 1.6; color: var(--ink2); background: var(--side); border: 1px solid var(--line); border-radius: var(--r-lg) var(--r-lg) 4px var(--r-lg);
+  padding: 5px 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* 正在跑的这一轮最下面一行：在等什么、等了几秒、Esc 停止、比平常慢 */
+.waiting { display: flex; align-items: center; gap: 8px; min-height: 20px; font-size: 13px; line-height: 20px; color: var(--accent); flex-wrap: wrap; }
+.stage { color: var(--ink2); }
+.secs { color: var(--faint); font-variant-numeric: tabular-nums; }
+.slow { color: var(--warn); }
+.waiting span + span::before { content: "·"; margin-right: 8px; color: var(--faint); }
+/* 藏着的快捷键在能用的那一刻写出来（批次 G 第 34 条）：回答在跑写 Esc 停止。触屏上不写 */
+.key { color: var(--faint); }
+.key :global(.ws-kbd) { height: 16px; margin: 0 4px; font-size: 12px; vertical-align: 1px; }
+
+@keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
+@media (max-width: 720px) {
+  /* 第 31 条：看得见的大小不变，透明点按区补够 44 */
+  button.head { position: relative; }
+  button.head::after { content: ""; position: absolute; inset: -12px 0; } /* 看得见 25 */
+  .tool:has(.main a) { line-height: 44px; } /* 读的那页：这一行 44 高，链接上下撑满 */
+  .main a { padding: 15px 0; } /* 字高各家不同（Chromium 16、WebKit 15），往大里给；超出这一行的部分被裁掉，点按区就是整行 44 */
+}
+/* 打印：过程只印收起来那一行，在等什么不印 */
+@media print {
+  .proc :global(.ws-fold) { display: none; }
+  .waiting { display: none !important; }
+}

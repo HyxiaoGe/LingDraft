@@ -1,0 +1,89 @@
+/* 左栏（sidebar.jsx）。简单的排版直接写在组件上（Tailwind），
+   这里放有状态、伪元素、动画和手机抽屉的部分 */
+
+.side { min-height: 0; display: flex; flex-direction: column; gap: 16px; padding: 18px 12px 10px; background: var(--side); border-right: 1px solid var(--line); }
+/* 桌面上收起左栏：整栏藏掉，顶栏左边出展开钮（窄屏不管这个，左栏是抽屉） */
+@media (min-width: 721px) { :global(.ws.side-off) .side { display: none; } }
+/* 手机：左边滑出的抽屉 */
+@media (max-width: 720px) {
+  .side { position: fixed; z-index: 40; top: 0; bottom: 0; left: 0; width: min(320px, calc(100vw - 48px)); height: 100vh; height: 100dvh;
+    padding: 12px 12px calc(8px + env(safe-area-inset-bottom)); gap: 12px; transform: translateX(-100%); visibility: hidden;
+    transition: transform .2s var(--ease), visibility 0s linear .2s; }
+  :global(.ws.drawer) .side { transform: none; visibility: visible; box-shadow: var(--lift); transition: transform .2s var(--ease); }
+}
+@media print { .side { display: none !important; } }
+
+/* 品牌那行“灵稿 | 对话”中间的竖线 */
+.tag::before { content: ""; display: inline-block; width: 1px; height: 11px; background: var(--line2); margin: 0 8px 0 2px; vertical-align: -1px; }
+
+/* “新对话”：白底按钮，图标是靛青的；悬停边框深一点、底下浮一点；在新对话页（aria-current）时边框是墨色 */
+.newChat { box-shadow: 0 1px 2px rgba(20, 24, 31, .04); transition: border-color .15s var(--ease), box-shadow .15s var(--ease); }
+@media (hover: hover) { .newChat:hover { border-color: var(--faint); box-shadow: 0 1px 3px rgba(20, 24, 31, .08); } }
+.newChat[aria-current="page"] { border-color: var(--ink); box-shadow: inset 0 0 0 .5px var(--ink); }
+
+/* 一行对话（第 13 条）：前面一个图标（也标状态），右边是时间，再右边“⋯”自己占一格，不盖时间。
+   选中的那行是白底、一圈细线、底下一点影子，像从左栏里浮起来的一块（照 Fusion 选中那块的意思，不做玻璃） */
+.row { position: relative; display: flex; align-items: flex-start; border-radius: var(--r); transition: background .12s; }
+.row.menu { background: var(--hover); }
+@media (hover: hover) { .row:hover { background: var(--hover); } }
+.row.sel { background: var(--paper); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(20, 24, 31, .05); }
+.row.renaming { display: block; padding: 4px; }
+
+/* 一行里排成两层：上面图标、标题、时间，下面的小字（进行中用了多久、重名的日期）从标题下面一直铺到时间下面，不挤在标题那一栏里折行 */
+.link { flex: 1; min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; padding: 8px 4px 8px 10px;
+  color: var(--ink); text-decoration: none; }
+.link:hover { text-decoration: none; }
+.body { display: contents; }
+.title { grid-column: 2; grid-row: 1; display: block; font-size: 13px; line-height: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sel .title { font-weight: 500; }
+/* 标题太长时停上去像跑马灯一样往左走（data-run 和变量在 sidebar.jsx 的 marquee 里设）：后面那一份平时不显示，滚的时候接在标题后面，
+   走完一圈（标题加中间的空）正好是后面那份到了开头的位置，从头再来看不出接缝；滚的时候不要省略号 */
+.title > span > span + span { display: none; }
+.row:is(:hover, :focus-within) .title[data-run] { text-overflow: clip; }
+.row:is(:hover, :focus-within) .title[data-run] > span { display: inline-block; animation: marquee var(--dur) linear .5s infinite; }
+.row:is(:hover, :focus-within) .title[data-run] > span > span + span { display: inline; padding-left: var(--gap); }
+@keyframes marquee { to { transform: translateX(var(--far)); } }
+.sub { grid-column: 2 / 4; grid-row: 2; display: block; font-size: 12px; color: var(--muted); }
+.time { grid-column: 3; grid-row: 1; margin-left: 8px; flex: none; font-size: 12px; line-height: 20px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.sel .time { color: var(--muted); }
+
+/* 前面的图标：平时是对话气泡（淡色，悬停深一点，选中是靛青）；正在回答、排队是转圈，没跑完是红色感叹号 */
+.icon { grid-column: 1; grid-row: 1; display: flex; align-items: center; height: 20px; margin-right: 9px; color: var(--faint); transition: color .12s; }
+@media (hover: hover) { .row:hover .icon.idle { color: var(--muted); } }
+.sel .icon.idle { color: var(--accent); }
+.icon.active { color: var(--accent); }
+.icon.failed { color: var(--danger); }
+
+/* “⋯”：悬停、键盘聚焦、选中、菜单开着时出现；没有悬停的设备（触屏）一直在 */
+.more { flex: none; width: 26px; height: 26px; margin: 5px 5px 0 0; border-radius: var(--r-sm); color: var(--muted);
+  display: inline-flex; align-items: center; justify-content: center; opacity: 0; }
+@media (hover: hover) { .more:hover { color: var(--ink); background: var(--line); } }
+.row:focus-within .more, .row.sel .more, .row.menu .more { opacity: 1; }
+@media (hover: hover) { .row:hover .more { opacity: 1; } }
+@media (hover: none) { .more { opacity: 1; } }
+
+@media (max-width: 720px) {
+  .link { padding: 12px 4px 12px 10px; }
+  .more { width: 44px; height: 44px; margin: 0; opacity: 1; } /* 没有悬停：一直在 */
+}
+
+/* 手机上抽屉后面的遮罩，点了关上抽屉 */
+.scrim { position: fixed; inset: 0; z-index: 40; background: var(--scrim); animation: fade .2s var(--ease); }
+@keyframes fade { from { opacity: 0; } }
+@media print { .scrim { display: none !important; } }
+
+/* 最下面的额度按钮（login.jsx 的 CreditsFoot）：小圆环（剩余比例）+“约可问 N 次”，和头像并排；点开是额度面板。用到八成变黄、用完变红 */
+.credits { display: inline-flex; align-items: center; gap: 6px; height: 24px; margin: -4px 0; padding: 0 9px 0 6px; border: 1px solid var(--line2); border-radius: 999px;
+  background: var(--paper); font: inherit; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; cursor: pointer; transition: border-color .15s, color .15s; }
+.credits .ring { color: var(--accent); flex: none; }
+.credits[aria-expanded="true"] { color: var(--ink); border-color: var(--ink); }
+@media (hover: hover) { .credits:hover { color: var(--ink); border-color: var(--ink); } }
+.credits.warn, .credits.warn .ring { color: var(--warn); }
+.credits.warn { border-color: var(--warn-line); background: var(--warn-soft); }
+.credits.out, .credits.out .ring { color: var(--danger); }
+.credits.out { border-color: var(--danger-line); background: var(--danger-soft); }
+/* 手机：看得见的 28px 高，上下用透明的点按区补到 44px */
+@media (max-width: 720px) {
+  .credits { position: relative; height: 28px; margin: 0; }
+  .credits::after { content: ""; position: absolute; inset: -8px 0; }
+}

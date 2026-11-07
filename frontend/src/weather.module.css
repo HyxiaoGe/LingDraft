@@ -1,0 +1,43 @@
+/* 天气卡（weather.jsx）；卡片外壳见 card.module.css。
+   逐日几列（问了某一天时只有一行），下面是逐小时（接下来 24 小时，或者问的那天）的气温（靛青折线）和降水概率（蓝色柱子） */
+.head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.head > svg { flex: none; color: var(--accent); }
+.place { font-weight: 600; }
+.adm { font-size: 12.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.by { margin-left: auto; flex: none; font-size: 12px; color: var(--muted); }
+.date { flex: none; font-size: 12.5px; color: var(--ink2); }
+.days { display: grid; grid-template-columns: repeat(var(--n, 4), minmax(0, 1fr)); gap: 6px; }
+.day { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 6px; border-radius: var(--r); text-align: center; }
+.day.today { background: var(--accent-soft); }
+.when b { font-size: 13px; font-weight: 600; }
+.when span { font-size: 12px; color: var(--muted); margin-left: 5px; }
+.day > svg { color: var(--ink2); margin: 4px 0 2px; }
+.sky { max-width: 100%; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.temp b { font-size: 15px; font-weight: 600; }
+.temp span { color: var(--muted); margin-left: 6px; }
+.wind { font-size: 12px; color: var(--muted); }
+/* 只有问的那一天：排成一行（图标、天气、气温、风），是哪天写在标题上 */
+.one .day { flex-direction: row; justify-content: flex-start; gap: 12px; padding: 8px 12px; }
+.one .day > svg { margin: 0; }
+.one .when { display: none; }
+
+/* 逐小时 */
+.hourly { border-top: 1px solid var(--line); padding-top: 10px; }
+.hourlyHead { display: flex; align-items: center; gap: 12px; min-height: 20px; font-size: 12px; color: var(--muted); }
+.title { color: var(--ink2); font-weight: 500; }
+.key, .read { margin-left: auto; display: flex; align-items: center; gap: 5px; }
+.read { color: var(--ink2); }
+.read b { font-weight: 600; color: var(--ink); margin-right: 3px; }
+.key i { width: 12px; height: 2px; border-radius: 1px; background: var(--accent); }
+.key i.rain { width: 8px; height: 8px; border-radius: 2px; background: var(--rain); margin-left: 8px; }
+/* 手指在图上左右拖着读数，上下划照常滚页面 */
+.hourly svg { overflow: visible; touch-action: pan-y; -webkit-user-select: none; user-select: none; }
+.tl { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.dot { fill: var(--accent); stroke: var(--paper); stroke-width: 2; }
+.bar { fill: var(--rain); }
+.bar.on { fill: var(--accent); }
+.base { stroke: var(--line2); }
+.cross { stroke: var(--line2); stroke-dasharray: 2 3; }
+.hourly text { font: 11px var(--sans); text-anchor: middle; fill: var(--muted); }
+.hourly text.t { fill: var(--ink2); }
+.hourly text.none { fill: var(--faint); }

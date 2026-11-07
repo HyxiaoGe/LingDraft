@@ -1,0 +1,111 @@
+/* 地点卡、路线卡（maps.jsx）和航班卡、火车卡、行程卡（travel.jsx，标题一行照地图卡）；卡片外壳见 card.module.css。
+   标题一行（查什么、在哪，或者起点 → 终点；右边署服务商和时间），下面一行一个地方、一种出行方式或者一个班次 */
+.head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.head > svg { flex: none; color: var(--accent); }
+.head .what { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.where, .to { flex: none; font-size: 12.5px; color: var(--muted); }
+.by { margin-left: auto; flex: none; padding-left: 8px; font-size: 12px; color: var(--muted); }
+.note { font-size: 12px; color: var(--muted); }
+
+/* ---------- 地点 ---------- */
+.places { display: flex; flex-direction: column; }
+.place { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+.place:first-child { border-top: 0; padding-top: 2px; }
+.place:last-child { padding-bottom: 0; }
+.place img { flex: none; width: 56px; height: 56px; object-fit: cover; border-radius: var(--r-sm); background: var(--side); }
+.placeBody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.name { font-weight: 600; font-size: 14px; }
+.name a { color: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 3px; }
+@media (hover: hover) { .name a:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; } }
+.name a svg { flex: none; color: var(--muted); }
+.place .facts { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12.5px; color: var(--ink2); }
+.rate { color: var(--warn); font-weight: 600; } /* 原来的橙色对白底只有 3.45:1（第 32 条） */
+.addr { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- 路线：一行一种出行方式，下面一段一段怎么走；另外几种走法收着 ---------- */
+.routes { display: flex; flex-direction: column; }
+.route { padding: 10px 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
+.route:first-child { border-top: 0; padding-top: 2px; }
+.route:last-child { padding-bottom: 0; }
+.routeMain { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+.mode { flex: none; width: 4.2em; font-size: 13px; color: var(--ink2); }
+.routeMain .dur { font-size: 15px; font-weight: 600; }
+.tag { font-size: 11.5px; padding: 0 6px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+.routeMain .facts { font-size: 12.5px; color: var(--muted); }
+.legs { margin: 0 0 0 calc(4.2em + 10px); padding: 0 0 0 12px; border-left: 2px solid var(--line2);
+  display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--ink2); }
+.legs li { display: flex; gap: 8px; min-width: 0; }
+.legs li.walk { color: var(--muted); }
+.legs .line { flex: none; font-weight: 600; color: var(--ink); }
+.legs .what { min-width: 0; }
+.more { align-self: flex-start; margin-left: calc(4.2em + 10px); display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); }
+@media (hover: hover) { .more:hover { color: var(--ink); } }
+.more :global(.chev) { transition: transform .15s; }
+.more :global(.chev.up) { transform: rotate(180deg); }
+.alt { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px dashed var(--line); margin-left: calc(4.2em + 10px); }
+.alt .legs { margin-left: 0; }
+
+/* ---------- 航班、火车：一行一个班次，出发 — 用时、班次 — 到达，最右是参考价、舱位座席、去飞猪看 ---------- */
+/* 四个班次起：排序、按出发时段筛、火车只看高铁动车（第 20 条）。一组按钮连成一条，按下的那个填浅靛青 */
+.tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.seg { display: inline-flex; align-items: center; gap: 4px; }
+.lab { font-size: 12px; color: var(--muted); margin-right: 4px; }
+.opt { position: relative; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; border: 1px solid var(--line2); border-radius: var(--r-sm);
+  background: var(--paper); font-size: 12.5px; color: var(--ink2); transition: background .12s, border-color .12s, color .12s; }
+@media (hover: hover) { .opt:hover { background: var(--hover); color: var(--ink); } }
+.opt.on { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent); }
+.n { font-size: 12px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.opt.on .n { color: var(--accent); }
+.count { margin-left: auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.count:empty { display: none; }
+.empty { display: flex; align-items: center; gap: 12px; padding: 12px 0 4px; font-size: 13px; color: var(--muted); }
+.svcs { display: flex; flex-direction: column; }
+.svc { display: grid; grid-template-columns: minmax(0, 9em) minmax(5em, 1fr) minmax(0, 9em) 7em; align-items: center; gap: 0 12px;
+  padding: 10px 0; border-top: 1px solid var(--line); }
+.svc:first-child { border-top: 0; padding-top: 2px; }
+.svc:last-child { padding-bottom: 0; }
+.end { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.end.arr { text-align: right; }
+.t { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.t sup { position: static; margin-left: 2px; font-size: 11px; font-weight: 600; line-height: inherit; vertical-align: super; color: var(--warn); }
+.st { font-size: 12.5px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mid { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; font-size: 12px; color: var(--muted); }
+.mid .line { align-self: stretch; height: 1px; background: var(--line2); }
+.no { color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.fare { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; font-size: 12px; color: var(--muted); }
+.fare b { font-size: 16px; color: var(--ink); font-variant-numeric: tabular-nums; } /* 价格用墨色加粗，旁边写着是参考价（不再用橙色） */
+.cls:empty { display: none; }
+.fare a { display: inline-flex; align-items: center; gap: 2px; color: var(--accent); text-decoration: none; }
+@media (hover: hover) { .fare a:hover { text-decoration: underline; text-underline-offset: 3px; } }
+
+/* ---------- 行程：几种走法，每种几段，每段一个班次 ---------- */
+.plan { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.head + .plan { border-top: 0; padding-top: 0; }
+.planHead { display: flex; align-items: baseline; gap: 8px; }
+.sum { margin-left: auto; font-size: 13px; font-weight: 600; color: var(--ink); }
+.why { font-size: 13px; color: var(--ink2); line-height: 1.6; }
+.leg { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px 8px; border-radius: var(--r-sm); background: var(--side); }
+.legDay { font-size: 12px; color: var(--muted); }
+.leg .svc { padding: 0; }
+
+@media (max-width: 720px) {
+  /* M8：班次改成竖着的时间轴：出发、用时和班次、到达三行，左边一条线连着；价格、参考价和舱位、去飞猪看在右边 */
+  .svc { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "dep fare" "mid fare" "arr fare"; gap: 0 12px; align-items: start; padding: 12px 0; }
+  .end { grid-area: dep; flex-direction: row; align-items: baseline; gap: 12px; }
+  .end.arr { grid-area: arr; text-align: left; }
+  .t { flex: none; min-width: 48px; }
+  .mid { grid-area: mid; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 0 8px; min-height: 32px; padding-left: calc(48px + 12px); position: relative; }
+  .mid .line { position: absolute; left: 24px; top: 4px; bottom: 4px; width: 1px; height: auto; }
+  .no { white-space: normal; }
+  .fare { grid-area: fare; align-self: center; }
+  .fare a { min-height: 44px; margin: 4px -8px -8px 0; padding: 0 8px; } /* 按得到：至少 44px 高，往右下多出的部分不占版面 */
+  .leg .svc { padding: 4px 0; }
+  /* 标题：日期和“飞猪旅行 · 查询”都不缩，窄屏上城市名会被挤到 0 宽；出处挪到第二行，第一行留给“北京 → 上海 日期” */
+  .travel .head { flex-wrap: wrap; row-gap: 4px; }
+  .travel .by { flex: 0 0 100%; margin-left: 0; padding-left: 0; }
+  .opt { height: 32px; }
+  .opt::after { content: ""; position: absolute; inset: -6px 0; } /* 看得见 32px，透明点按区补到 44px；两排之间隔 8px，补出来的会挨着不重叠 */
+  .tools { gap: 12px; }
+}
+
+@media print { .tools, .fare a { display: none !important; } }

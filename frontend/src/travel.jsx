@@ -7,6 +7,8 @@
 import { useState } from "react";
 import { IconExternal, IconPlane, IconTicket, IconTrain } from "./icons.jsx";
 import { stamp } from "./research.js";
+import shell from "./card.module.css";
+import styles from "./maps.module.css";
 
 const KIND_NAMES = { flight: "航班", train: "火车" };
 const ICONS = { flight: IconPlane, train: IconTrain };
@@ -37,13 +39,13 @@ export function itinerariesOf(items) {
 // "2026-11-20T08:05" → "08:05"；时刻是当地时间，不换时区
 const hm = (t) => t.slice(11, 16);
 
-export function dayText(date) {
+function dayText(date) {
   const [y, m, d] = date.slice(0, 10).split("-").map(Number);
   if (!y || !m || !d) return date;
   return `${m}月${d}日 周${WEEKDAYS[new Date(y, m - 1, d).getDay()]}`;
 }
 
-export function mins(m) {
+function mins(m) {
   if (m < 60) return `${m} 分钟`;
   return `${Math.floor(m / 60)} 小时${m % 60 ? ` ${m % 60} 分` : ""}`;
 }
@@ -53,7 +55,7 @@ const stationOf = (stop) => [stop.station, stop.terminal].filter(Boolean).join("
 
 function Credit({ at }) {
   const t = stamp(at);
-  return <span className="by" title={t?.full}>飞猪旅行{t && ` · ${t.text} 查询`}</span>;
+  return <span className={styles.by} title={t?.full}>飞猪旅行{t && ` · ${t.text} 查询`}</span>;
 }
 
 // 排序、筛选：班次少于 4 个时一眼看得完，不出这一排
@@ -70,10 +72,10 @@ const hourOf = (s) => Number(s.departure.time.slice(11, 13));
 const fast = (s) => /^[GDC]/i.test(s.number || "");
 
 function Seg({ label, children }) {
-  return <div className="ws-seg" role="group" aria-label={label}><span className="lab" aria-hidden="true">{label}</span>{children}</div>;
+  return <div className={styles.seg} role="group" aria-label={label}><span className={styles.lab} aria-hidden="true">{label}</span>{children}</div>;
 }
 function Opt({ on, onClick, children }) {
-  return <button className={"ws-seg-opt" + (on ? " on" : "")} aria-pressed={on} onClick={onClick}>{children}</button>;
+  return <button className={styles.opt + (on ? " " + styles.on : "")} aria-pressed={on} onClick={onClick}>{children}</button>;
 }
 
 export function TravelCard({ card }) {
@@ -91,39 +93,39 @@ export function TravelCard({ card }) {
   const filtered = !!slot || onlyFast;
   const clear = () => { setSlot(null); setOnlyFast(false); };
   return (
-    <section className="ws-card ws-wide ws-map ws-travel" aria-label={`${tl.origin}到${tl.destination}的${KIND_NAMES[tl.kind]}`}>
-      <div className="ws-map-head">
+    <section className={shell.card + " " + shell.map + " " + styles.travel} aria-label={`${tl.origin}到${tl.destination}的${KIND_NAMES[tl.kind]}`}>
+      <div className={styles.head}>
         <Icon size={15} />
-        <span className="what">{tl.origin}</span>
-        <span className="to">→</span>
-        <span className="what">{tl.destination}</span>
-        <span className="where">{dayText(tl.date)} · 直达{KIND_NAMES[tl.kind]}</span>
+        <span className={styles.what}>{tl.origin}</span>
+        <span className={styles.to}>→</span>
+        <span className={styles.what}>{tl.destination}</span>
+        <span className={styles.where}>{dayText(tl.date)} · 直达{KIND_NAMES[tl.kind]}</span>
         <Credit at={tl.observed_at} />
       </div>
       {tools && (
-        <div className="ws-svc-tools">
+        <div className={styles.tools}>
           <Seg label="排序">{SORTS.map(([k, name]) => <Opt key={k} on={sort === k} onClick={() => setSort(k)}>{name}</Opt>)}</Seg>
           <Seg label="出发">
             {SLOTS.map(([k, name, test]) => (
               <Opt key={k} on={slot === k} onClick={() => setSlot(slot === k ? null : k)}>
-                {name}<span className="n">{all.filter((s) => test(hourOf(s)) && fastOk(s)).length}</span>
+                {name}<span className={styles.n}>{all.filter((s) => test(hourOf(s)) && fastOk(s)).length}</span>
               </Opt>
             ))}
           </Seg>
-          {mixed && <Opt on={onlyFast} onClick={() => setOnlyFast(!onlyFast)}>只看高铁动车<span className="n">{all.filter((s) => fast(s) && inSlot(s)).length}</span></Opt>}
-          <span className="ws-svc-count" role="status">{filtered ? `显示 ${shown.length} / ${all.length} 个班次` : ""}</span>
+          {mixed && <Opt on={onlyFast} onClick={() => setOnlyFast(!onlyFast)}>只看高铁动车<span className={styles.n}>{all.filter((s) => fast(s) && inSlot(s)).length}</span></Opt>}
+          <span className={styles.count} role="status">{filtered ? `显示 ${shown.length} / ${all.length} 个班次` : ""}</span>
         </div>
       )}
       {shown.length ? (
-        <ol className="ws-svcs">{shown.map((s) => <ServiceRow key={s.option_id} s={s} />)}</ol>
+        <ol className={styles.svcs}>{shown.map((s) => <ServiceRow key={s.option_id} s={s} />)}</ol>
       ) : (
-        <div className="ws-svc-none">
+        <div className={styles.empty}>
           <span>查到的 {all.length} 个班次里没有符合的</span>
           <button className="ws-btn ghost sm" onClick={clear}>清除筛选</button>
         </div>
       )}
-      {tl.limitations.filter((l) => NOTES[l]).map((l) => <p key={l} className="ws-map-note">{NOTES[l]}</p>)}
-      <p className="ws-map-note">价格是查询时的参考价，余票、退改以飞猪为准</p>
+      {tl.limitations.filter((l) => NOTES[l]).map((l) => <p key={l} className={styles.note}>{NOTES[l]}</p>)}
+      <p className={styles.note}>价格是查询时的参考价，余票、退改以飞猪为准</p>
     </section>
   );
 }
@@ -131,23 +133,23 @@ export function TravelCard({ card }) {
 function ServiceRow({ s }) {
   const late = s.day_offset > 0 ? `+${s.day_offset}` : "";
   return (
-    <li className="ws-svc">
-      <div className="end">
-        <b className="t">{hm(s.departure.time)}</b>
-        <span className="st" title={stationOf(s.departure)}>{stationOf(s.departure)}</span>
+    <li className={styles.svc}>
+      <div className={styles.end}>
+        <b className={styles.t}>{hm(s.departure.time)}</b>
+        <span className={styles.st} title={stationOf(s.departure)}>{stationOf(s.departure)}</span>
       </div>
-      <div className="mid">
-        <span className="dur">{mins(s.duration_minutes)}</span>
-        <span className="line" aria-hidden />
-        <span className="no">{s.number}{s.carrier && ` · ${s.carrier}`}</span>
+      <div className={styles.mid}>
+        <span>{mins(s.duration_minutes)}</span>
+        <span className={styles.line} aria-hidden />
+        <span className={styles.no}>{s.number}{s.carrier && ` · ${s.carrier}`}</span>
       </div>
-      <div className="end arr">
-        <b className="t">{hm(s.arrival.time)}{late && <sup title={s.day_offset === 1 ? "次日到达" : `${s.day_offset} 天后到达`}>{late}</sup>}</b>
-        <span className="st" title={stationOf(s.arrival)}>{stationOf(s.arrival)}</span>
+      <div className={styles.end + " " + styles.arr}>
+        <b className={styles.t}>{hm(s.arrival.time)}{late && <sup title={s.day_offset === 1 ? "次日到达" : `${s.day_offset} 天后到达`}>{late}</sup>}</b>
+        <span className={styles.st} title={stationOf(s.arrival)}>{stationOf(s.arrival)}</span>
       </div>
-      <div className="fare">
-        {s.price_yuan != null ? <b>¥{yuan(s.price_yuan)}</b> : <span className="none">没有价格</span>}
-        <span className="cls">{[s.price_yuan != null && "参考价", s.travel_class].filter(Boolean).join(" · ")}</span>
+      <div className={styles.fare}>
+        {s.price_yuan != null ? <b>¥{yuan(s.price_yuan)}</b> : <span>没有价格</span>}
+        <span className={styles.cls}>{[s.price_yuan != null && "参考价", s.travel_class].filter(Boolean).join(" · ")}</span>
         {s.booking_url && <a href={s.booking_url} target="_blank" rel="noreferrer" aria-label={`去飞猪看 ${s.number}`} title="在飞猪上看这个班次，新窗口打开">去飞猪看<IconExternal size={10} /></a>}
       </div>
     </li>
@@ -159,14 +161,14 @@ function ServiceRow({ s }) {
 export function ItineraryCard({ card }) {
   const it = card.data;
   return (
-    <section className="ws-card ws-wide ws-map ws-travel" aria-label={it.title}>
-      <div className="ws-map-head">
+    <section className={shell.card + " " + shell.map + " " + styles.travel} aria-label={it.title}>
+      <div className={styles.head}>
         <IconTicket size={15} />
-        <span className="what">{it.title}</span>
-        <span className="by">飞猪旅行</span>
+        <span className={styles.what}>{it.title}</span>
+        <span className={styles.by}>飞猪旅行</span>
       </div>
       {it.plans.map((p, k) => <Plan key={k} p={p} />)}
-      <p className="ws-map-note">价格是查询时的参考价，余票、退改以飞猪为准</p>
+      <p className={styles.note}>价格是查询时的参考价，余票、退改以飞猪为准</p>
     </section>
   );
 }
@@ -176,16 +178,16 @@ function Plan({ p }) {
   const priced = p.legs.every((l) => l.price_yuan != null);
   const total = p.legs.reduce((sum, l) => sum + (l.price_yuan || 0), 0);
   return (
-    <div className="ws-plan">
-      <div className="ws-plan-head">
+    <div className={styles.plan}>
+      <div className={styles.planHead}>
         <b>{p.title}</b>
-        {priced && p.legs.length > 1 && <span className="sum">合计参考价 ¥{yuan(total)}</span>}
+        {priced && p.legs.length > 1 && <span className={styles.sum}>合计参考价 ¥{yuan(total)}</span>}
       </div>
-      <p className="ws-plan-why">{p.reason}</p>
+      <p className={styles.why}>{p.reason}</p>
       {p.legs.map((l, k) => (
-        <div key={l.option_id} className="ws-leg">
-          <span className="ws-leg-day">第 {k + 1} 段 · {dayText(l.departure.time)} · {KIND_NAMES[l.kind]}</span>
-          <ol className="ws-svcs"><ServiceRow s={l} /></ol>
+        <div key={l.option_id} className={styles.leg}>
+          <span className={styles.legDay}>第 {k + 1} 段 · {dayText(l.departure.time)} · {KIND_NAMES[l.kind]}</span>
+          <ol className={styles.svcs}><ServiceRow s={l} /></ol>
         </div>
       ))}
     </div>

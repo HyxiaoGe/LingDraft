@@ -1,0 +1,157 @@
+/* 输入框那一块（composer.jsx）。简单的排版直接写在组件上（Tailwind），
+   这里放有状态（悬停、禁用、开着）、伪元素、动画和手机上补点按区的部分 */
+
+/* 外壳；正文滚到输入框上面时，最后 24px 慢慢淡掉，不是被一条直线切断（2026-11-07 Sean 定）。
+   淡掉的只有正文那一栏（888 = 832 + 两边 28），不盖右边的滚动条。新对话页上面没有东西滚过来，不要 */
+.dock { position: relative; flex: none; }
+.dock::before { content: ""; position: absolute; bottom: 100%; left: 50%; width: min(100%, 888px); height: 24px; transform: translateX(-50%);
+  background: linear-gradient(to bottom, transparent, var(--paper)); pointer-events: none; }
+[data-fresh] .dock { position: static; } /* 下面“内容由 AI 生成”那行贴着整个右栏的底，不是贴着输入框 */
+[data-fresh] .dock::before { content: none; }
+@media print { .dock { display: none !important; } }
+
+/* 回到底部：浮在输入框上面正中。白色圆钮、一圈细线、软的两层影子，出现时从下面淡入。
+   鼠标停上去（2026-11-07 Sean 要的“往下坠”）：箭头加速往下掉出圆钮，再从上面落回来停稳，一下一下地坠，边框和箭头变靛青；
+   掉出去的部分要剪掉，所以有鼠标时圆钮 overflow: hidden（手机上没有悬停，不剪，点按区还能往外补） */
+.jump { position: absolute; left: 50%; bottom: calc(100% + 8px); z-index: 2; width: 36px; height: 36px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); background: var(--paper); color: var(--ink2);
+  box-shadow: 0 1px 2px rgba(20, 24, 31, .05), 0 4px 14px rgba(20, 24, 31, .1);
+  transform: translateX(-50%); animation: jump-in .2s var(--ease); transition: color .15s, border-color .15s, box-shadow .15s; }
+@media (hover: hover) {
+  .jump { overflow: hidden; }
+  .jump:hover { color: var(--accent); border-color: var(--accent-line); box-shadow: 0 1px 2px rgba(20, 24, 31, .06), 0 6px 18px rgba(20, 24, 31, .14); }
+  .jump:hover svg { animation: jump-drop 1s infinite; }
+}
+.jump:active { transform: translateX(-50%) scale(.95); }
+@keyframes jump-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+/* 往下坠：前半段越掉越快（ease-in）掉出底边，换到顶上，后半段落回原处、慢慢停稳（ease-out），停一下再坠 */
+@keyframes jump-drop {
+  0% { transform: none; opacity: 1; animation-timing-function: cubic-bezier(.55, 0, .9, .5); }
+  40% { transform: translateY(20px); opacity: 0; }
+  41% { transform: translateY(-20px); opacity: 0; animation-timing-function: cubic-bezier(.2, .7, .3, 1); }
+  75%, 100% { transform: none; opacity: 1; }
+}
+/* 离开底部以后下面又有了新内容：写上字，变成一枚胶囊，字和箭头是靛青 */
+.jump.more { width: auto; padding: 0 16px 0 12px; font-size: 13px; font-weight: 500; color: var(--accent); border-color: var(--accent-line); }
+
+/* 输入框下面一行小字；新对话页上它贴着整个右栏的底（手机上照常跟着输入框） */
+.ai { max-width: 832px; margin: 6px auto 0; text-align: center; font-size: 11.5px; color: var(--faint); }
+[data-fresh] .ai { position: absolute; left: 0; right: 0; bottom: 12px; }
+@media (max-width: 720px) { [data-fresh] .ai { position: static; } }
+
+/* 输入框上面：额度快用完、用完了的提醒 */
+.credits { width: calc(100% - 56px); max-width: 800px; margin: 0 auto 4px; display: flex; gap: 6px; align-items: center; font-size: 12px; line-height: 1.5; color: var(--warn); }
+.credits svg { flex: none; }
+.credits.out { color: var(--danger); }
+.link { color: var(--accent, var(--ink)); text-decoration: underline; cursor: pointer; }
+
+/* 还没发出去的话（最多一句）：一条窄一点的托盘贴在输入框上沿；文字只显示一行，悬停看全文 */
+.tray { width: calc(100% - 32px); max-width: 800px; margin: 0 auto; border: 1px solid var(--line2); border-bottom: 0; border-radius: var(--r) var(--r) 0 0;
+  background: var(--side); animation: rise .2s var(--ease); }
+@keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+.trayNote { font-size: 12px; line-height: 1.5; color: var(--faint); }
+/* 藏着的快捷键在能用的那一刻写出来（批次 G 第 34 条）：排着的话旁边写 ↑ 撤回。触屏上不写 */
+.trayNote :global(.ws-kbd) { height: 16px; margin: 0 4px; font-size: 12px; vertical-align: 1px; }
+
+/* 输入框。聚焦时边框深一档（2026-11-07 Sean 定：原来是蓝边加一圈浅蓝光晕，比别家都重）。
+   字和回答一样 16px（原来 14），手机上也是 16：iOS 聚焦不自动放大页面。
+   最高：桌面窗口高度的四成；手机上键盘占了一半，按四分之一；都不低于 160px（原来一律 160，大约 6 行）。再多就在框里滚，高度见 useAutoHeight */
+.box { max-width: 832px; margin: 0 auto; border: 1px solid var(--line2); border-radius: var(--r-lg); padding: 10px 12px 8px 14px; background: var(--paper);
+  box-shadow: 0 2px 12px rgba(20, 24, 31, .06); transition: border-color .15s; }
+.box:focus-within { border-color: var(--faint); border-color: color-mix(in srgb, var(--faint) 55%, var(--line2)); }
+.box textarea { width: 100%; outline: none; resize: none; font-size: 16px; line-height: 1.6; color: var(--ink);
+  max-height: max(160px, 40vh); max-height: max(160px, 40dvh); }
+.box textarea::placeholder { color: var(--faint); }
+@media (max-width: 720px) { .box textarea { max-height: max(160px, 25vh); max-height: max(160px, 25dvh); } }
+.note { display: flex; align-items: flex-start; gap: 4px; margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--muted); }
+.note svg { flex: none; margin-top: 2px; }
+.note.warn { color: var(--warn); }
+
+/* 左下角加图；选好的图在输入框顶上：缩略图、能拿它做什么，右上角去掉 */
+.attach { position: relative; flex: none; width: 32px; height: 32px; margin-left: -8px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--r-sm); color: var(--muted); transition: background .15s var(--ease), color .15s var(--ease); }
+@media (hover: hover) { .attach:hover:not(:disabled) { background: var(--hover); color: var(--ink); } }
+.attach:disabled { opacity: .45; }
+.open { display: block; width: 100%; height: 100%; border-radius: var(--r-sm); overflow: hidden; cursor: zoom-in; }
+.open img { width: 100%; height: 100%; object-fit: cover; }
+.remove { position: absolute; top: -8px; right: -8px; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--ink); color: var(--paper); transition: background .15s var(--ease); }
+@media (hover: hover) { .remove:hover { background: var(--accent); } }
+
+/* 发送；运行中换成停止：墨色底白方块 */
+.send { width: 32px; height: 32px; flex: none; border-radius: 50%; background: var(--ink); color: var(--paper);
+  display: inline-flex; align-items: center; justify-content: center; transition: background .15s var(--ease); }
+@media (hover: hover) { .send:hover:not(:disabled) { background: var(--accent); } }
+.send:disabled { background: var(--line2); }
+@media (hover: hover) { .send.stop:hover:not(:disabled) { background: var(--ink-hover); } }
+.send.stop:disabled { background: var(--ink2); opacity: .7; }
+/* 回答时打了字：停止键旁边另外一个“这一轮答完再发” */
+.later { flex: none; margin-left: 4px; }
+.later svg { color: var(--muted); }
+
+/* 发送左边：深度思考开关、选模型（菜单往放得下的那边开） */
+.think { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border: 1px solid var(--line2); border-radius: 999px; background: var(--paper);
+  color: var(--muted); font-size: 12.5px; white-space: nowrap; transition: background .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease); }
+@media (hover: hover) { .think:hover { background: var(--hover); color: var(--ink2); } }
+.think.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+.modelBtn { position: relative; min-width: 0; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px 0 8px; border-radius: var(--r-sm);
+  color: var(--ink2); font-size: 13px; white-space: nowrap; transition: background .15s var(--ease); }
+.modelBtn[aria-expanded="true"] { background: var(--hover); }
+@media (hover: hover) { .modelBtn:hover { background: var(--hover); } }
+.modelBtn svg { flex: none; }
+.caret { color: var(--muted); transform: rotate(180deg); transition: transform .2s var(--ease); }
+.modelBtn[aria-expanded="true"] .caret { transform: none; }
+.bulb { color: var(--faint); }
+.bulb.on { color: var(--accent); }
+
+/* 思考开关的说明：悬停一会儿、或用键盘移到开关上时出来，在开关上方 */
+.tip { position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 61; width: 280px; padding: 8px 12px; display: flex; flex-direction: column; gap: 4px;
+  border: 1px solid var(--line2); border-radius: var(--r); background: var(--paper); box-shadow: var(--lift); font-size: 12.5px; line-height: 1.5; color: var(--muted); white-space: normal;
+  pointer-events: none; visibility: hidden; opacity: 0; transform: translateY(4px); transition: opacity .15s var(--ease), transform .15s var(--ease), visibility 0s linear .15s; }
+.tip.show { visibility: visible; opacity: 1; transform: none; transition: opacity .15s var(--ease) .2s, transform .15s var(--ease) .2s, visibility 0s linear .2s; }
+.tip b { font-size: 13px; font-weight: 500; color: var(--ink); }
+.tip .cur { color: var(--ink2); }
+
+/* 选模型的菜单（桌面）：位置和最高多高由页面按剩下的空间算（见 ModelMenu），里面滚 */
+.menu { position: absolute; right: 0; z-index: 60; width: 300px; overflow-y: auto; overscroll-behavior: contain; padding: 4px;
+  background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r); box-shadow: var(--lift); animation: rise .12s var(--ease); }
+.menu > .menuNote { padding: 4px 8px; } /* 和 menu.module.css 的 .note 一起用 */
+.group { display: flex; align-items: center; gap: 4px; padding: 8px 8px 4px; font-size: 12px; color: var(--faint); }
+.group.toggle { width: 100%; min-height: 32px; border-radius: var(--r-sm); text-align: left; color: var(--muted); }
+@media (hover: hover) { .group.toggle:hover { background: var(--hover); color: var(--ink2); } }
+.group.toggle svg { color: var(--faint); }
+.row { display: flex; width: 100%; min-height: 32px; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border-radius: var(--r-sm); text-align: left; font-size: 13px; color: var(--ink); }
+@media (hover: hover) { .row:hover:not(:disabled) { background: var(--hover); } }
+.row:disabled { color: var(--faint); }
+.row svg { flex: none; color: var(--accent); }
+.row .lock { color: var(--faint); }
+.name { font-weight: 500; }
+.row.locked:not(:disabled) .name { color: var(--muted); } /* 游客能点去登录的锁着的模型：不像能选的那么黑 */
+.desc { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.row:disabled .desc { color: var(--faint); }
+
+/* 选模型的底部弹层（手机，弹层本身见 sheet.module.css，根上有 data-sheet）：每行至少 52px */
+[data-sheet] .group { padding: 12px 12px 4px; font-size: 13px; }
+[data-sheet] .group.toggle { min-height: 52px; padding: 8px 12px; }
+[data-sheet] .row { min-height: 52px; padding: 8px 12px; font-size: 16px; }
+[data-sheet] .desc { font-size: 13px; }
+.switchRow { display: flex; width: 100%; min-height: 52px; align-items: center; gap: 12px; padding: 8px 12px; border-radius: var(--r-sm);
+  text-align: left; font-size: 16px; color: var(--ink); }
+/* 触屏没有悬停（悬停的灰底都包在 hover: hover 里）；按下去的那一下给灰底 */
+@media (hover: none) {
+  [data-sheet] .row:active:not(:disabled), [data-sheet] .group.toggle:active, .switchRow:active, .attach:active:not(:disabled) { background: var(--hover); }
+}
+
+/* 手机：看得见的不变，透明点按区补到 44px，相邻的不重叠 */
+@media (max-width: 720px) {
+  .attach::after, .send::after { content: ""; position: absolute; inset: -6px; }
+  .send { position: relative; }
+  .modelBtn::after, .later::after { content: ""; position: absolute; inset: -8px 0; }
+  .later { position: relative; margin-left: 0; }
+  .remove::after { content: ""; position: absolute; inset: -12px; }
+  .jump::after { content: ""; position: absolute; inset: -4px; } /* 看得见 36 */
+}
+
+/* 拖着图进来：整个对话区盖一层，松手就加到输入框里（见 useImageDrop）。不挡鼠标 */
+.drop { position: absolute; inset: 8px; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  border: 1.5px dashed var(--accent); border-radius: var(--r-lg); background: var(--paper); background: color-mix(in srgb, var(--paper) 90%, transparent);
+  color: var(--accent); font-size: 15px; pointer-events: none; animation: fade .12s var(--ease); }
+@keyframes fade { from { opacity: 0; } }

@@ -97,11 +97,6 @@ export async function resumeThread(threadId, payload, onEvent) {
   return sse(`/api/threads/${threadId}/resume`, postJson({ payload }), onEvent);
 }
 
-export async function getState(threadId) {
-  const resp = await fetch(`/api/threads/${threadId}/state`);
-  if (!resp.ok) throw new Error(await resp.text());
-  return resp.json();
-}
 
 // ---- 对话 ----
 

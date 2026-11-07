@@ -1,0 +1,54 @@
+/* 设置窗口（settings.jsx，2026-11-07 Sean 定）；外壳（大窗口、手机上从底部升起）见 dialog.module.css。
+   照豆包的设置窗口：大的两栏窗口，换哪一类大小都不变（11-07 Sean 嫌 800×720 还小）。
+   左边是“设置”、谁、几类（一类一项设置）；右边是那一类的标题和一组组的行：组名小字在上，几行在圆角框里（一行 48 高），说明写在框下面 */
+.nav { flex: none; width: 240px; display: flex; flex-direction: column; overflow-y: auto; border-right: 1px solid var(--line); }
+.head { flex: none; display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 12px 0 24px; }
+.pane .head { display: grid; grid-template-columns: 1fr auto 1fr; padding: 0 12px; } /* 标题居中，左边手机上放返回，右边关闭 */
+.title { min-width: 0; font-size: 16px; font-weight: 600; }
+.nav .title { flex: 1; }
+.pane .title { grid-column: 2; }
+.close { grid-column: 3; justify-self: end; }
+.back { justify-self: start; gap: 4px; } /* 和 .ws-btn.ghost.sm 一起用 */
+.backIcon { transform: rotate(90deg); }
+.me { display: flex; align-items: center; gap: 12px; margin: 0 16px 16px; }
+.meText { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.meText b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meText small { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.navList { display: flex; flex-direction: column; gap: 4px; padding: 0 12px 16px; }
+.navItem { display: flex; align-items: center; gap: 12px; height: 40px; padding: 0 12px; border-radius: var(--r);
+  color: var(--ink2); font-weight: 500; text-align: left; }
+.navItem svg { flex: none; color: var(--muted); }
+.chev { margin-left: auto; transform: rotate(-90deg); }
+@media (hover: hover) { .navItem:hover { background: var(--hover); } }
+.navItem[aria-current] { background: var(--paper); color: var(--ink); box-shadow: 0 0 0 1px var(--line); }
+.navItem[aria-current] svg { color: var(--ink); }
+.pane { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px 24px 24px; }
+.group + .group { margin-top: 24px; }
+.groupLabel { padding: 0 16px 8px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.rows { background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+.row { display: flex; align-items: center; gap: 16px; width: 100%; min-height: 48px; padding: 12px 16px; color: var(--ink); text-align: left; }
+.row + .row { border-top: 1px solid var(--line); }
+.row:focus-visible { outline-offset: -2px; } /* 框是 overflow: hidden，外圈画在里面才看得见 */
+.name { flex: 1; min-width: 0; font-weight: 500; }
+.check { flex: none; color: var(--accent); }
+@media (hover: hover) { .row:not(:disabled):hover { background: var(--hover); } }
+.row:disabled :global(.ws-switch) { background: var(--line); }
+.row:disabled :global(.ws-switch)::after { background: var(--side); }
+.foot { margin: 8px 16px 0; font-size: 12.5px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
+
+/* 手机：先是分类列表（一类一行，48 高），点进去换成那一类，左上角“设置”回来 */
+@media (max-width: 720px) {
+  .nav { flex: 1; width: auto; border-right: 0; }
+  .head { height: auto; padding: 4px 4px 4px 16px; border-bottom: 1px solid var(--line); }
+  .pane .head { padding: 4px; }
+  .back { height: 44px; font-size: 14px; }
+  .me { margin: 16px 16px 8px; }
+  .me :global(.ws-btn) { height: 44px; padding: 0 16px; font-size: 14px; }
+  .navList { gap: 0; margin: 8px 16px 24px; padding: 0; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+  .navItem { height: 48px; padding: 0 16px; border-radius: 0; font-size: 16px; }
+  .navItem + .navItem { border-top: 1px solid var(--line); }
+  .navItem:focus-visible { outline-offset: -2px; }
+  .body { padding: 16px 16px 24px; }
+  .row { font-size: 16px; }
+}

@@ -1,6 +1,6 @@
 import { loginLine } from "./research.js";
 
-// 页面上的报错：按出了什么错转写成“发生了什么 + 能做什么”，不把后端、浏览器的原话直接显示出来（前端施工规范第二节）。
+// 页面上的报错：按出了什么错转写成“发生了什么 + 能做什么”，不把后端、浏览器的原话直接显示出来。
 // e 是 api.js 的 httpError（有 status，额度用完时 detail 是 {code, kind, resets_at, guest…}），或者连不上时 fetch 抛的 TypeError（没有 status）。
 // 看的只是状态码和后端给的结构化字段，不看报错文字
 

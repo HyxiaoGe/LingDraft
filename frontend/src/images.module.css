@@ -1,0 +1,53 @@
+/* 生成的图（images.jsx）：回答里的图片卡片、看大图 */
+
+/* 图片卡片（照 Fusion 的图片卡片）：按图的比例定宽，生成中是灰底上一道斜光扫过（busy），出图后淡入；下面一行是哪个模型画的和几个按钮 */
+.images { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; margin: 2px 0 4px; }
+.image { max-width: 100%; display: flex; flex-direction: column; gap: 6px; animation: rise .25s var(--ease); }
+.frame { position: relative; max-width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r); background: var(--side); }
+.frame.busy { background: var(--hover); }
+.frame.busy::before { content: ""; position: absolute; inset: 0; pointer-events: none; transform: translateX(-100%);
+  background: linear-gradient(105deg, transparent 30%, var(--sheen) 50%, transparent 70%); animation: sheen 2.2s ease-in-out infinite; }
+@keyframes sheen { 70%, 100% { transform: translateX(100%); } } /* 扫过去以后停一下再来 */
+.wait { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.secs { font-variant-numeric: tabular-nums; }
+.note { position: absolute; left: 12px; right: 12px; top: 50%; transform: translateY(-50%); text-align: center; font-size: 13px; color: var(--muted); }
+.failed { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.open { position: absolute; inset: 0; cursor: zoom-in; }
+.open img { width: 100%; height: 100%; object-fit: cover;
+  opacity: 0; filter: blur(14px); transform: scale(1.015); transition: opacity .7s ease-out, filter .9s ease-out, transform .9s ease-out; }
+.open img[data-instant=true] { transition: none; }
+.open img[data-loaded=true] { opacity: 1; filter: none; transform: none; }
+.open:focus-visible { outline-offset: -2px; } /* 外框裁掉了溢出，焦点框画在图里面才看得见 */
+.cap { font-size: 12px; color: var(--muted); }
+.row { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.by { flex: 1; min-width: 0; overflow-wrap: anywhere; text-wrap: balance; }
+.act { flex: none; display: inline-flex; align-items: center; justify-content: center; height: 26px; min-width: 26px; padding: 0 6px; border-radius: var(--r-sm); color: var(--muted); font-size: 12px; }
+.act.text { gap: 4px; }
+@media (hover: hover) { .act:hover { background: var(--hover); color: var(--ink); text-decoration: none; } }
+.prompt { margin: 4px 0 0; padding: 6px 8px; border-radius: var(--r-sm); background: var(--side); color: var(--ink2); line-height: 1.6; white-space: pre-wrap; }
+
+
+/* 看大图：盖住整个页面，深色底，图按比例放到最大 */
+.viewer { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 40px;
+  background: rgba(16, 18, 22, .82); animation: rise .2s var(--ease); cursor: zoom-out; }
+.viewer img { max-height: 100%; object-fit: contain; border-radius: var(--r-sm); cursor: default; box-shadow: 0 12px 48px rgba(0, 0, 0, .4); }
+.close { position: absolute; top: 14px; right: 16px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 99px; background: rgba(255, 255, 255, .12); color: #fff; }
+@media (hover: hover) { .close:hover { background: rgba(255, 255, 255, .22); } }
+@keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .open img { transition: opacity .2s linear; filter: none; transform: none; }
+  .frame.busy::before { display: none; }
+}
+@media (max-width: 720px) {
+  /* 图下那一排（第 50 条）：出处单独一行，按钮另起一行；看得见 28px 高，透明点按区补到 44px，只有图标的宽也到 44px */
+  .row { flex-wrap: wrap; }
+  .by { flex-basis: 100%; }
+  .by:empty { display: none; }
+  .act { position: relative; height: 28px; min-width: 44px; }
+  .act::after { content: ""; position: absolute; inset: -8px 0; }
+}
+@media print {
+  .image { break-inside: avoid; }
+  .act { display: none !important; }
+}

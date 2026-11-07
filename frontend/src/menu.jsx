@@ -1,24 +1,26 @@
-// 对话的“⋯”菜单（左栏每一行、顶栏都用）：桌面上是贴着按钮的小浮层，手机上是底部弹层（规范：手机上菜单用 bottom sheet）。
+// 对话的“⋯”菜单（左栏每一行、顶栏都用）：桌面上是贴着按钮的小浮层，手机上是底部弹层。
 // 还有改标题的输入框：左栏的行里、顶栏标题处都用，右边写着字数和上限（第 14 条之外顺带的“重命名显示字数上限”）
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLayer } from "./layers.js";
+import styles from "./menu.module.css";
 import { Sheet } from "./sheet.jsx";
+import sheet from "./sheet.module.css";
 
-export const TITLE_MAX = 40; // 后端 TITLE_MAX：超过了 400
+const TITLE_MAX = 40; // 后端 TITLE_MAX：超过了 400
 
 // items：[{key, icon, text, onClick, disabled, danger}]；note：菜单下面的一句说明（为什么有的点不了）。
 // anchor：打开它的按钮（桌面上按它的位置摆，Esc 收起时焦点回到它；点它自己由它切换开关）
 export function ActionMenu({ label, anchor, mobile, items, note, onClose }) {
   if (mobile) {
     return createPortal(
-      <Sheet title={label} onClose={onClose} className="ws-act-sheet">
+      <Sheet title={label} onClose={onClose}>
         {items.map((it) => (
-          <button key={it.key} className={"ws-sheet-act" + (it.danger ? " danger" : "")} disabled={it.disabled} onClick={it.onClick}>
+          <button key={it.key} className={sheet.act + (it.danger ? " " + sheet.danger : "")} disabled={it.disabled} onClick={it.onClick}>
             {it.icon}{it.text}
           </button>
         ))}
-        {note && <div className="ws-menu-note">{note}</div>}
+        {note && <div className={styles.note}>{note}</div>}
       </Sheet>,
       document.querySelector(".ws") || document.body, // 颜色等变量定义在 .ws 上，挂到 body 上弹层就没有底色（和来源弹层一样挂在 .ws 里）
     );
@@ -57,20 +59,20 @@ function PopMenu({ label, anchor, items, note, onClose }) {
   const below = rect.bottom + 4 + height < innerHeight;
   const style = { left: Math.max(8, rect.right - 196), width: 196, ...(below ? { top: rect.bottom + 4 } : { bottom: innerHeight - rect.top + 4 }) };
   return (
-    <div ref={box} className="ws-menu" role="menu" aria-label={label} style={style} onKeyDown={arrows}>
+    <div ref={box} className={styles.menu} role="menu" aria-label={label} style={style} onKeyDown={arrows}>
       {items.map((it) => (
-        <button key={it.key} role="menuitem" className={it.danger ? "danger" : undefined} disabled={it.disabled} onClick={it.onClick}>
+        <button key={it.key} role="menuitem" className={it.danger ? styles.danger : undefined} disabled={it.disabled} onClick={it.onClick}>
           {it.icon}{it.text}
         </button>
       ))}
-      {note && <div className="ws-menu-note">{note}</div>}
+      {note && <div className={styles.note}>{note}</div>}
     </div>
   );
 }
 
 // 改标题：回车或点别处保存，Esc 不改；onDone(新标题或 null, 怎么结束的："enter" | "escape" | "blur")。
-// 空的、没改的由调用的地方当没改；回车、Esc 结束的，焦点由调用的地方放回去（点别处结束的焦点已经在别处了）
-export function TitleInput({ value, className = "", onDone }) {
+// head：顶栏上的（字居中、大一号）。空的、没改的由调用的地方当没改；回车、Esc 结束的，焦点由调用的地方放回去（点别处结束的焦点已经在别处了）
+export function TitleInput({ value, head = false, onDone }) {
   const [v, setV] = useState(value);
   const ref = useRef(null);
   const done = useRef(false);
@@ -82,8 +84,8 @@ export function TitleInput({ value, className = "", onDone }) {
     onDone(title, how);
   };
   return (
-    <span className={"ws-title-input " + className}>
-      <input ref={ref} className="ws-rename" data-esc value={v} maxLength={TITLE_MAX} aria-label="对话标题" aria-describedby={id}
+    <span className={styles.titleInput + (head ? " " + styles.head : "")}>
+      <input ref={ref} className={styles.rename} data-esc value={v} maxLength={TITLE_MAX} aria-label="对话标题" aria-describedby={id}
         onChange={(e) => setV(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); finish(v.trim(), "enter"); }

@@ -7,6 +7,22 @@ html, body { margin: 0; height: 100%; }
 body { background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif; }
 #root { height: 100%; }
 .app { height: 100%; display: flex; flex-direction: column; }
+/* 这一页照浏览器默认样式写的：Tailwind 的样式重置（preflight，见 tailwind.css）在这一页退回浏览器默认（2026-11-07）。
+   :where 不加优先级，下面各条规则照样盖得住 */
+.app :where(*) { margin: revert; padding: revert; border: revert; }
+.app :where(a) { color: revert; text-decoration: revert; }
+.app :where(h1, h2, h3, h4, h5, h6) { font-size: revert; font-weight: revert; }
+.app :where(ol, ul, menu) { list-style: revert; }
+.app :where(img, svg, video, canvas, audio, iframe, embed, object) { display: revert; vertical-align: revert; }
+.app :where(img, video) { max-width: revert; height: revert; }
+.app :where(button, input, select, optgroup, textarea) { font: revert; font-feature-settings: revert; font-variation-settings: revert; letter-spacing: revert; color: revert;
+  border-radius: revert; background-color: revert; opacity: revert; }
+.app :where(textarea) { resize: revert; }
+.app :where(code, kbd, samp, pre) { font-family: revert; font-size: revert; }
+.app :where(small, sub, sup) { font-size: revert; line-height: revert; position: revert; vertical-align: revert; }
+.app :where(table) { text-indent: revert; border-color: revert; border-collapse: revert; }
+.app :where(hr) { height: revert; color: revert; }
+.app :where(input, textarea)::placeholder { color: revert; opacity: revert; }
 
 /* 顶栏 */
 .topbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 28px; border-bottom: 1px solid var(--line); }

@@ -1,0 +1,19 @@
+/* 卡片的外壳：天气卡（weather.jsx）、地点卡和路线卡（maps.jsx）、航班火车行程卡（travel.jsx）、
+   提示卡（timeline.jsx：没跑完、内容审核没通过）都套这一层；里面的样式各在自己的 module */
+.card { border: 1px solid var(--line2); border-radius: var(--r-lg); padding: 14px 16px; background: var(--paper);
+  display: flex; flex-direction: column; gap: 10px; animation: rise .25s var(--ease); margin: 2px 0; }
+.card.warn { border-color: var(--warn-line); background: var(--warn-soft); }
+/* 几种卡里面上下隔多远：天气 12，地图和出行 8，别的 10 */
+.card.weather { gap: 12px; }
+.card.map { gap: 8px; }
+
+/* 提示卡：标题（前面一个图标）、一句说明、按钮 */
+.title { font-weight: 600; font-size: 14px; display: flex; gap: 8px; align-items: flex-start; }
+.title svg { flex: none; margin-top: 3px; color: var(--accent); }
+.card.warn .title svg { color: var(--warn); }
+.sub { font-size: 12.5px; color: var(--muted); margin-top: -4px; }
+.actions { display: flex; gap: 8px; }
+
+@keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@media (max-width: 720px) { .actions :global(.ws-btn) { height: 44px; } }
+@media print { .card { break-inside: avoid; } }

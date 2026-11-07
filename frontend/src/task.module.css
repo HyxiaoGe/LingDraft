@@ -1,0 +1,15 @@
+/* 子任务卡（timeline.jsx 的 TaskCard）：过程里的一行，点开是子 agent 的思考和步骤 */
+.task { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--paper); margin: 2px 0; animation: rise .25s var(--ease); }
+.head { width: 100%; display: flex; gap: 8px; align-items: center; padding: 5px 10px; font-size: 12.5px; color: var(--ink2);
+  text-align: left; border-radius: var(--r-sm); }
+@media (hover: hover) { .head:hover { background: var(--hover); } }
+.head > svg:first-child { flex: none; color: var(--faint); }
+.main { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.sub { flex: none; max-width: 50%; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.head :global(.chev) { flex: none; color: var(--faint); }
+.live > .head > svg:first-child, .live > .head .sub { color: var(--accent); }
+.bad > .head .sub { color: var(--warn); }
+.body { padding: 6px 10px 8px 12px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+.prompt { font-size: 12px; line-height: 1.6; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; padding-bottom: 4px; }
+
+@keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
