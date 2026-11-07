@@ -282,6 +282,15 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
   }, []);
   useEffect(() => {
     const back = () => focus(false);
+    // 切去别的窗口、标签页再回来（2026-11-07 Sean 要的）：光标没在哪儿，或者只是点了正文停在某一轮上，就放回输入框，回来接着打字。
+    // 选着字、开着弹窗、光标在别的输入框或按钮链接上时不动；触屏不放（免得自己弹出键盘，见 focus）。等浏览器先把原来的焦点还回去再看
+    const ret = () => setTimeout(() => {
+      if (document.hidden || !document.hasFocus() || getSelection()?.toString() || document.querySelector('[aria-modal="true"]')) return;
+      const at = document.activeElement;
+      if (at && at !== document.body && (at.tabIndex >= 0 || at.isContentEditable || at.closest('[role="dialog"], [role="menu"]'))) return;
+      focus(true);
+    });
+    const shown = () => !document.hidden && ret();
     // 光标在输入框里、或者没在哪儿（点了正文）时才停；在改名、菜单、角标这些地方，Esc 归它们自己。
     // 在捕获阶段看：等它们处理完，改名框已经撤掉，光标就不在那儿了
     const esc = (e) => {
@@ -292,9 +301,13 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
     };
     addEventListener("ws-focus-input", back); // 见 focusInput
     addEventListener("keydown", esc, true);
+    addEventListener("focus", ret);
+    document.addEventListener("visibilitychange", shown);
     return () => {
       removeEventListener("ws-focus-input", back);
       removeEventListener("keydown", esc, true);
+      removeEventListener("focus", ret);
+      document.removeEventListener("visibilitychange", shown);
     };
   }, []);
 
