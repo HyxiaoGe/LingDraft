@@ -270,8 +270,8 @@ def _compat(provider: str) -> Callable[..., BaseChatModel]:
             发出去时原样传回，之前几轮的也传（和 DeepSeek 一样，下一轮发出去的开头不变）：方舟文档说带工具的多轮对话不传加密原文推理效果会下降，
             改过的报 Invalid signature；别家实测传不传都不报错。"""
 
-            def _guard_key(self) -> str:
-                return guard_key(GuardedChatModel._guard_key(self), guard)
+            def _guard_key(self) -> str:  # 按“厂商:模型”：直连的和托管在百炼上的同一个模型（免费额度）各断各的
+                return guard_key(f"{provider}:{name}", guard)
 
             def _first_token_s(self) -> float | None:
                 return first_token_s
@@ -331,7 +331,7 @@ def _deepseek(name: str, *, thinking: bool, effort: str, timeout: int, callbacks
 
     class ChatDeepSeekRT(GuardedChatModel, MeteredChatModel, ChatDeepSeek):
         def _guard_key(self) -> str:
-            return guard_key(GuardedChatModel._guard_key(self), guard)
+            return guard_key(f"deepseek:{name}", guard)
 
         def _first_token_s(self) -> float | None:
             return first_token_s

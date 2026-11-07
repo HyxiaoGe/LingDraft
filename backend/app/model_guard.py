@@ -163,7 +163,8 @@ def guard_key(model: str, use: str | None = None) -> str:
 class GuardedChatModel:
     """放在聊天模型类的前面（多继承）：每次调用先过熔断，服务商的错误换成 ModelUnavailable / ContentBlocked。
 
-    同一个模型（model_name）默认共用一个熔断状态：调研 agent 和快模型步骤用的是同一个服务。某个用途要单独记，子类改 _guard_key（见 guard_key）。
+    同一个模型默认共用一个熔断状态：调研 agent 和快模型步骤用的是同一个服务。建模型的地方（research_llm）按“厂商:模型”记，
+    某个用途要单独记时再加上用途（见 guard_key）。
     """
 
     breaker = BREAKER  # 不加类型标注：混进 pydantic 的模型类里，标了会被当成字段
