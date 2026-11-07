@@ -166,17 +166,17 @@ function rehypeCites() {
 // ---------- 自己画的几样 ----------
 const hastText = (node) => (node.type === "text" ? node.value : (node.children || []).map(hastText).join(""));
 
-// cite：引用角标；run：HTML 代码块能不能运行（过程里的话不给）；ready：回答写完了（写完才能运行、下载）
-const MdContext = createContext({ cite: () => null, run: false, ready: false });
+// cite：引用角标；download：HTML 代码块能不能下载（过程里的话不给）；ready：回答写完了（写完才能下载）
+const MdContext = createContext({ cite: () => null, download: false, ready: false });
 
 // 代码块：语言取自 language-xxx；公式块（KaTeX 还没取回来时）原样显示
 function Pre({ node, children }) {
-  const { run, ready } = useContext(MdContext);
+  const { download, ready } = useContext(MdContext);
   const code = node?.children?.find((x) => x.tagName === "code");
   const cls = (code?.properties?.className || []).map(String);
   const lang = (cls.find((x) => x.startsWith("language-")) || "").slice(9).toLowerCase();
   if (!code || lang === "math") return <pre>{children}</pre>;
-  return <CodeBlock lang={lang} text={hastText(code).replace(/\n$/, "")} run={run} ready={ready} />;
+  return <CodeBlock lang={lang} text={hastText(code).replace(/\n$/, "")} download={download} ready={ready} />;
 }
 
 // 组件要定在模块里：写在 components 里的箭头函数每次渲染都是新组件，角标、代码块会被卸掉重挂（新字一到就一次）
@@ -197,12 +197,12 @@ const COMPONENTS = {
 const GFM = [remarkGfm, { singleTilde: false }];
 
 // cite(sid) 返回引用角标；正文还在逐字出现时，最后一段可能写到一半，照常渲染（写到一半的符号见 research.tidyTyping）
-export function Markdown({ text, cite, run = false, ready = false }) {
+export function Markdown({ text, cite, download = false, ready = false }) {
   const { text: src, math } = prep(text.replace(/\r\n/g, "\n"));
   const tex = useLazy("math", math);
   return (
     <div className={"md " + styles.content}>
-      <MdContext.Provider value={{ cite, run, ready }}>
+      <MdContext.Provider value={{ cite, download, ready }}>
         <ReactMarkdown
           remarkPlugins={[GFM, remarkBreaks, remarkMath, remarkLinks]}
           rehypePlugins={[rehypeCites, ...(tex ? [tex] : [])]}

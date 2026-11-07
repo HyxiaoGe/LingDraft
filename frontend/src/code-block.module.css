@@ -146,49 +146,15 @@
 .code :global(.hljs-emphasis) { font-style: italic; }
 .code :global(.hljs-strong) { font-weight: 600; }
 
-/* 运行 HTML 的结果 */
-.preview { border-top: 1px solid var(--code-edge); background: var(--paper); }
-.previewBar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 8px 4px 12px;
-  border-bottom: 1px solid var(--code-edge);
-  color: var(--code-muted);
-  font-size: 12px;
-}
-.previewActions { display: flex; gap: 4px; }
-.previewButton {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: 8px;
-  background: none;
-  color: var(--code-muted);
-  cursor: pointer;
-  transition: color .15s, background-color .15s;
-}
-@media (hover: hover) { .previewButton:hover { background: var(--side); color: var(--code-fg); } }
-.previewButton:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.previewButton > svg { width: 14px; height: 14px; }
-/* 运行结果固定白底：示例页面大多按白底写，跟着深色会看不清。高度按页面报上来的内容高度 */
-.previewFrame { display: block; width: 100%; height: var(--preview-height, 320px); max-height: 80vh; border: 0; background: #fff; }
-
 /* 手机：按钮看着还是 32px，点按区往外扩到 44px */
 @media (max-width: 720px) {
   .iconButton::after, .button::after { content: ""; position: absolute; inset: -6px -3px; }
   .expandButton { height: 44px; }
-  .previewButton::after { content: ""; position: absolute; inset: -8px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .iconButton, .button, .expandButton, .previewButton { transition: none; }
+  .iconButton, .button, .expandButton { transition: none; }
 }
 @media print {
-  .actions, .iconButton, .expand, .preview { display: none; }
+  .actions, .iconButton, .expand { display: none; }
   .box { break-inside: avoid; }
 }

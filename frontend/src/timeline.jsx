@@ -812,7 +812,7 @@ function Item({ it, st, nums, running, lastItem }) {
 function Reply({ it, cite, caret }) {
   return (
     <div className={"ws-reply" + (caret ? " typing" : "")}>
-      <Markdown text={mdText(it)} cite={cite} run ready={!caret} />
+      <Markdown text={mdText(it)} cite={cite} download ready={!caret} />
     </div>
   );
 }
