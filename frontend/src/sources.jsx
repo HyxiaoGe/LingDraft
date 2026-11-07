@@ -175,7 +175,7 @@ function SourceSheet({ n, nums, sources, onClose }) {
     (list ? body.current.querySelector('[aria-current="true"]') : body.current.querySelector(".ws-pop-actions a"))?.focus();
   }, [list, cur]);
   return layer(
-    <Sheet title={list ? `这一轮的全部 ${all.length} 个来源` : `来源 ${cur}`} onClose={onClose} className="ws-src-sheet">
+    <Sheet title={list ? `这一轮的全部 ${all.length} 个来源` : `来源 ${cur}`} onClose={onClose} className="ws-src-sheet" roomy>
       <div ref={body}>
         {list ? (
           <ol className="ws-src-list">

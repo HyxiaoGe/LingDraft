@@ -8,6 +8,7 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { IconUndo } from "./icons.jsx";
 import { NavContext, touch } from "./nav.jsx";
+import styles from "./undo.module.css";
 
 export const UNDO_MS = 5000;
 const MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
@@ -100,13 +101,13 @@ export function UndoToast({ undo }) {
     return () => removeEventListener("resize", place);
   }, [it, nav?.mobile, nav?.drawer]);
   return (
-    <div className="ws-toast-host" role="status" aria-live="polite" style={lift != null ? { bottom: lift + 8 } : undefined}>
+    <div className={styles.host} role="status" aria-live="polite" style={lift != null ? { bottom: lift + 8 } : undefined}>
       {it && (
-        <div className="ws-toast" data-esc onPointerEnter={undo.pause} onPointerLeave={undo.resume} onFocus={undo.pause}
+        <div className={styles.toast} data-esc onPointerEnter={undo.pause} onPointerLeave={undo.resume} onFocus={undo.pause}
           onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) undo.resume(); }}
           onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); undo.now(); } }}>
-          <span className="text">{it.text}</span>
-          <button className="ws-toast-act" title={`撤销（${UNDO_KEY}）`} aria-keyshortcuts={MAC ? "Meta+Z" : "Control+Z"} onClick={undo.undo}>
+          <span className={styles.text}>{it.text}</span>
+          <button className={styles.act} title={`撤销（${UNDO_KEY}）`} aria-keyshortcuts={MAC ? "Meta+Z" : "Control+Z"} onClick={undo.undo}>
             <IconUndo size={14} />撤销{!touch() && <kbd className="ws-kbd" aria-hidden="true">{UNDO_KEY}</kbd>}
           </button>
         </div>

@@ -100,7 +100,7 @@
 /* 选模型的菜单（桌面）：位置和最高多高由页面按剩下的空间算（见 ModelMenu），里面滚 */
 .menu { position: absolute; right: 0; z-index: 60; width: 300px; overflow-y: auto; overscroll-behavior: contain; padding: 4px;
   background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r); box-shadow: var(--lift); animation: rise .12s var(--ease); }
-.menu > :global(.ws-menu-note) { padding: 4px 8px; }
+.menu > .menuNote { padding: 4px 8px; } /* 和 menu.module.css 的 .note 一起用 */
 .group { display: flex; align-items: center; gap: 4px; padding: 8px 8px 4px; font-size: 12px; color: var(--faint); }
 .group.toggle { width: 100%; min-height: 32px; border: 0; border-radius: var(--r-sm); background: none; text-align: left; color: var(--muted); }
 @media (hover: hover) { .group.toggle:hover { background: var(--hover); color: var(--ink2); } }
@@ -116,16 +116,16 @@
 .desc { font-size: 12px; line-height: 1.5; color: var(--muted); }
 .row:disabled .desc { color: var(--faint); }
 
-/* 选模型的底部弹层（手机，弹层本身见 workspace.css 的 .ws-sheet）：每行至少 52px */
-:global(.ws-sheet) .group { padding: 12px 12px 4px; font-size: 13px; }
-:global(.ws-sheet) .group.toggle { min-height: 52px; padding: 8px 12px; }
-:global(.ws-sheet) .row { min-height: 52px; padding: 8px 12px; font-size: 16px; }
-:global(.ws-sheet) .desc { font-size: 13px; }
+/* 选模型的底部弹层（手机，弹层本身见 sheet.module.css，根上有 data-sheet）：每行至少 52px */
+[data-sheet] .group { padding: 12px 12px 4px; font-size: 13px; }
+[data-sheet] .group.toggle { min-height: 52px; padding: 8px 12px; }
+[data-sheet] .row { min-height: 52px; padding: 8px 12px; font-size: 16px; }
+[data-sheet] .desc { font-size: 13px; }
 .switchRow { display: flex; width: 100%; min-height: 52px; align-items: center; gap: 12px; padding: 8px 12px; border: 0; border-radius: var(--r-sm); background: none;
   text-align: left; font-size: 16px; color: var(--ink); }
 /* 触屏没有悬停（悬停的灰底都包在 hover: hover 里）；按下去的那一下给灰底 */
 @media (hover: none) {
-  :global(.ws-sheet) .row:active:not(:disabled), :global(.ws-sheet) .group.toggle:active, .switchRow:active, .attach:active:not(:disabled) { background: var(--hover); }
+  [data-sheet] .row:active:not(:disabled), [data-sheet] .group.toggle:active, .switchRow:active, .attach:active:not(:disabled) { background: var(--hover); }
 }
 
 /* 手机：看得见的不变，透明点按区补到 44px，相邻的不重叠 */

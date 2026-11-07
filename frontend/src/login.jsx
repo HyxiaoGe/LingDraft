@@ -9,6 +9,8 @@ import { asksOf, creditsLeft, creditsLine, creditsParts, creditsShort, loginLine
 import { Sheet } from "./sheet.jsx";
 import dialog from "./dialog.module.css";
 import styles from "./login.module.css";
+import menu from "./menu.module.css";
+import sheet from "./sheet.module.css";
 import side from "./sidebar.module.css";
 
 // 当前身份：{ready, login, me}（见 auth.snapshot）。回到这个标签页时和 auth 服务对一下账（别处退出了就跟着退）
@@ -51,7 +53,7 @@ export function UserFoot({ auth, onLogin, onSettings, mobile }) {
   const leave = () => { setLeaving(true); signOut().catch(() => setLeaving(false)); };
   const note = "退出后在 Fusion 等其他应用也会退出。";
   const who = me && (
-    <div className="ws-menu-note ws-user-note">
+    <div className={menu.note + " " + styles.who}>
       <b>{me.name || me.email}</b>
       {me.name && me.email && <span>{me.email}</span>}
       {me.tier === "admin" && <span>管理员</span>}
@@ -67,25 +69,25 @@ export function UserFoot({ auth, onLogin, onSettings, mobile }) {
       <button ref={btn} className={"-my-1 -mr-1 ml-0 flex h-6 max-w-[120px] min-w-0 items-center gap-1.5 rounded-sm border-0 bg-transparent px-1 py-0 text-[12px] text-muted"
         + " hover:bg-hover hover:text-ink aria-expanded:bg-hover aria-expanded:text-ink phone:m-0 phone:h-11"}
         aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={open} title={mobile || !me ? undefined : me.email} onClick={() => setOpen(!open)}>
-        {me ? <Avatar me={me} /> : <span className="ws-avatar guest" aria-hidden="true">游</span>}
+        <Avatar me={me} />
         <span className="min-w-0 truncate">{label}</span>
       </button>
       {open && mobile && onWs(
-        <Sheet title="账号" onClose={close} className="ws-act-sheet">
+        <Sheet title="账号" onClose={close}>
           {who}
           {items.map(([Icon, text, fn, busy]) => (
-            <button key={text} className="ws-sheet-act" disabled={leaving} onClick={fn}>{busy ? <Spinner size={18} /> : <Icon size={18} />}{text}</button>
+            <button key={text} className={sheet.act} disabled={leaving} onClick={fn}>{busy ? <Spinner size={18} /> : <Icon size={18} />}{text}</button>
           ))}
-          {me && <div className="ws-menu-note">{note}</div>}
+          {me && <div className={menu.note}>{note}</div>}
         </Sheet>,
       )}
       {rect && (
-        <div ref={box} className="ws-menu ws-user-menu" role="menu" aria-label="账号" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: me ? 232 : 160 }}>
+        <div ref={box} className={menu.menu} role="menu" aria-label="账号" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: me ? 232 : 160 }}>
           {who}
           {items.map(([Icon, text, fn, busy]) => (
             <button key={text} role="menuitem" disabled={leaving} onClick={fn}>{busy ? <Spinner size={14} /> : <Icon size={14} />}{text}</button>
           ))}
-          {me && <div className="ws-menu-note">{note}</div>}
+          {me && <div className={menu.note}>{note}</div>}
         </div>
       )}
     </>
@@ -131,9 +133,9 @@ export function CreditsFoot({ credits, guest, onLogin, onOpen, mobile }) {
         <Ring frac={frac} />
         <span>{credits.unlimited ? "额度不限" : creditsShort(left)}</span>
       </button>
-      {open && mobile && onWs(<Sheet title="额度" onClose={close} className="ws-usage-sheet">{panel}</Sheet>)}
+      {open && mobile && onWs(<Sheet title="额度" onClose={close} className={styles.usageSheet}>{panel}</Sheet>)}
       {rect && (
-        <div ref={box} className="ws-menu ws-usage" role="dialog" aria-label="额度" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: 264 }}>
+        <div ref={box} className={menu.menu + " " + styles.usage} role="dialog" aria-label="额度" style={{ left: Math.max(8, rect.left), bottom: innerHeight - rect.top + 6, width: 264 }}>
           {panel}
         </div>
       )}
@@ -167,8 +169,8 @@ function UsagePanel({ credits, left, guest, mobile, onLogin }) {
     const used = usedBy(credits);
     return (
       <>
-        <div className="ws-usage-main">额度不限</div>
-        <div className="ws-menu-note">管理员。今天用了 {num(used.day)} 额度，这周 {num(used.week)}；按北京时间算。</div>
+        <div className={styles.usageMain}>额度不限</div>
+        <div className={menu.note}>管理员。今天用了 {num(used.day)} 额度，这周 {num(used.week)}；按北京时间算。</div>
       </>
     );
   }
@@ -178,26 +180,29 @@ function UsagePanel({ credits, left, guest, mobile, onLogin }) {
   return (
     <>
       {/* 和别处同一句，分两行：还剩多少 / 什么时候恢复（中间的“ · ”只是不显示，读屏、复制照旧是整句） */}
-      <div className={"ws-usage-main" + (left.exhausted ? " out" : left.warn ? " warn" : "")}>
-        {amount}<span className="ws-usage-when"><span className="sep"> · </span>{when}</span>
+      <div className={styles.usageMain + (left.exhausted ? " " + styles.out : left.warn ? " " + styles.warn : "")}>
+        {amount}<span className={styles.when}><span className={styles.sep}> · </span>{when}</span>
       </div>
-      <div className="ws-menu-note">
+      <div className={menu.note}>
         {guest ? "游客试用的额度。" : "登录账号的额度。"}
         {credits.per_ask > 0 && `按一次约 ${num(credits.per_ask)} 额度估算，联网查得多、开着深度思考的问题会用得多一些。`}按北京时间算。
       </div>
       {after && onLogin && (
-        <button className={"ws-usage-login" + (mobile ? " ws-sheet-act" : "")} onClick={onLogin}>
-          <IconLock size={mobile ? 18 : 14} /><span>{more}{asks && <>，<span className="ws-keep">{asks}</span></>}</span>
+        <button className={styles.usageLogin + (mobile ? " " + sheet.act : "")} onClick={onLogin}>
+          <IconLock size={mobile ? 18 : 14} /><span>{more}{asks && <>，<span className="whitespace-nowrap">{asks}</span></>}</span>
         </button>
       )}
     </>
   );
 }
 
-export function Avatar({ me }) {
+// 头像：有图用图（取不到退回首字母），没有图写名字或邮箱的首字母；游客（me 是 null）是浅一档的“游”。large：设置窗口左上角那个大的
+export function Avatar({ me, large }) {
   const [broken, setBroken] = useState(false);
-  if (me.avatar && !broken) return <img className="ws-avatar" src={me.avatar} alt="" referrerPolicy="no-referrer" onError={() => setBroken(true)} />;
-  return <span className="ws-avatar">{(me.name || me.email || "?").trim()[0].toUpperCase()}</span>;
+  const cls = styles.avatar + (me ? "" : " " + styles.guest) + (large ? " " + styles.large : "");
+  if (!me) return <span className={cls} aria-hidden="true">游</span>;
+  if (me.avatar && !broken) return <img className={cls} src={me.avatar} alt="" referrerPolicy="no-referrer" onError={() => setBroken(true)} />;
+  return <span className={cls}>{(me.name || me.email || "?").trim()[0].toUpperCase()}</span>;
 }
 
 const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';

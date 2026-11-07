@@ -1,0 +1,17 @@
+/* 小浮层菜单（桌面）：对话的“⋯”菜单（menu.jsx）、左栏下面的账号菜单和额度面板（login.jsx），2026-11-07 从 workspace.css 迁过来。
+   一项一行 32 高；手机上换成底部弹层（sheet.module.css）。
+   .note 是菜单里的一句小字说明（为什么有的点不了、额度怎么算），选模型的菜单、底部弹层里也用；弹层里大一号 */
+.menu { position: fixed; z-index: 60; background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r); box-shadow: var(--lift); padding: 4px;
+  display: flex; flex-direction: column; gap: 1px; animation: rise .12s var(--ease); }
+.menu > button { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 0; background: none; border-radius: var(--r-sm); font-size: 13px;
+  color: var(--ink); text-align: left; }
+.menu > button svg { color: var(--muted); }
+@media (hover: hover) { .menu > button:hover:not(:disabled) { background: var(--hover); } }
+.menu > button:disabled { color: var(--faint); }
+.menu > button[aria-current] { font-weight: 500; }
+.menu > button:disabled svg { color: var(--faint); }
+.menu > button.danger:not(:disabled), .menu > button.danger:not(:disabled) svg { color: var(--danger); }
+.note { font-size: 12px; color: var(--muted); padding: 8px 12px; line-height: 1.5; }
+[data-sheet] .note { padding: 8px 12px 4px; font-size: 13px; }
+@keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@media print { .menu { display: none !important; } }

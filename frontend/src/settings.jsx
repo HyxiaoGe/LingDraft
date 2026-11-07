@@ -119,7 +119,7 @@ function Me({ auth, onLogin }) {
   const { me } = auth;
   return (
     <div className={styles.me}>
-      {me ? <Avatar me={me} /> : <span className="ws-avatar guest" aria-hidden="true">游</span>}
+      <Avatar me={me} large />
       <span className={styles.meText}>
         <b>{me ? me.name || me.email : "游客"}</b>
         {me?.name && me.email && <small>{me.email}</small>}

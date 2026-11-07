@@ -1,0 +1,20 @@
+/* 手机上的底部弹层，2026-11-07 从 workspace.css 迁过来：sheet.jsx 的 Sheet（“⋯”菜单、账号、额度、来源），选模型（composer.jsx）、轮次目录（turns.jsx）自己搭的也用这一套。
+   盖一层暗底；最高 70dvh，里面滚；底下让出安全区。根上有 data-sheet：放在弹层里的东西（菜单的小字说明、选模型的行）靠它换成大一号 */
+.scrim { position: fixed; inset: 0; z-index: 70; background: var(--scrim); animation: fade .2s var(--ease); }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 71; max-height: 70vh; max-height: 70dvh; display: flex; flex-direction: column;
+  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: var(--paper); border-radius: var(--r-lg) var(--r-lg) 0 0;
+  box-shadow: var(--lift); animation: up .2s var(--ease); }
+.head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 4px 16px; border-bottom: 1px solid var(--line); }
+.head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 16px; font-weight: 600; } /* “⋯”菜单的标题是对话标题，长了截掉 */
+.body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px 8px 16px; }
+.roomy .body { padding: 16px; } /* 来源：放的是一张卡，四周都留 16 */
+/* 一行一项（“⋯”菜单、账号）：至少 52 高，字 16 */
+.act { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 0 12px; border: 0; border-radius: var(--r-sm); background: none;
+  font: inherit; font-size: 16px; color: var(--ink); text-align: left; }
+.act svg { flex: none; color: var(--muted); }
+.act:active:not(:disabled) { background: var(--hover); }
+.act:disabled, .act:disabled svg { color: var(--faint); }
+.act.danger:not(:disabled), .act.danger:not(:disabled) svg { color: var(--danger); }
+@keyframes fade { from { opacity: 0; } }
+@keyframes up { from { transform: translateY(100%); } }
+@media print { .sheet, .scrim { display: none !important; } }

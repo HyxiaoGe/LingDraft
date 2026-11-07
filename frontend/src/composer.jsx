@@ -10,6 +10,8 @@ import { NavContext, byKeyboard, touch } from "./nav.jsx";
 import { QUEUED, creditsLeft, creditsLine, loginLine, modelName } from "./research.js";
 import { IMAGE_ACCEPT, ImageError, prepareImage } from "./upload.js";
 import styles from "./composer.module.css";
+import menu from "./menu.module.css";
+import sheet from "./sheet.module.css";
 
 // 临时的输入框（改这句话、左栏改名）关掉以后，光标回到对话的输入框（等它从页面上撤掉再放）
 export const focusInput = () => setTimeout(() => dispatchEvent(new Event("ws-focus-input")));
@@ -465,7 +467,7 @@ export function ModelTools({ models, loading, current, locked, onPick, thinking,
       {open && mobile && (
         <ModelSheet title={locked ? "这段对话的模型" : "选模型"} onClose={close}>
           {toggle && <ThinkSwitch on={thinking} onChange={onThinking} />}
-          <div className="ws-menu-note">{note}</div>
+          <div className={menu.note}>{note}</div>
           {list}
         </ModelSheet>
       )}
@@ -535,7 +537,7 @@ function ModelMenu({ anchor, note, onLeave, children }) {
   return (
     <div ref={ref} className={styles.menu} data-model-scroll style={place ? { [place.up ? "bottom" : "top"]: "calc(100% + 8px)", maxHeight: place.max } : { visibility: "hidden" }}
       onBlur={(e) => { if (e.relatedTarget && !anchor.current?.contains(e.relatedTarget)) onLeave(); }}>
-      <div className="ws-menu-note">{note}</div>
+      <div className={menu.note + " " + styles.menuNote}>{note}</div>
       {children}
     </div>
   );
@@ -546,7 +548,7 @@ function ModelSheet({ title, onClose, children }) {
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
-    (el.querySelector('[aria-checked="true"]:not(:disabled):not([role="switch"])') || el.querySelector(".ws-sheet-close"))?.focus();
+    (el.querySelector('[aria-checked="true"]:not(:disabled):not([role="switch"])') || el.querySelector("[data-sheet-close]"))?.focus();
   }, []);
   const trap = (e) => {
     if (e.key !== "Tab") return;
@@ -562,13 +564,13 @@ function ModelSheet({ title, onClose, children }) {
   };
   return (
     <>
-      <div className="ws-sheet-scrim" onClick={onClose} aria-hidden="true" />
-      <div ref={ref} className="ws-sheet" role="dialog" aria-modal="true" aria-label={title} onKeyDown={trap}>
-        <div className="ws-sheet-head">
+      <div className={sheet.scrim} onClick={onClose} aria-hidden="true" />
+      <div ref={ref} className={sheet.sheet} data-sheet role="dialog" aria-modal="true" aria-label={title} onKeyDown={trap}>
+        <div className={sheet.head}>
           <b>{title}</b>
-          <button className="ws-icon-btn ws-sheet-close" aria-label="关闭" onClick={onClose}><IconClose size={18} /></button>
+          <button className="ws-icon-btn" data-sheet-close aria-label="关闭" onClick={onClose}><IconClose size={18} /></button>
         </div>
-        <div className="ws-sheet-body" data-model-scroll>{children}</div>
+        <div className={sheet.body} data-model-scroll>{children}</div>
       </div>
     </>
   );

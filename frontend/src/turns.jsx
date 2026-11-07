@@ -6,6 +6,7 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { IconClose, IconList } from "./icons.jsx";
 import { useLayer } from "./layers.js";
 import { NavContext } from "./nav.jsx";
+import sheet from "./sheet.module.css";
 import styles from "./turns.module.css";
 
 const MIN_TURNS = 3;
@@ -140,13 +141,13 @@ export function TurnIndexButton({ entries, scroller, onJump }) {
       </button>
       {open && (mobile ? (
         <>
-          <div className="ws-sheet-scrim" onClick={() => close()} aria-hidden="true" />
-          <div ref={box} className={"ws-sheet " + styles.sheet} role="dialog" aria-modal="true" aria-label="轮次目录" onKeyDown={trap}>
-            <div className="ws-sheet-head">
+          <div className={sheet.scrim} onClick={() => close()} aria-hidden="true" />
+          <div ref={box} className={sheet.sheet + " " + styles.sheet} data-sheet role="dialog" aria-modal="true" aria-label="轮次目录" onKeyDown={trap}>
+            <div className={sheet.head}>
               <b>轮次</b>
-              <button className="ws-icon-btn ws-sheet-close" aria-label="关闭" onClick={() => close()}><IconClose size={18} /></button>
+              <button className="ws-icon-btn" data-sheet-close aria-label="关闭" onClick={() => close()}><IconClose size={18} /></button>
             </div>
-            <div className="ws-sheet-body">{list}</div>
+            <div className={sheet.body}>{list}</div>
           </div>
         </>
       ) : (

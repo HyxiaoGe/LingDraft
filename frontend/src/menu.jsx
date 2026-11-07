@@ -3,7 +3,9 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLayer } from "./layers.js";
+import styles from "./menu.module.css";
 import { Sheet } from "./sheet.jsx";
+import sheet from "./sheet.module.css";
 
 export const TITLE_MAX = 40; // 后端 TITLE_MAX：超过了 400
 
@@ -12,13 +14,13 @@ export const TITLE_MAX = 40; // 后端 TITLE_MAX：超过了 400
 export function ActionMenu({ label, anchor, mobile, items, note, onClose }) {
   if (mobile) {
     return createPortal(
-      <Sheet title={label} onClose={onClose} className="ws-act-sheet">
+      <Sheet title={label} onClose={onClose}>
         {items.map((it) => (
-          <button key={it.key} className={"ws-sheet-act" + (it.danger ? " danger" : "")} disabled={it.disabled} onClick={it.onClick}>
+          <button key={it.key} className={sheet.act + (it.danger ? " " + sheet.danger : "")} disabled={it.disabled} onClick={it.onClick}>
             {it.icon}{it.text}
           </button>
         ))}
-        {note && <div className="ws-menu-note">{note}</div>}
+        {note && <div className={styles.note}>{note}</div>}
       </Sheet>,
       document.querySelector(".ws") || document.body, // 颜色等变量定义在 .ws 上，挂到 body 上弹层就没有底色（和来源弹层一样挂在 .ws 里）
     );
@@ -57,13 +59,13 @@ function PopMenu({ label, anchor, items, note, onClose }) {
   const below = rect.bottom + 4 + height < innerHeight;
   const style = { left: Math.max(8, rect.right - 196), width: 196, ...(below ? { top: rect.bottom + 4 } : { bottom: innerHeight - rect.top + 4 }) };
   return (
-    <div ref={box} className="ws-menu" role="menu" aria-label={label} style={style} onKeyDown={arrows}>
+    <div ref={box} className={styles.menu} role="menu" aria-label={label} style={style} onKeyDown={arrows}>
       {items.map((it) => (
-        <button key={it.key} role="menuitem" className={it.danger ? "danger" : undefined} disabled={it.disabled} onClick={it.onClick}>
+        <button key={it.key} role="menuitem" className={it.danger ? styles.danger : undefined} disabled={it.disabled} onClick={it.onClick}>
           {it.icon}{it.text}
         </button>
       ))}
-      {note && <div className="ws-menu-note">{note}</div>}
+      {note && <div className={styles.note}>{note}</div>}
     </div>
   );
 }

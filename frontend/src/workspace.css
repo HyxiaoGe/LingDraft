@@ -107,52 +107,6 @@
 .ws-title-input.head .ws-rename { height: 34px; padding-left: 48px; font-size: 16px; font-weight: 600; text-align: center; }
 .ws-rename { width: 100%; height: 30px; border: 1px solid var(--accent-line); border-radius: var(--r-sm); padding: 0 8px; font: inherit; font-size: 13px; color: var(--ink);
   background: var(--paper); outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
-.ws-menu { position: fixed; z-index: 60; background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r); box-shadow: var(--lift); padding: 4px;
-  display: flex; flex-direction: column; gap: 1px; animation: ws-in .12s var(--ease); }
-.ws-menu > button { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px; border: 0; background: none; border-radius: var(--r-sm); font-size: 13px;
-  color: var(--ink); text-align: left; }
-.ws-menu > button svg { color: var(--muted); }
-@media (hover: hover) { .ws-menu > button:hover:not(:disabled) { background: var(--hover); } }
-.ws-menu > button:disabled { color: var(--faint); }
-.ws-menu > button[aria-current] { font-weight: 500; }
-.ws-menu > button:disabled svg { color: var(--faint); }
-.ws-menu > button.danger:not(:disabled), .ws-menu > button.danger:not(:disabled) svg { color: var(--danger); }
-.ws-menu-note { font-size: 12px; color: var(--muted); padding: 8px 12px; line-height: 1.5; }
-.ws-menu-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 4px 8px 8px; }
-/* 手机上的“⋯”菜单：底部弹层里一行一项 */
-.ws-sheet-act { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 0 12px; border: 0; border-radius: var(--r-sm); background: none;
-  font: inherit; font-size: 16px; color: var(--ink); text-align: left; }
-.ws-sheet-act svg { flex: none; color: var(--muted); }
-.ws-sheet-act:active:not(:disabled) { background: var(--hover); }
-.ws-sheet-act:disabled, .ws-sheet-act:disabled svg { color: var(--faint); }
-.ws-sheet-act.danger:not(:disabled), .ws-sheet-act.danger:not(:disabled) svg { color: var(--danger); }
-.ws-act-sheet .ws-sheet-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 删了能撤销的提示（第 44 条）：桌面在左下角，手机在输入框上面（位置见 undo.jsx） */
-.ws-toast-host { position: fixed; z-index: 80; left: 16px; bottom: 16px; max-width: calc(100vw - 32px); pointer-events: none; }
-.ws-toast { pointer-events: auto; display: flex; align-items: center; gap: 12px; max-width: 400px; min-height: 44px; padding: 4px 4px 4px 16px; border-radius: var(--r);
-  background: var(--ink); color: var(--paper); box-shadow: var(--lift); font-size: 13px; animation: ws-in .2s var(--ease); }
-.ws-toast .text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-toast-act { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 36px; padding: 0 12px; border: 0; border-radius: var(--r-sm); background: none;
-  color: var(--paper); font: inherit; font-weight: 600; }
-@media (hover: hover) { .ws-toast-act:hover { background: var(--ink2); } }
-.ws-toast-act:focus-visible { outline: 2px solid var(--paper); outline-offset: -4px; }
-/* 额度面板（第 27 条）：完整的一句在最上面，下面小字是哪来的额度、怎么估的；游客最下面是去登录的按钮（写着登录后会怎样，可能折行） */
-.ws-usage-main { padding: 8px 12px 4px; font-size: 14px; line-height: 1.5; color: var(--ink); font-variant-numeric: tabular-nums; }
-.ws-usage-main.warn { color: var(--warn); }
-.ws-usage-main.out { color: var(--danger); }
-.ws-usage-when { display: block; font-size: 13px; color: var(--muted); }
-.ws-usage-when .sep { display: none; }
-.ws-keep { white-space: nowrap; }
-.ws-usage .ws-usage-login { height: auto; min-height: 32px; padding: 4px 12px; line-height: 1.5; color: var(--accent); }
-.ws-usage .ws-usage-login svg, .ws-usage-sheet .ws-usage-login svg { color: var(--accent); }
-.ws-usage-sheet .ws-usage-login { color: var(--accent); }
-.ws-usage-sheet .ws-usage-main { padding: 8px 12px 4px; font-size: 16px; }
-.ws-usage-sheet .ws-usage-when { font-size: 14px; }
-.ws-avatar { flex: none; width: 18px; height: 18px; border-radius: 50%; object-fit: cover; background: var(--ink); color: var(--paper); font: 600 10px/18px var(--sans); text-align: center; display: inline-block; }
-.ws-avatar.guest { background: var(--line2); color: var(--ink2); } /* 游客：浅一档，和登录了的头像分得开 */
-.ws-user-note { display: flex; flex-direction: column; gap: 1px; }
-.ws-user-note b { font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ws-user-note span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- 对话 ---------- */
 .ws-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
@@ -463,17 +417,6 @@
 /* 藏着的快捷键在能用的那一刻写出来（批次 G 第 34 条）：排着的话旁边写 ↑ 撤回，回答在跑写 Esc 停止，撤销提示里写 ⌘Z。触屏上不写 */
 .ws-live .key .ws-kbd { height: 16px; margin: 0 4px; font-size: 12px; vertical-align: 1px; }
 .ws-live .key { color: var(--faint); }
-.ws-toast .ws-kbd { margin: 0 0 0 4px; border-color: var(--muted); color: var(--line2); font-weight: 400; }
-/* 选模型的底部弹层（手机）：最高 70dvh，里面滚；每行至少 52px；底下让出安全区 */
-.ws-sheet-scrim { position: fixed; inset: 0; z-index: 70; background: var(--scrim); animation: ws-fade .2s var(--ease); }
-.ws-sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 71; max-height: 70vh; max-height: 70dvh; display: flex; flex-direction: column;
-  padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: var(--paper); border-radius: var(--r-lg) var(--r-lg) 0 0; box-shadow: var(--lift);
-  animation: ws-sheet-up .2s var(--ease); }
-@keyframes ws-sheet-up { from { transform: translateY(100%); } }
-.ws-sheet-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 4px 4px 4px 16px; border-bottom: 1px solid var(--line); }
-.ws-sheet-head b { font-size: 16px; font-weight: 600; }
-.ws-sheet-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px 8px 16px; }
-.ws-sheet .ws-menu-note { padding: 8px 12px 4px; font-size: 13px; }
 .ws-switch { position: relative; flex: none; width: 40px; height: 24px; border-radius: 999px; background: var(--line2); transition: background .15s var(--ease); }
 .ws-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: var(--paper); transition: transform .15s var(--ease); }
 .ws-switch.on { background: var(--accent); }
@@ -526,7 +469,6 @@
 @media (hover: hover) { .ws-cited a:hover { color: var(--accent) !important; } }
 .ws-cited .meta, .ws-src-list .meta { color: var(--faint); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 /* 手机上点角标弹出的来源（M5）：同一张卡放大一号；能切到这一轮的全部来源，每条一行至少 52px */
-.ws-src-sheet .ws-sheet-body { padding: 16px; }
 .ws-src-sheet .ws-pop-title { font-size: 16px; }
 .ws-src-sheet .ws-pop-meta { font-size: 13px; }
 .ws-src-sheet .ws-pop-excerpt { font-size: 14px; max-height: none; }
@@ -549,9 +491,6 @@
 @media (max-width: 720px) {
   .ws { grid-template-columns: minmax(0, 1fr); }
   .ws-icon-btn { width: 44px; height: 44px; }
-  .ws-toast-host { right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); }
-  .ws-toast { max-width: none; }
-  .ws-toast-act { height: 44px; }
 
   .ws-flow { --pad: 16px; padding: 20px var(--pad) 24px; }
   /* 输入框 16px：iOS 上聚焦不自动放大页面（M3）。对话的输入框、改这句话的框不分宽窄都是 16（见 composer.module.css 和上面的 .ws-edit）；
@@ -610,7 +549,7 @@
   .ws-main, .ws-scroll { display: block; overflow: visible; height: auto; }
   .ws-flow { max-width: none; padding: 0; }
   .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-live, .ws-error,
-  .ws-user-foot, .ws-ai-foot, .ws-pop, .ws-menu, .ws-toast-host, .ws-sheet, .ws-sheet-scrim, .ws-btn, .ws-icon-btn, .ws-svc-tools, .ws-svc .fare a,
+  .ws-user-foot, .ws-ai-foot, .ws-pop, .ws-btn, .ws-icon-btn, .ws-svc-tools, .ws-svc .fare a,
   .chev { display: none !important; }
   .ws-print-title { display: block; margin: 0 0 24px; font: 600 20px/1.4 var(--serif); }
   .ws-user { margin-bottom: 16px; }

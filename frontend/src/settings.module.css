@@ -11,7 +11,6 @@
 .back { justify-self: start; gap: 4px; } /* 和 .ws-btn.ghost.sm 一起用 */
 .backIcon { transform: rotate(90deg); }
 .me { display: flex; align-items: center; gap: 12px; margin: 0 16px 16px; }
-.me :global(.ws-avatar) { width: 32px; height: 32px; font-size: 14px; line-height: 32px; }
 .meText { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .meText b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meText small { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
