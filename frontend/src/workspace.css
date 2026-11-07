@@ -390,19 +390,49 @@
 .ws-reply { font-size: 15px; line-height: 1.8; color: var(--ink); overflow-wrap: anywhere; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
-.md p, .md ul, .md ol, .md blockquote, .md .md-table-box, .md pre { margin: 0 0 10px; }
+.md p, .md ul, .md ol, .md blockquote, .md .md-table-box, .md pre, .md-code, .md .katex-display { margin: 0 0 10px; }
 .md h3, .md h4, .md h5, .md h6 { font-weight: 600; margin: 16px 0 6px; line-height: 1.5; }
 .md h3 { font-size: 16px; }
 .md h4, .md h5, .md h6 { font-size: 14.5px; }
 .md ul, .md ol { padding-left: 22px; }
 .md li { margin: 2px 0; }
-.md li.sub { margin-left: 18px; list-style-type: circle; }
-.md .loose > li + li { margin-top: 8px; }
+/* 列表套列表：一层层往里缩，圆点换样子；项之间空了行的（项里是段落）项和项之间也留出空隙 */
+.md li > ul, .md li > ol { margin: 4px 0 0; }
+.md ul ul { list-style-type: circle; }
+.md ul ul ul { list-style-type: square; }
+.md li > p { margin: 0; }
+.md li > p + p, .md li > p + .md-code, .md li > .md-code { margin-top: 8px; }
+.md :is(ul, ol):has(> li > p) > li + li { margin-top: 8px; }
+.md .contains-task-list { list-style: none; padding-left: 0; }
+.md .task-list-item input { margin: 0 8px 0 0; vertical-align: -1px; accent-color: var(--accent); }
 .md-nobr { white-space: nowrap; }
 .md blockquote { border-left: 3px solid var(--line2); padding: 0 0 0 12px; color: var(--ink2); }
+.md blockquote > :last-child { margin-bottom: 0; }
 .md code { font: 12.5px/1.5 ui-monospace, Menlo, monospace; background: var(--hover); border-radius: 4px; padding: 1px 5px; }
 .md pre { background: var(--side); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; overflow-x: auto; }
 .md pre code { background: none; border-radius: 0; padding: 0; white-space: pre; line-height: 1.6; }
+/* 代码块：上面一条写语言和“复制”，下面是代码，放不下在框里横着滑 */
+.md .md-code { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--side); overflow: hidden; }
+.md-code-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 32px; padding: 0 4px 0 12px; border-bottom: 1px solid var(--line);
+  font-size: 12px; line-height: 1; color: var(--muted); }
+.md-code-lang { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.md-code-copy { display: inline-flex; align-items: center; gap: 4px; flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: var(--r-sm); background: none;
+  font-size: 12px; color: var(--muted); }
+@media (hover: hover) { .md-code-copy:hover { background: var(--hover); color: var(--ink); } }
+.md .md-code pre { margin: 0; border: 0; border-radius: 0; background: none; padding: 12px; }
+/* 代码上色：只用现有的几种颜色，深色主题跟着换 */
+.md .hljs-keyword, .md .hljs-selector-tag, .md .hljs-literal, .md .hljs-name, .md .hljs-section, .md .hljs-doctag { color: var(--accent); }
+.md .hljs-string, .md .hljs-regexp, .md .hljs-addition, .md .hljs-template-tag, .md .hljs-selector-attr, .md .hljs-selector-pseudo { color: var(--ok); }
+.md .hljs-number, .md .hljs-built_in, .md .hljs-type, .md .hljs-attr, .md .hljs-attribute, .md .hljs-symbol, .md .hljs-bullet, .md .hljs-selector-class, .md .hljs-selector-id { color: var(--warn); }
+.md .hljs-variable, .md .hljs-template-variable, .md .hljs-deletion { color: var(--danger); }
+.md .hljs-comment, .md .hljs-quote, .md .hljs-meta { color: var(--faint); font-style: italic; }
+.md .hljs-title, .md .hljs-title.function_, .md .hljs-title.class_ { color: var(--ink); font-weight: 600; }
+.md .hljs-emphasis { font-style: italic; }
+.md .hljs-strong { font-weight: 600; }
+/* 公式：行内的跟着字号，独占一行的居中，太长在框里横着滑 */
+.md .katex { font-size: 1.1em; }
+.md .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+.md .katex-display > .katex { font-size: 1.15em; }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
 .md .md-table-box { position: relative; }
 .md .md-table { overflow-x: auto; }
@@ -908,6 +938,7 @@
   .ws-inspire .ws-suggest-item::after, .ws-suggest-list .ws-suggest-item::after { content: ""; position: absolute; inset: -4px 0; }
   .ws-index-btn { width: 44px; padding: 0; }
   .ws-index-sheet .ws-index-turn { min-height: 48px; align-items: center; padding: 8px 12px; font-size: 16px; line-height: 24px; }
+  .md-code-head, .md-code-copy { height: 44px; } /* 代码块的“复制”：手机上点按区 44px */
   .ws-index-sheet .ws-index-turn .n { min-width: 16px; }
   .ws-inspire { min-height: 80px; }
   .ws-skel-chip { height: 36px; }
@@ -956,7 +987,7 @@
   .ws { display: block; height: auto; padding: 0; }
   .ws-main, .ws-scroll { display: block; overflow: visible; height: auto; }
   .ws-flow { max-width: none; padding: 0; }
-  .ws-side, .ws-scrim, .ws-head, .ws-dock, .ws-rail, .ws-jump, .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-live, .ws-error,
+  .ws-side, .ws-scrim, .md-code-copy, .ws-head, .ws-dock, .ws-rail, .ws-jump, .ws-examples, .ws-suggest, .ws-suggest-wait, .ws-live, .ws-error,
   .ws-user-foot, .ws-ai-foot, .ws-pop, .ws-menu, .ws-toast-host, .ws-sheet, .ws-sheet-scrim, .ws-btn, .ws-icon-btn, .ws-notify, .ws-svc-tools, .ws-svc .fare a,
   .chev, .md .md-table-box::before, .md .md-table-box::after { display: none !important; }
   .ws-print-title { display: block; margin: 0 0 24px; font: 600 20px/1.4 var(--serif); }
@@ -968,7 +999,7 @@
   .ws-ai > .ws-wide, .ws-reply .md > .md-table-box { width: auto; margin-left: 0; }
   .ws-reply .md table { min-width: 100%; }
   .md .md-table { overflow: visible; }
-  .ws-card, .md .md-table-box, .ws-cited li, .ws-image, .md pre, .md blockquote { break-inside: avoid; }
+  .ws-card, .md .md-table-box, .ws-cited li, .ws-image, .md pre, .md .md-code, .md blockquote { break-inside: avoid; }
   .ws-image-act { display: none !important; }
   .md :is(h1, h2, h3, h4) { break-after: avoid; }
   .ws-reply.typing .md > :last-child::after { display: none; }
