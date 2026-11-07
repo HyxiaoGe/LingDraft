@@ -168,6 +168,9 @@ fallback = "deepseek-flash"  # 选项 id；固定用 DeepSeek Flash（Sean 定�
 # - until 照控制台的到期日写，这天北京时间 0 点起不再用；过了的删掉就行。
 # - 子 agent 用备用的；思考开关跟用户（这几个都实测过能关，2026-11-08）；记账是 0 元（rate 记成 free_tier），用户的额度也不扣。
 # - 不能同时是上面的选项或下面的内部用途（同一个模型记账会分不开）。
+# - same_as：托管在百炼上的、和某个选项是同一个模型的（写那个选项的 model）。用户选了那个选项，主 agent 先走免费额度，
+#   用完、到期、出错再走直连（子 agent 照旧直连）；页面上还是那个选项，不标免费（额度大家共用，随时会用完，2026-11-08 Sean 定）。
+#   思考开关、强度照选项的（百炼上的 K3.1 Pro 开关思考 11-08 实测过）。没有对应选项的（K3 已经旧了、V4.1 Flash 不是直连的那个版本）只给 Auto 用。
 # 2026-11-08 百炼：qwen3.8-max-0902 只剩 3 万多、用完即停没开，不放。
 [[free]]
 model = "dashscope:kimi-k3"
@@ -186,6 +189,7 @@ model = "dashscope:kimi-k3.1-pro"
 name = "Kimi K3.1 Pro"
 icon = "moonshot"
 until = 2027-02-02
+same_as = "moonshot:kimi-k3.1-pro"  # 选项 Kimi K3.1 Pro 先走这里
 
 # ---- 内部用途：用户看不到，不跟着选项走 ----
 [roles]

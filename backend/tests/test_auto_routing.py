@@ -385,3 +385,83 @@ def test_models_endpoint_names_the_free_models():
     http, _ = _client(_planner())
     names = http.get("/api/models").json()["names"]
     assert names[K3] == {"name": "Kimi K3", "icon": "moonshot"} and names[V41]["icon"] == "deepseek"
+
+
+# ---- 用户选的模型先走同一个模型的免费额度（[[free]] 的 same_as） ----
+
+KIMI = "kimi-k3-1-pro"  # 选项 id
+KIMI_DIRECT = "moonshot:kimi-k3.1-pro"
+
+
+def test_chosen_model_uses_its_free_quota_first():
+    """选了 Kimi K3.1 Pro：主 agent 先走百炼上同一个模型的免费额度，子 agent 照旧直连；用完、到期、没配 key 走直连。
+    没有对应选项的免费额度（K3、V4.1 Flash）不会被选项用上。"""
+    c = _catalog()
+    now = datetime.now(CHINA_TZ)
+    plan = c.plan(KIMI, None, _always, now=now)
+    assert plan.option == KIMI and plan.agent == ModelUse(ref=K31, thinking=True) and plan.subagent == ModelUse(ref=KIMI_DIRECT, thinking=True)
+    assert c.plan(KIMI, False, _always, now=now).agent == ModelUse(ref=K31, thinking=False)
+    assert c.plan(KIMI, None, _always, now=now, free=False).agent.ref == KIMI_DIRECT
+    assert c.plan(KIMI, None, _always, now=now + timedelta(days=86)).agent.ref == KIMI_DIRECT
+    assert c.plan(KIMI, None, lambda ref: not ref.startswith("dashscope:"), now=now).agent.ref == KIMI_DIRECT
+    c.used_up(K31)
+    assert c.plan(KIMI, None, _always, now=now).agent.ref == KIMI_DIRECT
+    assert c.plan("deepseek-flash", None, _always, now=now).agent.ref == FLASH  # V4.1 Flash 不是它
+
+
+def test_same_as_must_be_an_option_model():
+    good = model_catalog.load().model_dump()
+    free = [{**f, "same_as": "moonshot:kimi-k9"} if f["model"] == K31 else f for f in good["free"]]
+    with pytest.raises(ValidationError, match="same_as"):
+        Catalog.model_validate({**good, "free": free})
+
+
+def _kimi_chat(p: FakeResearchPlanner) -> Chat:
+    c = Chat(planner=p)
+    c.r.accept(c.tid, "直接答：你好", owner=c.owner, option=KIMI)
+    return c
+
+
+def test_chosen_models_free_quota_breaks_then_direct():
+    """免费额度那边出问题：这一次换直连的同一个模型（不是 Flash），这一轮记成直连；不是用完的，下一轮还先走免费额度。"""
+    p = _planner()
+    p.broken[K31] = FailingModel(error=ModelUnavailable("模型服务暂时不可用（服务端出错），稍后再试"))
+    c = _kimi_chat(p)
+    v = c.run()
+    assert _models(v) == [KIMI_DIRECT] and _model_events(c.events) == [K31, KIMI_DIRECT] and not _routes(p)
+    p.broken.clear()
+    v = c.say("直接答：接着说")
+    assert _models(v) == [KIMI_DIRECT, K31] and v["model"] == KIMI and "auto_model" not in c.values()
+
+
+def test_chosen_models_free_quota_used_up_goes_direct_for_good():
+    p = _planner()
+    p.broken[K31] = FailingModel(error=FreeTierUsedUp("模型服务暂时不可用（免费额度用完了），稍后再试"))
+    c = _kimi_chat(p)
+    c.run()
+    p.broken.clear()
+    assert _models(c.say("直接答：接着说")) == [KIMI_DIRECT, KIMI_DIRECT]
+
+
+def test_free_then_direct_then_flash_in_one_call():
+    """免费额度、直连都出问题：同一次调用里接着换 Flash；Flash 也坏了才失败。"""
+    p = _planner()
+    down = ModelUnavailable("模型服务暂时不可用（服务端出错），稍后再试")
+    p.broken.update({K31: FailingModel(error=down), KIMI_DIRECT: FailingModel(error=down)})
+    c = _kimi_chat(p)
+    v = c.run()
+    assert _models(v) == [FLASH] and _model_events(c.events) == [K31, KIMI_DIRECT, FLASH]
+    p.broken[FLASH] = FailingModel(error=down)
+    with pytest.raises(ModelUnavailable):
+        c.say("直接答：接着说")
+
+
+def test_breaker_is_per_provider_and_model(monkeypatch):
+    """熔断按“厂商:模型”记：直连的和托管在百炼上的同一个模型各断各的。"""
+    from app import config
+    from app.research_llm import make_chat_model
+
+    for name in ("DASHSCOPE_API_KEY", "MOONSHOT_API_KEY"):
+        monkeypatch.setattr(config, name, "k")
+    hosted, direct = make_chat_model(K31, thinking=True), make_chat_model(KIMI_DIRECT, thinking=True)
+    assert hosted._guard_key() == K31 and direct._guard_key() == KIMI_DIRECT

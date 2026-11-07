@@ -277,8 +277,7 @@ def test_title_timeouts_only_break_titles(clock, monkeypatch):
     p = LiveResearchPlanner()
     ref = p.catalog.roles["title"].model
     assert ref == p.catalog.roles["summarize"].model  # 起标题和写短版用同一个模型（models.toml）
-    flash = ref.partition(":")[2]
-    assert p._titler._guard_key() == f"{flash}·起标题" and p._summarizer._guard_key() == flash
+    assert p._titler._guard_key() == f"{ref}·起标题" and p._summarizer._guard_key() == ref  # 按“厂商:模型”记
     other = make_chat_model(ref, thinking=False)  # Auto 的子 agent 也是它
     calls = []
 

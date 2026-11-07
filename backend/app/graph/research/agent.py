@@ -16,7 +16,7 @@
 - ModelCallCapMiddleware：一轮里调模型到了上限，最后一次不许调工具，用已经查到的回答（和子 agent 一样）。
 - InterruptedRetryMiddleware：模型生成到一半断了，自动再调一次，页面去掉断掉的半截（子 agent 也挂）。
 - ModelSelect：每次调模型换上这一轮定下的模型；之前几轮是别的模型答的，发过去时不带那几轮的思考（子 agent 也挂）。
-  主 agent 的模型出问题（不可用、首字超时、免费额度用完）换备用重调（2026-11-08 Sean 定）。
+  主 agent 的模型出问题（不可用、首字超时、免费额度用完）换备用重调：用户选的模型走免费额度的先换直连，别的换 Flash（2026-11-08 Sean 定）。
 - ContentGuard：模型服务的内容审核拦下请求时，去掉没通过的搜索、读页结果接着跑；去不掉就停下这一轮，之后不再带进上下文。
 - CompactionMiddleware：对话太长时，发给模型的那份里把之前几轮压一压，state 不改（见 compaction）；压掉的原文用 recall 工具取回。
 工具里有 task：把一件查资料的事交给子 agent（见 subagent），一次回复里调几次就并行跑几个。
@@ -593,37 +593,44 @@ class ModelSelect(AgentMiddleware):
         turns = request.state.get("turns", [])
         use = (turns[-1].model if turns else None) or LEGACY_USE  # 2026-11-05 之前开始、之后重试的那一轮
         msgs = _others_without_thinking(request.messages, turns, use)
-        try:
-            return await handler(request.override(model=self.planner.chat_model(use), messages=msgs))
-        except ModelUnavailable as e:
-            if not turns or (switch := self._backup(request, turns, use, e)) is None:
-                raise
-            backup, update = switch
-            log.warning("模型出问题，这次换备用 %s：%s: %s", backup.ref, use.ref, e)
-            if e.streamed:  # 页面去掉断掉的半截，说明在重新生成；没流出东西的接着说在等模型
-                emit({"type": "restart", "streamed": True})
-            emit({"type": "model", "ref": backup.ref})
-            msgs = _others_without_thinking(request.messages, update["turns"], backup)
-            resp = await handler(request.override(model=self.planner.chat_model(backup), messages=msgs))
-            return ExtendedModelResponse(model_response=resp, command=Command(update=update))
+        update: dict[str, Any] | None = None
+        while True:  # 出问题换备用，备用再出问题接着换（免费额度 → 直连 → Flash），换到头了照常失败
+            try:
+                resp = await handler(request.override(model=self.planner.chat_model(use), messages=msgs))
+                break
+            except ModelUnavailable as e:
+                if not turns or (switch := self._backup(request, turns, use, e)) is None:
+                    raise
+                backup, update = switch
+                log.warning("模型出问题，这次换备用 %s：%s: %s", backup.ref, use.ref, e)
+                if e.streamed:  # 页面去掉断掉的半截，说明在重新生成；没流出东西的接着说在等模型
+                    emit({"type": "restart", "streamed": True})
+                emit({"type": "model", "ref": backup.ref})
+                use, turns = backup, update["turns"]
+                msgs = _others_without_thinking(request.messages, turns, use)
+        return resp if update is None else ExtendedModelResponse(model_response=resp, command=Command(update=update))
 
     def _backup(self, request: ModelRequest, turns: list[Turn], use: ModelUse, e: ModelUnavailable) -> tuple[ModelUse, dict] | None:
-        """换备用（2026-11-08 Sean 定，models.toml 的 [auto] fallback）：返回备用和要写进 state 的（这一轮记录里的模型换成备用，
-        后面几次调模型都用它；Auto 的对话以后都用它）。已经是备用的不换（返回 None，照常失败）。
-        用户自己选的模型只有这一轮用备用，下一轮还是他选的。
+        """换成什么（2026-11-08 Sean 定）：返回换上的模型和要写进 state 的（这一轮记录里的模型换成它，后面几次调模型都用它；
+        Auto 的对话以后都用它）。换到头了返回 None，照常失败。
+        - 用户自己选的模型走的是它的免费额度（[[free]] 的 same_as）：换直连的同一个模型。
+        - 别的换备用（models.toml 的 [auto] fallback，Flash）；已经是备用的不换。用户自己选的模型只有这一轮换，下一轮还是他选的。
         这一轮前面已经有别的模型发的工具调用、又没带思考的（百炼上的 DeepSeek 带工具时不给思考），这一轮剩下的不开思考：
         DeepSeek 开思考时这一轮的工具调用要带着思考，不带报 400（别家的思考它收，2026-11-08 实测）。"""
-        catalog = self.planner.catalog
+        catalog, usable = self.planner.catalog, self.planner.usable
         if isinstance(e, FreeTierUsedUp):
             catalog.used_up(use.ref)
         turn = turns[-1]
-        fb = catalog.plan(catalog.auto.fallback, use.thinking, self.planner.usable)
-        if fb.agent.ref == use.ref:
+        if turn.option != AUTO and catalog.is_free(use.ref):
+            plan = catalog.plan(turn.option, use.thinking, usable, free=False)
+        else:
+            plan = catalog.plan(catalog.auto.fallback, use.thinking, usable)
+        if plan.agent.ref == use.ref:
             return None
-        backup = fb.agent
+        backup = plan.agent
         if backup.thinking and _bare_tool_calls(request.messages, turn.id):
             backup = backup.model_copy(update={"thinking": False, "effort": ""})
-        sub = turn.subagent_model if turn.option != AUTO else fb.subagent
+        sub = turn.subagent_model if turn.option != AUTO else plan.subagent
         update: dict[str, Any] = {"turns": [*turns[:-1], turn.model_copy(update={"model": backup, "subagent_model": sub})]}
         if turn.option == AUTO:
             update["auto_model"] = backup.ref
