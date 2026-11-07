@@ -352,8 +352,12 @@ function Abilities() {
 }
 
 // 今日灵感：Fusion 每天出的题（后端代取，只留新闻、调研、常识、天气、生图），大家看到的一样，每次打开新对话打乱顺序。
-// 排两行，放得下几个放几个，不自己翻；想看别的点“换一批”。一行放不下的题折成两行，不截断。点一下直接发。
-// 取不到就显示固定的几个例子，不写“今日灵感”。取回来之前先放占位，出来时页面不跳
+// 排两行，放得下几个放几个；每 15 秒一个接一个翻过去换下一批（批次 A 停过，2026-11-07 Sean 定恢复、改成 15 秒），
+// 鼠标放在上面、键盘停在上面时不翻；“换一批”马上翻，翻完重新数 15 秒。系统设了减少动态效果：直接换，不翻。
+// 一行放不下的题折成两行，不截断。点一下直接发。取不到就显示固定的几个例子，不写“今日灵感”。取回来之前先放占位，出来时页面不跳
+const ROTATE_MS = 15000;
+const FLIP_MS = 300; // 和 .ws-inspire 里翻的过渡时长一致
+const FLIP_STAGGER = 80;
 const CHIP_GAP = 8; // 和 .ws-inspire 的 gap 一致
 const ROWS = 2;
 
@@ -387,15 +391,22 @@ function Inspirations({ onPick }) {
   const [pool, setPool] = useState(null); // {questions, today}；today 为假：没取到，用的固定例子
   const [start, setStart] = useState(0);
   const [size, setSize] = useState(null); // {room：能用多宽, widths：每个题多宽}
+  const [flipped, setFlipped] = useState(false);
+  const [hover, setHover] = useState(false);
+  const [focused, setFocused] = useState(false);
   const box = useRef(null);
   const ruler = useRef(null); // 看不见的一排，用来量每个题多宽
+  const timers = useRef([]);
 
   useEffect(() => {
     let on = true;
     listInspirations()
       .then((qs) => on && setPool(qs.length ? { questions: shuffled(qs), today: true } : { questions: EXAMPLES, today: false }))
       .catch(() => on && setPool({ questions: EXAMPLES, today: false }));
-    return () => { on = false; };
+    return () => {
+      on = false;
+      timers.current.forEach(clearTimeout);
+    };
   }, []);
   useLayoutEffect(() => {
     if (!pool) return undefined;
@@ -408,22 +419,46 @@ function Inspirations({ onPick }) {
 
   const shown = pool && size?.room ? fitRows(size.widths, start, size.room) : [];
   const more = !!pool && shown.length > 0 && pool.questions.length > shown.length;
+  const next = useRef(null);
+  next.current = () => {
+    if (!more) return; // 一屏就放得下全部：不翻
+    const to = (start + shown.length) % pool.questions.length;
+    timers.current.forEach(clearTimeout);
+    timers.current = [];
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return setStart(to);
+    setFlipped(true);
+    timers.current.push(setTimeout(() => {
+      setStart(to);
+      timers.current.push(setTimeout(() => setFlipped(false), 50));
+    }, shown.length * FLIP_STAGGER + FLIP_MS));
+  };
+  const paused = hover || focused;
+  useEffect(() => {
+    if (paused || !more) return undefined;
+    const t = setTimeout(() => next.current(), ROTATE_MS); // 换了一批（自己翻的、点“换一批”的）都重新数
+    return () => clearTimeout(t);
+  }, [paused, more, start]);
 
   return (
     <section className="ws-examples" aria-label="新对话的起点">
       <Abilities />
+      {/* 停翻只看小标题和两行题：外面这块往下撑满了页面，鼠标放在下面的空白处不算 */}
+      <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+        onFocus={() => setFocused(true)} onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setFocused(false)}>
       <div className="ws-inspire-label">
         {pool?.today && <><IconSparkle size={13} /><b>今日灵感</b><span className="hint">每日更新，与你的对话无关</span></>}
-        {more && <button className="ws-inspire-more" onClick={() => setStart((start + shown.length) % pool.questions.length)}><IconLoop size={12} />换一批</button>}
+        {more && <button className="ws-inspire-more" onClick={() => next.current()}><IconLoop size={12} />换一批</button>}
       </div>
       <div className="ws-inspire-ruler" ref={ruler} aria-hidden="true">
         {pool?.questions.map((q) => <span key={q} className="ws-suggest-item">{q}</span>)}
       </div>
-      <div className="ws-inspire" ref={box} aria-label={pool?.today ? "今日灵感" : "可以这样问"} role="group">
-        {pool ? shown.map((i) => {
+      <div className={"ws-inspire" + (flipped ? " flip" : "")} ref={box} aria-label={pool?.today ? "今日灵感" : "可以这样问"} role="group">
+        {pool ? shown.map((i, n) => {
           const q = pool.questions[i];
-          return <button key={q} className="ws-suggest-item" onClick={() => onPick(q)}>{q}</button>;
+          const d = `${n * FLIP_STAGGER}ms`; // 只有翻的两项错开，悬停变色不等
+          return <button key={q} className="ws-suggest-item" style={{ transitionDelay: `${d}, ${d}, 0ms, 0ms` }} onClick={() => onPick(q)}>{q}</button>;
         }) : [112, 168, 136, 150].map((w) => <span key={w} className="ws-skel ws-skel-chip" style={{ width: w }} aria-hidden="true" />)}
+      </div>
       </div>
     </section>
   );

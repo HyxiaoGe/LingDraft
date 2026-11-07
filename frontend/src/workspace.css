@@ -648,6 +648,8 @@
 .ws-inspire-ruler { position: absolute; top: 0; left: 0; right: 0; height: 0; overflow: hidden; visibility: hidden; display: flex; } /* 一排放不下的剪掉，不把页面撑宽；量的宽度不受影响 */
 .ws-inspire-ruler .ws-suggest-item { flex: none; height: 32px; padding: 0 12px; line-height: 30px; white-space: nowrap; }
 .ws-inspire .ws-suggest-item, .ws-suggest-list .ws-suggest-item { flex: none; max-width: 100%; min-height: 32px; padding: 4px 12px; line-height: 1.5; text-align: left; }
+.ws-inspire .ws-suggest-item { backface-visibility: hidden; transition-property: opacity, transform, border-color, color; transition-duration: .3s, .3s, .15s, .15s; }
+.ws-inspire.flip .ws-suggest-item { opacity: 0; transform: rotateX(90deg); } /* 换一批：一个接一个翻过去（错开见 Inspirations） */
 
 /* 输入框；往上翻着看时，上面浮一个“回到底部” */
 .ws-dock { position: relative; flex: none; }
