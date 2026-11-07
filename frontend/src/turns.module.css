@@ -1,7 +1,8 @@
 /* 轮次目录（turns.jsx），2026-11-07 从 workspace.css 迁过来。三种样子：
    宽（正文区 ≥1280）：正文右边一栏，一直在；
-   中（≥960、有鼠标）：右边一列短横线，每轮一条，读到的那轮是长一点的蓝线；鼠标移上去、Tab 进来，在左边展开完整的目录；
-   窄：顶栏右边的“轮次”按钮，电脑上点开是按钮下面的浮层，手机上是底部弹层 */
+   中（≥960、有鼠标）：右边一列短横线，每轮一条，读到的那轮是长一点的蓝线，点一条跳过去；
+   窄：顶栏右边的“轮次”按钮，电脑上点开是按钮下面的浮层，手机上是底部弹层。
+   宽和中：停在某一轮上，左边出一张卡片（.peek）：问的话、回答的开头、时间 */
 
 /* 一行一轮：序号 + 那句话的第一行，最多两行，再长截掉（鼠标停上去看全句） */
 .turn { width: 100%; display: flex; align-items: baseline; gap: 8px; padding: 4px 8px; border-radius: var(--r-sm); text-align: left;
@@ -17,17 +18,23 @@
 .rail { position: absolute; top: calc(58px + 24px); right: 16px; z-index: 1; width: 184px; max-height: calc(100% - 58px - 24px - 48px);
   overflow-y: auto; overscroll-behavior: contain; }
 
-/* 中：一列短横线（离右边 16，不压着滚动条），轮次多了横线挨得更紧；左边留 12px 好让鼠标移上去 */
+/* 中：一列短横线（离右边 16，不压着滚动条），轮次多了横线挨得更紧。每条是一个按钮，32 宽（横线靠右，左边空的 12 好让鼠标移上去），上下挨着没有缝 */
 .mini { position: absolute; top: calc(58px + 24px); right: 16px; z-index: 2; max-height: calc(100% - 58px - 24px - 48px);
-  display: flex; flex-direction: column; align-items: flex-end; padding: 4px 0 4px 12px; }
-.tick { flex: 0 1 8px; min-height: 4px; display: flex; align-items: center; }
+  display: flex; flex-direction: column; padding: 4px 0; }
+.tick { flex: 0 1 8px; min-height: 4px; width: 32px; display: flex; align-items: center; justify-content: flex-end; }
 .tick::before { content: ""; width: 12px; height: 2px; border-radius: 1px; background: var(--line2); transition: width .15s var(--ease), background .15s var(--ease); }
+@media (hover: hover) { .tick:hover::before { width: 20px; background: var(--muted); } }
+.tick:focus-visible::before { width: 20px; background: var(--muted); }
 .tick.on::before { width: 20px; background: var(--accent); }
-/* 展开的目录：盖在正文上面，右边和横线对齐。没展开时看不见、也不挡鼠标，但还在 Tab 的顺序里：Tab 进来就展开 */
-.panel { position: absolute; top: -8px; right: 0; width: 280px; max-height: min(480px, calc(100vh - 160px)); max-height: min(480px, calc(100dvh - 160px));
-  overflow-y: auto; overscroll-behavior: contain; padding: 8px 4px 4px; background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r);
-  box-shadow: var(--lift); opacity: 0; transform: translateX(4px); pointer-events: none; transition: opacity .15s var(--ease), transform .15s var(--ease); }
-.mini:hover .panel, .mini:focus-within .panel { opacity: 1; transform: none; pointer-events: auto; transition-delay: .06s; }
+
+/* 停在某一轮上时的卡片：问的话（粗，最多两行）、回答的开头（最多三行）、时间。位置在 turns.jsx 里算（固定在窗口上，对着那一轮） */
+.peek { position: fixed; z-index: 30; width: 280px; display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; background: var(--paper);
+  border: 1px solid var(--line2); border-radius: var(--r-lg); box-shadow: var(--lift); pointer-events: none; animation: peek-in .12s var(--ease); }
+.ask, .reply { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.ask { -webkit-line-clamp: 2; font-size: 13.5px; font-weight: 600; line-height: 1.5; color: var(--ink); }
+.reply { -webkit-line-clamp: 3; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.when { font-size: 12px; color: var(--faint); }
+@keyframes peek-in { from { opacity: 0; transform: translateX(4px); } }
 
 /* 窄：顶栏的按钮点开，按钮下面的浮层 */
 .pop { position: absolute; top: calc(100% + 8px); right: 0; z-index: 60; width: 320px; max-height: min(480px, 70vh); max-height: min(480px, 70dvh);
@@ -41,4 +48,4 @@
   .sheet .n { min-width: 16px; }
 }
 
-@media print { .rail, .mini { display: none !important; } }
+@media print { .rail, .mini, .peek { display: none !important; } }
