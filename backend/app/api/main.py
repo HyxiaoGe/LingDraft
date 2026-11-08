@@ -768,14 +768,27 @@ def research_file(thread_id: str, file_id: str, who: Who):
                         headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
 
 
+@app.get("/api/research/threads/{thread_id}/files/{file_id}/parts")
+def research_file_parts(thread_id: str, file_id: str, who: Who):
+    """右栏预览用户发的文件：抽出来的文字，按段（PDF 一页、PPT 一张、表格一块，段名是“第 3 页”这样的），太长的只给前面一部分（more）。
+    PDF 页面上不用这个：桌面上看原件（浏览器自己的 PDF 查看器），手机上直接下载。"""
+    r = research()
+    _mine(r, thread_id, who)
+    got = r.file_preview(thread_id, file_id)
+    if got is None:
+        raise HTTPException(404, "没有这个文件")
+    row, parts, more = got
+    return {"id": row.id, "name": row.name, "type": row.type, "parts": [{"title": p.title, "text": p.text} for p in parts], "more": more}
+
+
 @app.get("/api/research/threads/{thread_id}/images/{image_id}")
 def research_image(thread_id: str, image_id: str):
-    """对话里画的图：图存在 image-service 里，后端按编号经网关取来转给页面（不暴露服务地址）。
-    这一轮还在跑时页面就来取了，所以不查图是不是这段对话的（见 ResearchRunner.image）。
-    页面用 <img src> 取，带不了登录信息，所以也不认人：知道对话 id 和图的编号（都是随机的）就能取。
+    """对话里的图（画的、用户发的）：图存在 image-service 里，后端按编号经网关取来转给页面（不暴露服务地址）。
+    只给这段对话的图（按文件表认，见 ResearchRunner.image）。
+    页面用 <img src> 取，带不了登录信息，所以不认人：知道对话 id 和图的编号（都是随机的）就能取。
     内容不会变，浏览器可以一直缓存；对话删了图也跟着删。网关、服务出问题回 502，页面显示加载失败、可以重试。"""
     try:
-        got = research().image(image_id) if valid_thread_id(thread_id) else None
+        got = research().image(thread_id, image_id) if valid_thread_id(thread_id) else None
     except GatewayError as e:
         logger.warning("取图失败：%s", e)
         raise HTTPException(502, "图片暂时取不到") from None

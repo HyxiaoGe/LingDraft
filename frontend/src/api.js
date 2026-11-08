@@ -187,11 +187,16 @@ export async function removeFile(id) {
   await authFetch(`/api/files/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
 }
 
-// 下载对话里发过的文件（原件）：要带登录信息，取成 blob 再存，文件名用原来的
-export async function downloadThreadFile(threadId, f) {
-  const resp = await authFetch(`/api/research/threads/${encodeURIComponent(threadId)}/files/${encodeURIComponent(f.id)}`);
+// 对话里发过的文件的原件（blob）：要带登录信息。下载、右栏看 PDF 都用它
+export async function threadFileBlob(threadId, id, signal) {
+  const resp = await authFetch(`/api/research/threads/${encodeURIComponent(threadId)}/files/${encodeURIComponent(id)}`, { signal });
   if (!resp.ok) throw await httpError(resp);
-  const url = URL.createObjectURL(await resp.blob());
+  return resp.blob();
+}
+
+// 下载对话里发过的文件（原件）：取成 blob 再存，文件名用原来的
+export async function downloadThreadFile(threadId, f) {
+  const url = URL.createObjectURL(await threadFileBlob(threadId, f.id));
   const a = Object.assign(document.createElement("a"), { href: url, download: f.name });
   document.body.append(a);
   a.click();
@@ -204,6 +209,13 @@ export async function threadFileText(threadId, id, signal) {
   const resp = await authFetch(`/api/research/threads/${encodeURIComponent(threadId)}/files/${encodeURIComponent(id)}`, { signal });
   if (!resp.ok) throw await httpError(resp);
   return resp.text();
+}
+
+// 右栏预览用户发的文件：抽出来的文字，{name, type, parts: [{title, text}], more}（太长的只有前面一部分，more 为 true）
+export async function threadFileParts(threadId, id, signal) {
+  const resp = await authFetch(`/api/research/threads/${encodeURIComponent(threadId)}/files/${encodeURIComponent(id)}/parts`, { signal });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
 }
 
 export async function getResearchState(threadId) {

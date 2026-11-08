@@ -125,6 +125,21 @@ def failed(call_id: str, code: str, *, attempted: bool) -> ToolMessage:
                        status="error")
 
 
+async def _register(request: Any, img: GeneratedImage, msgs: list[BaseMessage]) -> None:
+    """画好的图登记进文件表（见 FileService.add_image）：记在这段对话、这一轮下，页面取图按表认，重新回答时跟着这一轮删。
+    命令行、评测没有文件服务，不登记。没记上只记日志：图照样给模型，页面上这张取不到，说加载失败。"""
+    ctx = getattr(getattr(request, "runtime", None), "context", None)
+    files, tid = getattr(ctx, "files", None), getattr(ctx, "thread_id", None)
+    if files is None or not tid:
+        return
+    i = last_human(msgs)
+    try:
+        await files.add_image(img.id, owner=getattr(ctx, "owner", None) or "", workspace_id=tid, generated=True,
+                              turn_id=msgs[i].id if i >= 0 else None, mime_type=img.mime_type, width=img.width, height=img.height)
+    except Exception:
+        logger.exception("画好的图没登记进文件表：%s", img.id)
+
+
 class ImageMiddleware(AgentMiddleware):
     """只管 generate_image，见模块说明。放在 ToolProgressMiddleware 里面：过程记录看到的是整理好的结果。"""
 
@@ -178,6 +193,7 @@ class ImageMiddleware(AgentMiddleware):
                              prompt=str(args.get("prompt") or "").strip(),
                              aspect_ratio=ratio if isinstance(ratio, str) and ratio else ratio_of(got.width, got.height),
                              model=got.model, edited_from=got.edited_from)
+        await _register(request, img, msgs)
         search = data.get("reference_search")
         status = search.get("status") if isinstance(search, dict) else None
         note = f"{text} {prompts.render(f'tools.{IMAGE_TOOL}.shown')}"

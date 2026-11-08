@@ -34,6 +34,8 @@ export const IconPlane = (p) => svg(<path d="M10.5 21l1.5-6.5L5 14l-1.5 2H2l1-4-
 export const IconTrain = (p) => svg(<><rect x="5" y="3" width="14" height="14" rx="3" /><path d="M5 11h14M9 21l1.5-4M15 21l-1.5-4M9 14h.01M15 14h.01" /></>, p);
 export const IconTicket = (p) => svg(<><path d="M4 6h16v4a2 2 0 0 0 0 4v4H4v-4a2 2 0 0 0 0-4z" /><path d="M14 6v2M14 11v2M14 16v2" /></>, p);
 export const IconChevron = (p) => svg(<path d="M6 9l6 6 6-6" />, p);
+// 这段对话的文件（顶栏“文件”）：一个文件夹
+export const IconFolder = (p) => svg(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />, p);
 // 设置：三条横线上的三个滑钮
 export const IconSliders = (p) => svg(<><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1" /><circle cx="15" cy="6" r="2" /><circle cx="9" cy="12" r="2" /><circle cx="17" cy="18" r="2" /></>, p);
 // 登录：箭头进门

@@ -32,6 +32,7 @@ from app import aio, config, costs, quota
 from app.api.drafts import DraftTracker
 from app.api.run_store import ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, Pending, PostgresRunStore, RunStore
 from app.api.runner import BaseRunner, RunConflict, _sse_text, jsonable, log
+from app.files.parse import Part
 from app.files.service import NOT_HERE, FileService, NotSendable
 from app.files.store import FileRow, FileStore, MemoryFileStore, PostgresFileStore
 from app.graph.research import history
@@ -417,6 +418,10 @@ class ResearchRunner(BaseRunner):
         """这段对话里用户发的文件的原件（下载）：(路径, 那一行)。不是这段对话的、原件没了是 None。"""
         return aio.run(self.files.original(file_id, thread_id))
 
+    def file_preview(self, thread_id: str, file_id: str) -> tuple[FileRow, list[Part], bool] | None:
+        """这段对话里用户发的文件抽出来的文字（右栏预览，见 FileService.preview）。"""
+        return aio.run(self.files.preview(file_id, thread_id))
+
     def upload_image(self, data: bytes) -> AttachedImage:
         """用户发的图传进 image-service（归灵稿，和画的图放在一起），返回记在消息上的信息。
         服务不收抛 gateway.ImageRejected（太大、认不出），网关、服务出问题抛 GatewayError。"""
@@ -475,11 +480,11 @@ class ResearchRunner(BaseRunner):
     def state_view(self, thread_id: str) -> dict:
         return aio.run(self._astate_view(thread_id))
 
-    def image(self, image_id: str) -> tuple[bytes, str] | None:
+    def image(self, thread_id: str, image_id: str) -> tuple[bytes, str] | None:
         """页面来取的图：(内容, MIME 类型)，经网关从 image-service 取（见 app.tools.gateway）。
-        不查是不是这段对话的：图画好、页面就去取，这一轮还没跑完，检查点里还没有它（运行结束才写，见 DURABILITY）；
-        服务只给灵稿的图，编号是随机的 uuid。编号格式不对（比如以前灵稿自己存的图）、服务里已经没有的是 None。网关、服务出问题照常抛出。"""
-        if not IMAGE_ID.fullmatch(image_id):
+        按文件表认是不是这段对话的：图发出去、画好时就登记了（不靠检查点，检查点一轮结束才写，见 DURABILITY）。
+        不是这段对话的、编号格式不对（比如以前灵稿自己存的图）、服务里已经没有的是 None。网关、服务出问题照常抛出。"""
+        if not IMAGE_ID.fullmatch(image_id) or not aio.run(self.files.image_in(image_id, thread_id)):
             return None
         return aio.run(self.images.image(image_id))
 
@@ -867,11 +872,14 @@ class ResearchRunner(BaseRunner):
                 raise UnknownModel("对话开始后不能换模型，想换模型请开新对话")
             update["option"] = option
         attached: list[AttachedFile] = []
+        who = owner or (await self.run_store.owner_of(thread_id) if files or images else None)
         if files:
-            who = owner or await self.run_store.owner_of(thread_id)
             if who is None:
                 raise NotSendable(NOT_HERE, "这段对话不能带文件")
             attached = await self.files.bind(list(files), who, thread_id)
+        for img in images:  # 带的图登记进文件表（图已经在 image-service 里了）
+            await self.files.add_image(img.id, owner=who or "", workspace_id=thread_id, generated=False, turn_id=None,
+                                       mime_type=img.mime_type, width=img.width, height=img.height)
         update["messages"] = [_said(text, thinking, images, attached)]
         if owner is not None:
             await self.run_store.claim(thread_id, owner)

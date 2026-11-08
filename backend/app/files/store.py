@@ -1,4 +1,4 @@
-"""文件表：用户上传的文件（以后还有模型生成的、图片）一行一个，抽出来的文字按段另存（2026-11-08 Sean 定，见 docs/图片和文件理解方案.md）。
+"""文件表：用户上传的文件、模型写的文件、图片（用户发的、画的）一行一个，抽出来的文字按段另存（2026-11-08 Sean 定，见 docs/图片和文件理解方案.md）。
 
 - 文件按工作区归属：现在一段对话就是一个工作区（workspace_id = 对话编号），以后跨对话的项目是一个工作区挂几段对话，表不用改。
   刚传上来、还没发出去的不归哪个工作区（workspace_id 为空），发出去时绑上（bind）；没发出去的过一天清掉（见 service）。
@@ -6,6 +6,8 @@
 - 模型写的文件（origin = generated，见 app.tools.write_file）每改一次出新一版、一版一行、存全文：prev_id 指上一版，
   series_id 是第一版的编号（各版串起来），turn_id 是哪一轮写的（那一轮用户那句话的编号）。上传的这两列是空的。
 - 原件存在数据卷上（storage 是相对 config.FILES_DIR 的路径），文字存这里的 file_parts（段号从 1 起，PDF 段号就是页码）。
+- 图片（kind = image）在 image-service 里，这里只登记归哪段对话、哪一轮（行的编号、storage 都是图的编号），没有文字；
+  用户发的 origin = upload，画的 origin = generated（turn_id 是哪一轮画的）。上传的次数、额度只算文件，不算图。
 
 和运行记录同一个 Postgres、同一个连接池（见 ResearchRunner）；测试用内存的。都是协程，在对话的事件循环里调。
 """
@@ -23,7 +25,7 @@ from app.files.parse import Part
 
 PARSING, READY, FAILED = "parsing", "ready", "failed"
 UPLOAD, GENERATED = "upload", "generated"
-DOCUMENT = "document"
+DOCUMENT, IMAGE = "document", "image"
 
 
 class FileRow(BaseModel):
@@ -66,7 +68,7 @@ class FileStore(Protocol):
     async def delete(self, file_ids: list[str]) -> None: ...  # 行和文字一起删（原件由 service 删）
     async def unbound_before(self, at: datetime) -> list[FileRow]: ...
     async def with_status(self, status: str) -> list[FileRow]: ...
-    async def uploads_since(self, owner: str, at: datetime) -> int: ...  # 只算上传的
+    async def uploads_since(self, owner: str, at: datetime) -> int: ...  # 只算上传的文件（不算图）
 
 
 class MemoryFileStore:
@@ -124,7 +126,7 @@ class MemoryFileStore:
         return [r.model_copy(deep=True) for r in self._rows.values() if r.status == status]
 
     async def uploads_since(self, owner: str, at: datetime) -> int:
-        return sum(1 for i, r in self._rows.items() if r.owner == owner and r.origin == UPLOAD and self._at[i] >= at)
+        return sum(1 for i, r in self._rows.items() if r.owner == owner and r.origin == UPLOAD and r.kind == DOCUMENT and self._at[i] >= at)
 
 
 _DDL = (
@@ -217,5 +219,6 @@ class PostgresFileStore:
 
     async def uploads_since(self, owner: str, at: datetime) -> int:
         async with self.pool.connection() as conn:
-            cur = await conn.execute("SELECT count(*) AS n FROM files WHERE owner = %s AND origin = %s AND created_at >= %s", (owner, UPLOAD, at))
+            cur = await conn.execute("SELECT count(*) AS n FROM files WHERE owner = %s AND origin = %s AND kind = %s AND created_at >= %s",
+                                     (owner, UPLOAD, DOCUMENT, at))
             return (await cur.fetchone())["n"]

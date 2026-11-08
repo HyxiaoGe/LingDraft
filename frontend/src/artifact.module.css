@@ -3,6 +3,8 @@
 /* ---------- 卡片：正文下面一份文件一张，竖着排 ---------- */
 .cards { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin: 16px 0 4px; }
 .card { width: 100%; max-width: 420px; border: 1px solid var(--line); border-radius: var(--r); background: var(--paper); transition: border-color .15s var(--ease), background .15s var(--ease); }
+.cards.wide { margin: 0; }
+.cards.wide .card { max-width: none; }
 .card.on { border-color: var(--accent-line); background: var(--accent-soft); }
 .card.failed { border-color: var(--warn-line); background: var(--warn-soft); }
 .cardInner { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 60px; padding: 10px 14px 10px 10px; border-radius: inherit; text-align: left; }
@@ -29,12 +31,39 @@ button.cardInner { transition: background .15s var(--ease); }
 .headText { display: flex; min-width: 0; flex: 1; flex-direction: column; justify-content: center; }
 .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; line-height: 1.4; color: var(--ink); }
 .title:focus { outline: none; } /* 点开时光标挪到这里（读屏从标题读起），不是能点的东西，不画框 */
-.facts { display: flex; align-items: center; gap: 8px; min-width: 0; height: 22px; overflow: hidden; font-size: 12px; color: var(--muted); white-space: nowrap; }
+.facts { display: flex; align-items: center; gap: 8px; min-width: 0; height: 22px; margin-left: -6px; padding-left: 6px; overflow: hidden; font-size: 12px; color: var(--muted);
+  white-space: nowrap; } /* 左边多留 6px：换一版的按钮的底色往左出 6px，字和标题对齐 */
 .facts > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .live { display: inline-flex; align-items: center; gap: 6px; color: var(--accent); }
 .bad { display: inline-flex; align-items: center; gap: 4px; color: var(--warn); }
-.version { min-width: 0; max-width: 100%; height: 22px; padding: 0 4px; border: 1px solid var(--line2); border-radius: var(--r-sm); background: var(--paper); color: var(--ink2); font: inherit; font-size: 12px; cursor: pointer; }
-.version:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* 换一版：第二行的按钮（像一行字，悬停有底色），点开是一列各版（和选模型的菜单一个样子：选着的那行淡靛青底、打勾） */
+.verBtn { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; height: 22px; margin-left: -6px; padding: 0 6px; border-radius: var(--r-sm);
+  color: var(--ink2); font-size: 12px; transition: background .15s var(--ease), color .15s var(--ease); }
+.facts .verBtn:focus-visible { outline-offset: -2px; } /* 外面一圈会被这一行裁掉，焦点框画在里面 */
+.verBtn > svg { flex: none; color: var(--muted); transition: transform .15s var(--ease); }
+.verBtn[aria-expanded="true"] { background: var(--hover); color: var(--ink); }
+.verBtn[aria-expanded="true"] > svg { transform: rotate(180deg); }
+@media (hover: hover) { .verBtn:hover { background: var(--hover); color: var(--ink); } }
+.verText { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.verMenu { position: fixed; z-index: 60; overflow-y: auto; overscroll-behavior: contain; padding: 6px; background: var(--paper); border: 1px solid var(--line2);
+  border-radius: var(--r); box-shadow: var(--lift); animation: rise .12s var(--ease); }
+.verList { display: flex; flex-direction: column; gap: 2px; }
+.verRow { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 7px 10px; border-radius: var(--r-sm); text-align: left; color: var(--ink);
+  transition: background .12s var(--ease); }
+@media (hover: hover) { .verRow:hover { background: var(--hover); } }
+.verRow[aria-checked="true"], .verRow[aria-checked="true"]:hover { background: var(--accent-soft); }
+.verRow[aria-checked="true"] .verName { color: var(--accent); }
+.verRow > svg { flex: none; color: var(--accent); }
+.verMain { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; }
+.verName { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; line-height: 20px; }
+.newest { padding: 0 6px; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 11px; font-weight: 400; line-height: 18px; }
+.verRow[aria-checked="true"] .newest { background: var(--paper); }
+.verNote { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 12px; line-height: 1.45; color: var(--muted); }
+/* 手机：底部弹层（sheet.module.css）里，一行至少 56px、字大一号 */
+[data-sheet] .verRow { min-height: 56px; padding: 8px 12px; }
+[data-sheet] .verName { font-size: 16px; }
+[data-sheet] .verNote { font-size: 13px; }
+@media (hover: none) { .verRow:active { background: var(--hover); } }
 .acts { display: flex; flex: none; align-items: center; gap: 2px; }
 .acts :global(.ws-icon-btn):disabled { opacity: .4; }
 .seg { display: inline-flex; margin-right: 6px; border: 1px solid var(--line2); border-radius: var(--r-sm); overflow: hidden; }
@@ -67,9 +96,10 @@ button.cardInner { transition: background .15s var(--ease); }
 .panel[data-mobile] { position: fixed; inset: 0; z-index: 35; height: 100vh; height: 100dvh; border-left: 0;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
 .panel[data-mobile] .head { height: auto; min-height: 56px; gap: 4px; padding: 4px; }
-.panel[data-mobile] .facts { height: auto; min-height: 22px; }
+.panel[data-mobile] .facts { height: auto; min-height: 22px; overflow: visible; } /* 换一版的按钮补出来的点按区不被裁掉；字各自截断 */
 .panel[data-mobile] .head .badge { display: none; } /* 顶上挤：返回、标题、复制、下载，角标不放 */
-.panel[data-mobile] .version { height: 30px; font-size: 16px; } /* iOS 字小于 16 聚焦时会放大页面 */
+.panel[data-mobile] .verBtn { position: relative; height: 26px; font-size: 13px; }
+.panel[data-mobile] .verBtn::after { content: ""; position: absolute; inset: -9px -4px; } /* 看得见的不变，点按区补到 44px */
 .panel[data-mobile] .seg button { height: 36px; padding: 0 12px; font-size: 14px; }
 .panel[data-mobile] .padded { padding: 18px 16px calc(80px + env(safe-area-inset-bottom)); }
 .panel[data-mobile] .body:not(.padded) { padding-bottom: env(safe-area-inset-bottom); }
