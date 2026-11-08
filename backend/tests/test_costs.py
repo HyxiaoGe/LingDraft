@@ -85,6 +85,8 @@ def test_catalog_rejects_price_mistakes():
         ({**good, "prices": {**prices, M3: {**prices[M3], "off_peak": prices[M3]["regular"]}}}, "分档和峰谷"),
         ({**good, "prices": {**prices, HY4: {**prices[HY4], "promo": {**prices[HY4]["promo"], "until": datetime(2026, 12, 31)}}}}, "时区"),
         ({**good, "prices": {**prices, M3: {**prices[M3], "tiers": prices[M3]["tiers"] * 2}}}, "从小到大"),
+        # 免费额度按 same_as 的价格算给用户：藏起来的选项可以没价格，那就不能拿来当 same_as
+        ({**good, "free": [*good["free"], {"model": "tokenhub:grok-4.7", "until": "2027-01-01", "same_as": "xai:grok-4.7"}]}, "算给用户"),
     ]:
         with pytest.raises(ValidationError, match=why):
             Catalog.model_validate(broken)
@@ -152,8 +154,8 @@ def test_each_call_is_charged_and_the_message_carries_it(rows):
     assert len(rows) == 3
     assert rows[0] == {"started_at": FRI_10, "provider": "deepseek", "model": "deepseek-v4-pro", "purpose": "agent",
                        "thread_id": None, "turn_id": None, "owner": None, "status": "ok", "input_tokens": 10_000, "cached_tokens": 8_000,
-                       "output_tokens": 1_000, "yuan": pytest.approx(PRO_PEAK), "rate": {"kind": "regular", "cached": 0.30, "input": 9.0,
-                                                                                         "output": 27.0}, "version": config.VERSION or None}
+                       "output_tokens": 1_000, "yuan": pytest.approx(PRO_PEAK), "billed": pytest.approx(PRO_PEAK),
+                       "rate": {"kind": "regular", "cached": 0.30, "input": 9.0, "output": 27.0}, "version": config.VERSION or None}
 
 
 def test_async_stream_is_charged_with_its_scope(rows, monkeypatch):
@@ -179,6 +181,21 @@ def test_unknown_usage_and_unpriced_models(rows):
     unpriced = Metered(ref="xai:grok-4.7").invoke("问")
     assert COST not in no_usage.response_metadata and COST not in unpriced.response_metadata
     assert [(r["status"], r["input_tokens"], r["yuan"]) for r in rows] == [("no_usage", None, None), ("ok", 10_000, None)]
+
+
+def test_free_tier_costs_us_nothing_but_users_pay_the_normal_price(rows):
+    """免费额度是灵稿省的钱，不是用户的（2026-11-09 Sean 定）：账上记 0 元，算给用户的按没有免费额度时会用的模型算，
+    有 same_as 的按那个选项的模型，没有的（Auto 判为简单的用的 K3）按 Auto 的备用 Flash；消息上的钱数（每轮的额度）是算给用户的。"""
+    c = model_catalog.load()
+    k31 = Metered(ref="dashscope:kimi-k3.1-pro").invoke("问")
+    k3 = Metered(ref="dashscope:kimi-k3").invoke("问")
+    kimi = c.prices["moonshot:kimi-k3.1-pro"].regular.yuan(10_000, 8_000, 1_000)
+    flash_kind, flash = c.rate(FLASH, FRI_10, 10_000)
+    assert k31.response_metadata[COST] == pytest.approx(kimi) and k3.response_metadata[COST] == pytest.approx(flash.yuan(10_000, 8_000, 1_000))
+    assert [(r["yuan"], r["rate"]["kind"], r["rate"]["billed_as"]["model"], r["rate"]["billed_as"]["kind"]) for r in rows] == [
+        (0, "free_tier", "moonshot:kimi-k3.1-pro", "regular"), (0, "free_tier", FLASH, flash_kind)]
+    assert [r["billed"] for r in rows] == [pytest.approx(kimi), pytest.approx(flash.yuan(10_000, 8_000, 1_000))]
+    assert c.billed_as(PRO) == PRO and "billed_as" not in costs._rate("regular", c.prices[PRO].regular)
 
 
 def test_calls_cut_short_record_unknown_cost(rows):

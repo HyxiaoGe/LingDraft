@@ -218,6 +218,8 @@ class Catalog(BaseModel):
             raise ValueError(f"[[free]] 的 same_as 要是某个选项（auto 以外）的 model：{odd}")
         if nameless := sorted(f.model for f in self.free if not f.name and not f.same_as):
             raise ValueError(f"[[free]] 没有 same_as 的要写 name：{nameless}")
+        if unbilled := sorted(f.model for f in self.free if self.billed_as(f.model) not in self.prices):
+            raise ValueError(f"[[free]] 算给用户的额度按 same_as（没有的按 Auto 的备用）的价格，那个模型没填价格：{unbilled}")
         return self
 
     def refs(self) -> set[str]:
@@ -294,6 +296,14 @@ class Catalog(BaseModel):
 
     def is_free(self, ref: str) -> bool:
         return any(f.model == ref for f in self.free)
+
+    def billed_as(self, ref: str) -> str:
+        """算给用户的额度按哪个模型的价格。免费额度是灵稿省下的钱，不是用户的，用户的额度照常扣（2026-11-09 Sean 定）：
+        按没有免费额度时这一次会用的那个模型算，有 same_as 的是那个选项的模型，没有的（只给 Auto 判为简单的用）是 Auto 的备用。
+        这样免费额度用完、到期前后，同样的问题扣的差不多。不是免费额度的就是它自己。"""
+        if f := next((f for f in self.free if f.model == ref), None):
+            return f.same_as or self.option(self.auto.fallback).model
+        return ref
 
     def sees(self, ref: str) -> bool:
         """这个模型看不看得见图（models.toml 的 vision，2026-11-08 实测）。看不见的不一定报错：DeepSeek V4 Pro 把图丢了、编一个答案，
