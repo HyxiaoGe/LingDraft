@@ -58,6 +58,13 @@ class FreeTierUsedUp(ModelUnavailable):
     """这个模型的免费额度用完了（见 FREE_TIER_CODES）：调用方记下以后不再用它（model_catalog.Catalog.used_up），这次换备用。"""
 
 
+def free_failed(e: BaseException) -> bool:
+    """免费额度（models.toml 的 [[free]]）上这次没成、该换直连或备用的：服务不可用（ModelUnavailable，含额度用完），
+    还有认不出来的出错（openai.APIStatusError：别家的内容审核、不认的参数……内容审核只认得 DeepSeek 的，见 is_blocked）。
+    换过去再试一次，结果照它的算：免费的只是先试，不能比直连的差。"""
+    return isinstance(e, ModelUnavailable | openai.APIStatusError)
+
+
 class ContentBlocked(RuntimeError):
     """内容审核拦下。output=False：请求里的内容没通过（整个请求被拒）；True：模型的输出被截断（finish_reason=content_filter）。"""
 

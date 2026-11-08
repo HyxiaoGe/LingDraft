@@ -274,16 +274,17 @@ def test_title_timeouts_only_break_titles(clock, monkeypatch):
 
     for name, value in (("DEEPSEEK_API_KEY", "k"), ("AGENT_TOOLS_API_KEY", "k")):
         monkeypatch.setattr(config, name, value)
-    p = LiveResearchPlanner()
+    p = LiveResearchPlanner()  # 百炼、TokenHub 没配 key（见 conftest）：内部用途只有直连的，不走免费额度
     ref = p.catalog.roles["title"].model
     assert ref == p.catalog.roles["summarize"].model  # 起标题和写短版用同一个模型（models.toml）
-    assert p._titler._guard_key() == f"{ref}·起标题" and p._summarizer._guard_key() == ref  # 按“厂商:模型”记
+    titler = p._titler.model(p.catalog.role("title"))
+    assert titler._guard_key() == f"{ref}·起标题" and p._summarizer.model(p.catalog.role("summarize"))._guard_key() == ref  # 按“厂商:模型”记
     other = make_chat_model(ref, thinking=False)  # Auto 的子 agent 也是它
     calls = []
 
     async def service(self, messages, stop=None, run_manager=None, **kwargs):
         calls.append(self._guard_key())
-        if self is p._titler:
+        if self is titler:
             raise openai.APITimeoutError(request=REQ)
         return ChatResult(generations=[ChatGeneration(message=AIMessage("好"), generation_info={"finish_reason": "stop"})])
 

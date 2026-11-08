@@ -138,8 +138,9 @@ class Peak(BaseModel):
 class Free(BaseModel):
     """一个模型的免费额度（models.toml 的 [[free]]）：Auto 判断为简单的对话按到期日从早到晚用。不记还剩多少，
     厂商报额度用完（model_guard.FreeTierUsedUp）就当用完了（见 Catalog.used_up）。
-    same_as 给了的，是某个选项的模型托管在别家的同一个模型：用了那个选项（Auto 判为复杂的也是），主 agent 先走这里的免费额度，
-    用完、到期、出错再走直连；页面上还是那个选项，不标免费。这些 Auto 判为简单的不用：大模型的额度留给选了它的（2026-11-08 Sean 定）。"""
+    same_as 给了的，是某个选项的模型托管在别家的同一个模型：用了那个模型的（选了那个选项、Auto 判为复杂的、子 agent、内部用途），
+    先走这里的免费额度，用完、到期、出错再走直连；页面上还是那个选项，不标免费。这些 Auto 判为简单的不挑：大模型的额度留给选了它的
+    （2026-11-08 Sean 定）；Flash 的是备用的，Auto 判为简单的挑不到别的时也就用上了。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     model: str
@@ -232,9 +233,9 @@ class Catalog(BaseModel):
         """这一轮用哪个模型。option_id 是对话定下的选项（没定的是 Auto）；thinking 是用户这句话的思考开关（没给按选项的默认）。
         选项不在了、厂商停了（retired）、没配 key 的，改用 Auto（2026-11-05 Sean 定）。
         pick 是 Auto 的对话定下的模型（"厂商:模型"，见 pick）：没给的按 Auto 选项的模型；给的免费模型到期了、用完了，改用备用。
-        Plan.agent.ref 就是最后用的，调用方记下它当这段对话以后的 pick（换过去就一直用）。now 看免费额度到没到期，评测回放时按录像那时。
-        定下的模型有免费额度（[[free]] 的 same_as）还能用的，主 agent 先走免费额度（子 agent 照旧直连），Auto 判为复杂的也是；
-        free=False 不走（换直连时）。Plan.pick 是走免费额度以前的那个。"""
+        now 看免费额度到没到期，评测回放时按录像那时。
+        定下的模型有免费额度（[[free]] 的 same_as）还能用的，先走免费额度，主 agent、子 agent 各看各的，Auto 判为复杂的也是；
+        free=False 不走（换直连时）。Plan.pick 是主 agent 走免费额度以前的那个，Auto 的对话记下它当以后的 pick。"""
         o = self.option(option_id or AUTO)
         if o is None or o.status == "retired" or not all(usable(r) for r in o.refs()):
             o = self.options[0]
@@ -243,11 +244,12 @@ class Catalog(BaseModel):
         if chosen == AUTO:
             o = self._auto(o, pick, usable, now)
         direct = o.model
-        if free and (f := self._free_for(direct, usable, now)) is not None:
-            o = o.model_copy(update={"model": f.model, "subagent": o.subagent or Subagent(model=direct, effort=o.effort)})
+        sub = o.subagent or Subagent(model=direct, effort=o.effort)
+        agent = self.free_ref(direct, usable, now) if free else direct
+        if free:
+            sub = sub.model_copy(update={"model": self.free_ref(sub.model, usable, now)})
         on = {"always": True, "never": False}.get(o.thinking, thinking if thinking is not None else True)
-        sub = o.subagent or Subagent(model=o.model, effort=o.effort)
-        return Plan(option=chosen, agent=ModelUse(ref=o.model, thinking=on, effort=o.effort if on else ""),
+        return Plan(option=chosen, agent=ModelUse(ref=agent, thinking=on, effort=o.effort if on else ""),
                     subagent=ModelUse(ref=sub.model, thinking=on, effort=sub.effort if on else ""), pick=direct)
 
     def _auto(self, auto: Option, pick: str | None, usable: Callable[[str], bool], now: datetime) -> Option:
@@ -275,9 +277,10 @@ class Catalog(BaseModel):
             return self.fallback().model
         return self.fallback().model if guest else self.options[0].model
 
-    def _free_for(self, direct: str, usable: Callable[[str], bool], now: datetime) -> Free | None:
-        """直连的这个模型还能用的免费额度（same_as 是它的）：有几个按到期日早的先用。"""
-        return next((f for f in sorted(self.free, key=lambda f: f.until) if f.same_as == direct and self.free_ok(f, usable, now)), None)
+    def free_ref(self, direct: str, usable: Callable[[str], bool], now: datetime | None = None) -> str:
+        """直连的这个模型这次走哪个：还能用的免费额度（same_as 是它的，有几个按到期日早的先用），没有就是它自己。"""
+        now = now or datetime.now(CHINA_TZ)
+        return next((f.model for f in sorted(self.free, key=lambda f: f.until) if f.same_as == direct and self.free_ok(f, usable, now)), direct)
 
     def fallback(self) -> Option:
         return self.option(self.auto.fallback)  # type: ignore[return-value]  校验过一定有
@@ -332,6 +335,12 @@ class Catalog(BaseModel):
     def role(self, name: str) -> ModelUse:
         r = self.roles[name]
         return ModelUse(ref=r.model, thinking=r.thinking, effort=r.effort if r.thinking else "")
+
+    def role_uses(self, name: str, usable: Callable[[str], bool], now: datetime | None = None) -> list[ModelUse]:
+        """内部用途这一次按顺序试的：同一个模型还能用的免费额度（见 free_ref），出问题再直连；没有免费额度的只有直连。"""
+        use = self.role(name)
+        ref = self.free_ref(use.ref, usable, now)
+        return [use.model_copy(update={"ref": ref}), use] if ref != use.ref else [use]
 
 
 def load(path: Path = PATH) -> Catalog:

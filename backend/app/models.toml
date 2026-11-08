@@ -156,7 +156,7 @@ thinking = "always"
 # ---- Auto 怎么选（2026-11-08 Sean 定）----
 # 第一句话让 [roles] 的 route 判断难易，定下一个模型，整段对话沿用（后面问题再复杂也不换）：
 # - 复杂的：登录用户用 Auto 选项的模型（上面的 V4 Pro），游客用备用（游客只能用免费模型和备用）。
-# - 简单的：下面的免费额度按到期日从早到晚挑第一个能用的，都用不了用备用。
+# - 简单的：下面的免费额度（没有 same_as 的）按到期日从早到晚挑第一个能用的，都用不了用备用（备用照样先走 Flash 的免费额度）。
 # 出问题换备用：首字 30 秒没来、上游出错、免费额度用完、到期。Auto 的对话换过去就一直用备用；用户自己选的模型只有这一轮用备用，下一轮照旧
 # （见 graph.research.agent 的 ModelSelect）。DeepSeek 自己坏了备用也顶不上，先不管（Sean 定）。
 [auto]
@@ -169,11 +169,12 @@ fallback = "deepseek-flash"  # 选项 id；固定用 DeepSeek Flash（Sean 定�
 # - until 照控制台的到期日写（北京时间；TokenHub 接口给的是 UTC，要换算），这天北京时间 0 点起不再用；过了的删掉就行。
 # - 记账是 0 元（rate 记成 free_tier），用户的额度也不扣。不能同时是上面的选项或下面的内部用途（同一个模型记账会分不开）。
 # - 没有 same_as 的给 Auto 判为简单的对话用，按 until 从早到晚：子 agent 用备用的，思考开关跟用户（都实测过能关，2026-11-08）。
-# - same_as：托管在别家、和某个选项是同一个模型的（写那个选项的 model，name、icon 不写就用那个选项的）。用了那个选项（Auto 判为复杂的也是），
-#   主 agent 先走免费额度，有几个的按 until 早的先用；用完、到期、出错再走直连，子 agent 照旧直连。页面上还是那个选项，不标免费
-#   （额度大家共用，随时会用完）；Auto 判为简单的不用这些，大模型的额度留给选了它的（2026-11-08 Sean 定）。思考开关、强度照选项的。
-# 没有对应选项的：K3 已经旧了，V4.1 Flash 不是直连的那个版本。DeepSeek Flash 还没放：TokenHub 的 deepseek/deepseek-flash、
-# deepseek-v4-flash-202605 哪个和直连的是同一版没查清。翻译、角色扮演、写代码、看图的专用模型和预览版、要下线的不放。
+# - same_as：托管在别家、和某个选项是同一个模型的（写那个选项的 model，name、icon 不写就用那个选项的）。用到那个模型的都先走免费额度：
+#   选了那个选项、Auto 判为复杂的（主 agent）、子 agent、内部用途（[roles]，单条送审除外）、换备用时的 Flash；有几个的按 until 早的先用，
+#   用完、到期、出错再走直连。页面上还是那个选项，不标免费（额度大家共用，随时会用完）；Auto 判为简单的不挑这些，
+#   大模型的额度留给选了它的（2026-11-08 Sean 定）。思考开关、强度照选项的（内部用途照 [roles] 的）。
+# 没有对应选项的只有 K3（已经旧了）。翻译、角色扮演、写代码、看图的专用模型和预览版、要下线的不放；
+# TokenHub 的 deepseek-v4-flash-202605 是 V4 Flash 0731，比直连的旧，也不放。
 # 2026-11-08 百炼：qwen3.8-max-0902 只剩 3 万多、用完即停没开，不放。
 
 # -- Auto 判为简单的用 --
@@ -183,30 +184,12 @@ name = "Kimi K3"
 icon = "moonshot"
 until = 2026-11-17
 
-[[free]]
-model = "dashscope:deepseek-v4.1-flash-1017"
-name = "DeepSeek V4.1 Flash"
-icon = "deepseek"
-until = 2027-01-17
-
 # 下面 TokenHub 的：2026-11-08 Sean 整理的接入点列表，每个 100 万 token；腾讯混元自己的（hy4、hy3）是选项，在同一个接入点上，开了后付费，不在这里
 [[free]]
 model = "tokenhub:kimi-k3"
 name = "Kimi K3"
 icon = "moonshot"
 until = 2027-10-21
-
-[[free]]
-model = "tokenhub:deepseek-v4.1-flash"
-name = "DeepSeek V4.1 Flash"
-icon = "deepseek"
-until = 2027-10-21
-
-[[free]]
-model = "tokenhub:deepseek-v4.1-flash-1017"
-name = "DeepSeek V4.1 Flash"
-icon = "deepseek"
-until = 2027-11-08
 
 # -- 选项的同一个模型（same_as） --
 [[free]]
@@ -218,6 +201,39 @@ same_as = "moonshot:kimi-k3.1-pro"
 model = "tokenhub:kimi-k3.1-pro-highspeed"  # TokenHub 只有 highspeed 版：同一个模型，出字快的那档
 until = 2027-11-08
 same_as = "moonshot:kimi-k3.1-pro"
+
+# DeepSeek：直连的 deepseek-flash 2026-10-17 起是 V4.1-Flash-1017，deepseek-v4-pro 是 2026-08-13 的正式版（DeepSeek 文档的更新记录）。
+# 下面写了版本的控制台上就是这两个版本；TokenHub 的 deepseek-v4.1-flash、deepseek-v4-pro 控制台没写版本，核对不了，按名字当同一个模型。
+# 2026-11-08 都实测过：关思考、强制调工具（结构化输出）、JSON 输出、思考强度
+[[free]]
+model = "dashscope:deepseek-v4.1-flash-1017"
+until = 2027-01-17
+same_as = "deepseek:deepseek-flash"
+
+[[free]]
+model = "tokenhub:deepseek/deepseek-flash"  # 控制台写的 DeepSeek-V4.1-Flash-1017
+until = 2027-10-21
+same_as = "deepseek:deepseek-flash"
+
+[[free]]
+model = "tokenhub:deepseek-v4.1-flash"
+until = 2027-10-21
+same_as = "deepseek:deepseek-flash"
+
+[[free]]
+model = "tokenhub:deepseek-v4.1-flash-1017"
+until = 2027-11-08
+same_as = "deepseek:deepseek-flash"
+
+[[free]]
+model = "tokenhub:deepseek-v4-pro-0813"  # 控制台写的 0813 正式版
+until = 2027-10-21
+same_as = "deepseek:deepseek-v4-pro"
+
+[[free]]
+model = "tokenhub:deepseek-v4-pro-202606"  # 控制台写的 0813 正式版（别名 deepseek/deepseek-v4-pro）
+until = 2027-10-21
+same_as = "deepseek:deepseek-v4-pro"
 
 [[free]]
 model = "tokenhub:deepseek-v4-pro"
@@ -265,13 +281,14 @@ same_as = "mimo:mimo-v2.6-flash"
 title = { model = "deepseek:deepseek-flash" }
 # 推荐问题：不开思考，小活（2026-11-08 Sean 定从 Pro 换成 Flash，和起标题、写短版统一）
 suggest = { model = "deepseek:deepseek-flash" }
-# 内容审核拦下请求时把资料一条条单独送审。只认得 DeepSeek 的拦截（见 app.model_guard），别家的审核以后统一做（2026-11-05 Sean 定）
+# 内容审核拦下请求时把资料一条条单独送审。只认得 DeepSeek 的拦截（见 app.model_guard），别家的审核以后统一做（2026-11-05 Sean 定）；
+# 所以只有它不走免费额度（别的内部用途都先走同一个模型的，见上面的 [[free]] 和 research_llm.RoleModel）
 probe = { model = "deepseek:deepseek-v4-pro" }
 # 对话太长时给之前几轮写短版（见 graph.research.compaction）
 summarize = { model = "deepseek:deepseek-flash" }
 # 每天整理一次记忆：开思考，要判断一件事是长期的还是一次性的（见 graph.research.memory）
 dream = { model = "deepseek:deepseek-v4-pro", thinking = true, effort = "high" }
-# 评测的裁判：换被测的模型时裁判不变，分数才比得了（见 app.evals.research）
+# 评测的裁判：换被测的模型时裁判不变，分数才比得了（见 app.evals.research）；免费额度上的是同一个模型，不算换
 judge = { model = "deepseek:deepseek-v4-pro" }
 # Auto 第一句话判断难易（见上面的 [auto]）：不开思考，小活；坏了、慢了当复杂
 route = { model = "deepseek:deepseek-flash" }
