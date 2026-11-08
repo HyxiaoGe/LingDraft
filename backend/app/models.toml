@@ -162,16 +162,21 @@ thinking = "always"
 [auto]
 fallback = "deepseek-flash"  # 选项 id；固定用 DeepSeek Flash（Sean 定，起标题、推荐问题、写短版也是它）
 
-# 免费额度：各家给的试用额度（百炼控制台“模型用量 → 免费额度”能看到剩多少、哪天到期）。用完了、到期了自动不用：
-# - 不记还剩多少：厂商报额度用完（百炼是 AllocationQuota.FreeTierOnly）就当用完了，见 model_guard.FreeTierUsedUp。
-# - 前提：控制台里这个模型的“免费额度用完即停”开着，不然用完会接着按量收钱，我们记成 0 元（没有这个开关的厂商不往这里放）。
-# - until 照控制台的到期日写，这天北京时间 0 点起不再用；过了的删掉就行。
-# - 子 agent 用备用的；思考开关跟用户（这几个都实测过能关，2026-11-08）；记账是 0 元（rate 记成 free_tier），用户的额度也不扣。
-# - 不能同时是上面的选项或下面的内部用途（同一个模型记账会分不开）。
-# - same_as：托管在百炼上的、和某个选项是同一个模型的（写那个选项的 model）。用户选了那个选项，主 agent 先走免费额度，
-#   用完、到期、出错再走直连（子 agent 照旧直连）；页面上还是那个选项，不标免费（额度大家共用，随时会用完，2026-11-08 Sean 定）。
-#   思考开关、强度照选项的（百炼上的 K3.1 Pro 开关思考 11-08 实测过）。没有对应选项的（K3 已经旧了、V4.1 Flash 不是直连的那个版本）只给 Auto 用。
+# 免费额度：各家给的试用额度（百炼控制台“模型用量 → 免费额度”、腾讯 TokenHub 控制台“在线推理服务”能看到剩多少、哪天到期）。用完了、到期了自动不用：
+# - 不记还剩多少：厂商报额度用完就当用完了（百炼 AllocationQuota.FreeTierOnly，TokenHub 401007/401008），见 model_guard.FreeTierUsedUp。
+# - 前提：用完了不接着收钱。百炼要开着这个模型的“免费额度用完即停”；TokenHub 要关着这个接入点的后付费（开了的用完接着按量收、不报错），
+#   不然我们记成 0 元其实在花钱（没有这种开关的厂商不往这里放）。
+# - until 照控制台的到期日写（北京时间；TokenHub 接口给的是 UTC，要换算），这天北京时间 0 点起不再用；过了的删掉就行。
+# - 记账是 0 元（rate 记成 free_tier），用户的额度也不扣。不能同时是上面的选项或下面的内部用途（同一个模型记账会分不开）。
+# - 没有 same_as 的给 Auto 判为简单的对话用，按 until 从早到晚：子 agent 用备用的，思考开关跟用户（都实测过能关，2026-11-08）。
+# - same_as：托管在别家、和某个选项是同一个模型的（写那个选项的 model，name、icon 不写就用那个选项的）。用了那个选项（Auto 判为复杂的也是），
+#   主 agent 先走免费额度，有几个的按 until 早的先用；用完、到期、出错再走直连，子 agent 照旧直连。页面上还是那个选项，不标免费
+#   （额度大家共用，随时会用完）；Auto 判为简单的不用这些，大模型的额度留给选了它的（2026-11-08 Sean 定）。思考开关、强度照选项的。
+# 没有对应选项的：K3 已经旧了，V4.1 Flash 不是直连的那个版本。DeepSeek Flash 还没放：TokenHub 的 deepseek/deepseek-flash、
+# deepseek-v4-flash-202605 哪个和直连的是同一版没查清。翻译、角色扮演、写代码、看图的专用模型和预览版、要下线的不放。
 # 2026-11-08 百炼：qwen3.8-max-0902 只剩 3 万多、用完即停没开，不放。
+
+# -- Auto 判为简单的用 --
 [[free]]
 model = "dashscope:kimi-k3"
 name = "Kimi K3"
@@ -184,12 +189,75 @@ name = "DeepSeek V4.1 Flash"
 icon = "deepseek"
 until = 2027-01-17
 
+# 下面 TokenHub 的：2026-11-08 Sean 整理的接入点列表，每个 100 万 token；腾讯混元自己的（hy4、hy3）是选项，在同一个接入点上，开了后付费，不在这里
+[[free]]
+model = "tokenhub:kimi-k3"
+name = "Kimi K3"
+icon = "moonshot"
+until = 2027-10-21
+
+[[free]]
+model = "tokenhub:deepseek-v4.1-flash"
+name = "DeepSeek V4.1 Flash"
+icon = "deepseek"
+until = 2027-10-21
+
+[[free]]
+model = "tokenhub:deepseek-v4.1-flash-1017"
+name = "DeepSeek V4.1 Flash"
+icon = "deepseek"
+until = 2027-11-08
+
+# -- 选项的同一个模型（same_as） --
 [[free]]
 model = "dashscope:kimi-k3.1-pro"
-name = "Kimi K3.1 Pro"
-icon = "moonshot"
 until = 2027-02-02
-same_as = "moonshot:kimi-k3.1-pro"  # 选项 Kimi K3.1 Pro 先走这里
+same_as = "moonshot:kimi-k3.1-pro"
+
+[[free]]
+model = "tokenhub:kimi-k3.1-pro-highspeed"  # TokenHub 只有 highspeed 版：同一个模型，出字快的那档
+until = 2027-11-08
+same_as = "moonshot:kimi-k3.1-pro"
+
+[[free]]
+model = "tokenhub:deepseek-v4-pro"
+until = 2027-10-21
+same_as = "deepseek:deepseek-v4-pro"
+
+[[free]]
+model = "tokenhub:glm-5.3"
+until = 2027-10-21
+same_as = "zhipuai:glm-5.3"
+
+[[free]]
+model = "tokenhub:glm-5.3-flash"
+until = 2027-10-21
+same_as = "zhipuai:glm-5.3-flash"
+
+[[free]]
+model = "tokenhub:glm-5.2"
+until = 2027-10-21
+same_as = "zhipuai:glm-5.2"
+
+[[free]]
+model = "tokenhub:minimax-m3"
+until = 2027-10-21
+same_as = "minimax:MiniMax-M3"
+
+[[free]]
+model = "tokenhub:minimax-m3.1-flash"
+until = 2027-10-21
+same_as = "minimax:MiniMax-M3.1-Flash"
+
+[[free]]
+model = "tokenhub:mimo-v2.6-pro"
+until = 2027-10-21
+same_as = "mimo:mimo-v2.6-pro"
+
+[[free]]
+model = "tokenhub:mimo-v2.6-flash"
+until = 2027-10-21
+same_as = "mimo:mimo-v2.6-flash"
 
 # ---- 内部用途：用户看不到，不跟着选项走 ----
 [roles]

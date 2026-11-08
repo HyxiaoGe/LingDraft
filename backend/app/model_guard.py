@@ -31,9 +31,12 @@ import openai
 FAILURES = 2
 COOLDOWN_S = 180
 BLOCKED_MESSAGE = "Content Exists Risk"  # DeepSeek 内容审核拦下请求时 error.message 的固定文字（HTTP 400）
-# 厂商说免费额度用完了的错误码：百炼开了“免费额度用完即停”时额度用完返回这个（官方文档“新人免费额度”，2026-11-08 查的）。
-# 火山、腾讯接进来时把它们的加在这里
-FREE_TIER_CODES = {"AllocationQuota.FreeTierOnly"}
+# 厂商说免费额度用完了的错误码（2026-11-08 查的官方文档）：
+# - 百炼开了“免费额度用完即停”时额度用完：AllocationQuota.FreeTierOnly（“新人免费额度”）
+# - 腾讯 TokenHub 没开后付费时（HTTP 402，error.code）：401008 免费体验额度已耗尽、401007 没有可用的免费体验额度（到期了也是）
+#   （https://cloud.tencent.com/document/product/1823/131595）。开了后付费的接着按量收、不报错，所以免费的那些不能开
+# 火山接进来时把它的加在这里
+FREE_TIER_CODES = {"AllocationQuota.FreeTierOnly", "401007", "401008"}
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +74,7 @@ def is_free_tier_used_up(e: BaseException) -> bool:
     if not isinstance(e, openai.APIStatusError):
         return False
     body = e.body if isinstance(e.body, dict) else {}
-    return getattr(e, "code", None) in FREE_TIER_CODES or body.get("code") in FREE_TIER_CODES
+    return str(getattr(e, "code", None)) in FREE_TIER_CODES or str(body.get("code")) in FREE_TIER_CODES  # TokenHub 的 code 有时是数字
 
 
 def has_content(chunk: Any) -> bool:

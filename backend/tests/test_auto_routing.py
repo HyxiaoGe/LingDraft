@@ -24,6 +24,8 @@ from tests.test_research import Chat
 
 PRO, FLASH = "deepseek:deepseek-v4-pro", "deepseek:deepseek-flash"
 K3, V41, K31 = "dashscope:kimi-k3", "dashscope:deepseek-v4.1-flash-1017", "dashscope:kimi-k3.1-pro"
+TK_K3, TK_V41, TK_V41_1017 = "tokenhub:kimi-k3", "tokenhub:deepseek-v4.1-flash", "tokenhub:deepseek-v4.1-flash-1017"
+TK_PRO, TK_K31 = "tokenhub:deepseek-v4-pro", "tokenhub:kimi-k3.1-pro-highspeed"
 DOUBAO = "ark:doubao-seed-2-1-pro-260915"
 GUEST = "guest:g1"
 NOW = datetime(2026, 11, 8, 12, tzinfo=CHINA_TZ)
@@ -34,10 +36,12 @@ def _always(_ref: str) -> bool:
 
 
 def _catalog(days: tuple[int, ...] = (9, 70, 86)) -> Catalog:
-    """真的那份，三个免费额度的到期日改成今天往后这么多天（测试不随日子过去失效）。"""
+    """真的那份，只留百炼的三个免费额度（K3、V4.1 Flash 给 Auto，K3.1 Pro 是选项 Kimi 的 same_as），
+    到期日改成今天往后这么多天（测试不随日子过去失效）。TokenHub 的另外测（见 test_tokenhub_*）。"""
     c = model_catalog.load()
     today = datetime.now(CHINA_TZ).date()
-    free = [f.model_copy(update={"until": today + timedelta(days=d)}) for f, d in zip(c.free, days, strict=True)]
+    bailian = [f for f in c.free if f.model.startswith("dashscope:")]
+    free = [f.model_copy(update={"until": today + timedelta(days=d)}) for f, d in zip(bailian, days, strict=True)]
     return c.model_copy(update={"free": free})
 
 
@@ -61,12 +65,15 @@ def _model_events(events: list[dict]) -> list[str]:
 
 
 def test_models_toml_free_pool_and_roles():
-    """仓库里那份：三个百炼的免费额度按到期日排着；备用是 Flash（游客也能用）；判断难易、推荐问题都用 Flash。"""
+    """仓库里那份：给 Auto 的（没有 same_as 的）按到期日排着，百炼的先用；备用是 Flash（游客也能用）；判断难易、推荐问题都用 Flash。
+    页面上的名字：same_as 的不写就是那个选项的名字、图标。"""
     c = model_catalog.load()
-    assert [f.model for f in sorted(c.free, key=lambda f: f.until)] == [K3, V41, K31]
+    assert [f.model for f in sorted(c.free, key=lambda f: f.until) if not f.same_as] == [K3, V41, TK_K3, TK_V41, TK_V41_1017]
     assert c.fallback().model == FLASH and c.fallback().allows("guest")
     assert c.roles["route"].model == FLASH and c.roles["suggest"].model == FLASH
-    assert set(c.names()) == {K3, V41, K31} and c.names()[K3] == {"name": "Kimi K3", "icon": "moonshot"}
+    names = c.names()
+    assert set(names) == {f.model for f in c.free} and names[K3] == {"name": "Kimi K3", "icon": "moonshot"}
+    assert names[TK_PRO] == {"name": c.option("deepseek-v4-pro").name, "icon": "deepseek"} and names[K31]["icon"] == "moonshot"
 
 
 def test_catalog_rejects_free_pool_mistakes():
@@ -93,8 +100,7 @@ def test_simple_goes_to_the_soonest_free_model_complex_to_pro():
     assert c.pick(True, False, _always, now + timedelta(days=8)) == K3
     assert c.pick(True, False, lambda ref: ref != K3, now) == V41  # 没配 key
     c.used_up(V41)
-    assert c.pick(True, False, lambda ref: ref != K3, now) == K31
-    assert c.pick(True, False, lambda ref: not ref.startswith("dashscope:"), now) == FLASH
+    assert c.pick(True, False, lambda ref: ref != K3, now) == FLASH  # K3.1 Pro 是选项 Kimi 的 same_as：Auto 判为简单的不用
 
 
 def test_plan_follows_the_pick_and_drops_expired_or_used_up():
@@ -465,3 +471,90 @@ def test_breaker_is_per_provider_and_model(monkeypatch):
         monkeypatch.setattr(config, name, "k")
     hosted, direct = make_chat_model(K31, thinking=True), make_chat_model(KIMI_DIRECT, thinking=True)
     assert hosted._guard_key() == K31 and direct._guard_key() == KIMI_DIRECT
+
+
+# ---- 腾讯 TokenHub 的免费额度 ----
+
+
+def test_tokenhub_quota_errors_are_free_tier_used_up(breaker):
+    """TokenHub 没开后付费时额度用完、没有免费额度（到期了也是）：HTTP 402，error.code 是 401008 / 401007（有时是数字）。"""
+    def err(code):
+        body = {"message": "free quota exhausted", "code": code, "type": "gateway_error"}
+        return openai.APIStatusError("Error code: 402", response=httpx2.Response(402, request=REQ), body=body)
+
+    m = Guarded(script=[err("401008"), err(401007), err("401008")])
+    for _ in range(3):
+        with pytest.raises(FreeTierUsedUp):
+            m.invoke("hi")
+    assert len(m.calls) == 3  # 不算熔断
+
+
+def test_tokenhub_same_model_goes_free_first_and_auto_simple_skips_it():
+    """仓库里那份（按 11-08 看）：选了 Pro、Auto 判为复杂的，主 agent 先走 TokenHub 上的 Pro，pick 记直连的；
+    Kimi 有两份免费的，百炼的先到期先用；Auto 判为简单的不挑 same_as 的。"""
+    c = model_catalog.load()
+    for option in ("deepseek-v4-pro", AUTO):
+        plan = c.plan(option, None, _always, pick=PRO if option == AUTO else None, now=NOW)
+        assert plan.agent.ref == TK_PRO and plan.pick == PRO and plan.subagent.ref == FLASH
+        assert c.plan(option, None, _always, pick=PRO, now=NOW, free=False).agent.ref == PRO
+    assert c.plan("kimi-k3-1-pro", None, _always, now=NOW).agent.ref == K31
+    c.used_up(K31)
+    assert c.plan("kimi-k3-1-pro", None, _always, now=NOW).agent.ref == TK_K31
+    for f in [K3, V41]:
+        c.used_up(f)
+    assert c.pick(True, False, _always, NOW) == TK_K3
+    assert c.plan("hy4", None, _always, now=NOW).agent.ref == "hunyuan:hy4"  # 混元自己的不在 [[free]] 里
+    c.used_up(TK_PRO)
+    assert c.plan(AUTO, None, _always, pick=PRO, now=NOW).agent.ref == PRO
+
+
+def _pro_planner(**kw) -> FakeResearchPlanner:
+    """百炼的三个 + TokenHub 上的 Pro（选项 Pro 的 same_as）。"""
+    c = _catalog()
+    tk = next(f for f in model_catalog.load().free if f.model == TK_PRO)
+    tk = tk.model_copy(update={"until": datetime.now(CHINA_TZ).date() + timedelta(days=300)})
+    return FakeResearchPlanner(catalog=c.model_copy(update={"free": [*c.free, tk]}), **kw)
+
+
+def test_auto_complex_uses_free_pro_and_remembers_direct():
+    """Auto 判为复杂：每轮先走免费的 Pro，对话记下的是直连的 Pro；免费的出问题这一轮换直连 Pro（不是 Flash），下一轮再先走免费的；
+    直连也坏了换 Flash，之后一直用 Flash。"""
+    p = _pro_planner()
+    c = Chat(planner=p)
+    v = c.say("直接答：比较一下三家云厂商的数据库方案")
+    assert _models(v) == [TK_PRO] and c.values()["auto_model"] == PRO
+    p.broken[TK_PRO] = FailingModel(error=ModelUnavailable("模型服务暂时不可用（服务端出错），稍后再试"))
+    v = c.say("直接答：接着说")
+    assert _models(v) == [TK_PRO, PRO] and c.values()["auto_model"] == PRO and _model_events(c.events) == [TK_PRO, PRO]
+    p.broken.clear()
+    assert _models(c.say("直接答：再说说"))[-1] == TK_PRO
+    down = ModelUnavailable("模型服务暂时不可用（服务端出错），稍后再试")
+    p.broken.update({TK_PRO: FailingModel(error=down), PRO: FailingModel(error=down)})
+    v = c.say("直接答：最后一个问题")
+    assert _models(v)[-1] == FLASH and c.values()["auto_model"] == FLASH
+    p.broken.clear()
+    assert _models(c.say("直接答：谢谢"))[-1] == FLASH
+
+
+def test_auto_free_pro_used_up_goes_direct_for_good():
+    p = _pro_planner()
+    p.broken[TK_PRO] = FailingModel(error=FreeTierUsedUp("模型服务暂时不可用（免费额度用完了），稍后再试"))
+    c = Chat(planner=p)
+    c.say("直接答：比较一下三家云厂商的数据库方案")
+    p.broken.clear()
+    v = c.say("直接答：接着说")
+    assert _models(v) == [PRO, PRO] and c.values()["auto_model"] == PRO
+
+
+def test_tokenhub_provider(monkeypatch):
+    """TokenHub 上别家的模型：用混元的地址和 key，带 reasoning_split（MiniMax 的思考才单独给），熔断、记账按 tokenhub 记。"""
+    from app import config
+    from app.research_llm import make_chat_model, usable
+
+    monkeypatch.setattr(config, "HUNYUAN_API_KEY", "k")
+    on, off = make_chat_model(TK_PRO, thinking=True), make_chat_model(TK_PRO, thinking=False)
+    assert on.extra_body == {"reasoning_split": True} and off.extra_body == {"reasoning_split": True, "thinking": {"type": "disabled"}}
+    assert on.openai_api_base == config.HUNYUAN_BASE_URL and on._guard_key() == TK_PRO and on._cost_ref() == TK_PRO
+    assert usable(TK_PRO)
+    monkeypatch.setattr(config, "HUNYUAN_API_KEY", "")
+    assert not usable(TK_PRO)

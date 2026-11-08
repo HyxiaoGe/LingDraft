@@ -20,6 +20,8 @@ from tests.research_helpers import events, last, say, state
 from tests.auth_helpers import USER, bearer, guest_token
 
 PRO, FLASH = "deepseek:deepseek-v4-pro", "deepseek:deepseek-flash"
+# Auto 判为复杂（没判断的也当复杂）现在先走的那个：TokenHub 上的免费 Pro 还能用时是它，到期了是直连的 Pro（[[free]] 的 same_as）
+AUTO_REF = model_catalog.load().plan(None, None, lambda ref: True).agent.ref
 DOUBAO, LITE = "ark:doubao-seed-2-1-pro-260915", "ark:doubao-seed-2-1-lite-260915"
 
 
@@ -67,9 +69,9 @@ def test_models_toml_is_valid():
     c = model_catalog.load()
     assert c.options[0].id == AUTO and set(c.roles) == set(model_catalog.ROLES)
     assert {r.partition(":")[0] for r in c.refs()} <= set(PROVIDERS)
-    auto = c.plan(None, None, _always)
+    auto = c.plan(None, None, _always, free=False)  # 不走免费额度时
     assert auto == model_catalog.Plan(option=AUTO, agent=ModelUse(ref=PRO, thinking=True, effort="high"),
-                                      subagent=ModelUse(ref=FLASH, thinking=True, effort="high"))
+                                      subagent=ModelUse(ref=FLASH, thinking=True, effort="high"), pick=PRO)
     assert auto.agent == model_catalog.LEGACY_USE  # 以前没记模型的轮也是它答的
 
 
@@ -176,7 +178,7 @@ def test_models_endpoint_and_default_auto():
     st = _create(http, "直接答：你好")
     assert st["model"] == AUTO
     rec = _records(st)[0]
-    assert rec["option"] == AUTO and rec["model"] == {"ref": PRO, "thinking": True, "effort": "high"}
+    assert rec["option"] == AUTO and rec["model"] == {"ref": AUTO_REF, "thinking": True, "effort": "high"}
     assert rec["subagent_model"] == {"ref": FLASH, "thinking": True, "effort": "high"}
 
 
@@ -257,7 +259,7 @@ def test_retired_model_switches_to_auto_without_its_thinking():
     st = last(events(say(http, tid, "直接答：停了")), "state")
     recs = _records(st)
     assert [r["option"] for r in recs] == ["doubao-seed-2-1-pro"] * 3 + [AUTO]
-    assert recs[-1]["model"]["ref"] == PRO and st["model"] == AUTO
+    assert recs[-1]["model"]["ref"] == AUTO_REF and st["model"] == AUTO
     sent = [m for m in p._model.seen[-1] if isinstance(m, AIMessage)]
     assert len(sent) == 3 and not any(history.thinking_of(m) for m in sent)
     p.catalog = model_catalog.load()  # 又不停了：对话已经是 Auto，不回去
@@ -278,4 +280,4 @@ def test_old_conversation_becomes_auto():
     st = state(http, tid)
     assert st["model"] == AUTO and _records(st)[0]["model"] is None
     st = last(events(say(http, tid, "直接答：接着说")), "state")
-    assert [r["option"] for r in _records(st)] == ["", AUTO] and _records(st)[1]["model"]["ref"] == PRO
+    assert [r["option"] for r in _records(st)] == ["", AUTO] and _records(st)[1]["model"]["ref"] == AUTO_REF

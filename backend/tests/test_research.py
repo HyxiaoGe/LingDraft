@@ -18,7 +18,7 @@ from langchain_core.tools import StructuredTool
 from langgraph._internal._constants import ERROR
 from langgraph.checkpoint.memory import InMemorySaver
 
-from app import aio, config, research_llm
+from app import aio, config, model_catalog, research_llm
 from app.api import research_runner
 from app.api.research_runner import NothingToRegenerate, NotIdle, ResearchRunner, StreamBuffer
 from app.api.runner import RunConflict
@@ -97,6 +97,12 @@ def _stored():
 @pytest.fixture
 def chat() -> Chat:
     return Chat()
+
+
+def _direct_only() -> FakeResearchPlanner:
+    """不放免费额度（models.toml 的 [[free]] 去掉）：换备用只有一跳（直连 → Flash），测出错的次数不随免费额度变。"""
+    c = model_catalog.load()
+    return FakeResearchPlanner(catalog=c.model_copy(update={"free": []}))
 
 
 def _kinds(turn: dict) -> list[str]:
@@ -809,7 +815,7 @@ class FlakyModel(FakeToolModel):
 
 def test_model_unavailable_fails_the_turn_and_retry_continues():
     """模型不可用、换备用也不行（假实现里备用是同一个假模型）：这一轮失败，重试接着做。"""
-    p = FakeResearchPlanner()
+    p = _direct_only()
     p._model = FlakyModel(fails=[1, 1])
     c = Chat(planner=p)
     with pytest.raises(ModelUnavailable):
@@ -860,7 +866,7 @@ class FailsAfterTools(FakeToolModel):
 def test_model_call_cap_counts_this_turn_and_carries_over_a_retry(monkeypatch):
     """次数按这一轮算：上一轮用满了，这一轮从头数；这一轮中途出错，重试接着数，不从 0 开始。"""
     monkeypatch.setattr(agent_mod, "MAX_MODEL_CALLS", 3)
-    p = FakeResearchPlanner()
+    p = _direct_only()
     p._model = FailsAfterTools()
     c = Chat(planner=p)
     c.say("一直搜笔记软件")
@@ -906,9 +912,10 @@ def test_model_breaking_midway_is_called_again_and_the_page_drops_the_half(chat,
     assert turn["record"]["usage"]["model_calls"] == 3
 
 
-def test_model_breaking_again_fails_the_turn_like_before(chat, monkeypatch):
+def test_model_breaking_again_fails_the_turn_like_before(monkeypatch):
     """再调一次也断了：换备用（假实现里备用是同一个假模型，也断），再调一次也断，照常失败，页面给原因和重试。"""
     monkeypatch.setattr(agent_mod, "RESTART_WAIT_S", 0)
+    chat = Chat(planner=_direct_only())
     with pytest.raises(ModelUnavailable):
         chat.say("一直断：比较两款笔记软件")
     v = chat.view()
