@@ -83,3 +83,50 @@ export function uploadErrorText(status) {
   if (status === 415) return "这张图的格式不支持（只支持 PNG、JPEG、WebP），没发出去";
   return "图片暂时传不上去，稍后再发一次";
 }
+
+// ---- 文件（见后端 app/files）：PDF、Word、Excel、PPT、CSV、文本、Markdown、代码，一句话最多 MAX_FILES 个，每个不超过 FILE_MAX_MB。
+// 认类型、解析都在后端；页面只把图片和别的文件分开（图片走上面那条路，模型直接看），再挡一下明显太大、空的 ----
+export const MAX_FILES = 5;
+export const FILE_MAX_MB = 20;
+const FILE_MAX_BYTES = FILE_MAX_MB * 1024 * 1024;
+const IMAGE_EXT = /\.(png|jpe?g|webp|gif|heic|heif|avif|bmp)$/i;
+export const isImage = (f) => (f.type ? f.type.startsWith("image/") && f.type !== "image/svg+xml" : IMAGE_EXT.test(f.name || ""));
+
+// 传之前就知道传不了的（不用等后端说）：原因同后端的 reason
+export const tooBig = (f) => (f.size > FILE_MAX_BYTES ? "too_large" : f.size === 0 ? "empty_file" : null);
+
+const SUPPORTED = "可以传 PDF、Word（docx）、Excel（xlsx）、PPT（pptx）、CSV、文本、Markdown 或代码文件";
+// 文件传不了、读不了、发不出去：后端给原因（reason，见 app/files/service.py 和 parse.py 的 Unreadable），这里说人话。
+// d 是 429 今天传满了时的 detail（limit、guest、login_limit）
+export function fileErrorText(reason, d = {}) {
+  switch (reason) {
+    case "too_large": return `文件超过 ${FILE_MAX_MB} MB，传不了`;
+    case "empty_file": return "文件是空的";
+    case "daily_limit": return `今天传的文件到上限了（${d.limit} 个），${d.guest && d.login_limit ? `登录后每天能传 ${d.login_limit} 个` : "明天再传"}`;
+    case "image": return "图片请直接作为图片发送";
+    case "legacy_office": return "老格式的 doc、xls、ppt 和加了密码的 Office 文件读不了，另存成 docx、xlsx、pptx 再传";
+    case "encrypted": return "这个 PDF 有密码，读不了";
+    case "broken": return "文件打不开，可能已经损坏";
+    case "scanned": return "这个 PDF 是扫描的图片，读不出文字";
+    case "empty": return "文件里没有能读出来的文字";
+    case "unzipped_too_large": return "文件解压后太大，读不了";
+    case "unsupported": return `不支持这种文件，${SUPPORTED}`;
+    case "timeout": case "killed": return "文件太复杂，读不了";
+    case "expired": return "文件已经过期了";
+    case "offline": return "没传上去，网络好像断了";
+    case "busy": return "现在传不上去，稍后再传";
+    default: return "文件没读成";
+  }
+}
+
+// 卡片上那行短的：还没传上去的（传之前就挡下、后端不收、网络断了）和传上去了读不了的
+const NOT_UPLOADED = new Set(["too_large", "empty_file", "daily_limit", "offline", "busy"]);
+export const fileShortError = (reason) => (NOT_UPLOADED.has(reason) ? "没传上去" : reason === "expired" ? "已经过期" : "读不了");
+
+// 发消息时带的文件不能发（400，detail.code 是 files_not_sendable）
+export function notSendableText(reason) {
+  if (reason === "parsing") return "有文件还在解析";
+  if (reason === "unreadable") return "有文件读不了";
+  if (reason === "too_many") return `一句话最多带 ${MAX_FILES} 个文件`;
+  return "有文件已经过期了";
+}

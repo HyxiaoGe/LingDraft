@@ -16,6 +16,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, RemoveMessage, ToolMessage
@@ -30,13 +31,15 @@ from psycopg_pool import PoolTimeout
 from app import aio, config, costs, quota
 from app.api.run_store import ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, Pending, PostgresRunStore, RunStore
 from app.api.runner import BaseRunner, RunConflict, _sse_text, jsonable, log
+from app.files.service import NOT_HERE, FileService, NotSendable
+from app.files.store import FileRow, FileStore, MemoryFileStore, PostgresFileStore
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, fallback_title, now, stop_turn
 from app.graph.research.graph import NO_POSTGRES, build_graph, make_serde, postgres_pool, thread_ids
 from app.graph.research.memory import MemoryBook, next_at
 from app.identity import Identity, is_guest_sub
 from app.graph.research.sources import collect_sources, subagent_messages
-from app.graph.research.state import AttachedImage, Turn
+from app.graph.research.state import AttachedFile, AttachedImage, Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
 from app.model_guard import ContentBlocked, Interrupted, ModelUnavailable
 from app.tools.gateway import IMAGE_ID, GatewayError
@@ -82,11 +85,13 @@ DELTA_S = 0.08  # 逐字片段攒这么久发一次
 SENT_AT = "sent_at"  # 用户那句话的发送时间，记在消息的 additional_kwargs 里（不会发给模型）
 
 
-def _said(text: str, thinking: bool | None = None, images: Sequence[AttachedImage] = (), **kw: Any) -> HumanMessage:
-    """用户的话。thinking 是发的时候输入框旁边的思考开关（没给按选项的默认，见 model_catalog.Catalog.plan）；images 是这句话带的图。"""
+def _said(text: str, thinking: bool | None = None, images: Sequence[AttachedImage] = (), files: Sequence[AttachedFile] = (), **kw: Any) -> HumanMessage:
+    """用户的话。thinking 是发的时候输入框旁边的思考开关（没给按选项的默认，见 model_catalog.Catalog.plan）；images 是这句话带的图，files 是带的文件。"""
     extra: dict[str, Any] = {history.THINK: thinking} if thinking is not None else {}
     if images:
         extra[history.ATTACHED] = [i.model_dump() for i in images]
+    if files:
+        extra[history.FILES] = [f.model_dump() for f in files]
     return HumanMessage(content=text.strip(), additional_kwargs={SENT_AT: now(), **extra}, **kw)
 
 
@@ -177,6 +182,7 @@ def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
             t = by_id.get(m.id)
             cur = {"id": m.id, "user": history.text_of(m), "sent_at": m.additional_kwargs.get(SENT_AT, ""), "items": [],
                    "images": [i.model_dump() for i in history.attached_images(m)],
+                   "files": [f.model_dump() for f in history.attached_files(m)],
                    "record": {**t.model_dump(exclude={"id"}), "credits": costs.credits(t)} if t else None}
             out.append(cur)
         elif cur is not None and isinstance(m, AIMessage):
@@ -277,6 +283,10 @@ async def open_storage(url: str) -> tuple[AsyncPostgresSaver, AsyncPostgresStore
     return saver, store, runs
 
 
+def open_files(runs: RunStore) -> FileStore:
+    """用户发的文件的表：运行记录在 Postgres 里的，和它共用连接池；在内存里的（测试、评测）也记在内存里。"""
+    return PostgresFileStore(runs.pool) if isinstance(runs, PostgresRunStore) else MemoryFileStore()
+
 
 def _memory_row(m: dict) -> dict:
     """记忆页上的一条：thread_id 是记下（或最后改它）的那段对话，页面拿它点回去；对话删了、整理时没记（很早的几条）就点不了。"""
@@ -291,7 +301,7 @@ class ResearchRunner(BaseRunner):
 
     def __init__(self, fake: bool | None = None, workers: int | None = None,
                  planner: ResearchPlanner | None = None, checkpointer: BaseCheckpointSaver | None = None,
-                 run_store: RunStore | None = None, store: BaseStore | None = None):
+                 run_store: RunStore | None = None, store: BaseStore | None = None, files: FileService | None = None):
         fake = config.USE_FAKE_PLANNER if fake is None else fake
         self.planner = planner or (FakeResearchPlanner() if fake else LiveResearchPlanner())
         if checkpointer is None:  # 检查点、长期记忆、运行记录都存在配置的 Postgres 里（见 open_storage）；没配库、连不上抛 RuntimeError
@@ -308,6 +318,10 @@ class ResearchRunner(BaseRunner):
         self.run_store = run_store or MemoryRunStore()
         self.quota = quota.Quota(quota.usage_for(self.run_store))  # 额度按账上的记录算（见 app.quota）
         self.images = self.planner.gateway  # 画好的图存在 image-service 里，按编号取、删（见 app.tools.gateway）
+        # 用户发的文件：原件在数据卷上，文字和文件表在运行记录的库里；在这里起后台的解析、清理（见 app.files.service）
+        self.files = files or FileService(open_files(self.run_store), config.FILES_DIR, isolated=config.FILE_PARSE_ISOLATED,
+                                          timeout=config.FILE_PARSE_TIMEOUT_S)
+        aio.run(self.files.start())
         self.workers = workers or config.RESEARCH_WORKERS
         self._slots = asyncio.BoundedSemaphore(self.workers)  # 同时跑的执行
         self._inflight = 0  # 交出去、还没结束的执行（排队的也算）：据此告诉页面这次要不要排队
@@ -367,15 +381,33 @@ class ResearchRunner(BaseRunner):
     # ---- 给接口层的同步方法：在别的线程里调，活交给对话的事件循环 ----
 
     # option 是新对话选的模型（models.toml 里选项的 id，没给是 Auto），定下就不换；thinking 是这句话的思考开关（没给按选项的默认）；
-    # images 是这句话带的图（先用 upload_image 一张张传上去；没开始这一轮要自己 discard_images，见 api.main）
+    # images 是这句话带的图（先用 upload_image 一张张传上去；没开始这一轮要自己 discard_images，见 api.main）；
+    # files 是带的文件的编号（先用 upload_file 传上来、解析好，发出去时绑到这段对话；不能发的抛 NotSendable，什么都没写）
 
     def start(self, thread_id: str, text: str, option: str | None = None, thinking: bool | None = None, owner: str | None = None,
-              images: Sequence[AttachedImage] = ()) -> AsyncIterator[str]:
+              images: Sequence[AttachedImage] = (), files: Sequence[str] = ()) -> AsyncIterator[str]:
         """owner 是这段新对话归谁（见 app.identity 和 run_store 的 thread_owners）；命令行、评测不传，对话就没归谁（页面上谁都看不到）。"""
-        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking, option, owner, images), "new")))
+        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking, option, owner, images, files), "new")))
 
-    def say(self, thread_id: str, text: str, thinking: bool | None = None, images: Sequence[AttachedImage] = ()) -> AsyncIterator[str]:
-        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking, images=images), "say")))
+    def say(self, thread_id: str, text: str, thinking: bool | None = None, images: Sequence[AttachedImage] = (),
+            files: Sequence[str] = ()) -> AsyncIterator[str]:
+        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking, images=images, files=files), "say")))
+
+    def upload_file(self, owner: str, tier: str, name: str | None, data: bytes) -> FileRow:
+        """用户传的文件：存好原件、排进后台解析，马上返回（状态是解析中）。不收的抛 UploadRejected（太大、类型不对、今天传满了）。"""
+        return aio.run(self.files.upload(owner, tier, name, data))
+
+    def file(self, file_id: str, owner: str) -> FileRow | None:
+        """这个人传的文件（页面问解析好了没有）；别人的、没有的是 None。"""
+        return aio.run(self.files.get(file_id, owner))
+
+    def remove_file(self, file_id: str, owner: str) -> bool:
+        """去掉还没发出去的文件（输入框里点叉）。发出去的、别人的、没有的返回 False。"""
+        return aio.run(self.files.remove(file_id, owner))
+
+    def file_original(self, thread_id: str, file_id: str) -> tuple[Path, FileRow] | None:
+        """这段对话里用户发的文件的原件（下载）：(路径, 那一行)。不是这段对话的、原件没了是 None。"""
+        return aio.run(self.files.original(file_id, thread_id))
 
     def upload_image(self, data: bytes) -> AttachedImage:
         """用户发的图传进 image-service（归灵稿，和画的图放在一起），返回记在消息上的信息。
@@ -651,7 +683,7 @@ class ResearchRunner(BaseRunner):
         它的片段、进度、阶段带上 task（调用 id），页面放进那张子任务卡；它的节点做完不发 node。它的片段 langgraph_node 也是 model，只按节点名分不开。
         做完的 step 带着工具结果（result，不发给页面），记进 done：点停止时它那一步可能还没提交，收尾时补上（见 _write_stop）。"""
         ctx = ChatContext(take_guide=lambda: self._take_guide(thread_id), title=self._titles.get(thread_id),
-                          owner=await self.run_store.owner_of(thread_id))
+                          owner=await self.run_store.owner_of(thread_id), files=self.files)
         async for ns, mode, chunk in self.graph.astream(inp, self._cfg(thread_id), context=ctx, stream_mode=["messages", "updates", "custom"],
                                                         subgraphs=True, durability=self.durability):
             task = tasks.get(ns[0]) if ns else None
@@ -806,25 +838,33 @@ class ResearchRunner(BaseRunner):
     # ---- 一轮的输入 ----
 
     async def _aaccept(self, thread_id: str, text: str, thinking: bool | None = None, option: str | None = None, owner: str | None = None,
-                       images: Sequence[AttachedImage] = ()) -> None:
+                       images: Sequence[AttachedImage] = (), files: Sequence[str] = ()) -> None:
         """把用户的话写进检查点，agent 从这里接着跑（输入为 None）。
 
         先落盘再交出执行：排队时服务重启也查得到这句话，算没跑完，可以重试。
         option 是新对话选的模型，和第一句话一起写进去（第一轮开始时定下，见 agent.TurnMiddleware）；已经开始的对话只能给定下的那个。
         owner 是新对话归谁：第一句话写进去之前记下（已经记过的不改）。
+        files 是带的文件的编号：校验都过了才绑到这段对话（绑不上抛 NotSendable，什么都没写）。
         """
         await self._adrop_suggestions(thread_id)
         cfg = self._cfg(thread_id)
         snap = await self.graph.aget_state(cfg)
         if snap.values and snap.next:
             raise NotIdle("上一轮没跑完，先重试")
-        update: dict[str, Any] = {"messages": [_said(text, thinking, images)]}
+        update: dict[str, Any] = {}
         if option is not None:
             if option not in {o.id for o in self.planner.catalog.offered(self.planner.usable)}:
                 raise UnknownModel(f"没有这个模型可选：{option}")
             if (snap.values or {}).get("messages") and snap.values.get("option") != option:
                 raise UnknownModel("对话开始后不能换模型，想换模型请开新对话")
             update["option"] = option
+        attached: list[AttachedFile] = []
+        if files:
+            who = owner or await self.run_store.owner_of(thread_id)
+            if who is None:
+                raise NotSendable(NOT_HERE, "这段对话不能带文件")
+            attached = await self.files.bind(list(files), who, thread_id)
+        update["messages"] = [_said(text, thinking, images, attached)]
         if owner is not None:
             await self.run_store.claim(thread_id, owner)
         await self.graph.aupdate_state(cfg, update, as_node=START)
@@ -851,8 +891,9 @@ class ResearchRunner(BaseRunner):
             raise NothingToRegenerate("还没有回答，不需要重新生成")
         human = msgs[start]
         turns = [t for t in v.get("turns", []) if t.id != human.id]
-        if text is not None:  # 带的图留着：只改了字
-            edited = [_said(text, history.thinking_switch(human) if thinking is None else thinking, history.attached_images(human), id=human.id)]
+        if text is not None:  # 带的图、文件留着：只改了字
+            edited = [_said(text, history.thinking_switch(human) if thinking is None else thinking, history.attached_images(human),
+                            history.attached_files(human), id=human.id)]
         elif thinking is not None:
             edited = [human.model_copy(update={"additional_kwargs": {**human.additional_kwargs, history.THINK: thinking}})]
         else:
@@ -883,7 +924,7 @@ class ResearchRunner(BaseRunner):
             await self.graph.aupdate_state(cfg, {"title": title}, as_node=TURN_END)
 
     async def _adelete(self, thread_id: str) -> None:
-        """删掉整段对话（这个线程的所有检查点、运行记录、画的图、用户发的图和整理记忆的记录），找不回来；记下的记忆不删。
+        """删掉整段对话（这个线程的所有检查点、运行记录、画的图、用户发的图和文件、整理记忆的记录），找不回来；记下的记忆不删。
         运行记录先删：删不掉就整个报错，对话还在，可以再删一次；反过来对话先没了，剩下的记录就再也删不到了。
         图在对话删掉以后再删（编号先记下）：删图没成功只记日志，留下的图没人指着，只占服务的磁盘。"""
         async with self._ahold(thread_id):
@@ -895,6 +936,7 @@ class ResearchRunner(BaseRunner):
             await self.memory.aforget_thread(thread_id)  # 只删整理过哪几轮的记录；从这段对话记下的记忆不动（记的是人）
             await self.graph.checkpointer.adelete_thread(thread_id)
             await self.images.delete_images(images)
+            await self.files.delete_workspace(thread_id)  # 文件按工作区（现在就是这段对话）删，原件没删掉只记日志
 
     # ---- 推荐问题：这一轮结束之后再起 ----
 

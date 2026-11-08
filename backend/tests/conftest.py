@@ -11,6 +11,7 @@ from langgraph.types import Command
 from app import aio, config
 from app.api import research_runner
 from app.api.run_store import MemoryRunStore
+from app.files.store import MemoryFileStore
 from app.graph.poster.graph import build_graph, memory_checkpointer
 from app.graph.research import graph as research_graph
 from app.llm import FakePlanner
@@ -22,6 +23,7 @@ REQUEST = "某品牌蓝牙耳机黑五预热，5 折，11.20 到 11.27"
 # 设了 LINGDRAFT_TEST_DATABASE_URL 时存这个库，整套测试在 Postgres 上跑（每个测试前清空；别指向有用的库）
 config.DATABASE_URL = os.environ.get("LINGDRAFT_TEST_DATABASE_URL", "")
 config.DREAM_ENABLED = False  # 不开整理记忆的定时任务（它会建真实模型的运行器）
+config.FILE_PARSE_ISOLATED = False  # 用户发的文件在测试进程里解析（起子进程每次一秒多）；子进程的那条路单独测（tests/test_files.py）
 config.AUTH_CLIENT_ID = ""  # 本机 .env 里配的登录测试不用：认人的在 _auth 里换成假 auth 的
 # 本机 .env 里配了的新几家的 key 测试不用（和 CI 一样只有 DeepSeek、豆包的设置），要哪家的测试自己设
 for _spec in COMPAT.values():
@@ -40,21 +42,29 @@ def _auth():
 
 
 @pytest.fixture(autouse=True)
+def _files_dir(tmp_path, monkeypatch):
+    """用户发的文件的原件存在这个测试自己的临时目录里。"""
+    monkeypatch.setattr(config, "FILES_DIR", tmp_path / "files")
+
+
+@pytest.fixture(autouse=True)
 def _storage(monkeypatch):
     """不传检查点建的对话运行器，存储从 research_runner.open_storage 来。
     没设测试库：换成内存的，同一个测试里建的运行器共用一份，再建一个就像服务重启（运行器的状态丢了，库里的还在）。
     设了：开真的 Postgres，每个测试前清空，测试完关掉每个运行器的连接池，免得连接数攒满。"""
     if not config.DATABASE_URL:
         shared = (research_graph.memory_checkpointer(), InMemoryStore(), MemoryRunStore())
+        files = MemoryFileStore()
 
         async def in_memory(url):
             return shared
         monkeypatch.setattr(research_runner, "open_storage", in_memory)
+        monkeypatch.setattr(research_runner, "open_files", lambda runs: files if runs is shared[2] else MemoryFileStore())
         yield
         return
     with psycopg.connect(config.DATABASE_URL, autocommit=True) as c:
         for sql in ("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes", "TRUNCATE runs", "TRUNCATE pending_messages", "TRUNCATE store",
-                    "TRUNCATE model_costs", "TRUNCATE quota_resets"):
+                    "TRUNCATE model_costs", "TRUNCATE quota_resets", "TRUNCATE files, file_parts"):
             try:
                 c.execute(sql)
             except psycopg.errors.UndefinedTable:  # 还没有哪个测试建过表

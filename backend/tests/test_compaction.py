@@ -37,12 +37,15 @@ class Recording(FakeToolModel):
 def tools_tokens() -> float:
     """假模型下主 agent 的工具定义估算多少 token（每次都发，算进估算里）。下面的触发线都在这个基础上加。"""
     from app.graph.research.subagent import make_task_tool
+    from app.tools.files import make_read_file_tool
     from app.tools.flyai_mcp import itinerary_tool
+    from app.tools.vision import make_view_image_tool
 
     p = FakeResearchPlanner()
     aio.run(p.connect_tools())  # 和运行器里一样，连上 MCP 的工具（搜索、读页、天气……）
     # 和 agent.build_agent 的工具列表一样
-    return CompactionMiddleware(p, [*p.tools(), make_task_tool(p), cp.make_recall_tool(), itinerary_tool()]).tools_tokens
+    tools = [*p.tools(), make_task_tool(p), cp.make_recall_tool(), itinerary_tool(), make_view_image_tool(p), make_read_file_tool()]
+    return CompactionMiddleware(p, tools).tools_tokens
 
 
 TOOLS = tools_tokens()

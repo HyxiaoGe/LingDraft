@@ -1,15 +1,17 @@
 // 输入框那一块（样式在 composer.module.css 和元素上的 Tailwind 类）：
-// 输入框本身（写字、加图、发送 / 停止、这一轮答完再发），右下角的深度思考和选模型，贴在上沿的“还没发出去的话”，
-// 上面的额度提醒和“回到底部”，还有拖图进来时盖在对话区上的那层。
+// 输入框本身（写字、加图和文件、发送 / 停止、这一轮答完再发），右下角的深度思考和选模型，贴在上沿的“还没发出去的话”，
+// 上面的额度提醒和“回到底部”，还有拖图、拖文件进来时盖在对话区上的那层。
 import { Sparkles } from "lucide-react";
-import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { getFile, removeFile, uploadFile } from "./api.js";
 import { getDraft, setDraft } from "./drafts.js";
-import { IconArrowDown, IconArrowUp, IconBulb, IconCheck, IconChevron, IconClose, IconImage, IconInsert, IconLock, IconStop, IconUndo, IconWarn, Spinner } from "./icons.jsx";
+import { FileCard, fileFacts } from "./files.jsx";
+import { IconArrowDown, IconArrowUp, IconBulb, IconCheck, IconChevron, IconClip, IconClose, IconInsert, IconLock, IconStop, IconUndo, IconWarn, Spinner } from "./icons.jsx";
 import { Viewer } from "./images.jsx";
 import { useLayer } from "./layers.js";
 import { NavContext, byKeyboard, touch } from "./nav.jsx";
 import { QUEUED, creditsLeft, creditsLine, loginLine } from "./research.js";
-import { IMAGE_ACCEPT, ImageError, MAX_IMAGES, prepareImage } from "./upload.js";
+import { ImageError, MAX_FILES, MAX_IMAGES, fileErrorText, fileShortError, isImage, prepareImage, tooBig } from "./upload.js";
 import styles from "./composer.module.css";
 import menu from "./menu.module.css";
 import sheet from "./sheet.module.css";
@@ -17,7 +19,7 @@ import sheet from "./sheet.module.css";
 // 临时的输入框（改这句话、左栏改名）关掉以后，光标回到对话的输入框（等它从页面上撤掉再放）
 export const focusInput = () => setTimeout(() => dispatchEvent(new Event("ws-focus-input")));
 
-// 把图交给输入框，当成选了这些图（拖进对话区松手；图上的“改这张”见 images.jsx，发的是同一个事件，detail 是一张或一组）
+// 把图、文件交给输入框，当成选了这些（拖进对话区松手；图上的“改这张”见 images.jsx，发的是同一个事件，detail 是一个或一组）
 const attachImage = (files) => dispatchEvent(new CustomEvent("ws-attach-image", { detail: files }));
 
 // 输入框跟着字数长高，最高多高写在样式里（max-height：桌面窗口高度的四成，手机键盘占了一半、按四分之一；都不低于 160px），再多就在框里滚
@@ -46,8 +48,8 @@ export function JumpButton({ more, onClick }) {
   );
 }
 
-// 拖图进来（2026-11-07 Sean 定）：拖到对话区（box）哪儿都行，盖一层“松手添加图片”，松手交给输入框。
-// 拖到对话区外面（左栏）松手什么也不做，不让浏览器把图打开、离开页面。
+// 拖图、拖文件进来（2026-11-07 Sean 定）：拖到对话区（box）哪儿都行，盖一层“松手添加图片或文件”，松手交给输入框（图和别的文件在那里分开）。
+// 拖到对话区外面（左栏）松手什么也不做，不让浏览器把文件打开、离开页面。
 // 拖出窗口：dragleave 没有下一个落点就收起；有的浏览器不给落点，靠 dragover 停了一会儿收起（拖着的时候它一直在发）
 export function useImageDrop(box, enabled) {
   const [over, setOver] = useState(false);
@@ -90,9 +92,9 @@ export function useImageDrop(box, enabled) {
   return over;
 }
 
-// 拖着图在对话区上面时盖的那层（不挡鼠标，落点还是下面的东西）
+// 拖着图、文件在对话区上面时盖的那层（不挡鼠标，落点还是下面的东西）
 export function DropHint() {
-  return <div className={styles.drop} aria-hidden="true"><IconImage size={22} /><span>松手添加图片</span></div>;
+  return <div className={styles.drop} aria-hidden="true"><IconClip size={22} /><span>松手添加图片或文件</span></div>;
 }
 
 const PLACEHOLDER = {
@@ -105,7 +107,9 @@ const PLACEHOLDER = {
 };
 const HELD = "上面那句发出去以后才能再发，也可以撤回它一起改";
 const WITH_IMAGE = "问问图里的内容，或者说说要怎么改";
-const IMAGE_WAITS = "带图的话要等这一轮答完才能发";
+const WITH_FILE = "问问文件里的内容，或者说说要拿它做什么";
+const WITH_BOTH = "问问图和文件里的内容";
+const waits = (what) => `带${what}的话要等这一轮答完才能发`;
 const COUNT_FROM = 2000; // 超过这么多字在输入框里显示字数；不设上限（后端也没有），2026-11-06 Sean 定
 
 // 额度快用完（用了八成）或用完了时，输入框上面提醒一句（见后端 app.quota，按最紧的那个额度）：和左下角额度面板同一种说法（creditsLine）；
@@ -156,11 +160,107 @@ const attachments = new Map();
 const keepImages = (thread, list) => (list?.length ? attachments.set(thread, list) : attachments.delete(thread));
 let slots = 0; // 每张选进来的图一个记号：处理好了按它放回原位，处理时去掉了的不要
 
+// 每个对话选好、还没发的文件（[{key, name, size, status, id?, reason?, detail?, file?}]），和图一样只在这次打开的页面里留着。
+// status：uploading（传着）、parsing（传上去了，后台解析中，隔一会儿问一次）、ready（file 是随消息发的那份）、
+// failed（reason 是原因，见 upload.js 的 fileErrorText；要去掉才能发）。
+// 选好就传（见 pickFiles），不等发送：传和解析都在后台，不挡着打字、切对话；换了对话，传完、解析完的照样记到原来那个对话名下
+const picked = new Map();
+const watchers = new Set();
+const NO_FILES = [];
+const filesOf = (thread) => picked.get(thread) || NO_FILES;
+const setFiles = (thread, list) => {
+  if (list.length) picked.set(thread, list);
+  else picked.delete(thread);
+  watchers.forEach((f) => f());
+};
+const watchFiles = (f) => {
+  watchers.add(f);
+  return () => watchers.delete(f);
+};
+const findFile = (key) => {
+  for (const [thread, list] of picked) {
+    const f = list.find((d) => d.key === key);
+    if (f) return { thread, f };
+  }
+  return null;
+};
+// 改一个文件的状态；已经去掉了（或者发出去了）返回 false
+const patchFile = (key, patch) => {
+  const at = findFile(key);
+  if (!at) return false;
+  setFiles(at.thread, filesOf(at.thread).map((d) => (d.key === key ? { ...d, ...patch } : d)));
+  return true;
+};
+const uploads = new Map(); // 传着的：key → AbortController，去掉时断开
+let fileSlots = 0;
+const viewed = (v) => ({ id: v.id, status: v.status, reason: v.reason, file: v.file });
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 选进来的文件接在后面，先挡下传之前就知道传不了的（太大、空的），别的马上传
+function pickFiles(thread, files) {
+  const add = files.map((f) => ({ key: ++fileSlots, name: f.name || "未命名文件", size: f.size, src: f, status: tooBig(f) ? "failed" : "uploading", reason: tooBig(f) }));
+  setFiles(thread, [...filesOf(thread), ...add.map(({ src, ...d }) => d)]);
+  for (const d of add) if (d.status === "uploading") upload(d.key, d.src);
+}
+
+async function upload(key, file) {
+  const ctl = new AbortController();
+  uploads.set(key, ctl);
+  try {
+    const v = await uploadFile(file, ctl.signal);
+    uploads.delete(key);
+    if (!patchFile(key, viewed(v))) return removeFile(v.id); // 传的时候去掉了
+    if (v.status === "parsing") track(key, v.id);
+  } catch (e) {
+    uploads.delete(key);
+    if (ctl.signal.aborted) return;
+    const reason = e.detail?.reason || (!e.status ? "offline" : e.status === 413 ? "too_large" : e.status === 429 || e.status >= 500 ? "busy" : "failed");
+    patchFile(key, { status: "failed", reason, detail: e.detail || undefined });
+  }
+}
+
+// 解析中的隔一会儿问一次（开头问得勤，十几秒以后慢下来），好了、读不了就停；去掉了、发出去了也停。
+// 问不到（网络断了）接着问，连着一分多钟都问不到算没传成
+async function track(key, id) {
+  for (let i = 0, errs = 0; ; i++) {
+    await wait(i < 15 ? 800 : 2500);
+    const at = findFile(key);
+    if (!at || at.f.id !== id || at.f.status !== "parsing") return;
+    try {
+      const v = await getFile(id);
+      errs = 0;
+      if (v.status !== "parsing") return patchFile(key, viewed(v));
+    } catch (e) {
+      if (e.status === 404) return patchFile(key, { status: "failed", reason: "expired" });
+      if (++errs >= 30) return patchFile(key, { status: "failed", reason: "offline" });
+    }
+  }
+}
+
+// 没发出去、放回输入框的文件：再问一次现在的状态（可能过期清掉了）
+function recheck(list) {
+  for (const d of list) {
+    if (!d.id || d.status !== "ready") continue;
+    getFile(d.id).then((v) => patchFile(d.key, viewed(v)), (e) => e.status === 404 && patchFile(d.key, { status: "failed", reason: "expired" }));
+  }
+}
+
+// 去掉一个：传着的断开，传上去了的让后端也删掉
+function dropFile(thread, key) {
+  const d = filesOf(thread).find((x) => x.key === key);
+  if (!d) return;
+  uploads.get(key)?.abort();
+  if (d.id) removeFile(d.id);
+  setFiles(thread, filesOf(thread).filter((x) => x.key !== key));
+}
+
 // 回答时（queueing）也能打字：停止键一直在原位，不变成别的；打了字，旁边另外出一个“这一轮答完再发”，话排着，这一轮答完就发。Esc 停止回答。
 // held：已经有一句没发出去（排着或等着插进这一轮）。没发出去的话最多一句：这时还能打字，但发不出去，要先撤回那句、改好一起发。
-// 带图的话排不了（排着的话只有字），要等这一轮答完再发。
-// 图：点左下角选（能多选）、粘贴、拖进对话区都行（拖的见 useImageDrop），一句话最多 MAX_IMAGES 张，大图在本机先压到 4 MB 以内（见 upload.js）。
-// 没发出去的字每个对话各存一份在本机（见 drafts.js）：切走、刷新、登录回来都在，发出去就清掉；图只在这次打开的页面里留着（见 attachments）。
+// 带图、带文件的话排不了（排着的话只有字），要等这一轮答完再发。
+// 图和文件：点左下角的回形针选（能多选，图和别的文件一起选也行）、粘贴、拖进对话区都行（拖的见 useImageDrop），到这里再分开：
+// - 图一句话最多 MAX_IMAGES 张，大图在本机先压到 4 MB 以内（见 upload.js），随消息一起传；
+// - 文件一句话最多 MAX_FILES 个，选好就传、后台解析（见 pickFiles），都解析好了才能发；读不了的标出来，去掉才能发。
+// 没发出去的字每个对话各存一份在本机（见 drafts.js）：切走、刷新、登录回来都在，发出去就清掉；图和文件只在这次打开的页面里留着（见 attachments、picked）。
 // carry：新对话刚发出去、拿到了 id，thread 从 "new" 换成 id，还是同一个对话
 // putBack：放回输入框的话（撤回的、没发出去的，可能带着图）：放在已经写着的字前面、空一行，放回来的那段选中，看得出哪段是放回来的
 //   （被拒的那句还原样留着就换掉它，不叠加）；不是正在看的对话，放进那个对话的草稿
@@ -168,7 +268,8 @@ let slots = 0; // 每张选进来的图一个记号：处理好了按它放回�
 export function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSend, onStop, above, onTakeBack, tools }) {
   const [text, setText] = useState(() => getDraft(thread));
   const [images, setImages] = useState(() => attachments.get(thread) || []); // 见 attachments
-  const [imageError, setImageError] = useState(null);
+  const [attachError, setAttachError] = useState(null); // 选图、选文件时说的一句（超过张数、图读不出来）
+  const docs = useSyncExternalStore(watchFiles, () => filesOf(thread)); // 见 picked
   const ref = useRef(null);
   const fileRef = useRef(null);
   const shown = useRef(thread); // text、images 是哪个对话的
@@ -185,8 +286,10 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
   const sendNow = mode === "new" || mode === "idle";
   const canStop = mode === "busy" || mode === "queued";
   const hasText = !!text.trim();
-  const canQueue = queueing && !held && !images.length;
-  const processing = images.some((i) => i.pending);
+  const canQueue = queueing && !held && !images.length && !docs.length;
+  const docsBusy = docs.some((d) => d.status === "uploading" || d.status === "parsing");
+  const docFailed = docs.find((d) => d.status === "failed");
+  const processing = images.some((i) => i.pending) || docsBusy || !!docFailed || docs.length > MAX_FILES;
   const enabled = sendNow || (queueing && !held); // 能说话了（光标该回来了）
   const stopNow = useRef(null); // 按 Esc 时调的：能停才有
   stopNow.current = canStop && !stopping ? onStop : null;
@@ -238,16 +341,20 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
     }
     const keyed = byKeyboard() && thread !== "new";
     clearTimeout(saveTimer.current);
-    if (was === "new" && carry) { // 同一个对话：等回答时写的字、选的图留着，光标也不动；草稿挪到这个对话名下
+    if (was === "new" && carry) { // 同一个对话：等回答时写的字、选的图和文件留着，光标也不动；草稿挪到这个对话名下
       setDraft("new", "");
       setDraft(thread, textRef.current);
+      if (filesOf("new").length) {
+        setFiles(thread, [...filesOf(thread), ...filesOf("new")]);
+        setFiles("new", []);
+      }
       return;
     }
     setDraft(was, textRef.current);
     keepImages(was, imagesRef.current);
     setText(getDraft(thread));
     putImages(attachments.get(thread) || []);
-    setImageError(null);
+    setAttachError(null);
     if (!keyed) focus(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread]);
@@ -260,6 +367,11 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
     rejected.current = putBack.rejected ? putBack.text : null;
     const joined = (cur) => !!cur.trim() && !(putBack.rejected && cur === prev);
     const join = (cur) => (joined(cur) ? `${putBack.text}\n\n${cur}` : putBack.text);
+    if (putBack.docs?.length) { // 放回来的文件排在已经选着的前面
+      const keys = new Set(putBack.docs.map((d) => d.key));
+      setFiles(putBack.thread, [...putBack.docs, ...filesOf(putBack.thread).filter((d) => !keys.has(d.key))]);
+      recheck(putBack.docs);
+    }
     if (putBack.thread !== shown.current) {
       setDraft(putBack.thread, join(getDraft(putBack.thread)));
       if (putBack.images?.length) keepImages(putBack.thread, putBack.images);
@@ -276,7 +388,7 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
   useEffect(() => {
     // 图上点了“改这张”（见 images.jsx）、拖进对话区松手（见 useImageDrop）：当成选了这些图，桌面上光标进输入框好接着说
     const take = (e) => {
-      if (!e.detail) return setImageError("没取到这张图，再点一次“改这张”");
+      if (!e.detail) return setAttachError("没取到这张图，再点一次“改这张”");
       attachRef.current(e.detail);
       focus(true);
     };
@@ -316,14 +428,26 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
     };
   }, []);
 
-  // 选了、粘贴了、拖进来的图：接在已经选了的后面，先占上位置转圈，处理好（大图压缩）再显示；超过 MAX_IMAGES 张的不要，说一声。
-  // 处理的时候换了对话，处理好的图归原来那个对话；处理的时候去掉了的，处理好了也不要
+  // 选了、粘贴了、拖进来的：图和别的文件分开（见 Composer 上面的说明），文件超过 MAX_FILES 个的不要，说一声
   const attach = (files) => {
     const list = [].concat(files || []).filter(Boolean);
     if (!list.length) return;
+    setAttachError(null);
+    const imgs = list.filter(isImage);
+    const others = list.filter((f) => !isImage(f));
+    if (imgs.length) attachImages(imgs);
+    if (others.length) {
+      const room = MAX_FILES - filesOf(shown.current).length;
+      if (others.length > room) setAttachError(`一句话最多带 ${MAX_FILES} 个文件`);
+      if (room > 0) pickFiles(shown.current, others.slice(0, room));
+    }
+  };
+  // 图：接在已经选了的后面，先占上位置转圈，处理好（大图压缩）再显示；超过 MAX_IMAGES 张的不要，说一声。
+  // 处理的时候换了对话，处理好的图归原来那个对话；处理的时候去掉了的，处理好了也不要
+  const attachImages = (list) => {
     const thread = shown.current;
     const room = MAX_IMAGES - imagesRef.current.length;
-    setImageError(list.length > room ? `一句话最多带 ${MAX_IMAGES} 张图` : null);
+    if (list.length > room) setAttachError(`一句话最多带 ${MAX_IMAGES} 张图`);
     const take = list.slice(0, Math.max(0, room)).map((file) => ({ file, key: ++slots }));
     if (!take.length) return;
     putImages([...imagesRef.current, ...take.map(({ key }) => ({ key, pending: true }))]);
@@ -345,21 +469,28 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
     }
     if (here) {
       putImages(swap(list));
-      if (error) setImageError(error);
+      if (error) setAttachError(error);
     } else keepImages(thread, swap(list));
   };
   const attachRef = useRef(attach);
   attachRef.current = attach;
   const removeImage = (key) => {
     putImages(imagesRef.current.filter((i) => i.key !== key));
-    setImageError(null);
+    setAttachError(null);
     focus(true);
   };
-  // 粘贴：剪贴板里只有图（截图、网页上“复制图片”）才当图；带着字的（从文档里复制的常常也带一张图）照常粘贴文字
+  const removeDoc = (key) => {
+    dropFile(shown.current, key);
+    setAttachError(null);
+    focus(true);
+  };
+  // 粘贴：剪贴板里有图以外的文件（在访达、资源管理器里复制的文件）就当文件，连着一起复制的图也带上；
+  // 只有图时，没带着字的（截图、网页上“复制图片”）才当图，带着字的（从文档里复制的常常也带一张图）照常粘贴文字
   const onPaste = (e) => {
     const cd = e.clipboardData;
-    if (!cd || cd.types.includes("text/plain")) return;
-    const files = [...cd.files].filter((f) => f.type.startsWith("image/"));
+    if (!cd) return;
+    const all = [...cd.files];
+    const files = all.some((f) => !isImage(f)) ? all : cd.types.includes("text/plain") ? [] : all.filter(isImage);
     if (!files.length) return;
     e.preventDefault();
     attach(files);
@@ -369,18 +500,26 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
     const t = text.trim();
     if (!t || processing) return;
     if (sendNow) {
-      onSend(t, images);
+      onSend(t, images, docs);
       putImages([]);
-    } else if (canQueue) onSend(t, []);
+      setFiles(shown.current, []); // 发出去了：后端绑到这段对话，不删
+    } else if (canQueue) onSend(t, [], []);
     else return;
     setText("");
-    setImageError(null);
+    setAttachError(null);
     clearTimeout(saveTimer.current);
     setDraft(shown.current, "");
   };
-  const note = imageError ? { text: imageError, warn: true }
-    : queueing && hasText && held ? { text: HELD }
-      : queueing && hasText && images.length ? { text: IMAGE_WAITS } : null;
+  // 输入框下面那一句：选图、选文件时说的 > 读不了的文件（去掉才能发）> 文件太多 > 回答时打了字发不出去的原因 > 文件还没解析好
+  const both = images.length && docs.length;
+  const note = attachError ? { text: attachError, warn: true }
+    : docFailed ? { text: `「${docFailed.name}」${fileErrorText(docFailed.reason, docFailed.detail)}，去掉它才能发`, warn: true }
+      : docs.length > MAX_FILES ? { text: `一句话最多带 ${MAX_FILES} 个文件，去掉几个再发`, warn: true }
+        : queueing && hasText && held ? { text: HELD }
+          : queueing && hasText && (images.length || docs.length) ? { text: waits(both ? "图和文件" : docs.length ? "文件" : "图") }
+            : sendNow && hasText && docsBusy ? { text: "文件解析好了就能发" } : null;
+  const withWhat = both ? WITH_BOTH : docs.length ? WITH_FILE : images.length ? WITH_IMAGE : null;
+  const full = images.length >= MAX_IMAGES && docs.length >= MAX_FILES;
   const count = text.length > COUNT_FROM ? Array.from(text).length : 0;
   const keep = (e) => e.preventDefault(); // 按下去不抢光标
   return (
@@ -388,9 +527,9 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
       {above}
       {/* 点输入框这一块的空白处（四周留白、按钮之间，标着 data-blank）也把光标放进去：可点的是整块，不只是一行高的 textarea（第 31 条） */}
       <div className={styles.box} onClick={(e) => { if (e.target === e.currentTarget || e.target.hasAttribute("data-blank")) ref.current?.focus(); }}>
-        {images.length > 0 && <Attachments list={images} onRemove={removeImage} />}
+        {(images.length > 0 || docs.length > 0) && <Attachments list={images} docs={docs} onRemove={removeImage} onRemoveDoc={removeDoc} />}
         <textarea ref={ref} rows={1} value={text} aria-label="输入"
-          placeholder={queueing && held ? HELD : images.length && sendNow ? WITH_IMAGE : PLACEHOLDER[mode] || PLACEHOLDER.busy}
+          placeholder={queueing && held ? HELD : withWhat && sendNow ? withWhat : PLACEHOLDER[mode] || PLACEHOLDER.busy}
           onChange={(e) => setText(e.target.value)} onPaste={onPaste}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
@@ -405,10 +544,11 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
           }} />
         {note && <div className={styles.note + (note.warn ? " " + styles.warn : "")} role={note.warn ? "alert" : undefined}>{note.warn && <IconWarn size={13} />}<span>{note.text}</span></div>}
         <div className="mt-2 flex items-center gap-1 phone:gap-2" data-blank>
-          <button className={styles.attach} aria-label="添加图片" title={images.length >= MAX_IMAGES ? `一句话最多带 ${MAX_IMAGES} 张图` : "添加图片"}
-            disabled={mode === "opening" || images.length >= MAX_IMAGES} onMouseDown={keep}
-            onClick={() => fileRef.current?.click()}><IconImage size={16} /></button>
-          <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} multiple hidden tabIndex={-1}
+          {/* 不限类型：图在这边分开，别的文件后端认，认不出的说一声（手机上点开能选照片、拍照或文件） */}
+          <button className={styles.attach} aria-label="添加图片或文件" title={full ? `一句话最多带 ${MAX_IMAGES} 张图、${MAX_FILES} 个文件` : "添加图片或文件"}
+            disabled={mode === "opening" || full} onMouseDown={keep}
+            onClick={() => fileRef.current?.click()}><IconClip size={16} /></button>
+          <input ref={fileRef} type="file" multiple hidden tabIndex={-1}
             onChange={(e) => { attach([...(e.target.files || [])]); e.target.value = ""; }} />
           {count > COUNT_FROM && <span className="flex-none text-[12px] whitespace-nowrap text-muted tabular-nums">{count.toLocaleString("en-US")} 字</span>}
           <div className="ml-auto flex min-w-0 items-center" data-blank>{tools}</div>
@@ -427,12 +567,15 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
   );
 }
 
-// 选好要发的图：一排缩略图（点开看大图），每张右上角去掉。大图还在本机压缩时那张先转圈
-function Attachments({ list, onRemove }) {
+// 选好要发的图和文件：图是一排缩略图（点开看大图），大图还在本机压缩时那张先转圈；文件是小卡片（见 files.jsx），
+// 传着、解析中转圈，读不了的标出来（原因写在输入框下面）。每个右上角去掉
+function Attachments({ list, docs, onRemove, onRemoveDoc }) {
   const [viewing, setViewing] = useState(null); // {url, back}
   const pending = list.some((i) => i.pending);
+  const sub = (d) => (d.status === "uploading" ? "上传中…" : d.status === "parsing" ? "解析中…" : d.status === "ready" ? fileFacts(d.file) : fileShortError(d.reason));
   return (
-    <div className="mb-2 flex flex-wrap items-center gap-2 phone:mt-1">
+    // 手机上排成一行、左右滑（5 个文件加 4 张图一行行往下排，键盘弹出来时输入框会顶出屏幕）；上面留出去掉按钮探出去的那块
+    <div className="mb-2 flex flex-wrap items-center gap-2 phone:-mt-2 phone:flex-nowrap phone:overflow-x-auto phone:pr-2 phone:pt-3">
       {list.map((att, k) => (
         <div key={att.key} className="relative flex size-12 flex-none items-center justify-center rounded-sm border border-line bg-side text-muted">
           {att.url
@@ -441,7 +584,11 @@ function Attachments({ list, onRemove }) {
           <button className={styles.remove} aria-label={`去掉第 ${k + 1} 张图`} onMouseDown={(e) => e.preventDefault()} onClick={() => onRemove(att.key)}><IconClose size={12} /></button>
         </div>
       ))}
-      {pending && <span className="min-w-0 text-[12px] leading-[1.5] text-muted" role="status">正在处理图片…</span>}
+      {docs.map((d) => (
+        <FileCard key={d.key} name={d.name} sub={sub(d)} busy={d.status === "uploading" || d.status === "parsing"} bad={d.status === "failed"}
+          onRemove={() => onRemoveDoc(d.key)} />
+      ))}
+      {pending && <span className="min-w-0 text-[12px] leading-[1.5] text-muted phone:flex-none phone:whitespace-nowrap" role="status">正在处理图片…</span>}
       {viewing && <Viewer img={{ alt: "要发的图" }} src={viewing.url} onClose={() => { viewing.back.focus(); setViewing(null); }} />}
     </div>
   );

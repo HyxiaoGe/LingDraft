@@ -10,7 +10,8 @@ import { listInspirations } from "./api.js";
 import shell from "./card.module.css";
 import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelIcon, ModelTools, Pending, enterSends, focusInput, useAutoHeight, useImageDrop } from "./composer.jsx";
 import { failureText } from "./errors.js";
-import { IconBook, IconCheck, IconChevron, IconCloudSun, IconCopy, IconDownload, IconEdit, IconEye, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, Spinner } from "./icons.jsx";
+import { SentFiles, fileIndex, partUnit } from "./files.jsx";
+import { IconBook, IconCheck, IconChevron, IconClip, IconCloudSun, IconCopy, IconDownload, IconEdit, IconEye, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, Spinner } from "./icons.jsx";
 import { ImageCards, Viewer, drawn, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
@@ -171,9 +172,9 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   const dropping = useImageDrop(mainRef, mode !== "opening");
   // 回答时（包括还在排队、正在停止）发的话排着，这一轮答完就发；新对话刚发出去、还没拿到 id 时排不了
   const queueing = !!tid && (mode === "busy" || mode === "queued");
-  const onSend = (text, images) => { // images：带的图（[{key, file, url}]），排着的话不带
-    if (mode === "new") return act.start(text, images);
-    if (mode === "idle") return act.say(text, images);
+  const onSend = (text, images, docs) => { // images：带的图（[{key, file, url}]），docs：带的文件（解析好了的，见 composer.jsx 的 picked），排着的话都不带
+    if (mode === "new") return act.start(text, images, docs);
+    if (mode === "idle") return act.say(text, images, docs);
     if (queueing) return act.queue(text);
     return undefined;
   };
@@ -486,7 +487,9 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models, modelNa
   const turns = st?.turns || [];
   const running = busy || ACTIVE.has(st?.status);
   // 刚说的话还没出现在存下来的对话里：先按页面手上的显示
-  const pending = live?.said && turns.length <= (live.turnsAtStart ?? 0) ? { id: "pending", user: live.said, items: [], record: null, local: live.images?.map((i) => i.url) } : null;
+  const pending = live?.said && turns.length <= (live.turnsAtStart ?? 0)
+    ? { id: "pending", user: live.said, items: [], record: null, local: live.images?.map((i) => i.url), localFiles: live.docs?.map((d) => d.file).filter(Boolean) }
+    : null;
   const all = pending ? [...turns, pending] : turns;
   let shots = 0;
   // 每一轮一个 section：轮次目录跳过来的落点（data-turn 是第几轮，从 0 数；正在发的那句还没 id，按位置记），这一轮在跑时 aria-busy
@@ -525,8 +528,8 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
   const who = ref && models?.length > 0 ? named?.name || modelName(models, ref) : null;
   return (
     <>
-      {t.user && <UserMsg text={live?.edit ?? t.user} images={userImages(t, live, st?.thread_id)} at={live?.sentAt ?? t.sent_at} pinned={last} now={now}
-        editable={last && idle} onEdit={act.edit} />}
+      {t.user && <UserMsg text={live?.edit ?? t.user} images={userImages(t, live, st?.thread_id)} files={t.localFiles || t.files || []} tid={t.localFiles ? null : st?.thread_id}
+        at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && idle} onEdit={act.edit} />}
       <div className={styles.ai}>
         {who && <div className={styles.aiHead}><ModelIcon m={{ model: ref, name: who, icon: named?.icon }} size={22} />{who}</div>}
         {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} />}
@@ -596,13 +599,15 @@ function UserImage({ img, src, n, square }) {
 }
 
 // 用户说的话：下面是发送时间和“复制”，最后一句在空闲时还有“编辑”。都一直显示，pinned（最后一轮）以外的淡一档
-function UserMsg({ text, images, at, pinned, now, editable, onEdit }) {
+// files：这句话带的文件（点了下载原件，tid 是对话编号；刚发出去还没存下来的没有 tid，先不能点）
+function UserMsg({ text, images, files, tid, at, pinned, now, editable, onEdit }) {
   const [editing, setEditing] = useState(false);
   useEffect(() => { if (!editable) setEditing(false); }, [editable]); // 开着编辑框时这一轮又跑起来了（点了重新回答、推荐问题），编辑框就收起
   if (editing && editable) return <EditBox text={text} onCancel={() => { setEditing(false); focusInput(); }} onSend={(t) => { setEditing(false); onEdit(t); }} />;
   return (
     <div className={styles.user}>
       {images.length > 0 && <UserImages list={images} />}
+      {files.length > 0 && <SentFiles files={files} tid={tid} />}
       <Bubble text={text} />
       <div className={styles.userFoot + (pinned ? " " + styles.pinned : "")}>
         <Stamp iso={at} now={now} />
@@ -736,8 +741,9 @@ function didText(items) {
 // hideUnknown：子 agent 还在跑，它查到的来源要等它做完才进这一轮的来源表，还对不上的引用先不显示（不然先冒一个问号）
 function ProcItems({ items, st, nums, running, hideUnknown = false }) {
   const cite = (sid) => (hideUnknown && !st?.sources?.[sid] ? null : <Mark n={nums[sid]} s={st?.sources?.[sid]} nums={nums} sources={st?.sources} />);
+  const files = items.some((i) => i.kind === "file") ? fileIndex(st?.turns) : null; // 读文件那一步对上文件名、类型
   return items.map((it) => (it.type === "step" ? (it.kind === "task" ? <TaskCard key={`step:${it.id}`} s={it} st={st} nums={nums} running={running} />
-    : <ToolRow key={`step:${it.id}`} s={it} running={running} />)
+    : <ToolRow key={`step:${it.id}`} s={it} running={running} files={files} />)
     : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} running={running} thinking={running && it.live && it.ms == null} />
       : it.type === "blocked" ? <div key={`blocked:${it.id}`} className={proc.tool + " " + proc.bad}><IconWarn size={12} /><span className={proc.main}>内容审核没通过，这个子任务停在这里</span></div>
         : it.type === "guide" ? <GuideNote key={`guide:${it.id}`} it={it} />
@@ -932,10 +938,11 @@ function Thinking({ it, running, thinking }) {
   );
 }
 
-// 还没有结果的一步（pending）：这一轮在跑就是还在做；没在跑了（这一轮出错停在这一步）就是没有完成，和子任务卡一样说
-function ToolRow({ s, running }) {
+// 还没有结果的一步（pending）：这一轮在跑就是还在做；没在跑了（这一轮出错停在这一步）就是没有完成，和子任务卡一样说。
+// files：这段对话里用户发过的文件（见 fileIndex），读文件那一步用
+function ToolRow({ s, running, files }) {
   const Icon = { read: IconPage, weather: IconCloudSun, place: IconPin, route: IconRoute, flight: IconPlane, train: IconTrain, itinerary: IconTicket,
-    image: IconImage, docs: IconBook, view: IconEye }[s.kind] || IconSearch;
+    image: IconImage, docs: IconBook, view: IconEye, file: IconClip }[s.kind] || IconSearch;
   const busy = running && s.pending;
   let main, sub;
   let bad = !s.ok;
@@ -970,6 +977,12 @@ function ToolRow({ s, running }) {
   } else if (s.kind === "view") { // 看不见图的模型调看图工具：问的是什么
     main = <>看图「{s.text}」</>;
     sub = s.pending ? "查看中…" : s.ok ? "看过了" : s.message || "没看成";
+  } else if (s.kind === "file") { // 读用户发的文件：找的词，或者读的第几页（PPT 第几张、别的第几段）
+    const f = files?.[s.text];
+    const name = f?.name || (s.pending || !s.ok ? null : s.text); // 还在读、没读成的记的是编号，对不上就不写
+    const unit = partUnit(f?.type);
+    main = <>读文件{name && <>「{name}」</>}{s.limits.map((l) => <span key={l} className={proc.lim}>找「{l}」</span>)}{s.parts && <span className={proc.lim}>第 {s.parts} {unit}</span>}</>;
+    sub = s.pending ? "读取中…" : !s.ok ? s.message || "没读成" : s.limits.length ? (s.hits ? `找到 ${s.hits} ${unit}` : "没找到") : "读过了";
   } else if (s.kind === "image") {
     main = <>{s.edit ? "改图" : "画图"}「{s.text}」</>;
     sub = s.pending ? "生成中…" : s.image ? "已生成" : `没画成：${s.message || "出错了"}`;
@@ -1003,6 +1016,7 @@ const WAITING = [
   ["task", (n) => `${n} 个子任务在查`],
   ["image", () => "正在画图"],
   ["view", () => "正在看图"],
+  ["file", () => "正在读文件"],
   ["read", (n) => (n > 1 ? `正在读 ${n} 个网页` : "正在读网页")],
   ["search", (n) => (n > 1 ? `正在搜 ${n} 组关键词` : "正在搜索")],
   ["docs", () => "正在查文档"],

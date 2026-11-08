@@ -1,0 +1,30 @@
+/* 用户发的文件的小卡片（files.jsx）：输入框里一排、对话里用户那句话上面一排 */
+.card { position: relative; flex: none; width: 216px; max-width: 100%; height: 52px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--side); }
+.card.failed { border-color: var(--warn-line); background: var(--warn-soft); }
+.inner { display: flex; align-items: center; gap: 10px; width: 100%; height: 100%; padding: 0 12px 0 8px; border-radius: inherit; text-align: left; }
+button.inner { cursor: pointer; transition: background .15s var(--ease); }
+@media (hover: hover) { button.inner:hover { background: var(--hover); } }
+@media (hover: none) { button.inner:active { background: var(--hover); } }
+.text { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 1px; }
+.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; line-height: 1.45; color: var(--ink); }
+.sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; line-height: 1.45; color: var(--muted); }
+.sub.bad { color: var(--warn); }
+
+/* 类型角标：圆角小方块上写扩展名，白字（深色模式也一样，颜色够深） */
+.badge { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 7px;
+  font-size: 9.5px; font-weight: 700; letter-spacing: .02em; color: #fff; background: #6b7280; }
+.badge[data-kind="pdf"] { background: #d93f3f; }
+.badge[data-kind="word"] { background: #2f6bd8; }
+.badge[data-kind="excel"] { background: #1f8a4c; }
+.badge[data-kind="ppt"] { background: #d9642b; }
+.badge[data-kind="busy"] { background: var(--paper); border: 1px solid var(--line); color: var(--muted); }
+
+/* 去掉（输入框里的）：和选好的图右上角那个一样 */
+.remove { position: absolute; top: -8px; right: -8px; width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%;
+  background: var(--ink); color: var(--paper); transition: background .15s var(--ease); }
+@media (hover: hover) { .remove:hover { background: var(--accent); } }
+@media (max-width: 720px) { .remove::after { content: ""; position: absolute; inset: -12px; } }
+
+/* 对话里用户那句话上面：靠右一排，放不下换行 */
+.sent { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 80%; }
+@media (max-width: 720px) { .sent { max-width: 100%; } .sent .card { width: 200px; } }

@@ -1,7 +1,8 @@
 """上下文压缩：对话太长时，发给主 agent 的那份里把之前几轮压一压。state 里的消息不改，页面照常从消息里取（2026-11-03 Sean 定）。
 
 发给模型的对话估算超过 config.COMPACT_TRIGGER_TOKENS 时（一轮里每次调模型之前看一次），从最早的一轮起往后压，压到 COMPACT_TARGET_TOKENS 以下：
-- 第一层：之前几轮的搜索、读页、取回的结果换成一行说明（来源 id、标题、网址，要原文用 recall 取回），模型的思考不带。
+- 第一层：之前几轮的搜索、读页、取回的结果换成一行说明（来源 id、标题、网址，要原文用 recall 取回），模型的思考不带；
+  用户发的文件只给目录和开头、读文件的结果换成一句说明（要原文用 read_file 再读）。
   模型的工具调用本身、子任务的报告、天气、画图的结果都留着。
 - 第一层压完还超，第二层：再从最早的一轮起，模型那边（思考、正文、工具调用和结果）整个换成快模型写的短版，用户的话照原样留着；
   特别长的用户消息（贴了一大段的）也换成短的。短版一轮一份，写一次存进 state（Compaction.summaries），以后不再改，也不会拿短版再去压。
@@ -36,11 +37,13 @@ from app.graph.research import history, prompts
 from app.graph.research.agent import emit, memory_text, system_prompt, turn_start
 from app.graph.research.sources import DOCS_TOOL, SUBAGENT_TOOL, doc_snippets, flatten, hit_text, parse, search_hits
 from app.graph.research.state import Compaction, ResearchState
+from app.tools.files import extra_chars
 
 log = logging.getLogger(__name__)
 
 RECALL_TOOL = "recall"
-CLEARED_TOOLS = ("search_web", "read_page", DOCS_TOOL, RECALL_TOOL)  # 第一层换成说明的工具结果
+CLEARED_TOOLS = ("search_web", "read_page", DOCS_TOOL, RECALL_TOOL, history.FILE_TOOL)  # 第一层换成说明的工具结果
+FILE_TOKENS_PER_CHAR = 0.6  # 用户发的文件拼进去的字（消息里只有字数）按中文估，宁可早压
 PER_MESSAGE = 4  # 每条消息另算的 token（角色、分隔）
 SUMMARY_GUESS = 600  # 还没写出来时，一份短版按这么多 token 估
 LONG_USER_CHARS = 20000  # 换成短版的那几轮里，用户消息超过这么多字的也压
@@ -68,7 +71,7 @@ def message_tokens(m: BaseMessage) -> float:
     if isinstance(m, AIMessage):
         parts.append(history.thinking_of(m))
         parts += [json.dumps(tc.get("args") or {}, ensure_ascii=False) + tc["name"] for tc in m.tool_calls]
-    return tokens("".join(parts)) + PER_MESSAGE
+    return tokens("".join(parts)) + FILE_TOKENS_PER_CHAR * extra_chars(m) + PER_MESSAGE
 
 
 def size_of(messages: list[BaseMessage]) -> float:
@@ -94,14 +97,19 @@ def turn_order(messages: list[BaseMessage]) -> dict[str, int]:
 
 
 def _cleared(m: BaseMessage) -> BaseMessage:
-    """第一层：搜索、读页、查文档、取回的结果换成一行说明；模型消息不带思考（豆包的加密原文也去掉）。没做成的结果本来就短，留着。"""
+    """第一层：搜索、读页、查文档、取回、读文件的结果换成一行说明；模型消息不带思考（豆包的加密原文也去掉）；
+    用户发的文件只给目录和开头（见 app.tools.files）。没做成的结果本来就短，留着。"""
     if isinstance(m, AIMessage):
         return history.without_thinking(m)
+    if isinstance(m, HumanMessage):
+        return history.files_briefed(m)
     if not isinstance(m, ToolMessage) or m.name not in CLEARED_TOOLS or m.status == "error":
         return m
     data = parse(m)
     if m.name == RECALL_TOOL:
         note = prompts.render("compact.recall_cleared")
+    elif m.name == history.FILE_TOOL:
+        note = prompts.render("compact.file_cleared")
     elif m.name == "search_web" and (hits := search_hits(data)) is not None:
         found = [{"id": h.get("id"), "title": h.get("title") or "", "url": h.get("url") or ""} for h in hits if h.get("id")]
         note = prompts.render("compact.search_cleared", sources=json.dumps(found, ensure_ascii=False))
@@ -123,6 +131,7 @@ def _summarized(turn: list[BaseMessage], k: int, c: Compaction) -> list[BaseMess
 
     def user(m: HumanMessage) -> BaseMessage:
         short = c.shortened.get(m.id or "")
+        m = history.files_briefed(m)  # 第二层的轮都压过第一层
         return m.model_copy(update={"content": prompts.render("compact.user_shortened", turn=k + 1, text=short)}) if short else m
 
     tid = turn[0].id or ""
