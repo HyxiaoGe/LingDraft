@@ -138,13 +138,13 @@ class Peak(BaseModel):
 class Free(BaseModel):
     """一个模型的免费额度（models.toml 的 [[free]]）：Auto 判断为简单的对话按到期日从早到晚用。不记还剩多少，
     厂商报额度用完（model_guard.FreeTierUsedUp）就当用完了（见 Catalog.used_up）。
-    same_as 给了的，是某个选项的模型托管在别家的同一个模型：用户选了那个选项，主 agent 先走这里的免费额度，
-    用完、到期、出错再走直连（2026-11-08 Sean 定）；页面上还是那个选项，不标免费。"""
+    same_as 给了的，是某个选项的模型托管在别家的同一个模型：用了那个选项（Auto 判为复杂的也是），主 agent 先走这里的免费额度，
+    用完、到期、出错再走直连；页面上还是那个选项，不标免费。这些 Auto 判为简单的不用：大模型的额度留给选了它的（2026-11-08 Sean 定）。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     model: str
-    name: str = Field(description="页面上每轮开头显示的名字")
-    icon: str = Field(default="", description="页面上用哪家的图标（厂商前缀，比如 moonshot）；不写按 model 的厂商（托管在百炼上的 Kimi 就要写）")
+    name: str = Field(default="", description="页面上每轮开头显示的名字；有 same_as 的不写就用那个选项的")
+    icon: str = Field(default="", description="页面上用哪家的图标（厂商前缀，比如 moonshot）；不写按 same_as 的厂商，没有 same_as 按 model 的（托管在百炼上的 Kimi 就要写）")
     until: date = Field(description="控制台写的到期日：这天北京时间 0 点起不再用（不赌控制台的日期算到当天几点）")
     same_as: str = Field(default="", description="直连的同一个模型（某个选项的 model，厂商:模型）；没有对应的选项就不写，只给 Auto 用")
 
@@ -166,6 +166,7 @@ class Plan(BaseModel):
     option: str
     agent: ModelUse
     subagent: ModelUse
+    pick: str = Field(default="", description="走免费额度以前的模型（直连的）：Auto 的对话记下的是它，每轮再看免费额度还能不能用")
 
 
 class Catalog(BaseModel):
@@ -211,6 +212,8 @@ class Catalog(BaseModel):
         direct = {o.model for o in self.options if o.id != AUTO}
         if odd := sorted(f.same_as for f in self.free if f.same_as and f.same_as not in direct):
             raise ValueError(f"[[free]] 的 same_as 要是某个选项（auto 以外）的 model：{odd}")
+        if nameless := sorted(f.model for f in self.free if not f.name and not f.same_as):
+            raise ValueError(f"[[free]] 没有 same_as 的要写 name：{nameless}")
         return self
 
     def refs(self) -> set[str]:
@@ -230,7 +233,8 @@ class Catalog(BaseModel):
         选项不在了、厂商停了（retired）、没配 key 的，改用 Auto（2026-11-05 Sean 定）。
         pick 是 Auto 的对话定下的模型（"厂商:模型"，见 pick）：没给的按 Auto 选项的模型；给的免费模型到期了、用完了，改用备用。
         Plan.agent.ref 就是最后用的，调用方记下它当这段对话以后的 pick（换过去就一直用）。now 看免费额度到没到期，评测回放时按录像那时。
-        别的选项：它的模型有免费额度（[[free]] 的 same_as）还能用的，主 agent 先走免费额度（子 agent 照旧直连）；free=False 不走（换直连时）。"""
+        定下的模型有免费额度（[[free]] 的 same_as）还能用的，主 agent 先走免费额度（子 agent 照旧直连），Auto 判为复杂的也是；
+        free=False 不走（换直连时）。Plan.pick 是走免费额度以前的那个。"""
         o = self.option(option_id or AUTO)
         if o is None or o.status == "retired" or not all(usable(r) for r in o.refs()):
             o = self.options[0]
@@ -238,12 +242,13 @@ class Catalog(BaseModel):
         now = now or datetime.now(CHINA_TZ)
         if chosen == AUTO:
             o = self._auto(o, pick, usable, now)
-        elif free and (f := self._free_for(o.model, usable, now)) is not None:
-            o = o.model_copy(update={"model": f.model, "subagent": o.subagent or Subagent(model=o.model, effort=o.effort)})
+        direct = o.model
+        if free and (f := self._free_for(direct, usable, now)) is not None:
+            o = o.model_copy(update={"model": f.model, "subagent": o.subagent or Subagent(model=direct, effort=o.effort)})
         on = {"always": True, "never": False}.get(o.thinking, thinking if thinking is not None else True)
         sub = o.subagent or Subagent(model=o.model, effort=o.effort)
         return Plan(option=chosen, agent=ModelUse(ref=o.model, thinking=on, effort=o.effort if on else ""),
-                    subagent=ModelUse(ref=sub.model, thinking=on, effort=sub.effort if on else ""))
+                    subagent=ModelUse(ref=sub.model, thinking=on, effort=sub.effort if on else ""), pick=direct)
 
     def _auto(self, auto: Option, pick: str | None, usable: Callable[[str], bool], now: datetime) -> Option:
         """Auto 这一轮用的选项：pick 是 Auto 选项、备用的模型就是它们；是还能用的免费模型就照它现建一个（子 agent 和备用的一样）；
@@ -256,15 +261,16 @@ class Catalog(BaseModel):
         f = next((f for f in self.free if f.model == pick), None)
         if f is None or not self.free_ok(f, usable, now):
             return fb
-        return Option(id=AUTO, name=f.name, model=f.model, subagent=fb.subagent or Subagent(model=fb.model, effort=fb.effort), access="guest")
+        return Option(id=AUTO, name=self.names()[f.model]["name"], model=f.model, subagent=fb.subagent or Subagent(model=fb.model, effort=fb.effort),
+                      access="guest")
 
     def pick(self, simple: bool, guest: bool, usable: Callable[[str], bool], now: datetime | None = None) -> str:
         """Auto 的对话第一句话判断完难易，定下用哪个模型（之后整段对话沿用，2026-11-08 Sean 定）：
-        简单的按到期日从早到晚挑第一个还能用的免费模型，都用不了用备用；复杂的用 Auto 选项的模型，游客用备用（游客不给 Pro）。"""
+        简单的按到期日从早到晚挑第一个还能用的免费模型（有 same_as 的不挑），都用不了用备用；复杂的用 Auto 选项的模型，游客用备用（游客不给 Pro）。"""
         if simple:
             now = now or datetime.now(CHINA_TZ)
             for f in sorted(self.free, key=lambda f: f.until):
-                if self.free_ok(f, usable, now):
+                if not f.same_as and self.free_ok(f, usable, now):
                     return f.model
             return self.fallback().model
         return self.fallback().model if guest else self.options[0].model
@@ -283,13 +289,18 @@ class Catalog(BaseModel):
     def is_free(self, ref: str) -> bool:
         return any(f.model == ref for f in self.free)
 
+    def same_as(self, ref: str) -> str:
+        """免费额度对应的直连模型（[[free]] 的 same_as）；不是免费额度、没有对应选项的是空的。"""
+        return next((f.same_as for f in self.free if f.model == ref), "")
+
     def used_up(self, ref: str) -> None:
         """这个免费模型报了额度用完：之后的对话不再挑它，正在用它的对话下一次调模型改用备用。"""
         self._used_up.add(ref)
 
     def names(self) -> dict[str, dict[str, str]]:
         """选项以外、页面上可能出现的模型（免费额度的）：名字和图标（厂商前缀）。"""
-        return {f.model: {"name": f.name, "icon": f.icon or f.model.partition(":")[0]} for f in self.free}
+        by_model = {o.model: o for o in self.options if o.id != AUTO}
+        return {f.model: {"name": f.name or by_model[f.same_as].name, "icon": f.icon or (f.same_as or f.model).partition(":")[0]} for f in self.free}
 
     def rate(self, ref: str, at: datetime, input_tokens: int) -> tuple[str, Rate] | None:
         """这个模型在 at 这一刻、输入这么多 token 的一次调用按哪组单价：返回（哪一种, 单价），没填价格的是 None。

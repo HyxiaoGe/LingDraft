@@ -176,8 +176,8 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         if state.get("option") != plan.option:
             out["option"] = plan.option
         # Auto 用的模型记下来，之后每轮都用它：免费的到期了、用完了换成备用，也记成备用，不再换回来
-        if plan.option == AUTO and state.get("auto_model") != plan.agent.ref:
-            out["auto_model"] = plan.agent.ref
+        if plan.option == AUTO and state.get("auto_model") != plan.pick:
+            out["auto_model"] = plan.pick  # 走免费额度以前的（直连的）：下一轮再看免费额度还能不能用
         emit({"type": "model", "ref": plan.agent.ref})  # 页面在回答开头显示这一轮用的模型（Auto 选到哪个，一轮结束才进记录）
         return out
 
@@ -613,7 +613,7 @@ class ModelSelect(AgentMiddleware):
     def _backup(self, request: ModelRequest, turns: list[Turn], use: ModelUse, e: ModelUnavailable) -> tuple[ModelUse, dict] | None:
         """换成什么（2026-11-08 Sean 定）：返回换上的模型和要写进 state 的（这一轮记录里的模型换成它，后面几次调模型都用它；
         Auto 的对话以后都用它）。换到头了返回 None，照常失败。
-        - 用户自己选的模型走的是它的免费额度（[[free]] 的 same_as）：换直连的同一个模型。
+        - 走的是某个模型的免费额度（[[free]] 的 same_as，用户选的、Auto 判为复杂的）：换直连的同一个模型，只有这一轮换。
         - 别的换备用（models.toml 的 [auto] fallback，Flash）；已经是备用的不换。用户自己选的模型只有这一轮换，下一轮还是他选的。
         这一轮前面已经有别的模型发的工具调用、又没带思考的（百炼上的 DeepSeek 带工具时不给思考），这一轮剩下的不开思考：
         DeepSeek 开思考时这一轮的工具调用要带着思考，不带报 400（别家的思考它收，2026-11-08 实测）。"""
@@ -621,8 +621,8 @@ class ModelSelect(AgentMiddleware):
         if isinstance(e, FreeTierUsedUp):
             catalog.used_up(use.ref)
         turn = turns[-1]
-        if turn.option != AUTO and catalog.is_free(use.ref):
-            plan = catalog.plan(turn.option, use.thinking, usable, free=False)
+        if direct := catalog.same_as(use.ref):
+            plan = catalog.plan(turn.option, use.thinking, usable, pick=direct, free=False)
         else:
             plan = catalog.plan(catalog.auto.fallback, use.thinking, usable)
         if plan.agent.ref == use.ref:
@@ -633,7 +633,7 @@ class ModelSelect(AgentMiddleware):
         sub = turn.subagent_model if turn.option != AUTO else plan.subagent
         update: dict[str, Any] = {"turns": [*turns[:-1], turn.model_copy(update={"model": backup, "subagent_model": sub})]}
         if turn.option == AUTO:
-            update["auto_model"] = backup.ref
+            update["auto_model"] = plan.pick
         return backup, update
 
 

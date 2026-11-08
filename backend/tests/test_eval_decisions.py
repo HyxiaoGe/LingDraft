@@ -98,7 +98,8 @@ def test_fork_can_switch_the_model(tmp_path):
     assert runner.planner.model_uses == [(plan.agent, False)]
     runner.planner.model_uses.clear()
     aio.run(afork(runner.graph, pick(snaps, _decision(call=1)), "t2"))
-    assert [u.ref for u, _ in runner.planner.model_uses] == ["deepseek:deepseek-v4-pro"]  # 录的那遍是 Auto
+    auto = model_catalog.load().plan(None, None, lambda ref: True).agent.ref  # 录的那遍是 Auto（免费的 Pro 还能用时先走它）
+    assert [u.ref for u, _ in runner.planner.model_uses] == [auto]
 
 
 def test_sample_checks_the_tool_decision(tmp_path):

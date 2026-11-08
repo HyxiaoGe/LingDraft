@@ -248,6 +248,11 @@ COMPAT: dict[str, Compat] = {
     "zhipuai": Compat("zhipuai", lambda: config.ZHIPUAI_BASE_URL, lambda: config.ZHIPUAI_API_KEY, "ZHIPUAI_API_KEY", {}, _OFF),
     # 腾讯混元（TokenHub）：默认思考，thinking disabled 能关（enable_thinking 不认）
     "hunyuan": Compat("hunyuan", lambda: config.HUNYUAN_BASE_URL, lambda: config.HUNYUAN_API_KEY, "HUNYUAN_API_KEY", {}, _OFF),
+    # TokenHub 上别家的模型（免费额度，见 models.toml 的 [[free]]）：和混元同一个地址、同一个 key，记账、熔断分开记。2026-11-08 逐个实测：
+    # 默认思考，thinking disabled 能关（GLM 5.3 系列、MiniMax M3.1 Flash 关不掉，选项写的 always）；工具调用不带思考发回去也不报错
+    # （直连 DeepSeek 报 400）；MiniMax 不带 reasoning_split 时思考夹在正文的 <think> 里，别家不认这个参数、带了也不影响
+    "tokenhub": Compat("tokenhub", lambda: config.HUNYUAN_BASE_URL, lambda: config.HUNYUAN_API_KEY, "HUNYUAN_API_KEY",
+                       {"reasoning_split": True}, {"reasoning_split": True, **_OFF}),
     # MiniMax：不带 reasoning_split 时 M3 的思考夹在正文的 <think> 里，带了才放进 reasoning_content；开思考的值是 adaptive，
     # 传 enabled 报 400，所以开的时候不传；M3.1 Flash 关不掉（关了报 400）
     "minimax": Compat("minimax", lambda: config.MINIMAX_BASE_URL, lambda: config.MINIMAX_API_KEY, "MINIMAX_API_KEY",
