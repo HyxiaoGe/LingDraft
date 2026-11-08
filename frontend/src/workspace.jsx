@@ -14,14 +14,13 @@ import { saveThinkDefault, thinkDefault, useTheme } from "./prefs.js";
 import { SearchDialog } from "./search.jsx";
 import { SettingsDialog } from "./settings.jsx";
 import { Sidebar, withCurrent } from "./sidebar.jsx";
-import { MOBILE, NavContext, isSearchKey, isSideKey, useMedia } from "./nav.jsx";
+import { MOBILE, NavContext, SPLIT, focusInput, isSearchKey, isSideKey, typeNext, useMedia } from "./nav.jsx";
 import { ACTIVE, QUEUED, addLive, itemKey, saveFile, threadMarkdown, useNow } from "./research.js";
 import { FilePanel } from "./artifact.jsx";
 import { FileList, SentPanel } from "./workspace-files.jsx";
 import { opener } from "./layers.js";
 import { useDoneAlert } from "./alert.jsx";
 import { Conversation, forgetReading } from "./timeline.jsx";
-import { focusInput } from "./composer.jsx";
 import { UndoToast, useUndo } from "./undo.jsx";
 import { notSendableText, uploadErrorText } from "./upload.js";
 // 样式：对话页的变量、基础样式和共用的小件在 tailwind.css，各块的在各自的 *.module.css
@@ -111,26 +110,29 @@ export default function Workspace() {
   const fileOpener = useRef(null); // 点开右栏的那个按钮：关上以后光标回去
   const mobileRef = useRef(mobile);
   mobileRef.current = mobile;
+  // 点开文件、在右栏里换着看（文件列表点开一个、看完回列表）以后光标去哪（2026-11-09 Sean 要的）：分栏时回输入框，看着文件接着说；
+  // 右栏盖在对话上（窄桌面、手机）时挪到右栏的标题上，键盘、读屏接着从这里读
+  const focusAfterOpen = () => {
+    if (matchMedia(SPLIT).matches) {
+      setFileFocus(0); // 右栏换成别的（列表、文件）挂上时不拿以前的数去挪光标
+      focusInput(true);
+    } else setFileFocus((n) => n + 1);
+  };
   const openFile = (target) => {
     fileOpener.current = opener();
     setFile(target);
-    setFileFocus((n) => n + 1);
+    focusAfterOpen();
   };
-  // 收起右栏：光标回到点开它的那个按钮；toInput（桌面上按 Esc 收的）回输入框，接着说
-  const closeFile = (how) => {
+  // 收起右栏（×、Esc、再点一下“文件 N”）：桌面上光标回输入框；手机上回到点开它的那个按钮（见 typeNext）
+  const closeFile = () => {
     setFile(null);
     const back = fileOpener.current;
     fileOpener.current = null;
-    if (how?.toInput === true) {
-      document.activeElement?.blur?.(); // 光标停在对话里别的按钮上时输入框不抢（见 composer.jsx 的 focus），这里是用户要回去打字
-      focusInput();
-    }
-    else if (back?.isConnected) back.focus({ preventScroll: true });
+    typeNext(back?.isConnected ? back : null);
   };
-  // 右栏里换着看（文件列表点开一个、看完回列表）：光标挪到右栏的标题上，关上以后回的还是最先点开右栏的那个按钮
   const navFile = (target) => {
     setFile(target);
-    setFileFocus((n) => n + 1);
+    focusAfterOpen();
   };
   // 顶栏的“文件 N”：开着文件列表时再点收起，开着别的换成列表
   const toggleFiles = () => (file?.list ? closeFile() : file ? navFile({ list: true }) : openFile({ list: true }));

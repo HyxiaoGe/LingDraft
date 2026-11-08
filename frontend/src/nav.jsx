@@ -8,9 +8,21 @@ import { TitleInput } from "./menu.jsx";
 export const NavContext = createContext(null);
 
 export const MOBILE = "(max-width: 720px)";
+export const SPLIT = "(min-width: 1024px)"; // 右栏和对话左右分栏（窄一点的桌面右栏盖在对话上，见 artifact.module.css）
 
 // 触屏（手指点的）：程序不把光标放进输入框，免得自己弹出键盘（批次 G 第 42 条）
 export const touch = () => matchMedia("(pointer: coarse)").matches;
+
+// 临时的输入框（改这句话、左栏改名）关掉以后，光标回到对话的输入框（等它从页面上撤掉再放；输入框听这个事件，见 composer.jsx）。
+// force：光标停在别的按钮上、选着字也放过去（用户点开文件、关掉右栏和大图，是要接着打字，2026-11-09 Sean 要的）
+export const focusInput = (force = false) => setTimeout(() => dispatchEvent(new CustomEvent("ws-focus-input", { detail: force })));
+
+// 关掉大图、右栏以后光标去哪：桌面上回输入框；手机上（全屏的盖着输入框，触屏还会弹出键盘）回到点开它的那个按钮
+export function typeNext(back) {
+  if (matchMedia(MOBILE).matches) back?.focus?.({ preventScroll: true });
+  else focusInput(true);
+}
+
 // 最近一次是用键盘还是用鼠标、手指：键盘选的对话焦点留在左栏那一行，鼠标点开的光标进输入框（批次 G 第 42 条）
 let keyed = false;
 addEventListener("keydown", (e) => { if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) keyed = true; }, true);

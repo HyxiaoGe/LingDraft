@@ -19,7 +19,7 @@ import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
 import { Markdown } from "./markdown.jsx";
 import { ActionMenu } from "./menu.jsx";
-import { HeadBar, NavContext, touch } from "./nav.jsx";
+import { HeadBar, NavContext, touch, typeNext } from "./nav.jsx";
 import proc from "./process.module.css";
 import { ACTIVE, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
@@ -603,7 +603,7 @@ function UserImage({ img, src, n, square }) {
           <img src={src} alt={n ? `发的第 ${n} 张图` : "发的图"} onError={() => setFailed(true)} />
         </button>
       )}
-      {viewing && <Viewer img={{ alt: "发的图" }} src={src} onClose={() => { viewing.focus(); setViewing(null); }} />}
+      {viewing && <Viewer img={{ alt: "发的图" }} src={src} onClose={() => { typeNext(viewing); setViewing(null); }} />}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { IconClose, IconDownload, IconEdit, IconLoop, Spinner } from "./icons.jsx";
 import styles from "./images.module.css";
 import { useLayer } from "./layers.js";
+import { typeNext } from "./nav.jsx";
 
 const MAX_W = 640;
 const MAX_H = 560;
@@ -107,7 +108,7 @@ export function ImageCards({ steps, tid, running, onRegenerate, title, base = 0 
         ? <ImageCard key={s.id} img={s.image} src={imageUrl(tid, s.image)} name={imageFileName(title, ++n, s.image.mime_type)}
           onOpen={(back) => setViewing({ img: s.image, back })} onRegenerate={onRegenerate} />
         : <PendingCard key={s.id} s={s} running={running} />))}
-      {viewing && <Viewer img={viewing.img} src={imageUrl(tid, viewing.img)} onClose={() => { viewing.back?.focus(); setViewing(null); }} />}
+      {viewing && <Viewer img={viewing.img} src={imageUrl(tid, viewing.img)} onClose={() => { typeNext(viewing.back); setViewing(null); }} />}
     </div>
   );
 }
