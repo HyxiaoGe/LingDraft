@@ -21,6 +21,7 @@ import { FileList, SentPanel } from "./workspace-files.jsx";
 import { opener } from "./layers.js";
 import { useDoneAlert } from "./alert.jsx";
 import { Conversation, forgetReading } from "./timeline.jsx";
+import { focusInput } from "./composer.jsx";
 import { UndoToast, useUndo } from "./undo.jsx";
 import { notSendableText, uploadErrorText } from "./upload.js";
 // 样式：对话页的变量、基础样式和共用的小件在 tailwind.css，各块的在各自的 *.module.css
@@ -115,11 +116,16 @@ export default function Workspace() {
     setFile(target);
     setFileFocus((n) => n + 1);
   };
-  const closeFile = () => {
+  // 收起右栏：光标回到点开它的那个按钮；toInput（桌面上按 Esc 收的）回输入框，接着说
+  const closeFile = (how) => {
     setFile(null);
     const back = fileOpener.current;
     fileOpener.current = null;
-    if (back?.isConnected) back.focus({ preventScroll: true });
+    if (how?.toInput === true) {
+      document.activeElement?.blur?.(); // 光标停在对话里别的按钮上时输入框不抢（见 composer.jsx 的 focus），这里是用户要回去打字
+      focusInput();
+    }
+    else if (back?.isConnected) back.focus({ preventScroll: true });
   };
   // 右栏里换着看（文件列表点开一个、看完回列表）：光标挪到右栏的标题上，关上以后回的还是最先点开右栏的那个按钮
   const navFile = (target) => {
