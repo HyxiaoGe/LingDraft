@@ -25,19 +25,18 @@ function Badge({ type, name, busy }) {
 
 const isWrite = (i) => i.type === "step" && i.kind === "write";
 
-// 这段对话里写成了的各版：第一版的编号 → 各版（按第几版从小到大）。重新回答时旧回答的那几步不算（live.hidden，后端已经删了）
+// 这段对话里写成了的各版：第一版的编号 → 各版（按第几版从小到大）。重新回答时旧回答的那几步不算（live.hidden，后端已经删了）。
+// 一轮里一份文件只出一版：同一轮里又改了的，后写的顶替先写的、版本号一样（先写的那版后端已经删了，见 app/tools/write_file.py），按版本号留后面那个
 export function fileVersions(st, live) {
   const out = new Map();
-  const seen = new Set();
   const add = (it) => {
-    if (!isWrite(it) || !it.file || seen.has(it.file.id) || live?.hidden?.has(itemKey(it))) return;
-    seen.add(it.file.id);
-    out.set(it.file.series, [...(out.get(it.file.series) || []), it.file]);
+    if (!isWrite(it) || !it.file || live?.hidden?.has(itemKey(it))) return;
+    if (!out.has(it.file.series)) out.set(it.file.series, new Map());
+    out.get(it.file.series).set(it.file.version, it.file);
   };
   for (const t of st?.turns || []) t.items.forEach(add);
   live?.items?.forEach(add);
-  for (const list of out.values()) list.sort((a, b) => a.version - b.version);
-  return out;
+  return new Map([...out].map(([series, byVersion]) => [series, [...byVersion.values()].sort((a, b) => a.version - b.version)]));
 }
 
 // 写文件的那一步（按调用 id）：实时收到的比存下来的新
@@ -140,7 +139,8 @@ function resolve(target, st, live, versions) {
   const draft = target.call ? live?.drafts?.[target.call] || null : null;
   const series = target.series || step?.file?.series || step?.target || draft?.file_id || null;
   const list = (series && versions.get(series)) || [];
-  if (step?.file) return { mode: "file", file: list.find((f) => f.id === step.file.id) || step.file, list, series };
+  // 写成了：这一轮后面又改了的，看顶替它的那版（同一版本号）
+  if (step?.file) return { mode: "file", file: list.find((f) => f.id === step.file.id) || list.find((f) => f.version === step.file.version) || step.file, list, series };
   // 没写成（收到的草稿一轮结束才清，不能再当在写），或者这一轮已经结束、那一步还挂着（停下了、断了）
   if (step && (!step.pending || !live)) return { mode: "failed", step, base: list.at(-1) || null, list, series };
   if (target.call && (draft || step)) return { mode: "draft", draft, step, base: list.at(-1) || null, list, series };

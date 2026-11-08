@@ -376,7 +376,7 @@ content = "The complete new content, to rewrite the whole file. Leave empty when
 
 [tools.write_file]
 # create_file、edit_file 的结果
-saved = """Saved version {{ version }} of "{{ title }}" (file_id: {{ id }}, {{ chars }} characters). The user can open it from the file card under your reply. Do not repeat its content in your reply; say briefly what you {{ "changed" if edited else "wrote" }}."""
+saved = """Saved version {{ version }} of "{{ title }}" (file_id: {{ id }}, {{ chars }} characters).{% if redo %} It replaces what you saved earlier in this turn, so it is still version {{ version }}.{% endif %} The user can open it from the file card under your reply. Do not repeat its content in your reply; say briefly what you {{ "changed" if edited else "wrote" }}."""
 cut_off = """The file was not saved: your output reached its maximum length and was cut off in the middle of this call. Write a shorter version, or create the file with the first part and add the rest with edit_file in later calls."""
 unavailable = """The file could not be saved because file storage is unavailable right now. Tell the user plainly that the file was not saved."""
 empty = """The file was not saved because its content is empty."""

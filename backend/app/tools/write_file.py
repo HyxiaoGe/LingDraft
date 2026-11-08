@@ -2,6 +2,8 @@
 
 - 文档（Markdown）、网页（HTML）、代码文件三种，后端一样存，只是页面上显示得不一样。每一版是文件表里的一行、存全文（见 FileService.write）；
   各版用第一版的编号串起来，模型认的是它，读（read_file）、改的总是这段对话里最新的一版。版本号按对话里的消息数（history.written_files）。
+- 一轮里一份文件只出一版（2026-11-08 Sean 定）：模型在同一轮里又改了这一轮写的那版（比如写完嫌长自己压一遍），新的顶替它、版本号不变，
+  那一版作废删掉。用户看到的版本是一轮一轮的结果，中间稿不算。
 - 什么时候写由模型判断（系统提示词的 agent.files）。改用片段替换（每段 old_text 要恰好出现一次，不做模糊匹配）或者整篇重写。
 - 输出被截断（finish_reason=length）的那次调用不存：截断时参数多半还能补成合法的 JSON（LangChain 按半截解析），存下来就是半篇文档。
 - 用户发的文件只读（Sean 定）：edit_file 给的是它们的编号时说明只能另写一份。
@@ -21,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from app.files import artifacts
 from app.graph.research import prompts
-from app.graph.research.history import CREATE_TOOL, EDIT_TOOL, last_human, owned_file_ids, written_files
+from app.graph.research.history import CREATE_TOOL, EDIT_TOOL, last_human, owned_file_ids, written_files, written_of
 from app.graph.research.state import WrittenFile
 
 log = logging.getLogger(__name__)
@@ -89,17 +91,30 @@ async def _save(runtime: ToolRuntime, name: str, *, title: str, kind: str, conte
         return _fail(runtime, name, "too_long", "too_long", chars=len(content), limit=artifacts.MAX_CHARS)
     i = last_human(messages)
     turn = (messages[i].id if i >= 0 else None) or ""
+    # 这一轮已经写过这份（上一版是这一轮写的）：顶替那一版，版本号、上一版不变；改了什么接在那一版后面（这一轮新建的还是第 1 版，不记）
+    redo = prev is not None and any(getattr(written_of(m), "id", None) == prev.id for m in messages[i + 1:])
+    version, prev_id = (prev.version + 1 if prev else 1), (prev.id if prev else None)
+    if redo:
+        assert prev is not None
+        before = await service.get(prev.id, owner)  # type: ignore[attr-defined]
+        version, prev_id = prev.version, before.prev_id if before else None
+        note = "" if prev.version == 1 else "；".join(dict.fromkeys(n for n in (prev.note, note) if n))[:200]
     try:
         row = await service.write(owner=owner, workspace_id=workspace, turn_id=turn, title=title, kind=kind, content=content, note=note,
-                                  prev_id=prev.id if prev else None, series_id=prev.series if prev else None,
-                                  version=prev.version + 1 if prev else 1)
+                                  prev_id=prev_id, series_id=prev.series if prev else None, version=version)
     except Exception:
         log.exception("存模型写的文件出错：%s", workspace)
         return _fail(runtime, name, "unavailable", "unavailable")
+    if redo:
+        assert prev is not None
+        try:
+            await service.discard(prev.id)  # type: ignore[attr-defined]
+        except Exception:  # 没删掉只是多一行没人指着的，重新回答、删对话时按轮、按对话一起删
+            log.exception("删作废的那一版出错：%s", prev.id)
     w = WrittenFile(id=row.id, series=row.series_id or row.id, version=row.version, title=title, type=kind, name=row.name,  # type: ignore[arg-type]
                     lang=row.meta.get("lang", ""), chars=len(content), note=note)
     return ToolMessage(content=prompts.render("tools.write_file.saved", title=title, version=w.version, id=w.series, chars=w.chars,
-                                              edited=prev is not None),
+                                              edited=prev is not None, redo=redo),
                        name=name, tool_call_id=runtime.tool_call_id or "", artifact={"file": w.model_dump()})
 
 

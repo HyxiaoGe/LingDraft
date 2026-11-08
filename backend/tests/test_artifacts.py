@@ -152,6 +152,40 @@ def test_create_then_edit_reads_and_versions(tmp_path):
     run_async(go())
 
 
+def test_rewriting_in_the_same_turn_keeps_one_version(tmp_path):
+    """一轮里一份文件只出一版（2026-11-08 Sean 定）：同一轮里又改了这一轮写的，顶替那一版、版本号不变，那一版删掉；
+    下一轮再改才是新一版，那一轮里改几次都还是这一版，改了什么接起来。"""
+    async def go():
+        files = _service(tmp_path)
+        create, edit = _tools()
+        user = HumanMessage("写一份报告", id="turn-1")
+        c1 = AIMessage("", tool_calls=[{"name": "create_file", "args": {}, "id": "call-1"}])
+        made = await create(_runtime([user, c1], files, "call-1"), title="报告", type="markdown", content="# 报告\n\n" + "长" * 50 + "\n")
+        w1 = history.written_of(made)
+        draft = await files.store.get(w1.id)
+        msgs = [user, c1, made, AIMessage("", tool_calls=[{"name": "edit_file", "args": {}, "id": "call-2"}])]
+        again = await edit(_runtime(msgs, files, "call-2"), file_id=w1.series, change_note="压短", content="# 报告\n\n短\n")
+        w = history.written_of(again)
+        assert (w.version, w.series, w.note) == (1, w1.series, "") and "still version 1" in again.content
+        assert await files.store.get(w1.id) is None and not (tmp_path / draft.storage).exists()
+        row = await files.store.get(w.id)
+        assert (row.version, row.prev_id, row.series_id, row.turn_id) == (1, None, w1.series, "turn-1")
+        msgs.append(again)
+        assert history.written_files(msgs) == {w1.series: w}
+        # 下一轮改：第 2 版；这一轮里又改一次，还是第 2 版，上一版还是第 1 版
+        msgs += [AIMessage("写好了"), HumanMessage("改一下", id="turn-2"), AIMessage("", tool_calls=[{"name": "edit_file", "args": {}, "id": "call-3"}])]
+        v2 = await edit(_runtime(msgs, files, "call-3"), file_id=w1.series, change_note="短改成简", edits=[_edit("短", "简")])
+        assert "still" not in v2.content and history.written_of(v2).version == 2
+        msgs += [v2, AIMessage("", tool_calls=[{"name": "edit_file", "args": {}, "id": "call-4"}])]
+        v2b = await edit(_runtime(msgs, files, "call-4"), file_id=w1.series, change_note="加一句", edits=[_edit("简", "简。再补一句")])
+        b = history.written_of(v2b)
+        assert (b.version, b.note) == (2, "短改成简；加一句") and await files.store.get(history.written_of(v2).id) is None
+        assert (await files.store.get(b.id)).prev_id == w.id and await files.text(b.id) == "# 报告\n\n简。再补一句\n"
+        assert await files.text(w.id) == "# 报告\n\n短\n"  # 上一轮的那版还在
+
+    run_async(go())
+
+
 def _edit(old: str, new: str):
     from app.tools.write_file import EditItem
 
