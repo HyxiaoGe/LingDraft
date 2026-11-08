@@ -185,13 +185,13 @@ class LiveJudge:
 
     def __init__(self) -> None:
         from app import model_catalog
-        from app.research_llm import role_model
+        from app.research_llm import RoleModel, usable
 
-        self._llm = role_model(model_catalog.load(), "judge", timeout=180)
+        self._llm = RoleModel(model_catalog.load(), "judge", usable, timeout=180)  # 先走同一个模型的免费额度，见 RoleModel
 
     def _ask(self, schema, key: str, **values):
-        chain = self._llm.with_structured_output(schema, method="json_schema", strict=True)
-        return chain.invoke([("system", PROMPTS.render(f"{key}.system")), ("user", PROMPTS.render(f"{key}.user", **values))])
+        return self._llm.invoke([("system", PROMPTS.render(f"{key}.system")), ("user", PROMPTS.render(f"{key}.user", **values))],
+                                shape=lambda m: m.with_structured_output(schema, method="function_calling", strict=True))
 
     def citations(self, question: str, reply: str, sources: list[dict], today: str) -> CitationJudgement:
         # 给裁判和助理一样的日期（今天、明天、这周末……）：正文里“明天（11月6日，星期五）”是助理按日期推的，材料里本来就没有

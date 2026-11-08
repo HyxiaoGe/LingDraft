@@ -25,7 +25,7 @@ from app.evals.research import (
     transcript,
     turn_checks,
 )
-from app import aio
+from app import aio, model_catalog
 from app.evals.tape import Tape
 from app.research_llm import FakeResearchPlanner
 from app.tools.research_tools import CHINA_TZ
@@ -71,7 +71,8 @@ def test_case_can_pick_a_model():
     r = run_case(Case.model_validate({"id": "x", "source": "测试", "turns": [{"say": "直接答：一"}, {"say": "直接答：二"}]}),
                  planner, FakeJudge(), option="deepseek-flash")
     assert r["passed"], r
-    assert [t["model"] for t in r["turns"]] == [{"ref": "deepseek:deepseek-flash", "thinking": True, "effort": "high"}] * 2
+    flash = model_catalog.load().free_ref("deepseek:deepseek-flash", lambda ref: True)  # 先走同一个模型的免费额度
+    assert [t["model"] for t in r["turns"]] == [{"ref": flash, "thinking": True, "effort": "high"}] * 2
 
 def test_cases_file_parses():
     cases = load_cases()

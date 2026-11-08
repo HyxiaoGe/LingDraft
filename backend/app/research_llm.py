@@ -41,7 +41,7 @@ from app.graph.research import history, prompts
 from app.graph.research.compaction import RECALL_TOOL as RECALL
 from app.graph.research.sources import DOCS_TOOL, doc_snippets, search_hits
 from app.model_catalog import Catalog, ModelUse
-from app.model_guard import ContentBlocked, GuardedChatModel, Interrupted, ModelUnavailable, guard_key
+from app.model_guard import ContentBlocked, FreeTierUsedUp, GuardedChatModel, Interrupted, ModelUnavailable, free_failed, guard_key
 from app.tools import docs_mcp, flyai_mcp, image_mcp, maps_mcp, web_mcp, weather_mcp
 from app.tools.docs_mcp import LIBRARY_TOOL, docs_tools
 from app.tools.flyai_mcp import FLIGHT_TOOL, ITINERARY_TOOL, TRAIN_TOOL, TravelTool
@@ -367,16 +367,64 @@ API_KEYS: dict[str, Callable[[], str | None]] = {"deepseek": lambda: config.DEEP
 
 
 def role_model(catalog: Catalog, role: str, **kw: Any) -> BaseChatModel:
-    """内部用途（起标题、写短版、评测的裁判……，见 models.toml 的 [roles]）用的模型。"""
+    """内部用途（见 models.toml 的 [roles]）直连的模型，不走免费额度：只有单条送审用（见 LiveResearchPlanner.blocked），别的用 RoleModel。"""
     use = catalog.role(role)
     return make_chat_model(use.ref, thinking=use.thinking, effort=use.effort, purpose=role, **kw)
+
+
+class RoleModel:
+    """内部用途（起标题、写短版、评测的裁判……，见 models.toml 的 [roles]）用的模型：先走同一个模型的免费额度（[[free]] 的 same_as），
+    没成（见 model_guard.free_failed）这次换直连；额度用完的记下，以后不再走（见 Catalog.role_uses）。每次调用现挑，到期了下一次就直连。
+    kw 是建模型的参数（超时、熔断单独记的用途……，见 make_chat_model），免费的、直连的一样。
+    shape 把聊天模型包成这次要调的（结构化输出、bind 参数），调用方给。"""
+
+    def __init__(self, catalog: Catalog, role: str, usable: Callable[[str], bool], **kw: Any) -> None:
+        self.catalog, self.role, self.usable, self.kw = catalog, role, usable, kw
+        self._models: dict[str, BaseChatModel] = {}
+        self.model(catalog.role(role))  # 直连的先建好：没配 key 启动就报错
+
+    def model(self, use: ModelUse) -> BaseChatModel:
+        if use.ref not in self._models:
+            self._models[use.ref] = make_chat_model(use.ref, thinking=use.thinking, effort=use.effort, purpose=self.role, **self.kw)
+        return self._models[use.ref]
+
+    async def ainvoke(self, messages: Any, config: dict | None = None, shape: Callable[[BaseChatModel], Any] = lambda m: m) -> Any:
+        *frees, direct = self.catalog.role_uses(self.role, self.usable)
+        for use in frees:
+            try:
+                return await shape(self.model(use)).ainvoke(messages, config=config)
+            except Exception as e:
+                if not self._switch(use, e):
+                    raise
+        return await shape(self.model(direct)).ainvoke(messages, config=config)
+
+    def invoke(self, messages: Any, config: dict | None = None, shape: Callable[[BaseChatModel], Any] = lambda m: m) -> Any:
+        *frees, direct = self.catalog.role_uses(self.role, self.usable)
+        for use in frees:
+            try:
+                return shape(self.model(use)).invoke(messages, config=config)
+            except Exception as e:
+                if not self._switch(use, e):
+                    raise
+        return shape(self.model(direct)).invoke(messages, config=config)
+
+    def _switch(self, use: ModelUse, e: Exception) -> bool:
+        """免费额度这次没成，换不换直连：该换的（见 model_guard.free_failed）记下、打日志；别的（结构化输出没按格式……）照常抛出。"""
+        if not free_failed(e):
+            return False
+        if isinstance(e, FreeTierUsedUp):
+            self.catalog.used_up(use.ref)
+        log.warning("%s 的免费额度这次没成，换直连：%s: %s: %s", self.role, use.ref, type(e).__name__, e)
+        return True
 
 
 # ---- 真实模型 ----
 
 
 def _structured(llm, schema):
-    """DeepSeek 的 json_schema 实际走工具调用；模型偶尔直接回一段文字、不调工具，langchain 这时给 None 而不报错。
+    """结构化输出走工具调用（强制调这个工具、strict）：DeepSeek 只有这一种（langchain-deepseek 把 json_schema 也换成它）；
+    百炼、TokenHub 上的 DeepSeek 有的不认 json_schema（400），强制调工具都认（2026-11-08 实测）。
+    模型偶尔直接回一段文字、不调工具，langchain 这时给 None 而不报错。
     转成异常，交给调用方的重试或失败处理，不让 None 流进后面的步骤。"""
 
     def parsed(out: dict):
@@ -384,7 +432,7 @@ def _structured(llm, schema):
             raise RuntimeError(f"模型没有按结构返回：{out['parsing_error'] or '没有调用结构化输出'}")
         return out["parsed"]
 
-    return llm.with_structured_output(schema, method="json_schema", strict=True, include_raw=True) | parsed
+    return llm.with_structured_output(schema, method="function_calling", strict=True, include_raw=True) | parsed
 
 
 class McpTools:
@@ -429,15 +477,16 @@ class LiveResearchPlanner:
             raise ValueError(f"models.toml 里有不认得的厂商：{unknown}")
         self._models: dict[ModelUse, BaseChatModel] = {}  # 主 agent、子 agent 用的模型，用到时才建（见 chat_model）
         # 内部用途各用哪个模型见 models.toml 的 [roles]，都不开思考（整理记忆除外）：都是小活，开思考慢得多。
+        # 先走同一个模型的免费额度（见 RoleModel）；单条送审不走：只认得 DeepSeek 的拦截（见 app.model_guard.is_blocked）。
         # 起标题照 Fusion 超时短：标题是锦上添花，慢了、坏了就用原话（见 graph.research.agent._TitleJob）。
         # 熔断单独记：超时短只是不想等，不说明服务坏了，不能把同一个模型上的子 agent、写短版一起断开；
         # 连续超时就先不起标题（断开期间直接用原话，回答也不用再等它）
-        self._titler = role_model(self.catalog, "title", timeout=TITLE_TIMEOUT, max_tokens=TITLE_MAX_TOKENS, guard="起标题")
-        self._suggester = role_model(self.catalog, "suggest", timeout=120)
+        self._titler = RoleModel(self.catalog, "title", self.usable, timeout=TITLE_TIMEOUT, max_tokens=TITLE_MAX_TOKENS, guard="起标题")
+        self._suggester = RoleModel(self.catalog, "suggest", self.usable, timeout=120)
         self._prober = role_model(self.catalog, "probe", timeout=120)
-        self._summarizer = role_model(self.catalog, "summarize", timeout=120, max_tokens=SUMMARY_MAX_TOKENS)
-        self._dreamer = role_model(self.catalog, "dream", timeout=300)
-        self._router = role_model(self.catalog, "route", timeout=ROUTE_TIMEOUT, guard="判断难易")  # 熔断单独记，理由和起标题一样
+        self._summarizer = RoleModel(self.catalog, "summarize", self.usable, timeout=120, max_tokens=SUMMARY_MAX_TOKENS)
+        self._dreamer = RoleModel(self.catalog, "dream", self.usable, timeout=300)
+        self._router = RoleModel(self.catalog, "route", self.usable, timeout=ROUTE_TIMEOUT, guard="判断难易")  # 熔断单独记，理由和起标题一样
         # Auto 的两个、备用的先建好：没配 key 在这里就报错，不等到第一个对话
         auto = self.catalog.plan(None, None, self.usable)
         self.chat_model(auto.agent)
@@ -477,13 +526,13 @@ class LiveResearchPlanner:
         return str(out.content).strip()
 
     async def route(self, text: str) -> bool:
-        res = await _structured(self._router, Route).ainvoke([("user", prompts.render("route.prompt", message=text))], config={"run_name": "route"})
+        res = await self._router.ainvoke([("user", prompts.render("route.prompt", message=text))], {"run_name": "route"}, lambda m: _structured(m, Route))
         log.info("Auto 判断难易：%s（%s）", "简单" if res.simple else "复杂", res.reason)
         return res.simple
 
     async def suggest(self, question: str, reply: str) -> list[str]:
-        res = await _structured(self._suggester, Suggestions).ainvoke([("user", prompts.render("suggest.prompt", question=question, reply=reply))],
-                                                          config={"run_name": "suggest"})
+        res = await self._suggester.ainvoke([("user", prompts.render("suggest.prompt", question=question, reply=reply))], {"run_name": "suggest"},
+                                            lambda m: _structured(m, Suggestions))
         return [q.strip() for q in res.questions if q.strip()]
 
     async def blocked(self, texts: Sequence[str]) -> list[bool]:
@@ -509,7 +558,7 @@ class LiveResearchPlanner:
 
     def dream(self, prompt: str) -> str:
         """按 JSON 输出（response_format json_object）：开着思考也能用，不像结构化输出要强制调工具。"""
-        out = self._dreamer.bind(response_format={"type": "json_object"}).invoke([("user", prompt)], config={"run_name": "dream"})
+        out = self._dreamer.invoke([("user", prompt)], {"run_name": "dream"}, lambda m: m.bind(response_format={"type": "json_object"}))
         return str(out.content)
 
 

@@ -26,6 +26,7 @@ PRO, FLASH = "deepseek:deepseek-v4-pro", "deepseek:deepseek-flash"
 K3, V41, K31 = "dashscope:kimi-k3", "dashscope:deepseek-v4.1-flash-1017", "dashscope:kimi-k3.1-pro"
 TK_K3, TK_V41, TK_V41_1017 = "tokenhub:kimi-k3", "tokenhub:deepseek-v4.1-flash", "tokenhub:deepseek-v4.1-flash-1017"
 TK_PRO, TK_K31 = "tokenhub:deepseek-v4-pro", "tokenhub:kimi-k3.1-pro-highspeed"
+TK_FLASH, TK_PRO_0813, TK_PRO_202606 = "tokenhub:deepseek/deepseek-flash", "tokenhub:deepseek-v4-pro-0813", "tokenhub:deepseek-v4-pro-202606"
 DOUBAO = "ark:doubao-seed-2-1-pro-260915"
 GUEST = "guest:g1"
 NOW = datetime(2026, 11, 8, 12, tzinfo=CHINA_TZ)
@@ -37,11 +38,13 @@ def _always(_ref: str) -> bool:
 
 def _catalog(days: tuple[int, ...] = (9, 70, 86)) -> Catalog:
     """真的那份，只留百炼的三个免费额度（K3、V4.1 Flash 给 Auto，K3.1 Pro 是选项 Kimi 的 same_as），
-    到期日改成今天往后这么多天（测试不随日子过去失效）。TokenHub 的另外测（见 test_tokenhub_*）。"""
+    到期日改成今天往后这么多天（测试不随日子过去失效）。TokenHub 的另外测（见 test_tokenhub_*）。
+    V4.1 Flash 在仓库里是 Flash 的 same_as，这里改成只给 Auto 的：测 Auto 按到期日挑要两个；Flash 先走免费额度的另外测（见 _flash_catalog）。"""
     c = model_catalog.load()
     today = datetime.now(CHINA_TZ).date()
     bailian = [f for f in c.free if f.model.startswith("dashscope:")]
     free = [f.model_copy(update={"until": today + timedelta(days=d)}) for f, d in zip(bailian, days, strict=True)]
+    free = [f.model_copy(update={"same_as": "", "name": "DeepSeek V4.1 Flash", "icon": "deepseek"}) if f.model == V41 else f for f in free]
     return c.model_copy(update={"free": free})
 
 
@@ -65,15 +68,20 @@ def _model_events(events: list[dict]) -> list[str]:
 
 
 def test_models_toml_free_pool_and_roles():
-    """仓库里那份：给 Auto 的（没有 same_as 的）按到期日排着，百炼的先用；备用是 Flash（游客也能用）；判断难易、推荐问题都用 Flash。
+    """仓库里那份：给 Auto 的（没有 same_as 的）只有 K3，按到期日排着，百炼的先用；DeepSeek 的都是直连的同一个模型（same_as），
+    写了版本的 Pro 排在没写的前面；备用是 Flash（游客也能用）；判断难易、推荐问题都用 Flash。
     页面上的名字：same_as 的不写就是那个选项的名字、图标。"""
     c = model_catalog.load()
-    assert [f.model for f in sorted(c.free, key=lambda f: f.until) if not f.same_as] == [K3, V41, TK_K3, TK_V41, TK_V41_1017]
+    by_until = sorted(c.free, key=lambda f: f.until)
+    assert [f.model for f in by_until if not f.same_as] == [K3, TK_K3]
+    assert [f.model for f in by_until if f.same_as == FLASH] == [V41, TK_FLASH, TK_V41, TK_V41_1017]
+    assert [f.model for f in by_until if f.same_as == PRO] == [TK_PRO_0813, TK_PRO_202606, TK_PRO]
     assert c.fallback().model == FLASH and c.fallback().allows("guest")
     assert c.roles["route"].model == FLASH and c.roles["suggest"].model == FLASH
     names = c.names()
     assert set(names) == {f.model for f in c.free} and names[K3] == {"name": "Kimi K3", "icon": "moonshot"}
     assert names[TK_PRO] == {"name": c.option("deepseek-v4-pro").name, "icon": "deepseek"} and names[K31]["icon"] == "moonshot"
+    assert names[V41] == {"name": c.option("deepseek-flash").name, "icon": "deepseek"}
 
 
 def test_catalog_rejects_free_pool_mistakes():
@@ -400,19 +408,19 @@ KIMI_DIRECT = "moonshot:kimi-k3.1-pro"
 
 
 def test_chosen_model_uses_its_free_quota_first():
-    """选了 Kimi K3.1 Pro：主 agent 先走百炼上同一个模型的免费额度，子 agent 照旧直连；用完、到期、没配 key 走直连。
-    没有对应选项的免费额度（K3、V4.1 Flash）不会被选项用上。"""
+    """选了 Kimi K3.1 Pro：主 agent、子 agent 都先走百炼上同一个模型的免费额度；用完、到期、没配 key 走直连。
+    没有对应选项的免费额度（K3）不会被选项用上。"""
     c = _catalog()
     now = datetime.now(CHINA_TZ)
     plan = c.plan(KIMI, None, _always, now=now)
-    assert plan.option == KIMI and plan.agent == ModelUse(ref=K31, thinking=True) and plan.subagent == ModelUse(ref=KIMI_DIRECT, thinking=True)
+    assert plan.option == KIMI and plan.agent == ModelUse(ref=K31, thinking=True) and plan.subagent == ModelUse(ref=K31, thinking=True)
+    assert c.plan(KIMI, None, _always, now=now, free=False).subagent.ref == KIMI_DIRECT
     assert c.plan(KIMI, False, _always, now=now).agent == ModelUse(ref=K31, thinking=False)
     assert c.plan(KIMI, None, _always, now=now, free=False).agent.ref == KIMI_DIRECT
     assert c.plan(KIMI, None, _always, now=now + timedelta(days=86)).agent.ref == KIMI_DIRECT
     assert c.plan(KIMI, None, lambda ref: not ref.startswith("dashscope:"), now=now).agent.ref == KIMI_DIRECT
     c.used_up(K31)
     assert c.plan(KIMI, None, _always, now=now).agent.ref == KIMI_DIRECT
-    assert c.plan("deepseek-flash", None, _always, now=now).agent.ref == FLASH  # V4.1 Flash 不是它
 
 
 def test_same_as_must_be_an_option_model():
@@ -490,20 +498,24 @@ def test_tokenhub_quota_errors_are_free_tier_used_up(breaker):
 
 
 def test_tokenhub_same_model_goes_free_first_and_auto_simple_skips_it():
-    """仓库里那份（按 11-08 看）：选了 Pro、Auto 判为复杂的，主 agent 先走 TokenHub 上的 Pro，pick 记直连的；
+    """仓库里那份（按 11-08 看）：选了 Pro、Auto 判为复杂的，主 agent 先走 TokenHub 上的 Pro，pick 记直连的；子 agent 先走百炼上的 Flash；
     Kimi 有两份免费的，百炼的先到期先用；Auto 判为简单的不挑 same_as 的。"""
     c = model_catalog.load()
     for option in ("deepseek-v4-pro", AUTO):
         plan = c.plan(option, None, _always, pick=PRO if option == AUTO else None, now=NOW)
-        assert plan.agent.ref == TK_PRO and plan.pick == PRO and plan.subagent.ref == FLASH
+        assert plan.agent.ref == TK_PRO_0813 and plan.pick == PRO and plan.subagent == ModelUse(ref=V41, thinking=True, effort="high")
         assert c.plan(option, None, _always, pick=PRO, now=NOW, free=False).agent.ref == PRO
     assert c.plan("kimi-k3-1-pro", None, _always, now=NOW).agent.ref == K31
     c.used_up(K31)
     assert c.plan("kimi-k3-1-pro", None, _always, now=NOW).agent.ref == TK_K31
-    for f in [K3, V41]:
-        c.used_up(f)
+    c.used_up(K3)
     assert c.pick(True, False, _always, NOW) == TK_K3
+    c.used_up(TK_K3)
+    assert c.pick(True, False, _always, NOW) == FLASH and c.plan(AUTO, None, _always, pick=FLASH, now=NOW).agent.ref == V41  # 备用照样先走免费额度
     assert c.plan("hy4", None, _always, now=NOW).agent.ref == "hunyuan:hy4"  # 混元自己的不在 [[free]] 里
+    for f in (TK_PRO_0813, TK_PRO_202606):
+        c.used_up(f)
+        assert c.plan(AUTO, None, _always, pick=PRO, now=NOW).agent.ref != f
     c.used_up(TK_PRO)
     assert c.plan(AUTO, None, _always, pick=PRO, now=NOW).agent.ref == PRO
 
@@ -558,3 +570,155 @@ def test_tokenhub_provider(monkeypatch):
     assert usable(TK_PRO)
     monkeypatch.setattr(config, "HUNYUAN_API_KEY", "")
     assert not usable(TK_PRO)
+
+
+# ---- Flash、子 agent、内部用途也先走同一个模型的免费额度（2026-11-08） ----
+
+
+def _flash_catalog() -> Catalog:
+    """_catalog 的，再加 Flash 的两个免费额度（deepseek/deepseek-flash 先到期先用）和 TokenHub 上的 Pro，到期日也改成往后数。"""
+    c = _catalog()
+    today = datetime.now(CHINA_TZ).date()
+    real = {f.model: f for f in model_catalog.load().free}
+    extra = [real[ref].model_copy(update={"until": today + timedelta(days=d)}) for ref, d in ((TK_FLASH, 100), (TK_V41_1017, 200), (TK_PRO, 300))]
+    return c.model_copy(update={"free": [*c.free, *extra]})
+
+
+def test_subagents_and_roles_go_free_first():
+    """子 agent 和主 agent 各看各的免费额度；内部用途先免费、再直连（思考、强度照 [roles]）；用完了的跳过，都用完了只剩直连。"""
+    c = _flash_catalog()
+    plan = c.plan("deepseek-v4-pro", None, _always)
+    assert plan.agent.ref == TK_PRO and plan.subagent == ModelUse(ref=TK_FLASH, thinking=True, effort="high")
+    assert c.plan("deepseek-v4-pro", None, _always, free=False).subagent.ref == FLASH
+    assert c.plan("deepseek-flash", False, _always).agent == ModelUse(ref=TK_FLASH, thinking=False)
+    assert c.plan(AUTO, None, _always, pick=K3).subagent.ref == TK_FLASH  # Auto 判为简单的：子 agent 用备用的，备用也先走免费额度
+    assert c.role_uses("title", _always) == [ModelUse(ref=TK_FLASH, thinking=False), ModelUse(ref=FLASH, thinking=False)]
+    assert c.role_uses("dream", _always) == [ModelUse(ref=TK_PRO, thinking=True, effort="high"), ModelUse(ref=PRO, thinking=True, effort="high")]
+    assert c.role_uses("title", lambda ref: not ref.startswith("tokenhub:")) == [ModelUse(ref=FLASH, thinking=False)]
+    c.used_up(TK_FLASH)
+    assert c.role_uses("title", _always)[0].ref == TK_V41_1017
+    c.used_up(TK_V41_1017)
+    assert c.role_uses("title", _always) == [ModelUse(ref=FLASH, thinking=False)]
+
+
+def _down() -> ModelUnavailable:
+    return ModelUnavailable("模型服务暂时不可用（服务端出错），稍后再试")
+
+
+def _rejected() -> openai.BadRequestError:
+    """别家认不出来的出错（内容审核、不认的参数……）：只认得 DeepSeek 的拦截，别家的就是一个 400。"""
+    body = {"message": "input contains sensitive content", "code": "400100", "type": "invalid_request_error"}
+    return openai.BadRequestError("Error code: 400", response=httpx2.Response(400, request=REQ), body=body)
+
+
+def _role(monkeypatch, models: dict):
+    from langchain_core.language_models import FakeListChatModel
+
+    from app import config
+    from app.research_llm import RoleModel
+
+    monkeypatch.setattr(config, "DEEPSEEK_API_KEY", "k")
+    c = _flash_catalog()
+    role = RoleModel(c, "title", _always, timeout=8)
+    role._models.update({FLASH: FakeListChatModel(responses=["直连的"] * 5), **models})
+    return c, role
+
+
+@pytest.mark.parametrize("error", [_down(), _rejected()])
+def test_role_free_quota_fails_then_direct(monkeypatch, error):
+    """内部用途：免费额度这次没成（服务不可用，或者认不出来的出错）这次换直连；不是用完的，下一次还先走免费额度。"""
+    from langchain_core.language_models import FakeListChatModel
+
+    c, role = _role(monkeypatch, {TK_FLASH: FailingModel(error=error)})
+    assert asyncio.run(role.ainvoke("起个标题")).content == "直连的"
+    role._models[TK_FLASH] = FakeListChatModel(responses=["免费的"])
+    assert asyncio.run(role.ainvoke("起个标题")).content == "免费的"
+
+
+def test_role_free_quota_used_up_moves_on_and_other_errors_are_raised(monkeypatch):
+    """额度用完的记下，以后跳过它（有下一个先走下一个）；同步调用一样。别的错（结构化输出没按格式……）照常抛出，不换直连。"""
+    from langchain_core.language_models import FakeListChatModel
+
+    used_up = FreeTierUsedUp("模型服务暂时不可用（免费额度用完了），稍后再试")
+    c, role = _role(monkeypatch, {TK_FLASH: FailingModel(error=used_up), TK_V41_1017: FakeListChatModel(responses=["下一个"])})
+    assert role.invoke("起个标题").content == "直连的"
+    assert role.invoke("起个标题").content == "下一个"
+    role._models[TK_V41_1017] = FailingModel(error=RuntimeError("模型没有按结构返回"))
+    with pytest.raises(RuntimeError, match="没有按结构返回"):
+        asyncio.run(role.ainvoke("起个标题"))
+
+
+def test_probe_stays_direct_and_the_rest_go_free(monkeypatch):
+    """单条送审只认得 DeepSeek 的拦截：不走免费额度，别的内部用途都走（结构化输出走工具调用，百炼、TokenHub 都认）。"""
+    from app import config
+    from app.research_llm import LiveResearchPlanner, RoleModel
+
+    for name, value in (("DEEPSEEK_API_KEY", "k"), ("AGENT_TOOLS_API_KEY", "k")):
+        monkeypatch.setattr(config, name, value)
+    p = LiveResearchPlanner(catalog=_flash_catalog())
+    assert not isinstance(p._prober, RoleModel) and p._prober._guard_key() == PRO
+    assert all(isinstance(r, RoleModel) for r in (p._titler, p._suggester, p._summarizer, p._dreamer, p._router))
+
+
+def _chosen(p: FakeResearchPlanner, option: str, text: str = "直接答：你好") -> Chat:
+    c = Chat(planner=p)
+    p.model_uses.clear()  # 建图时的占位模型不算
+    c.r.accept(c.tid, text, owner=c.owner, option=option)
+    return c
+
+
+def test_free_pro_direct_pro_free_flash_flash_then_stop():
+    """选了 Pro：免费的 Pro → 直连 Pro → 免费的 Flash → 直连 Flash，一次调用里接着换；都坏了失败，不在试过的里面来回换。"""
+    p = FakeResearchPlanner(catalog=_flash_catalog())
+    p.broken.update({TK_PRO: FailingModel(error=_down()), PRO: FailingModel(error=_down()), TK_FLASH: FailingModel(error=_down())})
+    c = _chosen(p, "deepseek-v4-pro")
+    v = c.run()
+    assert _models(v) == [FLASH] and _model_events(c.events) == [TK_PRO, PRO, TK_FLASH, FLASH]
+    p.broken[FLASH] = FailingModel(error=_down())
+    p.model_uses.clear()
+    with pytest.raises(ModelUnavailable):
+        c.say("直接答：接着说")
+    assert [u.ref for u, sub in p.model_uses if not sub] == [TK_PRO, PRO, TK_FLASH, FLASH]
+
+
+def test_flash_used_up_tries_the_next_free_one_then_stops():
+    """选了 Flash：免费的用完了 → 直连 Flash 坏了 → 下一个免费的（用完的跳过）也坏了 → 回到直连是试过的，失败。"""
+    p = FakeResearchPlanner(catalog=_flash_catalog())
+    used_up = FreeTierUsedUp("模型服务暂时不可用（免费额度用完了），稍后再试")
+    p.broken.update({TK_FLASH: FailingModel(error=used_up), FLASH: FailingModel(error=_down()), TK_V41_1017: FailingModel(error=_down())})
+    c = _chosen(p, "deepseek-flash")
+    with pytest.raises(ModelUnavailable):
+        c.run()
+    assert [u.ref for u, sub in p.model_uses if not sub] == [TK_FLASH, FLASH, TK_V41_1017]
+
+
+def test_unrecognized_error_on_free_quota_goes_direct_but_not_on_direct():
+    """免费额度上认不出来的出错（别家的内容审核……）换直连的同一个模型再试，结果照直连的算；直连的出这种错照常失败，不换 Flash。"""
+    p = _pro_planner()
+    p.broken[TK_PRO] = FailingModel(error=_rejected())
+    c = Chat(planner=p)
+    assert _models(c.say("直接答：比较一下三家云厂商的数据库方案")) == [PRO]
+    p.broken[PRO] = FailingModel(error=_rejected())
+    p.model_uses.clear()
+    with pytest.raises(openai.BadRequestError):
+        c.say("直接答：接着说")
+    assert [u.ref for u, sub in p.model_uses if not sub] == [TK_PRO, PRO]
+
+
+@pytest.mark.parametrize("error", [_down(), FreeTierUsedUp("模型服务暂时不可用（免费额度用完了），稍后再试")])
+def test_subagent_free_quota_fails_then_direct_for_the_rest_of_the_task(error):
+    """子 agent 的免费额度这次没成：换直连的同一个模型，这个子任务剩下的都用直连，子任务照常做完；主 agent 不受影响，页面上不报换模型。"""
+    p = FakeResearchPlanner(catalog=_flash_catalog())
+    p.broken[TK_FLASH] = FailingModel(error=error)
+    c = _chosen(p, "deepseek-v4-pro", "子任务：查一下杭州美食")
+    v = c.run()
+    (turn,) = v["turns"]
+    (task,) = [i for i in turn["items"] if i["type"] == "step" and i["kind"] == "task"]
+    assert v["status"] == "idle" and task["ok"]
+    subs = [u.ref for u, sub in p.model_uses if sub]
+    assert subs[0] == TK_FLASH and len(subs) > 2 and set(subs[1:]) == {FLASH}
+    assert _models(v) == [TK_PRO] and _model_events(c.events) == [TK_PRO]
+    p.broken.clear()
+    p.model_uses.clear()
+    c.say("子任务：再查一下")
+    assert [u.ref for u, sub in p.model_uses if sub][0] == (TK_V41_1017 if isinstance(error, FreeTierUsedUp) else TK_FLASH)

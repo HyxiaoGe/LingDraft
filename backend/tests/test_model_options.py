@@ -22,6 +22,7 @@ from tests.auth_helpers import USER, bearer, guest_token
 PRO, FLASH = "deepseek:deepseek-v4-pro", "deepseek:deepseek-flash"
 # Auto 判为复杂（没判断的也当复杂）现在先走的那个：TokenHub 上的免费 Pro 还能用时是它，到期了是直连的 Pro（[[free]] 的 same_as）
 AUTO_REF = model_catalog.load().plan(None, None, lambda ref: True).agent.ref
+FLASH_REF = model_catalog.load().free_ref(FLASH, lambda ref: True)  # Flash 先走同一个模型的免费额度（[[free]] 的 same_as），按今天能用的
 DOUBAO, LITE = "ark:doubao-seed-2-1-pro-260915", "ark:doubao-seed-2-1-lite-260915"
 
 
@@ -101,7 +102,7 @@ def test_guests_get_auto_and_the_light_models():
 def test_plan_falls_back_to_auto():
     """选项不在了、厂商停了、没配 key 的改用 Auto；只是不再提供（hidden）的照常用，但新对话里没有它。"""
     c = _with({"deepseek-flash": "hidden", "doubao-seed-2-1-lite": "retired"})
-    assert c.plan("deepseek-flash", None, _always).agent.ref == FLASH
+    assert c.plan("deepseek-flash", None, _always).agent.ref == FLASH_REF
     assert "deepseek-flash" not in {o.id for o in c.offered(_always)}
     assert c.plan("doubao-seed-2-1-lite", None, _always).option == AUTO
     assert c.plan("nope", None, _always).option == AUTO
@@ -115,7 +116,7 @@ def test_plan_thinking_switch():
     c = model_catalog.load()
     off = c.plan("doubao-seed-2-1-pro", False, _always)
     assert (off.agent, off.subagent) == (ModelUse(ref=DOUBAO, thinking=False), ModelUse(ref=LITE, thinking=False))
-    assert c.plan("deepseek-flash", None, _always).agent == ModelUse(ref=FLASH, thinking=True, effort="high")
+    assert c.plan("deepseek-flash", None, _always).agent == ModelUse(ref=FLASH_REF, thinking=True, effort="high")
     fixed = c.model_copy(update={"options": [o.model_copy(update={"thinking": "always" if o.id == "deepseek-flash" else "never"})
                                              for o in c.options]})
     assert fixed.plan("deepseek-flash", False, _always).agent.thinking is True
@@ -179,7 +180,7 @@ def test_models_endpoint_and_default_auto():
     assert st["model"] == AUTO
     rec = _records(st)[0]
     assert rec["option"] == AUTO and rec["model"] == {"ref": AUTO_REF, "thinking": True, "effort": "high"}
-    assert rec["subagent_model"] == {"ref": FLASH, "thinking": True, "effort": "high"}
+    assert rec["subagent_model"] == {"ref": FLASH_REF, "thinking": True, "effort": "high"}
 
 
 def test_bad_model_is_rejected():
@@ -236,7 +237,7 @@ def test_regenerate_and_edit_take_a_new_thinking_switch():
     st = last(events(http.post(f"{base}/regenerate")), "state")
     assert _records(st)[0]["model"]["thinking"] is False
     st = last(events(http.post(f"{base}/regenerate", json={"thinking": True})), "state")
-    assert _records(st)[0]["model"] == {"ref": FLASH, "thinking": True, "effort": "high"}
+    assert _records(st)[0]["model"] == {"ref": FLASH_REF, "thinking": True, "effort": "high"}
     st = last(events(http.post(f"{base}/edit", json={"text": "直接答：改一下"})), "state")
     assert _records(st)[0]["model"]["thinking"] is True and st["turns"][0]["user"] == "直接答：改一下"
     st = last(events(http.post(f"{base}/edit", json={"text": "直接答：再改", "thinking": False})), "state")
