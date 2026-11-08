@@ -2,7 +2,8 @@
 
 发给模型的对话估算超过 config.COMPACT_TRIGGER_TOKENS 时（一轮里每次调模型之前看一次），从最早的一轮起往后压，压到 COMPACT_TARGET_TOKENS 以下：
 - 第一层：之前几轮的搜索、读页、取回的结果换成一行说明（来源 id、标题、网址，要原文用 recall 取回），模型的思考不带；
-  用户发的文件只给目录和开头、读文件的结果换成一句说明（要原文用 read_file 再读）。
+  用户发的文件只给目录和开头、读文件的结果换成一句说明（要原文用 read_file 再读）；
+  模型写文件的调用里整篇的内容、改的片段换成一句说明（结果里有文件编号，要看用 read_file 读最新一版）。
   模型的工具调用本身、子任务的报告、天气、画图的结果都留着。
 - 第一层压完还超，第二层：再从最早的一轮起，模型那边（思考、正文、工具调用和结果）整个换成快模型写的短版，用户的话照原样留着；
   特别长的用户消息（贴了一大段的）也换成短的。短版一轮一份，写一次存进 state（Compaction.summaries），以后不再改，也不会拿短版再去压。
@@ -96,11 +97,31 @@ def turn_order(messages: list[BaseMessage]) -> dict[str, int]:
     return {m.id: i for i, m in enumerate(x for x in messages if history.is_request(x)) if m.id}
 
 
+WRITE_BODY = ("content", "edits")  # 写文件的调用里换成说明的参数
+
+
+def _write_args(name: str, args: dict) -> dict:
+    """写文件的调用参数：整篇内容、改的片段换成一句说明，标题、编号、这版改了什么留着。别的工具原样。"""
+    if name not in history.WRITE_TOOLS:
+        return args
+    note = prompts.render("compact.write_cleared")
+    return {k: note if k in WRITE_BODY and v else v for k, v in args.items()}
+
+
+def without_write_bodies(m: AIMessage) -> AIMessage:
+    """模型消息里写文件的调用去掉整篇内容（参数坏了的那种也一样：多半就是整篇写到一半）。"""
+    if not any(tc.get("name") in history.WRITE_TOOLS for tc in [*m.tool_calls, *m.invalid_tool_calls]):
+        return m
+    calls = [{**tc, "args": _write_args(tc["name"], tc.get("args") or {})} for tc in m.tool_calls]
+    bad = [{**tc, "args": prompts.render("compact.write_cleared")} if tc.get("name") in history.WRITE_TOOLS else tc for tc in m.invalid_tool_calls]
+    return m.model_copy(update={"tool_calls": calls, "invalid_tool_calls": bad})
+
+
 def _cleared(m: BaseMessage) -> BaseMessage:
-    """第一层：搜索、读页、查文档、取回、读文件的结果换成一行说明；模型消息不带思考（豆包的加密原文也去掉）；
+    """第一层：搜索、读页、查文档、取回、读文件的结果换成一行说明；模型消息不带思考（豆包的加密原文也去掉）、写文件的调用不带整篇内容；
     用户发的文件只给目录和开头（见 app.tools.files）。没做成的结果本来就短，留着。"""
     if isinstance(m, AIMessage):
-        return history.without_thinking(m)
+        return without_write_bodies(history.without_thinking(m))  # type: ignore[arg-type]
     if isinstance(m, HumanMessage):
         return history.files_briefed(m)
     if not isinstance(m, ToolMessage) or m.name not in CLEARED_TOOLS or m.status == "error":
@@ -176,7 +197,7 @@ def render_turn(turn: list[BaseMessage]) -> str:
         elif isinstance(m, AIMessage):
             if text := history.text_of(m).strip():
                 parts.append(f"<assistant>\n{text}\n</assistant>")
-            parts += [f'<tool_call name="{tc["name"]}">{json.dumps(tc.get("args") or {}, ensure_ascii=False)}</tool_call>'
+            parts += [f'<tool_call name="{tc["name"]}">{json.dumps(_write_args(tc["name"], tc.get("args") or {}), ensure_ascii=False)}</tool_call>'
                       for tc in m.tool_calls]
         elif isinstance(m, ToolMessage):
             n = TURN_REPORT_CHARS if m.name == SUBAGENT_TOOL else TURN_RESULT_CHARS

@@ -311,9 +311,16 @@ export function addLive(l, ev, data) {
   } else if (ev === "model") {
     return { ...l, model: data.ref }; // 这一轮主 agent 用的模型（Auto 判断完选的、出问题换的备用）：一轮结束才进记录，回答开头先按它显示
   } else if (ev === "restart") {
-    // 模型生成到一半断了、正在再调一次：刚才流出来的半截（思考和正文，id 是那条消息的；没流出东西时是空的）不要了，空档里说明在重新生成
+    // 模型生成到一半断了、正在再调一次：刚才流出来的半截（思考、正文和正在写的文件，id 是那条消息的；没流出东西时是空的）不要了，空档里说明在重新生成
     const kept = data.id ? items.filter((x) => !((x.type === "thinking" || x.type === "text") && x.id === data.id)) : items;
-    return { ...l, items: kept, phase: "restart" };
+    const drafts = data.id && l.drafts ? Object.fromEntries(Object.entries(l.drafts).filter(([, d]) => d.mid !== data.id)) : l.drafts;
+    return { ...l, items: kept, drafts, phase: "restart" };
+  } else if (ev === "draft") {
+    // 模型正在写的文件（create_file / edit_file 的参数边收边解，见后端 api/drafts.py）：按调用 id 攒着，text 是新收到的那段内容。
+    // 头一批带工具名和所属消息；标题、类型、改的哪份收完了才来一次。写成了以过程里那一步为准，这里的不存
+    const d = l.drafts?.[data.id] || { id: data.id, text: "", at: Date.now() };
+    const { text, ...rest } = data;
+    return { ...l, drafts: { ...l.drafts, [data.id]: { ...d, ...rest, text: d.text + (text || "") } } };
   } else {
     return l;
   }

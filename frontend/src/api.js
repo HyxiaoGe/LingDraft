@@ -199,6 +199,13 @@ export async function downloadThreadFile(threadId, f) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// 模型写的文件某一版的全文（右栏显示、复制、下载用）：和用户发的文件同一个接口，要带登录信息
+export async function threadFileText(threadId, id, signal) {
+  const resp = await authFetch(`/api/research/threads/${encodeURIComponent(threadId)}/files/${encodeURIComponent(id)}`, { signal });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.text();
+}
+
 export async function getResearchState(threadId) {
   const resp = await authFetch(`/api/research/threads/${threadId}/state`);
   if (!resp.ok) throw await httpError(resp);

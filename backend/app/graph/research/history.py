@@ -33,6 +33,7 @@ from app.graph.research.state import (
     Usage,
     WeatherDay,
     WeatherHour,
+    WrittenFile,
 )
 
 BLOCKED = "lingdraft_blocked"  # 一轮因内容审核停下时，系统补的那条模型消息 response_metadata 里的键，值是原因（见 agent.ContentGuard）
@@ -45,13 +46,16 @@ MAX_FILES = 5  # 一句话最多带几个文件（2026-11-08 Sean 定）
 FILES_BRIEF = "lingdraft_files_brief"  # 压缩第一层压过的那句话（只在发给模型的那份里）：带的文件只给目录和开头（见 app.tools.files）
 IMAGE_TOOL = "generate_image"
 VIEW_TOOL = "view_image"  # 看图工具：看不见图的模型问图里有什么（见 app.tools.vision）
-FILE_TOOL = "read_file"  # 读用户发的文件：按段读、在文件里找（见 app.tools.files）
+FILE_TOOL = "read_file"  # 读用户发的文件、模型写的文件：按段读、在文件里找（见 app.tools.files）
+CREATE_TOOL, EDIT_TOOL = "create_file", "edit_file"  # 模型写文件：新建、出新一版（见 app.tools.write_file）
+WRITE_TOOLS = (CREATE_TOOL, EDIT_TOOL)
 PLACE_TOOL, ROUTE_TOOL = "place_search", "route_compare"  # 地图的两个工具（见 app.tools.maps_mcp）
 FLIGHT_TOOL, TRAIN_TOOL = "search_flights", "search_trains"  # flyai 的两个工具（见 app.tools.flyai_mcp）
 ITINERARY_TOOL = "present_itinerary"  # 灵稿自己的排行程（见 app.tools.flyai_mcp）
 TRAVEL_KINDS = {FLIGHT_TOOL: "flight", TRAIN_TOOL: "train"}
 STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", PLACE_TOOL: "place", ROUTE_TOOL: "route",
-              **TRAVEL_KINDS, ITINERARY_TOOL: "itinerary", IMAGE_TOOL: "image", VIEW_TOOL: "view", FILE_TOOL: "file", SUBAGENT_TOOL: "task", LIBRARY_TOOL: "library", DOCS_TOOL: "docs"}
+              **TRAVEL_KINDS, ITINERARY_TOOL: "itinerary", IMAGE_TOOL: "image", VIEW_TOOL: "view", FILE_TOOL: "file", CREATE_TOOL: "write", EDIT_TOOL: "write", SUBAGENT_TOOL: "task",
+              LIBRARY_TOOL: "library", DOCS_TOOL: "docs"}
 BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
 # 没画成的原因在页面上的说法（照 Fusion 的图片卡片），没列的都说“图片生成失败”
 IMAGE_FAILURES = {
@@ -72,6 +76,19 @@ TASK_FAILURES = {
     "error": "子任务出错了，没做完",
 }
 TASK_FAILED = "子任务没做成"
+# 写文件没写成的原因在页面上的说法（create_file / edit_file 结果 artifact 的 failure，见 app.tools.write_file）
+WRITE_FAILURES = {
+    "cut_off": "内容太长，输出被截断了，没写完",
+    "broken": "内容没写完整，没写成",
+    "not_found": "没找到要改的文件",
+    "read_only": "用户发的文件不能改，没写成",
+    "no_match": "要改的地方没对上，没改成",
+    "no_change": "内容没有变化，没出新版本",
+    "too_long": "文件太长了，没写成",
+    "empty": "内容是空的，没写成",
+    "unavailable": "文件暂时存不了",
+}
+WRITE_FAILED = "没写成"
 
 
 def text_of(m: BaseMessage) -> str:
@@ -222,6 +239,10 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         text, extra = _text(args.get("query")), {"limits": [_text(args.get("libraryId"))] if args.get("libraryId") else []}
     elif kind == "view":
         text, extra = _text(args.get("question")), {}
+    elif kind == "write":  # 标题在参数里，写好了用结果里的（改文件没给新标题的是空的）；改的是哪份记在 target，页面按它对上标题、归到同一份文件
+        w = written_of(result) if result is not None else None
+        text = w.title if w else _text(args.get("title"))
+        extra = {"edit": name == EDIT_TOOL, "target": _text(args.get("file_id")) if name == EDIT_TOOL else ""}
     elif kind == "file":  # 读的哪个文件：名字在结果的 artifact 里（参数只有编号）；还没结果、没读成的是编号，页面按这段对话发的文件对上名字。
         # 在文件里找的，limits 是找的词；按段读的，parts 是哪几段（有找的词时工具不看段号）
         art = result.artifact if result is not None and isinstance(result.artifact, dict) else {}
@@ -248,6 +269,11 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         return _docs_step(kind, cid, text, extra, result)
     if kind == "view":
         return ToolStep(id=cid, kind=kind, text=text, ok=result.status != "error", message="" if result.status != "error" else "没看成", **extra)
+    if kind == "write":
+        if w := written_of(result):
+            return ToolStep(id=cid, kind=kind, text=text, file=w, **extra)
+        code = result.artifact.get("failure") if isinstance(result.artifact, dict) else None
+        return ToolStep(id=cid, kind=kind, text=text, ok=False, message=WRITE_FAILURES.get(code, WRITE_FAILED), **extra)
     if kind == "file":
         ok = result.status != "error"
         art = result.artifact if isinstance(result.artifact, dict) else {}
@@ -656,6 +682,34 @@ def files_briefed(m: BaseMessage) -> BaseMessage:
 def owned_file_ids(messages: list[BaseMessage]) -> list[str]:
     """这些消息里用户发的文件的编号，按先后：read_file 只认它们。"""
     return [f.id for m in messages for f in attached_files(m)]
+
+
+def written_of(m: BaseMessage | None) -> WrittenFile | None:
+    """一条写文件的结果里写好的那一版；没写成是 None。"""
+    art = m.artifact if isinstance(m, ToolMessage) and m.name in WRITE_TOOLS and m.status != "error" else None
+    if not isinstance(art, dict) or not art.get("file"):
+        return None
+    try:
+        return WrittenFile.model_validate(art["file"])
+    except ValidationError:
+        return None
+
+
+def written_files(messages: list[BaseMessage]) -> dict[str, WrittenFile]:
+    """这些消息里模型写的文件：第一版的编号 → 最新的一版。read_file、edit_file 只认它们；下一版的版本号按它数。"""
+    out: dict[str, WrittenFile] = {}
+    for m in messages:
+        if w := written_of(m):
+            out[w.series] = w
+    return out
+
+
+def broken_write(call: dict) -> ToolStep | None:
+    """参数解析不了的写文件调用（多半是整篇内容太长、JSON 没闭合）：工具没执行，过程里照实写没写成，不让流出来的半截悄悄没了。
+    别的工具参数坏了不列（模型多半改好再调一次）。"""
+    if call.get("name") not in WRITE_TOOLS or not call.get("id"):
+        return None
+    return ToolStep(id=call["id"], kind="write", text="", ok=False, message=WRITE_FAILURES["broken"], edit=call["name"] == EDIT_TOOL)
 
 
 def owned_image_ids(messages: list[BaseMessage]) -> list[str]:

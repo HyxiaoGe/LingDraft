@@ -181,6 +181,7 @@ class Catalog(BaseModel):
     tools: dict[str, float] = Field(default_factory=dict, description="工具每次调用多少元（[tools]，只算成功的）；没列的不收钱")
     auto: AutoRules
     free: list[Free] = Field(default_factory=list)
+    max_output: int = Field(gt=0, description="主 agent、子 agent 每次最多输出多少 token（见 models.toml）")
     _used_up: set[str] = PrivateAttr(default_factory=set)  # 报过额度用完的免费模型：只在进程内存里，重启后最多再撞一次就又记上
 
     @model_validator(mode="after")

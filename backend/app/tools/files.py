@@ -5,7 +5,8 @@
   - 长的、这句话里放不下的只给目录、开头（HEAD_CHARS 字），模型用 read_file 按段读、在文件里找；
   - 之前几轮的，压缩第一层压过了（见 compaction）也只给目录和开头。
   整篇还是只给开头，只看这句话带的文件的字数和压没压过，不看别的：同一句话每次拼出来都一样，前缀缓存接得上。
-- read_file：只认这段对话里用户发的文件（history.owned_file_ids），一次最多回 READ_MAX_CHARS 字。不收钱（models.toml 的 [tools] 没定价）。
+- read_file：只认这段对话里用户发的文件（history.owned_file_ids）和模型写的文件（history.written_files，读的是最新一版），
+  一次最多回 READ_MAX_CHARS 字。不收钱（models.toml 的 [tools] 没定价）。
   只给主 agent：子 agent 看不到用户发的文件，要用的内容主 agent 写进交代里。
 """
 
@@ -22,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from app.files.parse import MAX_ROWS, Part
 from app.graph.research import prompts
-from app.graph.research.history import FILE_TOOL, FILES_BRIEF, attached_files, owned_file_ids
+from app.graph.research.history import FILE_TOOL, FILES_BRIEF, attached_files, owned_file_ids, written_files
 from app.graph.research.state import AttachedFile
 
 log = logging.getLogger(__name__)
@@ -222,23 +223,27 @@ def _snippets(text: str, needles: list[str]) -> str:
 
 
 def make_read_file_tool():
-    """读用户发的文件：按段读或在文件里找。文件服务从这次运行的上下文里取（ChatContext.files）。
-    编号不是这段对话里用户发的、文件没了、段号不对：给模型一句说明、status=error。
+    """读用户发的文件、模型写的文件：按段读或在文件里找。文件服务从这次运行的上下文里取（ChatContext.files）。
+    编号不是这段对话里的、文件没了、段号不对：给模型一句说明、status=error。
     结果的 artifact 记着文件名和类型（页面上写读的是哪个文件、第几页还是第几段），在文件里找的还记着找到了几段。"""
 
     @tool(FILE_TOOL, description=prompts.render("tools.read_file.description"), args_schema=ReadFileArgs, response_format="content_and_artifact")
     async def read_file(runtime: ToolRuntime, file_id: str, parts: str | None = None, query: str | None = None) -> tuple[str, dict]:
         fid = file_id.strip()
         messages = runtime.state.get("messages", [])
-        if fid not in owned_file_ids(messages):
-            raise ToolException(prompts.render("tools.read_file.not_found", id=fid))
-        f = next(a for m in messages if isinstance(m, HumanMessage) for a in attached_files(m) if a.id == fid)
         service = getattr(runtime.context, "files", None)
-        got = await service.content(fid) if service is not None else None
+        if w := written_files(messages).get(fid):  # 模型写的：读最新一版（编号是第一版的）
+            name, ftype, row_id, extra = w.title, w.type, w.id, {"version": w.version}
+        elif fid in owned_file_ids(messages):
+            f = next(a for m in messages if isinstance(m, HumanMessage) for a in attached_files(m) if a.id == fid)
+            name, ftype, row_id, extra = f.name, f.type, fid, {}
+        else:
+            raise ToolException(prompts.render("tools.read_file.not_found", id=fid))
+        got = await service.content(row_id) if service is not None else None
         if got is None:
-            raise ToolException(prompts.render("tools.read_file.unavailable", name=f.name))
+            raise ToolException(prompts.render("tools.read_file.unavailable", name=name))
         all_parts = got[1]
-        art = {"name": f.name, "file_id": fid, "type": f.type}
+        art = {"name": name, "file_id": fid, "type": ftype, **extra}
         if query and query.strip():
             text, found = search(f.name, all_parts, query)
             return text, {**art, "query": query.strip(), "found": found}

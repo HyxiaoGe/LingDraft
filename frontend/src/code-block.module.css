@@ -82,6 +82,11 @@
 .button.success { color: var(--ok); }
 .actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 
+/* 右栏里看整个文件（bare）：没有框，铺满右栏，行号那一列和代码一起往下走 */
+.block.bare { border: 0; border-radius: 0; box-shadow: none; min-height: 100%; }
+.bare .scroll { min-height: 100%; }
+.bare .row { min-height: 100%; }
+
 .scroll { overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: var(--line2) transparent; }
 .row { display: flex; min-width: 100%; }
 .gutter {

@@ -29,6 +29,7 @@ from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg_pool import PoolTimeout
 
 from app import aio, config, costs, quota
+from app.api.drafts import DraftTracker
 from app.api.run_store import ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, Pending, PostgresRunStore, RunStore
 from app.api.runner import BaseRunner, RunConflict, _sse_text, jsonable, log
 from app.files.service import NOT_HERE, FileService, NotSendable
@@ -118,12 +119,14 @@ class StreamBuffer:
     """把模型的流式片段攒成事件：思考和正文按（子任务，消息 id，种类）合并，约每 80ms 发一次。子 agent 的片段带上派它的 task 调用 id。
     一条消息想完了（下一个片段是正文或工具调用），思考那一段带上 ms（思考了多久，后端计的）：页面按收到片段的时间自己算不准，
     中途打开对话时前面的事件一下子补发过来、标签页在后台时浏览器拖着不处理，都会算短。
-    同时记着主 agent 和每个子 agent 最后一条消息流出来的东西：停止时存下来（主 agent 的是这一轮的回复，子 agent 的进它的子任务卡）。"""
+    同时记着主 agent 和每个子 agent 最后一条消息流出来的东西：停止时存下来（主 agent 的是这一轮的回复，子 agent 的进它的子任务卡）。
+    主 agent 写文件的工具调用，参数边收边解出来，同一批发给页面（draft，见 api.drafts）；子 agent 没有写文件的工具。"""
 
     def __init__(self) -> None:
         self._deltas: list[dict] = []
         self._last = time.monotonic()
         self._cur: dict[str | None, _Streamed] = {}  # None 是主 agent
+        self._drafts = DraftTracker()
 
     def add(self, chunk: AIMessageChunk, task: str | None = None) -> list[dict]:
         mid = chunk.id or ""
@@ -140,6 +143,8 @@ class StreamBuffer:
         for kind, piece in (("thinking", thinking), ("text", text)):
             if piece:
                 self._piece(mid, task, kind, piece)
+        if task is None and chunk.tool_call_chunks:
+            self._drafts.add(mid, chunk.tool_call_chunks)
         return self.flush() if time.monotonic() - self._last >= DELTA_S else []
 
     def _piece(self, mid: str, task: str | None, kind: str, piece: str) -> dict:
@@ -152,13 +157,15 @@ class StreamBuffer:
         return d
 
     def flush(self) -> list[dict]:
-        out = [{"event": "delta", "data": d} for d in self._deltas]
+        out = [{"event": "delta", "data": d} for d in self._deltas] + [{"event": "draft", "data": d} for d in self._drafts.take()]
         self._deltas, self._last = [], time.monotonic()
         return out
 
     def drop(self, task: str | None = None) -> str | None:
-        """这条消息不要了（调模型断了，正在再调一次）：不再当作流出来的半截，点停止时不存它。返回它的 id。"""
+        """这条消息不要了（调模型断了，正在再调一次）：不再当作流出来的半截，点停止时不存它。返回它的 id（页面去掉它的片段和写到一半的文件）。"""
         cur = self._cur.pop(task, None)
+        if cur is not None and task is None:
+            self._drafts.drop(cur.mid)
         return cur.mid if cur is not None else None
 
     def partial(self, task: str | None = None) -> AIMessage | None:
@@ -206,6 +213,7 @@ def _items_of(m: AIMessage, results: dict[str, ToolMessage]) -> list[dict]:
             if step.kind == "task":
                 item["items"] = subagent_items(result)
             items.append(item)
+    items += [{"type": "step", **step.model_dump()} for tc in m.invalid_tool_calls if (step := history.broken_write(tc))]  # type: ignore[arg-type]
     return items
 
 
@@ -683,7 +691,7 @@ class ResearchRunner(BaseRunner):
         它的片段、进度、阶段带上 task（调用 id），页面放进那张子任务卡；它的节点做完不发 node。它的片段 langgraph_node 也是 model，只按节点名分不开。
         做完的 step 带着工具结果（result，不发给页面），记进 done：点停止时它那一步可能还没提交，收尾时补上（见 _write_stop）。"""
         ctx = ChatContext(take_guide=lambda: self._take_guide(thread_id), title=self._titles.get(thread_id),
-                          owner=await self.run_store.owner_of(thread_id), files=self.files)
+                          owner=await self.run_store.owner_of(thread_id), files=self.files, thread_id=thread_id)
         async for ns, mode, chunk in self.graph.astream(inp, self._cfg(thread_id), context=ctx, stream_mode=["messages", "updates", "custom"],
                                                         subgraphs=True, durability=self.durability):
             task = tasks.get(ns[0]) if ns else None
@@ -901,6 +909,8 @@ class ResearchRunner(BaseRunner):
         await self.graph.aupdate_state(cfg, {"messages": edited + [RemoveMessage(id=m.id) for m in msgs[start + 1:]], "turns": turns},
                                        as_node=START)
         await self.images.delete_images(history.owned_image_ids(msgs[start + 1:]))  # 这一轮原来画的图不要了（用户那句话带的图留着）
+        if msgs[start].id:  # 这一轮原来写的文件各版也不要了（按这一轮记的，进程崩掉时写了、对话里没记下的也删）
+            await self.files.delete_turn(thread_id, msgs[start].id)
 
     # ---- 改名、删除 ----
 

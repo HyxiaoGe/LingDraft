@@ -59,6 +59,9 @@ export const IconClip = (p) => svg(<path d="M21 11.5l-8.6 8.6a5.5 5.5 0 0 1-7.8-
 export const IconImage = (p) => svg(<><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="M21 16l-5-5-9 9" /></>, p);
 export const IconInsert = (p) => svg(<><path d="M5 4v7a4 4 0 0 0 4 4h11" /><path d="M15 10l5 5-5 5" /></>, p);
 export const IconUndo = (p) => svg(<><path d="M9 14L4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></>, p);
+export const IconWrite = (p) => svg(<><path d="M13 3H6v18h5" /><path d="M13 3l5 5v2.5" /><path d="M13 3v5h5" /><path d="M14 21v-2.5l5.5-5.5 2.5 2.5-5.5 5.5z" /></>, p); // 模型写文件、改文件
+export const IconBack = (p) => svg(<path d="M15 5l-7 7 7 7" />, p);
+export const IconQuote = (p) => svg(<path d="M6 7h4v4c0 3-1.3 5-4 6M14 7h4v4c0 3-1.3 5-4 6" />, p);
 export const IconClose = (p) => svg(<path d="M6 6l12 12M18 6L6 18" />, p);
 export const IconMenu = (p) => svg(<path d="M4 7h16M4 12h16M4 17h16" />, p);
 // 左栏开合：一个框，左边隔出一栏

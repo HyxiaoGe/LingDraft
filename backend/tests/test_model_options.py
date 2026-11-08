@@ -124,7 +124,7 @@ def test_plan_thinking_switch():
 
 
 def test_live_planner_builds_each_model_once(monkeypatch):
-    """同样的（模型、思考开关、强度）共用一个模型；思考关了不传强度，DeepSeek 不开思考时 temperature 0。没配 key 的那家不能选。"""
+    """同样的（模型、思考开关、强度）共用一个模型；思考关了不传强度，DeepSeek 不开思考时 temperature 0；都带上最长输出。没配 key 的那家不能选。"""
     from app.research_llm import LiveResearchPlanner, make_chat_model, usable
 
     for name, value in (("DEEPSEEK_API_KEY", "k"), ("AGENT_TOOLS_API_KEY", "k"), ("ARK_API_KEY", None)):
@@ -136,6 +136,7 @@ def test_live_planner_builds_each_model_once(monkeypatch):
     assert p.chat_model(on).reasoning_effort == "high" and p.chat_model(on).extra_body == {"thinking": {"type": "enabled"}}
     assert p.chat_model(off).reasoning_effort is None and p.chat_model(off).temperature == 0
     assert p.chat_model(off).extra_body == {"thinking": {"type": "disabled"}}
+    assert p.chat_model(on).max_tokens == p.chat_model(off).max_tokens == p.catalog.max_output == 65536  # 写整篇文档不被默认值截断
     assert not usable(DOUBAO) and usable(PRO) and not usable("openai:gpt-x")
     assert [o["id"] for o in ResearchRunner.models(type("R", (), {"planner": p})(), "user")] == [AUTO, "deepseek-v4-pro", "deepseek-flash"]
     with pytest.raises(ValueError, match="未知的模型提供方"):
