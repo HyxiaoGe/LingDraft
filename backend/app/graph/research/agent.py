@@ -51,6 +51,7 @@ from app.graph.research.sources import DOCS_TOOL, SEPARATORS, SUBAGENT_TOOL, col
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Source, Turn
 from app.model_catalog import AUTO, LEGACY_MODEL, LEGACY_USE, ModelUse
 from app.model_guard import ContentBlocked, FreeTierUsedUp, Interrupted, ModelUnavailable, free_failed
+from app.tools.files import with_files
 from app.tools.vision import with_images
 
 TITLE_CHARS = 30  # 标题最长这么多字（汉字算一个、字母算半个，见 _width）：模型给的超过了不用（见 usable_title）；用户原话超过了截掉（照 Fusion）
@@ -84,6 +85,8 @@ class ChatContext:
     title: str | None = None
     # 这段对话归谁（见 app.identity）：系统提示词里放这个人的记忆。游客的、没归谁的（登录以前的老对话）没有记忆这一段
     owner: str | None = None
+    # 用户发的文件的服务（app.files.service.FileService）：拼给模型、read_file 按编号取文字。命令行、评测没有，文件都当读不了
+    files: Any = None
 
 
 def now() -> str:
@@ -611,10 +614,11 @@ class ModelSelect(AgentMiddleware):
         return resp if update is None else ExtendedModelResponse(model_response=resp, command=Command(update=update))
 
     async def _for(self, request: ModelRequest, turns: list[Turn], use: ModelUse) -> ModelRequest:
-        """这次调 use 这个模型的请求：别的模型答的轮次去掉思考；用户发的图看得见的直接给、看不见的给说明，看图工具只给看不见的
-        （见 app.tools.vision）。一轮里换了备用，按换上的重新组织。"""
+        """这次调 use 这个模型的请求：别的模型答的轮次去掉思考；用户发的文件拼进那句话（见 app.tools.files）；
+        用户发的图看得见的直接给、看不见的给说明，看图工具只给看不见的（见 app.tools.vision）。一轮里换了备用，按换上的重新组织。"""
         sees = self.planner.catalog.sees(use.ref)
-        msgs = await with_images(_others_without_thinking(request.messages, turns, use), sees, self.planner.image_uri)
+        msgs = await with_files(_others_without_thinking(request.messages, turns, use), getattr(request.runtime.context, "files", None))
+        msgs = await with_images(msgs, sees, self.planner.image_uri)
         tools = [t for t in request.tools if not (sees and getattr(t, "name", None) == history.VIEW_TOOL)]
         return request.override(model=self.planner.chat_model(use), messages=msgs, tools=tools)
 
@@ -712,6 +716,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     from app.graph.research.compaction import CompactionMiddleware, make_recall_tool
     from app.graph.research.subagent import make_task_tool
     from app.tools.docs_mcp import DocsMiddleware
+    from app.tools.files import make_read_file_tool
     from app.tools.flyai_mcp import TravelMiddleware, itinerary_tool
     from app.tools.image_mcp import ImageMiddleware
     from app.tools.maps_mcp import MapsMiddleware
@@ -721,7 +726,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
 
     # recall 一直都在（工具列表变了前缀缓存整个断），只有压缩换成说明的内容才用得上；页面上不显示这一步。
     # 排行程（present_itinerary）也一直在，查过航班火车才用得上
-    tools = [*planner.tools(), make_task_tool(planner), make_recall_tool(), itinerary_tool(), make_view_image_tool(planner)]
+    tools = [*planner.tools(), make_task_tool(planner), make_recall_tool(), itinerary_tool(), make_view_image_tool(planner), make_read_file_tool()]
     return create_agent(
         model=planner.chat_model(planner.catalog.plan(None, None, planner.usable).agent),  # 只是占位：每次调模型由 ModelSelect 换上这一轮的
         tools=tools,

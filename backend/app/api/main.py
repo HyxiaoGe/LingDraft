@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import logging
+import mimetypes
 import threading
 import uuid
 import zipfile
@@ -14,7 +15,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Upload
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.datastructures import UploadFile as FormFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -24,6 +25,7 @@ from app.api.inspiration import InspirationError, Inspirations
 from app.api.research_runner import AlreadyPending, NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner, UnknownModel
 from app.api.run_store import STATUSES
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
+from app.files.service import NotSendable, UploadRejected, view as file_view
 from app.graph.research.memory import TEXT_MAX as MEMORY_TEXT_MAX
 from app.graph.research.memory import DreamSchedule
 from app.identity import ADMIN, Authenticator, AuthUnavailable, BadToken, Identity, make_authenticator
@@ -267,11 +269,13 @@ async def export_zip(thread_id: str):
 
 
 class ResearchMessageBody(BaseModel):
-    """thinking 是输入框旁边的思考开关，没给按模型的默认（能开关的默认开）。"""
+    """thinking 是输入框旁边的思考开关，没给按模型的默认（能开关的默认开）。
+    files 是这句话带的文件的编号（先传到 /api/files、解析好了才能发），最多 history.MAX_FILES 个。"""
 
     model_config = ConfigDict(extra="forbid")
     text: str
     thinking: bool | None = None
+    files: list[str] = Field(default_factory=list, max_length=history.MAX_FILES)
 
 
 class ResearchCreateBody(ResearchMessageBody):
@@ -364,6 +368,71 @@ def _upload(r: ResearchRunner, datas: list[bytes]) -> list[AttachedImage]:
 def _discard(r: ResearchRunner, images: list[AttachedImage]) -> None:
     """图传上去了，这一轮却没开始（运行中、上一轮没跑完、模型不对）：删掉。别的错不删：说不准那句话是不是已经记下了。"""
     r.discard_images([i.id for i in images])
+
+
+# ---- 用户发的文件（见 app.files）：先传上来、后台解析，页面问状态，解析好了随消息发出去 ----
+
+FILE_TOO_LARGE = f"文件不能超过 {config.FILE_MAX_BYTES // (1024 * 1024)} MB"
+
+
+class _Upload(NamedTuple):
+    name: str | None
+    data: bytes
+
+
+async def _uploaded(request: Request) -> _Upload:
+    """传文件：multipart/form-data，一个 file 字段。超过上限回 413：请求头说的长度就超了的不读，读的时候也只读到上限多一个字节。"""
+    if not request.headers.get("content-type", "").startswith("multipart/form-data"):
+        raise HTTPException(415, "请用表单上传文件")
+    try:
+        length = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        length = 0
+    if length > config.FILE_MAX_BYTES + 64 * 1024:  # 留出表单本身的那点
+        raise HTTPException(413, FILE_TOO_LARGE)
+    try:
+        form = await request.form(max_files=1, max_fields=1)
+    except StarletteHTTPException as e:
+        raise HTTPException(400, "一次传一个文件") from e
+    try:
+        f = form.get("file")
+        if not isinstance(f, FormFile):
+            raise HTTPException(422, "file 要是文件")
+        name, data = f.filename, await f.read(config.FILE_MAX_BYTES + 1)
+    finally:
+        await form.close()
+    if len(data) > config.FILE_MAX_BYTES:
+        raise HTTPException(413, FILE_TOO_LARGE)
+    return _Upload(name, data)
+
+
+@app.post("/api/files")
+def file_upload(who: Who, up: Annotated[_Upload, Depends(_uploaded)]):  # 先认人再读表单
+    """传一个文件：存好原件、排进后台解析，马上返回（status 是 parsing），页面接着问 /api/files/{id}。
+    认不出、不收的（图片、老格式、压缩包……）415，太大 413，今天传满了 429：detail 是 {code: "file_rejected", reason, message, …}，
+    页面按 reason 说人话（今天传满了还带 limit、guest、login_limit）。"""
+    try:
+        row = research().upload_file(who.sub, who.tier, up.name, up.data)
+    except UploadRejected as e:
+        raise HTTPException(e.status, {"code": "file_rejected", "reason": e.code, "message": e.message, **e.extra}) from None
+    return file_view(row)
+
+
+@app.get("/api/files/{file_id}")
+def file_status(file_id: str, who: Who):
+    """解析好了没有：status 是 parsing / ready / failed，failed 的 reason 是没读成的原因（见 files.service.view）。别人的、没有的（过期清掉了）404。"""
+    row = research().file(file_id, who.sub)
+    if row is None:
+        raise HTTPException(404, "文件已经过期了，请重新上传")
+    return file_view(row)
+
+
+@app.delete("/api/files/{file_id}")
+def file_remove(file_id: str, who: Who):
+    """去掉还没发出去的文件（输入框里点叉）。发出去的跟着对话走，删对话才删；别人的、没有的、发出去的都 404。"""
+    if not research().remove_file(file_id, who.sub):
+        raise HTTPException(404, "没有这个文件")
+    return {"ok": True}
 
 
 # ---- 身份（见 app.identity） ----
@@ -474,7 +543,8 @@ def research_models(who: Who):
 def research_create(who: Who, msg: Annotated[_Incoming, Depends(_incoming(ResearchCreateBody))]):  # 先认人再读表单
     """新对话，归这个人。选的模型没有、停用了时返回 400；这一档选不了的（游客选了要登录的）返回 403，不能绕过页面上的锁。
     模型只在开新对话时选，之后每轮照对话定下的：游客打不开登录用户的对话，这里查一次就够。
-    可以带图（见 _incoming）：每张超过 4 MB 回 413，不是 PNG / JPEG / WebP 回 415，传不上去回 502。"""
+    可以带图（见 _incoming）：每张超过 4 MB 回 413，不是 PNG / JPEG / WebP 回 415，传不上去回 502。
+    可以带文件（body 的 files，先传到 /api/files）：还在解析、没读成、过期了回 400，什么都没开始。"""
     body: ResearchCreateBody = msg.body
     r = research()
     if body.model and r.locked(body.model, who.tier):
@@ -483,16 +553,19 @@ def research_create(who: Who, msg: Annotated[_Incoming, Depends(_incoming(Resear
     text = _text(body)
     images = _upload(r, msg.images)
     try:
-        return _sse(r.start(str(uuid.uuid4()), text, body.model, body.thinking, owner=who.sub, images=images))
+        return _sse(r.start(str(uuid.uuid4()), text, body.model, body.thinking, owner=who.sub, images=images, files=body.files))
     except UnknownModel as e:
         _discard(r, images)
         raise HTTPException(400, str(e)) from None
+    except NotSendable as e:
+        _discard(r, images)
+        raise _not_sendable(e) from None
 
 
 @app.post("/api/research/threads/{thread_id}/messages")
 def research_say(thread_id: str, who: Who, msg: Annotated[_Incoming, Depends(_incoming(ResearchMessageBody))]):
-    """接着说。运行中、上一轮没跑完时返回 409；额度用完了 429。可以带图，同新对话。
-    排着的话、插进这一轮的话不能带图（/queue 只收 JSON）：图要在这一轮开始时就在。"""
+    """接着说。运行中、上一轮没跑完时返回 409；额度用完了 429。可以带图、带文件，同新对话（带的文件不能发时 400）。
+    排着的话、插进这一轮的话不能带图、带文件（/queue 只收 JSON）：图和文件要在这一轮开始时就在。"""
     body: ResearchMessageBody = msg.body
     r = research()
     _mine(r, thread_id, who)
@@ -500,10 +573,18 @@ def research_say(thread_id: str, who: Who, msg: Annotated[_Incoming, Depends(_in
     text = _text(body)
     images = _upload(r, msg.images)
     try:
-        return _sse(r.say(thread_id, text, body.thinking, images))
+        return _sse(r.say(thread_id, text, body.thinking, images, body.files))
     except (RunConflict, NotIdle) as e:
         _discard(r, images)
         raise HTTPException(409, str(e)) from None
+    except NotSendable as e:
+        _discard(r, images)
+        raise _not_sendable(e) from None
+
+
+def _not_sendable(e: NotSendable) -> HTTPException:
+    """带的文件不能发：400，detail 是 {code: "files_not_sendable", reason, message}，页面按 reason 说人话、话和文件放回输入框。"""
+    return HTTPException(400, {"code": "files_not_sendable", "reason": e.code, "message": str(e)})
 
 
 @app.post("/api/research/threads/{thread_id}/queue")
@@ -513,6 +594,8 @@ def research_queue(thread_id: str, body: ResearchMessageBody, who: Who):
     已经有一句没发出去（排着或等着插进这一轮）、或上一轮没跑完时返回 409；额度用完了 429。"""
     r = research()
     _mine(r, thread_id, who)
+    if body.files:
+        raise HTTPException(400, "回答完再发带文件的消息")
     _admit(r, who)
     text = _text(body)
     try:
@@ -669,6 +752,20 @@ def research_runs(who: Who, status: str | None = None, limit: int = 50):
 @app.get("/api/research/threads/{thread_id}/state")
 def research_state(thread_id: str, who: Who):
     return _mine(research(), thread_id, who)
+
+
+@app.get("/api/research/threads/{thread_id}/files/{file_id}")
+def research_file(thread_id: str, file_id: str, who: Who):
+    """下载这段对话里用户发的文件（原件）。页面带着登录信息取（fetch 成 blob 再存），所以这里认人：不是这个人的对话一律 404。"""
+    r = research()
+    _mine(r, thread_id, who)
+    got = r.file_original(thread_id, file_id)
+    if got is None:
+        raise HTTPException(404, "没有这个文件")
+    path, row = got
+    mime = mimetypes.guess_type(row.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=mime, filename=row.name, content_disposition_type="attachment",
+                        headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
 
 
 @app.get("/api/research/threads/{thread_id}/images/{image_id}")

@@ -10,7 +10,7 @@
 [agent]
 # Fusion: prompt_templates/app-identity.j2（灵稿界面上不显示模型，对话也只接一家模型服务，去掉了说这两件事的句子）
 identity = """[LingDraft identity consistency]
-You are the AI assistant in LingDraft. You help users with questions, analysis, writing, and organizing information, and you can search the web, read web pages, check the weather, look up places, routes, flights, and trains, understand images the user attaches, and generate or edit images.
+You are the AI assistant in LingDraft. You help users with questions, analysis, writing, and organizing information, and you can search the web, read web pages, check the weather, look up places, routes, flights, and trains, understand images and read files the user attaches (PDF, Word, Excel, PowerPoint, CSV, text, and code), and generate or edit images.
 When the user asks who you are, which model you are, or who developed you:
 - Identify yourself first as the AI assistant in LingDraft.
 - Do not claim that you are Claude, ChatGPT, Gemini, or DeepSeek, and do not claim that you were created solely by Anthropic, OpenAI, Google, DeepSeek, or another model provider."""
@@ -330,6 +330,45 @@ not_found = """No image with id {{ id }} exists in this conversation. Use an id 
 unavailable = """The image {{ id }} is no longer available, so it cannot be viewed. If it matters, tell the user plainly; do not guess what it showed."""
 failed = """The image could not be viewed this time because the viewing service had a problem. You may try once more; if it fails again, tell the user plainly that you could not view the image, and do not guess what it shows."""
 
+[tools.read_file]
+# 读用户发的文件（app.tools.files）：短的文件整篇在那句话前面，长的只有目录和开头，模型用它按段读、在文件里找（2026-11-08 Sean 定）
+description = """Read a file the user attached in this conversation. Each attached file is shown in the user's message inside <file> tags with its id: a short file is shown in full, a long one only by its outline and beginning, and files from earlier turns may have been shortened to save space. Files are split into numbered parts (for a PDF, part n is page n; for a presentation, slide n). Use this to read specific parts, or to search the file for words, when what you need is not already shown. Read what you need before answering; never guess what a part says."""
+file_id = "Id of a file the user attached in this conversation, as given in its <file> tag."
+parts = "Part numbers to read, such as \"3\", \"5-8\", or \"2,7,9\". Leave empty to read from the beginning."
+query = "Words or a phrase to search for in the file, in the file's language. Matching parts are returned with the text around each match. Use this instead of parts when you do not know where something is."
+# 工具结果
+not_found = """No file with id {{ id }} exists in this conversation. Use an id given in a <file> tag; do not guess ids."""
+unavailable = """The file {{ name }} can no longer be read. Tell the user plainly if it matters; do not guess what it says."""
+bad_parts = """"{{ parts }}" is not a valid part range. This file has parts 1 to {{ count }}; give numbers like "3", "5-8", or "2,7,9"."""
+out_of_range = """This file has parts 1 to {{ count }} only."""
+no_match = """No part of {{ name }} contains "{{ query }}". Try other words, a shorter phrase, or read parts directly; the file has {{ count }} parts."""
+matches = """{{ found }} part{{ "s" if found > 1 }} of {{ name }} match "{{ query }}"{% if shown < found %}; the {{ shown }} with the most matches are shown{% endif %}:"""
+cut = """[Output limit reached. Continue with parts="{{ next }}-{{ count }}" if you need the rest.]"""
+part_cut = """[Part {{ n }} is longer than the output limit and was cut here.]"""
+
+[files]
+# 用户发的文件：放在那句话前面给模型（存着的消息里没有，见 app.tools.files）。
+# 短的整篇；长的、这句话里放不下的、压缩时压过的（之前几轮）只给目录和开头，用 read_file 读
+full = """<file id="{{ id }}" name="{{ name }}" type="{{ type }}" parts="{{ count }}">
+{{ body }}
+</file>"""
+brief = """<file id="{{ id }}" name="{{ name }}" type="{{ type }}" parts="{{ count }}" shown="outline and beginning">
+{% if facts %}{{ facts }}
+{% endif %}{% if outline %}Outline:
+{{ outline }}
+
+{% endif %}Beginning:
+{{ body }}
+</file>"""
+brief_note = """[{{ "These files are" if n > 1 else "This file is" }} not shown in full{% if earlier %} (shortened to save space){% endif %}. Call read_file with the file id to read specific parts or search the file before relying on what it says.]"""
+gone = """<file id="{{ id }}" name="{{ name }}" type="{{ type }}">
+[This file can no longer be read.]
+</file>"""
+part = """[part {{ n }}: {{ title }}]"""
+sheets = """Sheets: {{ sheets }}"""
+sheet_cut = """Only the first {{ rows }} data rows of {{ names }} were extracted."""
+truncated = """The file is very long; only its first {{ chars }} characters were extracted."""
+
 [tools.generate_image]
 # 说明、参数，画成、没画成时给模型的话都在 image-service 里（Fusion 和灵稿共用，见 agent-tools 的 services/image/src/mcp/owned.py）。
 # 这里是灵稿接在工具说明后面的一段、画成时接在结果后面的一句，和灵稿自己回的几种失败（见 app.tools.image_mcp）
@@ -357,7 +396,7 @@ invalid_response = """Image generation failed: the image service returned an une
 # Fusion 没有子 agent。灵稿只有一种通用的子 agent，没有 subagent_type；title 是给页面卡片的短标题。
 [tools.task]
 description = """Launch a sub-agent that handles one self-contained research task in its own context and returns a report.
-The sub-agent can search the web, read web pages, and get the current time. It cannot see images the user attached, check the weather, look up places, routes, flights, or trains, generate images, or launch further sub-agents, so put anything it needs from an image into the prompt as text.
+The sub-agent can search the web, read web pages, and get the current time. It cannot see images or files the user attached, check the weather, look up places, routes, flights, or trains, generate images, or launch further sub-agents, so put anything it needs from an image or file into the prompt as text.
 Use it for work that takes many searches and page reads, so that the raw material stays out of your context:
 - A request with several independent parts, such as comparing a few products, places, or options, or covering a topic from several angles: launch one sub-agent per part, all in a single response with multiple tool calls, so that they run in parallel.
 - Digging deep into one sub-question that needs many sources.
@@ -412,6 +451,7 @@ docs_cleared = """[Removed to save space] This documentation result was removed 
 {{ sources }}"""
 read_cleared = """[Removed to save space] The page text of source {{ id }} ({{ title }}, {{ url }}) was removed from your context. To read it again, call recall with source_id {{ id }}."""
 recall_cleared = """[Removed to save space] This recalled content was removed from your context again. If you need it, call recall again with the same arguments."""
+file_cleared = """[Removed to save space] This text from a file the user attached was removed from your context. If you need it, call read_file again."""
 # 第二层：一轮里模型那边整个换成短版（作为这一轮的模型消息），特别长的用户消息换成短的
 summary = """[Short version of my side of turn {{ turn }}: the full turn was removed from context to save space. To see my full answer, call recall with turn {{ turn }}.]
 {{ summary }}"""

@@ -15,7 +15,7 @@ COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev
 COPY backend/ ./
 COPY --from=web /web/dist /app/static
-# 对话里画的图、网站图标存在 /app/data（compose 里挂到宿主机）；对话本身存 Postgres（LINGDRAFT_DATABASE_URL）
+# 对话里画的图、网站图标、用户发的文件的原件存在 /app/data（compose 里挂到宿主机）；对话本身存 Postgres（LINGDRAFT_DATABASE_URL）
 ENV PATH="/app/.venv/bin:$PATH" \
     LINGDRAFT_STATIC_DIR=/app/static \
     LINGDRAFT_DATA_DIR=/app/data \

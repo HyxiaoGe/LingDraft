@@ -24,6 +24,12 @@ def _flag(name: str, default: bool) -> bool:
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.environ.get("LINGDRAFT_DATA_DIR", BACKEND_DIR / "data"))
 OUTPUT_DIR = Path(os.environ.get("LINGDRAFT_OUTPUT_DIR", BACKEND_DIR / "output"))
+# 用户上传的文件（2026-11-08 Sean 定）：原件存数据卷（dev 上 compose 挂着 /app/data），文字存 Postgres（见 app.files）
+FILES_DIR = Path(os.environ.get("LINGDRAFT_FILES_DIR", DATA_DIR / "files"))
+FILE_MAX_BYTES = 20 * 1024 * 1024  # 单个文件上限（Sean 定 20 MB）
+FILE_PARSE_TIMEOUT_S = float(os.environ.get("FILE_PARSE_TIMEOUT_S", "60"))
+FILE_PARSE_ISOLATED = True  # 在单独的子进程里解析（容器只有 512 MB，解析出事不拖垮对话）；测试里换成线程（见 tests/conftest.py）
+FILE_UPLOADS_DAILY = {"guest": 20, "user": 100}  # 每人每天能传几个（防磁盘被灌满）；管理员不限
 
 ARK_BASE_URL = os.environ.get("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
 ARK_API_KEY = os.environ.get("ARK_API_KEY")

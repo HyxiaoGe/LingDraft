@@ -225,11 +225,13 @@ export function answerText(items, sources, { links = false } = {}) {
   return used.length ? `${body}\n\n来源：\n${links ? "\n" : ""}${used.join("\n")}` : body;
 }
 
-// 整段对话导出成 Markdown：每轮是用户的话（引用块，回答过程中插进去的话接在后面）和回答，不含思考和搜索步骤
+// 整段对话导出成 Markdown：每轮是用户的话（引用块，带的图和文件写一句，回答过程中插进去的话接在后面）和回答，不含思考和搜索步骤
 export function threadMarkdown(st) {
   const quote = (text) => text.split("\n").map((l) => `> ${l}`).join("\n");
   const turns = st.turns.map((t) => {
-    const asked = [t.user, ...t.items.filter((i) => i.type === "guide").map((i) => `（回答过程中插话）${i.text}`)].map(quote).join("\n>\n");
+    const with_ = [t.images?.length && `${t.images.length} 张图`, t.files?.length && `文件 ${t.files.map((f) => f.name).join("、")}`].filter(Boolean);
+    const said = with_.length ? `${t.user}\n（带了${with_.join("，")}）` : t.user;
+    const asked = [said, ...t.items.filter((i) => i.type === "guide").map((i) => `（回答过程中插话）${i.text}`)].map(quote).join("\n>\n");
     let reply = answerText(t.items, st.sources, { links: true }) || "（这一轮没有回答）";
     if (t.record?.outcome === "stopped") reply += "\n\n（已停止）";
     if (t.items.some((i) => i.type === "blocked")) reply += "\n\n（内容审核没通过，这一轮停在这里）";

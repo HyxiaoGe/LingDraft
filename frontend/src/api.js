@@ -152,7 +152,8 @@ export async function listModels() {
 }
 
 // 开新对话。opts：model 是选的模型（listModels 里的 id，不给是 Auto；没有了返回 400），定下就不换；
-// thinking 是这句话的思考开关（不给按模型的默认）。下面几个的 opts.thinking 一样。opts.images：这句话带的图（见 message）
+// thinking 是这句话的思考开关（不给按模型的默认）。下面几个的 opts.thinking 一样。opts.images：这句话带的图（见 message）；
+// opts.files：带的文件的编号（先 uploadFile、解析好了），不能发时 400，detail 是 {code: "files_not_sendable", reason}
 export async function createResearchThread(text, opts, onEvent, signal) {
   return sse("/api/research/threads", message({ text, ...opts }), onEvent, signal);
 }
@@ -160,6 +161,42 @@ export async function createResearchThread(text, opts, onEvent, signal) {
 // 接着说，opts.images 同上。运行中、上一轮没跑完时后端返回 409
 export async function sayResearch(threadId, text, opts, onEvent, signal) {
   return sse(`/api/research/threads/${threadId}/messages`, message({ text, ...opts }), onEvent, signal);
+}
+
+// ---- 用户发的文件（见后端 app/files）：选好就传，后台解析，问到解析好了，发消息时带上编号（opts.files） ----
+
+// 传一个文件，马上回 {id, name, type, size, status, reason?, file?}（status 多半是 parsing）。
+// 不收时抛 httpError：413 太大、415 不支持、429 今天传满了，detail 是 {code: "file_rejected", reason, …}（见 upload.js 的 fileErrorText）
+export async function uploadFile(file, signal) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const resp = await authFetch("/api/files", { method: "POST", body: fd, signal });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 解析好了没有，同 uploadFile 回的；过期清掉了 404
+export async function getFile(id, signal) {
+  const resp = await authFetch(`/api/files/${encodeURIComponent(id)}`, { signal });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 去掉还没发出去的文件（输入框里点叉）：去不掉也不要紧，没发出去的一天后自己清掉
+export async function removeFile(id) {
+  await authFetch(`/api/files/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
+}
+
+// 下载对话里发过的文件（原件）：要带登录信息，取成 blob 再存，文件名用原来的
+export async function downloadThreadFile(threadId, f) {
+  const resp = await authFetch(`/api/research/threads/${encodeURIComponent(threadId)}/files/${encodeURIComponent(f.id)}`);
+  if (!resp.ok) throw await httpError(resp);
+  const url = URL.createObjectURL(await resp.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: f.name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export async function getResearchState(threadId) {

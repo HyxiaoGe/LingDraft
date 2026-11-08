@@ -15,6 +15,7 @@ from app.costs import COST
 from app.graph.research import prompts
 from app.graph.research.sources import DOCS_TOOL, LIBRARY_TOOL, SUBAGENT_TOOL, collect_sources, doc_snippets, parse, search_hits, subagent_messages
 from app.graph.research.state import (
+    AttachedFile,
     AttachedImage,
     Forecast,
     GeneratedImage,
@@ -39,14 +40,18 @@ STOPPED = "lingdraft_stopped"  # 用户点了停止时，已经流出来的那�
 GUIDE = "lingdraft_guide"  # 用户插进正在跑的这一轮的话：这条用户消息 additional_kwargs 里的键（见 agent.TurnMiddleware.abefore_model）
 ATTACHED = "lingdraft_image"  # 用户这句话带的图（AttachedImage 的列表，11-08 以前是一张）：用户消息 additional_kwargs 里的键（给模型的怎么组织见 app.tools.vision）
 MAX_ATTACHED = 4  # 一句话最多带几张图
+FILES = "lingdraft_files"  # 用户这句话带的文件（AttachedFile 的列表）：用户消息 additional_kwargs 里的键（给模型的怎么组织见 app.tools.files）
+MAX_FILES = 5  # 一句话最多带几个文件（2026-11-08 Sean 定）
+FILES_BRIEF = "lingdraft_files_brief"  # 压缩第一层压过的那句话（只在发给模型的那份里）：带的文件只给目录和开头（见 app.tools.files）
 IMAGE_TOOL = "generate_image"
 VIEW_TOOL = "view_image"  # 看图工具：看不见图的模型问图里有什么（见 app.tools.vision）
+FILE_TOOL = "read_file"  # 读用户发的文件：按段读、在文件里找（见 app.tools.files）
 PLACE_TOOL, ROUTE_TOOL = "place_search", "route_compare"  # 地图的两个工具（见 app.tools.maps_mcp）
 FLIGHT_TOOL, TRAIN_TOOL = "search_flights", "search_trains"  # flyai 的两个工具（见 app.tools.flyai_mcp）
 ITINERARY_TOOL = "present_itinerary"  # 灵稿自己的排行程（见 app.tools.flyai_mcp）
 TRAVEL_KINDS = {FLIGHT_TOOL: "flight", TRAIN_TOOL: "train"}
 STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", PLACE_TOOL: "place", ROUTE_TOOL: "route",
-              **TRAVEL_KINDS, ITINERARY_TOOL: "itinerary", IMAGE_TOOL: "image", VIEW_TOOL: "view", SUBAGENT_TOOL: "task", LIBRARY_TOOL: "library", DOCS_TOOL: "docs"}
+              **TRAVEL_KINDS, ITINERARY_TOOL: "itinerary", IMAGE_TOOL: "image", VIEW_TOOL: "view", FILE_TOOL: "file", SUBAGENT_TOOL: "task", LIBRARY_TOOL: "library", DOCS_TOOL: "docs"}
 BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
 # 没画成的原因在页面上的说法（照 Fusion 的图片卡片），没列的都说“图片生成失败”
 IMAGE_FAILURES = {
@@ -217,6 +222,12 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         text, extra = _text(args.get("query")), {"limits": [_text(args.get("libraryId"))] if args.get("libraryId") else []}
     elif kind == "view":
         text, extra = _text(args.get("question")), {}
+    elif kind == "file":  # 读的哪个文件：名字在结果的 artifact 里（参数只有编号）；还没结果、没读成的是编号，页面按这段对话发的文件对上名字。
+        # 在文件里找的，limits 是找的词；按段读的，parts 是哪几段（有找的词时工具不看段号）
+        art = result.artifact if result is not None and isinstance(result.artifact, dict) else {}
+        text = _text(art.get("name")) or _text(args.get("file_id"))
+        q = _text(args.get("query"))
+        extra = {"limits": [q] if q else [], "parts": "" if q else _text(args.get("parts"))}
     else:
         text, extra = str(args.get("url" if kind == "read" else "location", "")), {}
     if result is None:
@@ -237,6 +248,10 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         return _docs_step(kind, cid, text, extra, result)
     if kind == "view":
         return ToolStep(id=cid, kind=kind, text=text, ok=result.status != "error", message="" if result.status != "error" else "没看成", **extra)
+    if kind == "file":
+        ok = result.status != "error"
+        art = result.artifact if isinstance(result.artifact, dict) else {}
+        return ToolStep(id=cid, kind=kind, text=text, ok=ok, hits=int(art.get("found") or 0), message="" if ok else "没读成", **extra)
     data = parse(result)
     if kind == "weather":
         return _weather_step(cid, text, data, result)
@@ -617,6 +632,30 @@ def attached_images(m: BaseMessage) -> list[AttachedImage]:
         except ValidationError:
             pass
     return out
+
+
+def attached_files(m: BaseMessage) -> list[AttachedFile]:
+    """用户这句话带的文件，按发的先后；没带是空的，格式不对的那个不算。"""
+    raw = m.additional_kwargs.get(FILES) if isinstance(m, HumanMessage) else None
+    out = []
+    for r in raw if isinstance(raw, list) else []:
+        try:
+            out.append(AttachedFile.model_validate(r))
+        except ValidationError:
+            pass
+    return out
+
+
+def files_briefed(m: BaseMessage) -> BaseMessage:
+    """压缩用：带了文件的用户消息标上只给目录和开头；没带的原样。"""
+    if not isinstance(m, HumanMessage) or not m.additional_kwargs.get(FILES) or m.additional_kwargs.get(FILES_BRIEF):
+        return m
+    return m.model_copy(update={"additional_kwargs": {**m.additional_kwargs, FILES_BRIEF: True}})
+
+
+def owned_file_ids(messages: list[BaseMessage]) -> list[str]:
+    """这些消息里用户发的文件的编号，按先后：read_file 只认它们。"""
+    return [f.id for m in messages for f in attached_files(m)]
 
 
 def owned_image_ids(messages: list[BaseMessage]) -> list[str]:

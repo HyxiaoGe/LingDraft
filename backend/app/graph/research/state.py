@@ -256,17 +256,31 @@ class AttachedImage(BaseModel):
     height: int
 
 
+class AttachedFile(BaseModel):
+    """用户发消息时带的一个文件（一句话最多 history.MAX_FILES 个，2026-11-08 Sean 定）。先传上来、解析好（见 app.files），
+    发出去时绑到这段对话，记在那条用户消息上。上传的原件不会变，所以这几项记在消息上不会对不上；文字在文件表里，
+    给模型时按编号取（短的整篇放进去，长的给目录和开头、模型用 read_file 读，见 app.tools.files）。跟着对话删，重新回答、改那句话都留着。"""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(description="文件编号（文件表的）")
+    name: str
+    type: str = Field(description="pdf / docx / xlsx / pptx / csv / markdown / code / text")
+    size: int = Field(description="字节数")
+    pages: int | None = Field(default=None, description="PDF 的页数、PPT 的张数、Excel 的表数")
+    chars: int = Field(default=0, description="抽出来的字数")
+
+
 class ToolStep(BaseModel):
     """一次工具调用，给页面的过程记录用。"""
 
     model_config = ConfigDict(extra="forbid")
     id: str = Field(description="工具调用 id；页面据此把实时进度和存下来的记录对上")
-    kind: Literal["search", "read", "weather", "place", "route", "flight", "train", "itinerary", "image", "view", "task", "library", "docs"]
+    kind: Literal["search", "read", "weather", "place", "route", "flight", "train", "itinerary", "image", "view", "file", "task", "library", "docs"]
     text: str = Field(description="搜索词 / 网址 / 地名 / 查地点的关键词 / 路线、航班、火车的起终点 / 行程方案的标题 / 画图的描述 / 子任务的标题"
-                                  " / 找的库名 / 查文档的问题")
+                                  " / 找的库名 / 查文档的问题 / 读的文件名（还没读完、没读成的是文件编号）")
     limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制；查地点在哪查；比路线比哪几种方式；航班、火车的日期和条件；查的是哪个库")
     ok: bool = True
-    hits: int = 0  # 搜索返回的条数；找到的候选库、查到的文档段数
+    hits: int = 0  # 搜索返回的条数；找到的候选库、查到的文档段数；在文件里找到的段数
     body: bool = False  # 读页读到了正文
     title: str = ""  # 读到的页面标题；查天气时是和风的地名
     source_ids: list[str] = Field(default_factory=list, description="这一步得到的来源")
@@ -281,6 +295,7 @@ class ToolStep(BaseModel):
     aspect_ratio: str = Field(default="", description="画图时要的比例：还没出图时页面按它占位；改图没给比例时是空的")
     edit: bool = Field(default=False, description="画图是在改之前的一张图")
     prompt: str = Field(default="", description="子任务：主 agent 交给子 agent 的完整说明")
+    parts: str = Field(default="", description="读文件：读的哪几段（参数原样，比如 3、5-8、2,7）；PDF 的段就是页，PPT 是张。在文件里找的不填，找的词在 limits")
 
     @field_validator("title")
     @classmethod
