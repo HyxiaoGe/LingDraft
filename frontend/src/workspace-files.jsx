@@ -12,7 +12,7 @@ import { Badge as FileBadge, SentFile, fileFacts, partUnit } from "./files.jsx";
 import { IconDownload, IconFolder, Spinner } from "./icons.jsx";
 import { Viewer, drawn, imageAlt, imageFileName, imageUrl, imagesOf } from "./images.jsx";
 import { Markdown } from "./markdown.jsx";
-import { NavContext } from "./nav.jsx";
+import { NavContext, typeNext } from "./nav.jsx";
 import { mergeItems } from "./research.js";
 import pstyles from "./artifact.module.css";
 import styles from "./workspace-files.module.css";
@@ -101,7 +101,7 @@ export function FileList({ tid, st, live, title, onNav, onClose, focus }) {
       </div>
       {viewing && (
         <Viewer img={{ ...viewing.it.img, alt: viewing.it.alt }} src={imageUrl(tid, viewing.it.img)} download={viewing.it.name}
-          onClose={() => { viewing.back?.focus(); setViewing(null); }} />
+          onClose={() => { typeNext(viewing.back); setViewing(null); }} />
       )}
     </PanelShell>
   );

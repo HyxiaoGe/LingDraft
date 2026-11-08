@@ -9,15 +9,14 @@ import { FileCard, fileFacts } from "./files.jsx";
 import { IconArrowDown, IconArrowUp, IconBulb, IconCheck, IconChevron, IconClip, IconClose, IconInsert, IconLock, IconStop, IconUndo, IconWarn, Spinner } from "./icons.jsx";
 import { Viewer } from "./images.jsx";
 import { useLayer } from "./layers.js";
-import { NavContext, byKeyboard, touch } from "./nav.jsx";
+import { NavContext, byKeyboard, touch, typeNext } from "./nav.jsx";
 import { QUEUED, creditsLeft, creditsLine, loginLine } from "./research.js";
 import { ImageError, MAX_FILES, MAX_IMAGES, fileErrorText, fileShortError, isImage, prepareImage, tooBig } from "./upload.js";
 import styles from "./composer.module.css";
 import menu from "./menu.module.css";
 import sheet from "./sheet.module.css";
 
-// 临时的输入框（改这句话、左栏改名）关掉以后，光标回到对话的输入框（等它从页面上撤掉再放）
-export const focusInput = () => setTimeout(() => dispatchEvent(new Event("ws-focus-input")));
+export { focusInput, typeNext } from "./nav.jsx"; // 光标回输入框（见 nav.jsx），输入框自己听 ws-focus-input
 
 // 把图、文件交给输入框，当成选了这些（拖进对话区松手；图上的“改这张”见 images.jsx，发的是同一个事件，detail 是一个或一组）
 const attachImage = (files) => dispatchEvent(new CustomEvent("ws-attach-image", { detail: files }));
@@ -410,7 +409,7 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
     };
   }, []);
   useEffect(() => {
-    const back = () => focus(false);
+    const back = (e) => focus(!!e.detail);
     // 切去别的窗口、标签页再回来（2026-11-07 Sean 要的）：光标没在哪儿，或者只是点了正文停在某一轮上，就放回输入框，回来接着打字。
     // 选着字、开着弹窗、光标在别的输入框或按钮链接上时不动；触屏不放（免得自己弹出键盘，见 focus）。等浏览器先把原来的焦点还回去再看
     const ret = () => setTimeout(() => {
@@ -601,7 +600,7 @@ function Attachments({ list, docs, onRemove, onRemoveDoc }) {
           onRemove={() => onRemoveDoc(d.key)} />
       ))}
       {pending && <span className="min-w-0 text-[12px] leading-[1.5] text-muted phone:flex-none phone:whitespace-nowrap" role="status">正在处理图片…</span>}
-      {viewing && <Viewer img={{ alt: "要发的图" }} src={viewing.url} onClose={() => { viewing.back.focus(); setViewing(null); }} />}
+      {viewing && <Viewer img={{ alt: "要发的图" }} src={viewing.url} onClose={() => { typeNext(viewing.back); setViewing(null); }} />}
     </div>
   );
 }

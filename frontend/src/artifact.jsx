@@ -211,7 +211,8 @@ export function PanelShell({ label, title, badge, facts, acts, onBack, onClose, 
   const mobile = !!useContext(NavContext)?.mobile;
   const titleRef = useRef(null);
   useEffect(() => { if (focus) titleRef.current?.focus({ preventScroll: true }); }, [focus]);
-  useLayer(mobile, onBack || onClose); // 手机全屏时 Esc（外接键盘）退一步；桌面上 Esc 留给停止回答
+  // Esc：桌面上收起右栏；手机全屏时（外接键盘）退一步。右栏算一层（见 layers.js）：开着时 Esc 先收它，收了再按才停止回答
+  useLayer(true, mobile ? onBack || onClose : onClose);
   return (
     <aside className={styles.panel} aria-label={label} data-mobile={mobile || undefined}>
       <header className={styles.head}>

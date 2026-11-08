@@ -19,7 +19,7 @@ import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
 import { Markdown } from "./markdown.jsx";
 import { ActionMenu } from "./menu.jsx";
-import { HeadBar, NavContext, touch } from "./nav.jsx";
+import { HeadBar, NavContext, touch, typeNext } from "./nav.jsx";
 import proc from "./process.module.css";
 import { ACTIVE, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
@@ -603,7 +603,7 @@ function UserImage({ img, src, n, square }) {
           <img src={src} alt={n ? `发的第 ${n} 张图` : "发的图"} onError={() => setFailed(true)} />
         </button>
       )}
-      {viewing && <Viewer img={{ alt: "发的图" }} src={src} onClose={() => { viewing.focus(); setViewing(null); }} />}
+      {viewing && <Viewer img={{ alt: "发的图" }} src={src} onClose={() => { typeNext(viewing); setViewing(null); }} />}
     </div>
   );
 }
@@ -755,7 +755,7 @@ function ProcItems({ items, st, nums, running, hideUnknown = false, versions }) 
   const files = items.some((i) => i.kind === "file") ? fileIndex(st?.turns) : null; // 读文件那一步对上文件名、类型
   return items.map((it) => (it.type === "step" ? (it.kind === "task" ? <TaskCard key={`step:${it.id}`} s={it} st={st} nums={nums} running={running} />
     : <ToolRow key={`step:${it.id}`} s={it} running={running} files={files} versions={versions} />)
-    : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} running={running} thinking={running && it.live && it.ms == null} />
+    : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} thinking={running && it.live && it.ms == null} />
       : it.type === "blocked" ? <div key={`blocked:${it.id}`} className={proc.tool + " " + proc.bad}><IconWarn size={12} /><span className={proc.main}>内容审核没通过，这个子任务停在这里</span></div>
         : it.type === "guide" ? <GuideNote key={`guide:${it.id}`} it={it} />
           : <ProcText key={`text:${it.id}`} it={it} cite={cite} />));
@@ -927,11 +927,11 @@ function useMd(it) {
   return [it.live || typing ? tidyTyping(shown) : cutPartialCite(shown), typing];
 }
 
-// 思考：逐字出现。这一轮在跑时展开，想完的那段不收（跑着的时候收起来页面会往回缩、跳一下）；这一轮跑完就收成一行（过程不收）：
-// 思考往往很长，开着把回答推远。重新打开的对话里也收着，点开看原文
-function Thinking({ it, running, thinking }) {
+// 思考：逐字出现。正在想的时候展开，想完这一段、字也放完了就收成一行（2026-11-09 Sean 定，不等这一轮跑完）：思考往往很长，开着把回答推远。
+// 重新打开的对话里也收着，点开看原文；自己点开、收起的照点的来
+function Thinking({ it, thinking }) {
   const text = useTyped(`thinking:${it.id}`, it.text, it.live, false);
-  const [shown, toggle, found] = useFoldOpen(`thinking:${it.id}`, running, false);
+  const [shown, toggle, found] = useFoldOpen(`thinking:${it.id}`, thinking || text.length < it.text.length, false);
   const box = useRef(null);
   useLayoutEffect(() => { // 正在想的时候框里跟着最新的字
     if (thinking && box.current) box.current.scrollTop = box.current.scrollHeight;
