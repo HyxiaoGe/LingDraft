@@ -42,7 +42,7 @@ export const imageUrl = (tid, img) => `/api/research/threads/${encodeURIComponen
 const EXTENSIONS = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
 
 // 下载的文件名带上对话标题、是这段对话的第几张（批次 G 第 50 条）：“北京秋天的海报-2.png”。文件名里不能有的字符换成空格，太长截短；还没有标题的叫“灵稿的图”
-function imageFileName(title, n, mime) {
+export function imageFileName(title, n, mime) {
   const base = title && title !== "新对话" ? title.replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim() : "";
   const short = Array.from(base).slice(0, 40).join("").trim(); // 按字数截，不把表情这类两个码元的字切成半个
   return `${short || "灵稿的图"}-${n}.${EXTENSIONS[mime] || "png"}`;
@@ -50,7 +50,7 @@ function imageFileName(title, n, mime) {
 
 // 图片的替代文字（读屏念的）：描述开头一句、最多 40 字，不把整段描述当图片说明念一遍；整段在“查看描述”里
 const ALT_MAX = 40;
-function imageAlt(prompt) {
+export function imageAlt(prompt) {
   const first = (prompt || "").trim().split(/(?<=[。！？!?；;])|\n|(?<=\.)\s/)[0].trim();
   const text = Array.from(first);
   return text.length ? `生成的图：${text.length > ALT_MAX ? text.slice(0, ALT_MAX).join("") + "…" : first}` : "生成的图";
@@ -179,15 +179,21 @@ function ImageCard({ img, src, name, onOpen, onRegenerate }) {
 }
 
 // 看大图：盖住整个页面，点空白处、按 Esc 或点关闭都收起。光标先放到关闭按钮上，Esc 收的是这一层，不会去停止回答。
-// 挂到页面最外层：放在缩略图里会吃到缩略图的样式（铺满裁切），大图只剩中间一截
-export function Viewer({ img, src, onClose }) {
+// 挂到页面最外层：放在缩略图里会吃到缩略图的样式（铺满裁切），大图只剩中间一截。
+// download：下载的文件名，给了右上角关闭旁边多一个下载（文件列表里点开的；对话里图片卡片上本来就有下载）
+export function Viewer({ img, src, onClose, download }) {
   const close = useRef(null);
   useEffect(() => { close.current?.focus(); }, []);
   useLayer(true, onClose);
   return createPortal(
     <div className={styles.viewer} role="dialog" aria-modal="true" aria-label="图片" onClick={onClose}>
       <img src={src} alt={img.alt ?? imageAlt(img.prompt)} onClick={(e) => e.stopPropagation()} />
-      <button ref={close} className={styles.close} aria-label="关闭" onClick={onClose}><IconClose size={20} /></button>
+      <div className={styles.viewerActs}>
+        {download && (
+          <a className={styles.close} href={src} download={download} aria-label="下载" title="下载" onClick={(e) => e.stopPropagation()}><IconDownload size={20} /></a>
+        )}
+        <button ref={close} className={styles.close} aria-label="关闭" onClick={onClose}><IconClose size={20} /></button>
+      </div>
     </div>,
     document.querySelector(".ws") || document.body,
   );

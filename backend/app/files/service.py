@@ -1,5 +1,6 @@
 """上传的文件：传上来、后台解析、发消息时绑到对话、删对话一起删（2026-11-08 Sean 定，见 docs/图片和文件理解方案.md 的“二、文件”）。
 模型写的文件（Artifact）也在这里存：一版一行、不用解析（见 write、app.tools.write_file）。
+图片（用户发的、画的）在 image-service 里，这里只登记（add_image）：这段对话有哪些图以表为准，取图时认是不是这段对话的（image_in）。
 
 - 上传是单独的接口，不经过对话的运行器：存好原件、记一行就回编号，解析排进后台（一次一个，在单独的子进程里，有超时），页面问状态。
   模型正在回答时也能传，别的对话不受影响；要等的只是这句话本身（页面上有文件还在解析，发送按钮先不能点）。
@@ -26,7 +27,7 @@ from typing import Any
 from app import config
 from app.files import artifacts, parse
 from app.files.parse import OUTLINE_MAX, Part, Unreadable
-from app.files.store import FAILED, GENERATED, PARSING, READY, FileRow, FileStore
+from app.files.store import DOCUMENT, FAILED, GENERATED, IMAGE, PARSING, READY, UPLOAD, FileRow, FileStore
 from app.graph.research.history import MAX_FILES
 from app.graph.research.state import AttachedFile
 from app.quota import day_start
@@ -36,6 +37,7 @@ log = logging.getLogger(__name__)
 UNBOUND_TTL = timedelta(days=1)  # 传上来、一直没发出去的，过这么久清掉
 SWEEP_S = 3600
 CACHE_CHARS = 8_000_000  # 给模型的文字在内存里最多缓存这么多字（上传的原件不会变，一段对话每次调模型都要）
+PREVIEW_CHARS = 200_000  # 右栏预览用户发的文件最多给这么多字，再多的页面让下载原件看（大约 100 页的书）
 TOO_COMPLEX = "文件太复杂，读不了"
 NOT_READ = "文件没读成，请重新上传"
 NAME_MAX = 120
@@ -236,10 +238,44 @@ class FileService:
     async def original(self, fid: str, workspace_id: str) -> tuple[Path, FileRow] | None:
         """这段对话里的文件的原件（下载）。"""
         row = await self.store.get(fid)
-        if row is None or row.workspace_id != workspace_id:
+        if row is None or row.workspace_id != workspace_id or row.kind != DOCUMENT:
             return None
         path = self.root / row.storage
         return (path, row) if path.exists() else None
+
+    async def preview(self, fid: str, workspace_id: str) -> tuple[FileRow, list[Part], bool] | None:
+        """这段对话里用户发的文件抽出来的文字（页面右栏预览）：那一行、前面的段落（加起来不超过 PREVIEW_CHARS 字，至少一段）、
+        后面还有没有。不是这段对话的、还没解析好的是 None。"""
+        got = await self.content(fid)
+        if got is None or got[0].workspace_id != workspace_id or got[0].kind != DOCUMENT:
+            return None
+        row, parts = got
+        shown, size = [], 0
+        for p in parts:
+            if shown and size + len(p.text) > PREVIEW_CHARS:
+                break
+            shown.append(p)
+            size += len(p.text)
+        return row, shown, len(shown) < len(parts)
+
+    # ---- 图片：只登记，图在 image-service 里 ----
+
+    async def add_image(self, image_id: str, *, owner: str, workspace_id: str, generated: bool, turn_id: str | None,
+                        mime_type: str, width: int, height: int) -> bool:
+        """一张图登记进文件表：用户发的（发出去时）、画好的（画好时，turn_id 是哪一轮）。行的编号就是图的编号，页面、模型认的都是它。
+        已经登记过的不再记（补登记可以重跑），返回这次记了没有。"""
+        if await self.store.get(image_id) is not None:
+            return False
+        ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}.get(mime_type, "png")
+        await self.store.add(FileRow(id=image_id, owner=owner, workspace_id=workspace_id, origin=GENERATED if generated else UPLOAD, kind=IMAGE,
+                                     name=f"{'生成的图' if generated else '发的图'}.{ext}", type=ext, size=0, storage=image_id, status=READY,
+                                     meta={"mime_type": mime_type, "width": width, "height": height}, turn_id=turn_id if generated else None))
+        return True
+
+    async def image_in(self, image_id: str, workspace_id: str) -> bool:
+        """这张图是不是这段对话的（取图时认）。"""
+        row = await self.store.get(image_id)
+        return row is not None and row.kind == IMAGE and row.workspace_id == workspace_id
 
     # ---- 对话 ----
 
@@ -312,11 +348,12 @@ class FileService:
 
     async def discard(self, fid: str) -> None:
         """同一轮里模型又改了这一轮刚写的那版（见 app.tools.write_file）：那一版作废，行、文字、原件一起删。"""
-        if (row := await self.store.get(fid)) is not None and row.origin == GENERATED:
+        if (row := await self.store.get(fid)) is not None and row.origin == GENERATED and row.kind == DOCUMENT:
             await self._drop([row])
 
     async def delete_turn(self, workspace_id: str, turn_id: str) -> int:
-        """重新回答、改了那句话：那一轮写的各版都删掉（连同进程崩掉时写了、对话里没记下的），返回删了几个。"""
+        """重新回答、改了那句话：那一轮写的各版、画的图（登记的行；图本身由调用的地方从 image-service 删）都删掉
+        （连同进程崩掉时写了、对话里没记下的），返回删了几行。用户那句话带的图、文件留着。"""
         rows = [r for r in await self.store.of_workspace(workspace_id) if r.origin == GENERATED and r.turn_id == turn_id]
         await self._drop(rows)
         return len(rows)
@@ -326,10 +363,11 @@ class FileService:
         for r in rows:
             if (got := self._cache.pop(r.id, None)) is not None:
                 self._cached -= sum(len(p.text) for p in got[1])
-            await asyncio.to_thread(self._unlink, r.storage)
+            if r.kind == DOCUMENT:  # 图不在数据卷上
+                await asyncio.to_thread(self._unlink, r.storage)
 
     async def delete_workspace(self, workspace_id: str) -> None:
-        """删对话：这段对话的文件、文字、原件一起删。原件没删掉只记日志（没人指着，只占磁盘）。"""
+        """删对话：这段对话的文件、文字、原件、图的登记一起删。原件没删掉只记日志（没人指着，只占磁盘）。"""
         await self._drop(await self.store.of_workspace(workspace_id))
 
     # ---- 清理 ----

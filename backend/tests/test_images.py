@@ -9,6 +9,8 @@ import json
 import threading
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
@@ -19,6 +21,9 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from PIL import Image
 
 from app import aio
+from app.files.backfill_images import register_images
+from app.files.service import FileService
+from app.files.store import MemoryFileStore
 from app.api import main as api_main
 from app.api.research_runner import ResearchRunner
 from app.graph.research import history, prompts
@@ -463,10 +468,56 @@ def test_edit_and_regenerate_keep_the_attached_image_and_delete_removes_it():
     assert turn["user"] == "改图：加一顶帽子" and [i["id"] for i in turn["images"]] == [uid]  # 只改了字，图留着
     drawn = _image_steps(turn)[0]["image"]
     assert drawn["edited_from"] == uid
+    row = lambda i: aio.run(rr.files.store.get(i))  # noqa: E731
+    sent, made = row(uid), row(drawn["id"])  # 发的、画的都登记进文件表：画的记在这一轮下
+    assert (sent.kind, sent.origin, sent.workspace_id, sent.turn_id, sent.meta["width"]) == ("image", "upload", tid, None, 64)
+    assert (made.kind, made.origin, made.workspace_id) == ("image", "generated", tid)
+    assert made.turn_id == rr.graph.get_state(rr._cfg(tid)).values["messages"][0].id
     last(events(client.post(f"/api/research/threads/{tid}/regenerate")), "state")
     assert drawn["id"] in service.deleted and uid not in service.deleted  # 重新回答：画的那张不要了，发的那张留着
+    assert row(drawn["id"]) is None and row(uid) is not None
+    assert client.get(f"/api/research/threads/{tid}/images/{drawn['id']}").status_code == 404
     assert client.delete(f"/api/research/threads/{tid}").status_code == 200
-    assert uid in service.deleted and service.made == {}
+    assert uid in service.deleted and service.made == {} and row(uid) is None
+
+
+def test_images_are_only_served_from_their_own_conversation():
+    """取图按文件表认是不是这段对话的：换一段对话的编号取不到。发的图不算进每天上传文件的次数。"""
+    rr, client = _api()
+    tid = last(events(_send(client, "/api/research/threads", "直接答：看看", _photo())), "state")["thread_id"]
+    (uid,) = rr.planner.images.uploaded
+    v = new(client, "画一只猫")
+    drawn = next(i["image"] for t in v["turns"] for i in t["items"] if i["type"] == "step" and i.get("image"))
+    for image_id, own, other in ((uid, tid, v["thread_id"]), (drawn["id"], v["thread_id"], tid)):
+        assert client.get(f"/api/research/threads/{own}/images/{image_id}").status_code == 200
+        assert client.get(f"/api/research/threads/{other}/images/{image_id}").status_code == 404
+    owner = aio.run(rr.files.store.get(uid)).owner
+    assert aio.run(rr.files.store.uploads_since(owner, datetime.now(UTC) - timedelta(days=1))) == 0
+
+
+def test_backfill_registers_old_images_once():
+    """以前的对话补登记（app.files.backfill_images）：发的、画好的都记上，画的记在画它的那一轮；以前灵稿自己存的图不记；重跑不重复。"""
+    sent = {"id": str(uuid.uuid4()), "mime_type": "image/jpeg", "width": 30, "height": 40}
+    made = {**OLD_IMAGE, "id": str(uuid.uuid4()), "file": None}
+    first = HumanMessage(content="改图", id="h1", additional_kwargs={history.ATTACHED: [sent]})
+    second = HumanMessage(content="再画", id="h2")
+    guide = HumanMessage(content="插一句", id="g1", additional_kwargs={history.GUIDE: True})
+    drawn = ToolMessage(content="", tool_call_id="c1", name="generate_image", artifact={"attempted": True, "image": made})
+    old = ToolMessage(content="", tool_call_id="c0", name="generate_image", artifact={"attempted": True, "image": OLD_IMAGE})
+    files = FileService(MemoryFileStore(), Path("/nonexistent"))
+
+    async def go():
+        msgs = [first, old, second, guide, drawn]
+        assert await register_images(files, "t1", "u1", msgs, write=False) == (2, 2)
+        assert await files.store.get(sent["id"]) is None  # 只数不写
+        assert await register_images(files, "t1", "u1", msgs, write=True) == (2, 2)
+        assert await register_images(files, "t1", "u1", msgs, write=True) == (0, 2)
+        a, b = await files.store.get(sent["id"]), await files.store.get(made["id"])
+        assert (a.origin, a.turn_id, a.owner, a.workspace_id) == ("upload", None, "u1", "t1")
+        assert (b.origin, b.turn_id, b.name) == ("generated", "h2", "生成的图.png")
+        assert await files.image_in(made["id"], "t1") and not await files.image_in(made["id"], "t2")
+
+    aio.run(go())
 
 
 def test_images_the_service_does_not_take_never_start_a_turn():

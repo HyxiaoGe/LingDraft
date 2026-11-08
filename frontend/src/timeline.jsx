@@ -12,6 +12,7 @@ import { FileCards, fileVersions, turnCards } from "./artifact.jsx";
 import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelIcon, ModelTools, Pending, enterSends, focusInput, useAutoHeight, useImageDrop } from "./composer.jsx";
 import { failureText } from "./errors.js";
 import { SentFiles, fileIndex, partUnit } from "./files.jsx";
+import { FilesButton, workspaceFiles } from "./workspace-files.jsx";
 import { IconBook, IconCheck, IconChevron, IconClip, IconCloudSun, IconCopy, IconDownload, IconEdit, IconEye, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, IconWrite, Spinner } from "./icons.jsx";
 import { ImageCards, Viewer, drawn, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
@@ -239,7 +240,10 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   return (
     <section ref={mainRef} className={styles.main} data-fresh={fresh || undefined} aria-label="对话">
       <HeadBar title={fresh ? "新对话" : title} edit={edit}
-        end={<>{index && !rail && <TurnIndexButton entries={entries} scroller={scrollRef} onJump={jumpTo} />}{headMenu}</>} />
+        end={<>
+          {files && !fresh && !opening && <FilesButton count={workspaceFiles(st, live, title).count} on={!!files.current?.list} onClick={files.toggle} />}
+          {index && !rail && <TurnIndexButton entries={entries} scroller={scrollRef} onJump={jumpTo} />}{headMenu}
+        </>} />
       {menuAt && manageable && <ActionMenu label="这段对话的操作" anchor={menuAt} mobile={mobile} items={menuItems} note={menuNote} onClose={closeMenu} />}
       <div className={styles.scroll} data-scroll ref={scrollRef}
         onScroll={(e) => {
@@ -534,7 +538,7 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
   return (
     <>
       {t.user && <UserMsg text={live?.edit ?? t.user} images={userImages(t, live, st?.thread_id)} files={t.localFiles || t.files || []} tid={t.localFiles ? null : st?.thread_id}
-        at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && idle} onEdit={act.edit} />}
+        panel={files} at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && idle} onEdit={act.edit} />}
       <div className={styles.ai}>
         {who && <div className={styles.aiHead}><ModelIcon m={{ model: ref, name: who, icon: named?.icon }} size={22} />{who}</div>}
         {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} versions={versions} />}
@@ -605,15 +609,15 @@ function UserImage({ img, src, n, square }) {
 }
 
 // 用户说的话：下面是发送时间和“复制”，最后一句在空闲时还有“编辑”。都一直显示，pinned（最后一轮）以外的淡一档
-// files：这句话带的文件（点了下载原件，tid 是对话编号；刚发出去还没存下来的没有 tid，先不能点）
-function UserMsg({ text, images, files, tid, at, pinned, now, editable, onEdit }) {
+// files：这句话带的文件（点了在右栏看，panel 是右栏；tid 是对话编号，刚发出去还没存下来的没有 tid，先不能点）
+function UserMsg({ text, images, files, tid, panel, at, pinned, now, editable, onEdit }) {
   const [editing, setEditing] = useState(false);
   useEffect(() => { if (!editable) setEditing(false); }, [editable]); // 开着编辑框时这一轮又跑起来了（点了重新回答、推荐问题），编辑框就收起
   if (editing && editable) return <EditBox text={text} onCancel={() => { setEditing(false); focusInput(); }} onSend={(t) => { setEditing(false); onEdit(t); }} />;
   return (
     <div className={styles.user}>
       {images.length > 0 && <UserImages list={images} />}
-      {files.length > 0 && <SentFiles files={files} tid={tid} />}
+      {files.length > 0 && <SentFiles files={files} tid={tid} panel={panel} />}
       <Bubble text={text} />
       <div className={styles.userFoot + (pinned ? " " + styles.pinned : "")}>
         <Stamp iso={at} now={now} />

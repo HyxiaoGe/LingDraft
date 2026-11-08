@@ -553,6 +553,26 @@ def test_download_the_original_only_from_its_conversation():
     assert theirs.get(f"/api/research/threads/{v['thread_id']}/files/{f['id']}").status_code == 404
 
 
+def test_preview_gives_the_text_by_part_and_cuts_long_files(monkeypatch):
+    """右栏预览用户发的文件：抽出来的文字按段给（PDF 一页一段）；太长的只给前面几段（至少一段），more 说后面还有。
+    别的对话、别人的对话、没有的都 404。"""
+    rr, client = _api()
+    f = _upload(rr, client, "合同.pdf", make_pdf(["Page one", "Page two"]))
+    tid = _new(client, "直接答：收到", [f["id"]])["thread_id"]
+    url = f"/api/research/threads/{tid}/files/{f['id']}/parts"
+    got = client.get(url).json()
+    assert got == {"id": f["id"], "name": "合同.pdf", "type": "pdf", "more": False,
+                   "parts": [{"title": "第 1 页", "text": "Page one"}, {"title": "第 2 页", "text": "Page two"}]}
+    monkeypatch.setattr(file_service, "PREVIEW_CHARS", 3)
+    got = client.get(url).json()
+    assert [p["title"] for p in got["parts"]] == ["第 1 页"] and got["more"]
+    other = _new(client, "直接答：别的", [])["thread_id"]
+    assert client.get(f"/api/research/threads/{other}/files/{f['id']}/parts").status_code == 404
+    assert client.get(f"/api/research/threads/{tid}/files/file-0000000000000000/parts").status_code == 404
+    theirs = TestClient(api_main.app, headers=bearer(user_token("u2")))
+    assert theirs.get(url).status_code == 404
+
+
 def test_edit_and_regenerate_keep_the_files_and_delete_removes_them():
     rr, client = _api()
     f = _upload(rr, client, "a.txt", b"hello world")

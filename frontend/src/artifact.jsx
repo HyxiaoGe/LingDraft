@@ -5,20 +5,22 @@
 // 边写边出现：用户在桌面上看着这一轮生成时自动打开、跟着出字（见 workspace.jsx 的 onEvent，判断记在那里，不跟着组件切换丢掉）；
 // 翻历史、刷新以后不自动打开。只能看：不能直接改、不能恢复旧版、不做对比（2026-11-08 Sean 定第一批先不做）
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { threadFileText } from "./api.js";
 import { CodeBlock } from "./code-block.jsx";
-import { IconBack, IconCheck, IconClose, IconCopy, IconDownload, IconQuote, IconWarn, Spinner } from "./icons.jsx";
+import { IconBack, IconCheck, IconChevron, IconClose, IconCopy, IconDownload, IconQuote, IconWarn, Spinner } from "./icons.jsx";
 import { useLayer } from "./layers.js";
 import { Markdown } from "./markdown.jsx";
 import { NavContext } from "./nav.jsx";
 import { CITE, citeNumbers, copyText, itemKey, num, sourceName, tidyTyping } from "./research.js";
+import { Sheet } from "./sheet.jsx";
 import { AnswerSources, Mark } from "./sources.jsx";
 import styles from "./artifact.module.css";
 
 const ext = (name) => (/\.([A-Za-z0-9]{1,8})$/.exec(name || "")?.[1] || "").toLowerCase();
 // 角标上的字：文档 MD、网页 HTML，代码写扩展名（最多 4 个字母）
 const badgeText = (type, name) => (type === "markdown" ? "MD" : type === "html" ? "HTML" : (ext(name) || "code").slice(0, 4).toUpperCase());
-function Badge({ type, name, busy }) {
+export function Badge({ type, name, busy }) {
   if (busy) return <span className={styles.badge} data-kind="busy" aria-hidden="true"><Spinner size={14} /></span>;
   return <span className={styles.badge} data-kind={type || "markdown"} aria-hidden="true">{badgeText(type, name)}</span>;
 }
@@ -80,10 +82,10 @@ export function turnCards(items, drafts, versions) {
   return [...cards.values()];
 }
 
-// 正文下面的文件卡片。open(目标)：在右栏打开；current：右栏正开着的（那张标出来）
-export function FileCards({ cards, running, open, current }) {
+// 正文下面的文件卡片。open(目标)：在右栏打开；current：右栏正开着的（那张标出来）；wide：右栏文件列表里的（铺满那一栏）
+export function FileCards({ cards, running, open, current, wide = false }) {
   if (!cards.length) return null;
-  return <div className={styles.cards}>{cards.map((c) => <Card key={c.key} c={c} running={running} open={open} current={current} />)}</div>;
+  return <div className={styles.cards + (wide ? " " + styles.wide : "")}>{cards.map((c) => <Card key={c.key} c={c} running={running} open={open} current={current} />)}</div>;
 }
 
 function Card({ c, running, open, current }) {
@@ -178,7 +180,7 @@ export function quoteText(title, text) {
 }
 
 // 右栏里选中的字（只认正文区里的，网页预览在 iframe 里选不到）：{text, top, left}，位置是相对正文区内容的
-function useSelected(ref, enabled) {
+export function useSelected(ref, enabled) {
   const [sel, setSel] = useState(null);
   useEffect(() => {
     setSel(null);
@@ -203,9 +205,166 @@ function useSelected(ref, enabled) {
 
 const TYPE_LABEL = { markdown: "文档", html: "网页", code: "代码" };
 
-// 右栏。target：开着的是什么（见 resolve）；onTarget：换一版；onClose：关上。tid、st、live 是这段对话的
-// focus：用户点开的（不是自动打开的）每次加一，光标挪到右栏的标题上，键盘、读屏接着从这里读
-export function FilePanel({ tid, st, live, target, onTarget, onClose, focus }) {
+// 右栏的外框和顶上一条（模型写的文件、用户发的文件、文件列表都用）：左边返回（手机上总有，回对话；从文件列表点开的回列表，桌面上也有），
+// 角标、标题和第二行（facts），右边是各自的按钮（acts）和关闭（桌面）。focus：用户点开的每次加一，光标挪到标题上，键盘、读屏接着从这里读
+export function PanelShell({ label, title, badge, facts, acts, onBack, onClose, focus, children }) {
+  const mobile = !!useContext(NavContext)?.mobile;
+  const titleRef = useRef(null);
+  useEffect(() => { if (focus) titleRef.current?.focus({ preventScroll: true }); }, [focus]);
+  useLayer(mobile, onBack || onClose); // 手机全屏时 Esc（外接键盘）退一步；桌面上 Esc 留给停止回答
+  return (
+    <aside className={styles.panel} aria-label={label} data-mobile={mobile || undefined}>
+      <header className={styles.head}>
+        {(mobile || onBack) && (
+          <button className="ws-icon-btn" aria-label={onBack ? "返回文件列表" : "返回对话"} title={onBack ? "返回文件列表" : undefined} onClick={onBack || onClose}>
+            <IconBack size={mobile ? 20 : 18} />
+          </button>
+        )}
+        {badge}
+        <div className={styles.headText}>
+          <h2 ref={titleRef} tabIndex={-1} className={styles.title} title={title}>{title}</h2>
+          {facts && <div className={styles.facts}>{facts}</div>}
+        </div>
+        <div className={styles.acts}>
+          {acts}
+          {!mobile && <button className="ws-icon-btn" aria-label="关闭" title="关闭" onClick={onClose}><IconClose size={17} /></button>}
+        </div>
+      </header>
+      {children}
+    </aside>
+  );
+}
+
+// 复制按钮：点了两秒内说复制成了没有。text 为空（还没写完、没取到）时点不了
+export function CopyAll({ text, reset }) {
+  const [copied, setCopied] = useState(null);
+  useEffect(() => setCopied(null), [reset]);
+  const copy = async () => {
+    try {
+      await copyText(text);
+      setCopied("ok");
+    } catch {
+      setCopied("fail");
+    }
+    setTimeout(() => setCopied(null), 2000);
+  };
+  const label = copied === "ok" ? "已复制" : copied === "fail" ? "没复制成" : "复制全文";
+  return (
+    <button className="ws-icon-btn" aria-label={label} title={label} disabled={!text} onClick={copy}>
+      {copied === "ok" ? <IconCheck size={17} /> : <IconCopy size={17} />}
+    </button>
+  );
+}
+
+// 选中一段后的“引用到输入框”：桌面上在选区下面，手机上是底部一条（引用完收起右栏，接着在输入框里写）
+export function QuoteButton({ sel, title, onDone }) {
+  const mobile = !!useContext(NavContext)?.mobile;
+  if (!sel) return null;
+  const quote = () => {
+    dispatchEvent(new CustomEvent("ws-quote", { detail: quoteText(title, sel.text) }));
+    getSelection()?.removeAllRanges();
+    if (mobile) onDone();
+  };
+  return (
+    <button className={styles.quote + (mobile ? " " + styles.quoteBar : "")} style={mobile ? undefined : { top: sel.top, left: sel.left }}
+      onPointerDown={(e) => e.preventDefault()} onClick={quote}>
+      <IconQuote size={14} />引用到输入框
+    </button>
+  );
+}
+
+// 换一版：顶上第二行一个按钮（第几版 · 这版改了什么），点开列出各版（新的在上），当前那版打勾。
+// 桌面是按钮下面的小浮层（上下键走、回车选、Esc 收起回到按钮）；手机是底部弹层，一行够高
+function VersionPick({ list, current, onPick }) {
+  const mobile = !!useContext(NavContext)?.mobile;
+  const [open, setOpen] = useState(false);
+  const btn = useRef(null);
+  const newest = list.at(-1);
+  const label = `第 ${current.version} 版${current.id === newest.id ? "（最新）" : ""}`;
+  const close = (refocus) => {
+    setOpen(false);
+    if (refocus) btn.current?.focus({ preventScroll: true });
+  };
+  const pick = (f) => {
+    close(!mobile); // 手机上弹层收起时自己把焦点还给按钮
+    if (f.id !== current.id) onPick(f);
+  };
+  const rows = (
+    <div className={styles.verList} role="menu" aria-label="看哪一版" onKeyDown={arrows}>
+      {[...list].reverse().map((f) => (
+        <button key={f.id} role="menuitemradio" aria-checked={f.id === current.id} className={styles.verRow} onClick={() => pick(f)}>
+          <span className={styles.verMain}>
+            <span className={styles.verName}>第 {f.version} 版{f.id === newest.id && <span className={styles.newest}>最新</span>}</span>
+            {f.note && <small className={styles.verNote}>{f.note}</small>}
+          </span>
+          {f.id === current.id && <IconCheck size={15} />}
+        </button>
+      ))}
+    </div>
+  );
+  return (
+    <>
+      <button ref={btn} className={styles.verBtn} aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={open} title={current.note || undefined}
+        onClick={() => setOpen(!open)}>
+        <span className={styles.verText}>{label}{current.note ? ` · ${current.note}` : ""}</span>
+        <IconChevron size={13} />
+      </button>
+      {open && (mobile
+        ? createPortal(<Sheet title="看哪一版" onClose={() => close(false)}>{rows}</Sheet>, document.querySelector(".ws") || document.body)
+        : <VersionMenu anchor={btn} onClose={close}>{rows}</VersionMenu>)}
+    </>
+  );
+}
+
+// 上下键在各版之间走，Home、End 到头尾
+function arrows(e) {
+  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+  const els = [...e.currentTarget.querySelectorAll("button")];
+  const i = els.indexOf(document.activeElement);
+  const n = els.length;
+  e.preventDefault();
+  els[e.key === "Home" ? 0 : e.key === "End" ? n - 1 : (i + (e.key === "ArrowDown" ? 1 : n - 1)) % n]?.focus();
+}
+
+// 桌面上的小浮层：挂在页面最外层（右栏的头一条 overflow 是藏起来的），按按钮的位置放在它下面；放不下往左挪，太长里面滚。
+// 点别处、窗口变了收起；Esc 收起、光标回到按钮；Tab 走出去也收起
+function VersionMenu({ anchor, onClose, children }) {
+  const box = useRef(null);
+  const closing = useRef(onClose);
+  closing.current = onClose;
+  const [pos, setPos] = useState(null);
+  useLayoutEffect(() => {
+    const r = anchor.current.getBoundingClientRect();
+    const width = Math.min(320, innerWidth - 16);
+    setPos({ top: r.bottom + 6, left: Math.max(8, Math.min(r.left, innerWidth - width - 8)), width, maxHeight: Math.max(160, Math.min(420, innerHeight - r.bottom - 20)) });
+  }, [anchor]);
+  const placed = !!pos;
+  useEffect(() => {
+    if (placed) (box.current.querySelector('[aria-checked="true"]') || box.current.querySelector("button"))?.focus({ preventScroll: true });
+  }, [placed]);
+  useEffect(() => {
+    const down = (e) => !box.current?.contains(e.target) && !anchor.current?.contains(e.target) && closing.current(false);
+    const resize = () => closing.current(false);
+    addEventListener("mousedown", down);
+    addEventListener("resize", resize);
+    return () => {
+      removeEventListener("mousedown", down);
+      removeEventListener("resize", resize);
+    };
+  }, [anchor]);
+  useLayer(true, () => closing.current(true));
+  return createPortal(
+    <div ref={box} className={styles.verMenu} style={pos || { visibility: "hidden" }}
+      onBlur={(e) => { if (e.relatedTarget && !box.current?.contains(e.relatedTarget) && !anchor.current?.contains(e.relatedTarget)) closing.current(false); }}>
+      {children}
+    </div>,
+    document.querySelector(".ws") || document.body,
+  );
+}
+
+// 右栏看模型写的文件。target：开着的是什么（见 resolve；back：从文件列表点开的）；onTarget：换一版；onNav：换到别的（回文件列表）；
+// onClose：关上。tid、st、live 是这段对话的；focus 见 PanelShell
+export function FilePanel({ tid, st, live, target, onTarget, onNav, onClose, focus }) {
   const mobile = !!useContext(NavContext)?.mobile;
   const versions = fileVersions(st, live);
   const r = resolve(target, st, live, versions);
@@ -224,10 +383,7 @@ export function FilePanel({ tid, st, live, target, onTarget, onClose, focus }) {
   const bodyRef = useRef(null);
   const stick = useRef(true); // 正在写：贴着底的跟着往下走，往上翻着看的不动
   const sel = useSelected(bodyRef, !(type === "html" && view === "preview" && !streaming) && text != null);
-  useLayer(mobile, onClose); // 手机全屏时 Esc（外接键盘）收起；桌面上 Esc 留给停止回答
 
-  const titleRef = useRef(null);
-  useEffect(() => { if (focus) titleRef.current?.focus({ preventScroll: true }); }, [focus]);
   // 换了文件、换了一版：回到顶上；正在写的从底下跟着
   const shownKey = target.call || `${r.series}:${target.id || ""}`;
   useLayoutEffect(() => {
@@ -242,41 +398,22 @@ export function FilePanel({ tid, st, live, target, onTarget, onClose, focus }) {
 
   const done = r.mode === "file" && fetched != null;
   const out = done ? fileExport(r.file, fetched, sources) : null;
-  const [copied, setCopied] = useState(null);
-  useEffect(() => setCopied(null), [shownId]);
-  const copy = async () => {
-    try {
-      await copyText(out);
-      setCopied("ok");
-    } catch {
-      setCopied("fail");
-    }
-    setTimeout(() => setCopied(null), 2000);
-  };
-  const quote = () => {
-    if (!sel) return;
-    dispatchEvent(new CustomEvent("ws-quote", { detail: quoteText(title, sel.text) }));
-    getSelection()?.removeAllRanges();
-    if (mobile) onClose(); // 手机上右栏盖着输入框：收起来接着写
-  };
 
-  // 顶上第二行：第几版、这版改了什么；正在写的说在写
-  let status = null;
+  // 顶上第二行：第几版、这版改了什么（几版的能换着看）；正在写的说在写
+  let facts;
   if (r.mode === "draft") {
     const editing = draft ? draft.name === "edit_file" : r.step?.edit;
     const doing = !draft ? "正在保存…" : editing ? (draft.text ? "正在重写" : `正在修改${draft.change_note ? `：${draft.change_note}` : "…"}`) : "正在写";
-    status = <span className={styles.live}><Spinner size={12} />{doing}{draft?.text ? ` · ${num(draft.text.length)} 字` : ""}</span>;
+    facts = <span className={styles.live}><Spinner size={12} />{doing}{draft?.text ? ` · ${num(draft.text.length)} 字` : ""}</span>;
   } else if (r.mode === "failed") {
-    status = <span className={styles.bad}><IconWarn size={12} />{r.step.pending ? "没有完成" : r.step.message || "没写成"}{r.base ? `，下面是第 ${r.base.version} 版` : ""}</span>;
+    facts = <span className={styles.bad}><IconWarn size={12} />{r.step.pending ? "没有完成" : r.step.message || "没写成"}{r.base ? `，下面是第 ${r.base.version} 版` : ""}</span>;
+  } else if (r.mode === "file" && r.list.length > 1) {
+    facts = <VersionPick list={r.list} current={r.file} onPick={(f) => onTarget({ series: r.series, id: f.id, back: target.back })} />;
+  } else if (r.mode === "file") {
+    facts = <span>第 {r.file.version} 版{r.file.note ? ` · ${r.file.note}` : ""}</span>;
+  } else {
+    facts = <span>{TYPE_LABEL[type]}</span>;
   }
-  const versionPick = r.mode === "file" && r.list.length > 1 && (
-    <select className={styles.version} aria-label="看哪一版" value={r.file.id} onChange={(e) => onTarget({ series: r.series, id: e.target.value })}>
-      {[...r.list].reverse().map((f, k) => (
-        <option key={f.id} value={f.id}>{`第 ${f.version} 版${k === 0 ? "（最新）" : ""}${f.note ? ` · ${f.note.slice(0, 24)}${f.note.length > 24 ? "…" : ""}` : ""}`}</option>
-      ))}
-    </select>
-  );
-  const facts = r.mode === "file" && (r.list.length > 1 ? null : <span>第 {r.file.version} 版{r.file.note ? ` · ${r.file.note}` : ""}</span>);
 
   let body;
   if (r.mode === "gone") body = <p className={styles.note}>这份文件已经不在了（重新回答时那一轮写的会一起删掉）。</p>;
@@ -294,40 +431,28 @@ export function FilePanel({ tid, st, live, target, onTarget, onClose, focus }) {
   else body = <CodeBlock lang={type === "html" ? "html" : base?.lang || ""} text={text} bare still={streaming} />;
 
   const pad = type === "markdown" || r.mode === "gone" || (r.mode === "failed" && !r.base) || error || text == null;
+  const acts = (
+    <>
+      {type === "html" && !streaming && text != null && (
+        <div className={styles.seg} role="group" aria-label="网页怎么看">
+          <button aria-pressed={view === "preview"} onClick={() => setView("preview")}>预览</button>
+          <button aria-pressed={view === "source"} onClick={() => setView("source")}>源码</button>
+        </div>
+      )}
+      <CopyAll text={out} reset={shownId} />
+      <button className="ws-icon-btn" aria-label={`下载 ${r.file?.name || ""}`} title={r.file ? `下载 ${r.file.name}` : "写完后可以下载"} disabled={!out}
+        onClick={() => save(r.file, out)}><IconDownload size={17} /></button>
+    </>
+  );
   return (
-    <aside className={styles.panel} aria-label={`文件：${title}`} data-mobile={mobile || undefined}>
-      <header className={styles.head}>
-        {mobile && <button className="ws-icon-btn" aria-label="返回对话" onClick={onClose}><IconBack size={20} /></button>}
-        <Badge type={type} name={base?.name} />
-        <div className={styles.headText}>
-          <h2 ref={titleRef} tabIndex={-1} className={styles.title} title={title}>{title}</h2>
-          <div className={styles.facts}>{status || facts || (!versionPick && <span>{TYPE_LABEL[type]}</span>)}{versionPick}</div>
-        </div>
-        <div className={styles.acts}>
-          {type === "html" && !streaming && text != null && (
-            <div className={styles.seg} role="group" aria-label="网页怎么看">
-              <button aria-pressed={view === "preview"} onClick={() => setView("preview")}>预览</button>
-              <button aria-pressed={view === "source"} onClick={() => setView("source")}>源码</button>
-            </div>
-          )}
-          <button className="ws-icon-btn" aria-label={copied === "ok" ? "已复制" : copied === "fail" ? "没复制成" : "复制全文"} title={copied === "ok" ? "已复制" : copied === "fail" ? "没复制成" : "复制全文"}
-            disabled={!out} onClick={copy}>{copied === "ok" ? <IconCheck size={17} /> : <IconCopy size={17} />}</button>
-          <button className="ws-icon-btn" aria-label={`下载 ${r.file?.name || ""}`} title={r.file ? `下载 ${r.file.name}` : "写完后可以下载"} disabled={!out}
-            onClick={() => save(r.file, out)}><IconDownload size={17} /></button>
-          {!mobile && <button className="ws-icon-btn" aria-label="关闭" title="关闭" onClick={onClose}><IconClose size={17} /></button>}
-        </div>
-      </header>
+    <PanelShell label={`文件：${title}`} title={title} badge={!mobile && <Badge type={type} name={base?.name} />} facts={facts} acts={acts}
+      onBack={target.back ? () => onNav({ list: true }) : null} onClose={onClose} focus={focus}>
       <div ref={bodyRef} className={styles.body + (pad ? " " + styles.padded : "") + (type === "html" && view === "preview" && !streaming && text != null ? " " + styles.framed : "")}
         onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60; }}>
         {body}
-        {sel && (
-          <button className={styles.quote + (mobile ? " " + styles.quoteBar : "")} style={mobile ? undefined : { top: sel.top, left: sel.left }}
-            onPointerDown={(e) => e.preventDefault()} onClick={quote}>
-            <IconQuote size={14} />引用到输入框
-          </button>
-        )}
+        <QuoteButton sel={sel} title={title} onDone={onClose} />
       </div>
-    </aside>
+    </PanelShell>
   );
 }
 

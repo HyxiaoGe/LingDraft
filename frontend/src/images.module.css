@@ -31,8 +31,11 @@
 .viewer { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 40px;
   background: rgba(16, 18, 22, .82); animation: rise .2s var(--ease); cursor: zoom-out; }
 .viewer img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--r-sm); cursor: default; box-shadow: 0 12px 48px rgba(0, 0, 0, .4); }
-.close { position: absolute; top: 14px; right: 16px; width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 99px; background: rgba(255, 255, 255, .12); color: #fff; }
+/* 右上角：关闭（文件列表里点开的还有下载）。手机上 44px、让开刘海 */
+.viewerActs { position: absolute; top: calc(14px + env(safe-area-inset-top)); right: calc(16px + env(safe-area-inset-right)); display: flex; gap: 8px; }
+.close { width: 36px; height: 36px; display: flex; align-items: center; justify-content: center; border-radius: 99px; background: rgba(255, 255, 255, .12); color: #fff; }
 @media (hover: hover) { .close:hover { background: rgba(255, 255, 255, .22); } }
+@media (max-width: 720px) { .close { width: 44px; height: 44px; } }
 @keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 
 @media (prefers-reduced-motion: reduce) {

@@ -17,6 +17,7 @@ import { Sidebar, withCurrent } from "./sidebar.jsx";
 import { MOBILE, NavContext, isSearchKey, isSideKey, useMedia } from "./nav.jsx";
 import { ACTIVE, QUEUED, addLive, itemKey, saveFile, threadMarkdown, useNow } from "./research.js";
 import { FilePanel } from "./artifact.jsx";
+import { FileList, SentPanel } from "./workspace-files.jsx";
 import { opener } from "./layers.js";
 import { useDoneAlert } from "./alert.jsx";
 import { Conversation, forgetReading } from "./timeline.jsx";
@@ -120,6 +121,13 @@ export default function Workspace() {
     fileOpener.current = null;
     if (back?.isConnected) back.focus({ preventScroll: true });
   };
+  // 右栏里换着看（文件列表点开一个、看完回列表）：光标挪到右栏的标题上，关上以后回的还是最先点开右栏的那个按钮
+  const navFile = (target) => {
+    setFile(target);
+    setFileFocus((n) => n + 1);
+  };
+  // 顶栏的“文件 N”：开着文件列表时再点收起，开着别的换成列表
+  const toggleFiles = () => (file?.list ? closeFile() : file ? navFile({ list: true }) : openFile({ list: true }));
   const [gone, setGone] = useState(() => new Set()); // 点了删除、还在等撤销的对话：列表里不显示（隔几秒取回的列表里还有它）
 
   const setBusy = (b) => {
@@ -752,8 +760,10 @@ export default function Workspace() {
           who={auth.ready ? (auth.me ? auth.me.name || "" : null) : earlyWho}
           models={models} modelNames={modelNames} credits={credits} manage={manage}
           picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }}
-          files={{ open: openFile, current: file }} />
-        {file && <FilePanel tid={tid} st={shown} live={live} target={file} onTarget={setFile} onClose={closeFile} focus={fileFocus} />}
+          files={{ open: openFile, current: file, toggle: toggleFiles }} />
+        {file && (file.list ? <FileList tid={tid} st={shown} live={live} title={live?.title || shown?.title || listedTitle} onNav={navFile} onClose={closeFile} focus={fileFocus} />
+          : file.sent ? <SentPanel tid={tid} f={file.sent} back={file.back} onNav={navFile} onClose={closeFile} focus={fileFocus} />
+            : <FilePanel tid={tid} st={shown} live={live} target={file} onTarget={setFile} onNav={navFile} onClose={closeFile} focus={fileFocus} />)}
         {search && (
           <SearchDialog threads={shownThreads && withCurrent(shownThreads, tid, st, live, busy)} now={now} href={chatPath}
             onOpen={(id) => { setSearch(false); select(id); }} onClose={() => setSearch(false)} />
