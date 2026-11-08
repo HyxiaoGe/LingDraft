@@ -9,7 +9,7 @@ import { Viewer } from "./images.jsx";
 import { useLayer } from "./layers.js";
 import { NavContext, byKeyboard, touch } from "./nav.jsx";
 import { QUEUED, creditsLeft, creditsLine, loginLine } from "./research.js";
-import { IMAGE_ACCEPT, ImageError, prepareImage } from "./upload.js";
+import { IMAGE_ACCEPT, ImageError, MAX_IMAGES, prepareImage } from "./upload.js";
 import styles from "./composer.module.css";
 import menu from "./menu.module.css";
 import sheet from "./sheet.module.css";
@@ -17,8 +17,8 @@ import sheet from "./sheet.module.css";
 // 临时的输入框（改这句话、左栏改名）关掉以后，光标回到对话的输入框（等它从页面上撤掉再放）
 export const focusInput = () => setTimeout(() => dispatchEvent(new Event("ws-focus-input")));
 
-// 把一张图交给输入框，当成选了这张图（拖进对话区松手；图上的“改这张”见 images.jsx，发的是同一个事件）
-const attachImage = (file) => dispatchEvent(new CustomEvent("ws-attach-image", { detail: file }));
+// 把图交给输入框，当成选了这些图（拖进对话区松手；图上的“改这张”见 images.jsx，发的是同一个事件，detail 是一张或一组）
+const attachImage = (files) => dispatchEvent(new CustomEvent("ws-attach-image", { detail: files }));
 
 // 输入框跟着字数长高，最高多高写在样式里（max-height：桌面窗口高度的四成，手机键盘占了一半、按四分之一；都不低于 160px），再多就在框里滚
 export function useAutoHeight(ref, value) {
@@ -73,7 +73,7 @@ export function useImageDrop(box, enabled) {
       e.preventDefault();
       clearTimeout(timer);
       setOver(false);
-      if (inside(e) && e.dataTransfer.files[0]) attachImage(e.dataTransfer.files[0]);
+      if (inside(e) && e.dataTransfer.files.length) attachImage([...e.dataTransfer.files]);
     };
     addEventListener("dragenter", onOver);
     addEventListener("dragover", onOver);
@@ -104,7 +104,7 @@ const PLACEHOLDER = {
   failed: "这一轮没有完成，点上面的“重试”",
 };
 const HELD = "上面那句发出去以后才能再发，也可以撤回它一起改";
-const WITH_IMAGE = "说说要怎么改这张图，或照着它画什么";
+const WITH_IMAGE = "问问图里的内容，或者说说要怎么改";
 const IMAGE_WAITS = "带图的话要等这一轮答完才能发";
 const COUNT_FROM = 2000; // 超过这么多字在输入框里显示字数；不设上限（后端也没有），2026-11-06 Sean 定
 
@@ -150,14 +150,16 @@ export function Pending({ st, act }) {
   );
 }
 
-// 每个对话选好、还没发的图（{file, url}，见 upload.js）：存不进本机，只在这次打开的页面里留着——切对话再回来还在，刷新就没了
+// 每个对话选好、还没发的图（[{key, file, url}]，见 upload.js；还在处理的是 {key, pending: true}）：存不进本机，只在这次打开的页面里留着——
+// 切对话再回来还在（处理到一半的，处理好了放进这里），刷新就没了
 const attachments = new Map();
-const keepImage = (key, att) => (att?.url ? attachments.set(key, att) : attachments.delete(key));
+const keepImages = (thread, list) => (list?.length ? attachments.set(thread, list) : attachments.delete(thread));
+let slots = 0; // 每张选进来的图一个记号：处理好了按它放回原位，处理时去掉了的不要
 
 // 回答时（queueing）也能打字：停止键一直在原位，不变成别的；打了字，旁边另外出一个“这一轮答完再发”，话排着，这一轮答完就发。Esc 停止回答。
 // held：已经有一句没发出去（排着或等着插进这一轮）。没发出去的话最多一句：这时还能打字，但发不出去，要先撤回那句、改好一起发。
 // 带图的话排不了（排着的话只有字），要等这一轮答完再发。
-// 图：点左下角选、粘贴、拖进对话区都行（拖的见 useImageDrop），一次一张（再选换掉），大图在本机先压到 4 MB 以内（见 upload.js）。
+// 图：点左下角选（能多选）、粘贴、拖进对话区都行（拖的见 useImageDrop），一句话最多 MAX_IMAGES 张，大图在本机先压到 4 MB 以内（见 upload.js）。
 // 没发出去的字每个对话各存一份在本机（见 drafts.js）：切走、刷新、登录回来都在，发出去就清掉；图只在这次打开的页面里留着（见 attachments）。
 // carry：新对话刚发出去、拿到了 id，thread 从 "new" 换成 id，还是同一个对话
 // putBack：放回输入框的话（撤回的、没发出去的，可能带着图）：放在已经写着的字前面、空一行，放回来的那段选中，看得出哪段是放回来的
@@ -165,21 +167,26 @@ const keepImage = (key, att) => (att?.url ? attachments.set(key, att) : attachme
 // onTakeBack：有没发出去的话时，光标在最前面（输入框空着也算）按 ↑ 把它们取回来。光标在最前面时 ↑ 本来什么也不做，不和挪光标抢
 export function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSend, onStop, above, onTakeBack, tools }) {
   const [text, setText] = useState(() => getDraft(thread));
-  const [image, setImage] = useState(() => attachments.get(thread) || null); // {file, url}；还在处理是 {pending: true}
+  const [images, setImages] = useState(() => attachments.get(thread) || []); // 见 attachments
   const [imageError, setImageError] = useState(null);
   const ref = useRef(null);
   const fileRef = useRef(null);
-  const shown = useRef(thread); // text、image 是哪个对话的
+  const shown = useRef(thread); // text、images 是哪个对话的
   const textRef = useRef(text);
   textRef.current = text;
-  const imageRef = useRef(image);
-  imageRef.current = image;
-  const attachSeq = useRef(0); // 每选一次图、去掉一次加一：处理慢的那张回来时发现对不上，就不要了
+  const imagesRef = useRef(images);
+  imagesRef.current = images;
+  // 改选着的图都走这里：imagesRef 马上跟上（小图处理得快，没等重新渲染就回来了，要看得到刚占的位置）
+  const putImages = (next) => {
+    imagesRef.current = next;
+    setImages(next);
+  };
   const selectNext = useRef(null); // 放回来的话要选中的那段：[起, 止]，字放进去以后再选
   const sendNow = mode === "new" || mode === "idle";
   const canStop = mode === "busy" || mode === "queued";
   const hasText = !!text.trim();
-  const canQueue = queueing && !held && !image;
+  const canQueue = queueing && !held && !images.length;
+  const processing = images.some((i) => i.pending);
   const enabled = sendNow || (queueing && !held); // 能说话了（光标该回来了）
   const stopNow = useRef(null); // 按 Esc 时调的：能停才有
   stopNow.current = canStop && !stopping ? onStop : null;
@@ -206,7 +213,7 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
     return () => {
       removeEventListener("pagehide", save);
       save();
-      keepImage(shown.current, imageRef.current);
+      keepImages(shown.current, imagesRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -237,9 +244,9 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
       return;
     }
     setDraft(was, textRef.current);
-    keepImage(was, imageRef.current);
+    keepImages(was, imagesRef.current);
     setText(getDraft(thread));
-    setImage(attachments.get(thread) || null);
+    putImages(attachments.get(thread) || []);
     setImageError(null);
     if (!keyed) focus(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -255,22 +262,19 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
     const join = (cur) => (joined(cur) ? `${putBack.text}\n\n${cur}` : putBack.text);
     if (putBack.thread !== shown.current) {
       setDraft(putBack.thread, join(getDraft(putBack.thread)));
-      if (putBack.image) attachments.set(putBack.thread, putBack.image);
+      if (putBack.images?.length) keepImages(putBack.thread, putBack.images);
       return;
     }
     const cur = textRef.current;
     const next = join(cur);
     selectNext.current = joined(cur) ? [0, putBack.text.length] : [next.length, next.length];
     setText(next);
-    if (putBack.image) {
-      attachSeq.current += 1;
-      setImage(putBack.image);
-    }
+    if (putBack.images?.length) putImages(putBack.images);
     focus(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [putBack]);
   useEffect(() => {
-    // 图上点了“改这张”（见 images.jsx）、拖进对话区松手（见 useImageDrop）：当成选了这张图，桌面上光标进输入框好接着说
+    // 图上点了“改这张”（见 images.jsx）、拖进对话区松手（见 useImageDrop）：当成选了这些图，桌面上光标进输入框好接着说
     const take = (e) => {
       if (!e.detail) return setImageError("没取到这张图，再点一次“改这张”");
       attachRef.current(e.detail);
@@ -312,30 +316,42 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
     };
   }, []);
 
-  // 选了、粘贴了、拖进来一张图：先占上位置转圈，处理好（大图压缩）再显示；处理的时候换了对话，处理好的图归原来那个对话
-  const attach = async (file) => {
-    if (!file) return;
-    const key = shown.current;
-    const seq = ++attachSeq.current;
-    setImageError(null);
-    setImage({ pending: true });
-    try {
-      const f = await prepareImage(file);
-      if (seq !== attachSeq.current) return;
-      const att = { file: f, url: URL.createObjectURL(f) };
-      if (shown.current === key) setImage(att);
-      else attachments.set(key, att);
-    } catch (e) {
-      if (seq !== attachSeq.current || shown.current !== key) return;
-      setImage(null);
-      setImageError(e instanceof ImageError ? e.message : "这张图读不出来，换一张再试");
+  // 选了、粘贴了、拖进来的图：接在已经选了的后面，先占上位置转圈，处理好（大图压缩）再显示；超过 MAX_IMAGES 张的不要，说一声。
+  // 处理的时候换了对话，处理好的图归原来那个对话；处理的时候去掉了的，处理好了也不要
+  const attach = (files) => {
+    const list = [].concat(files || []).filter(Boolean);
+    if (!list.length) return;
+    const thread = shown.current;
+    const room = MAX_IMAGES - imagesRef.current.length;
+    setImageError(list.length > room ? `一句话最多带 ${MAX_IMAGES} 张图` : null);
+    const take = list.slice(0, Math.max(0, room)).map((file) => ({ file, key: ++slots }));
+    if (!take.length) return;
+    putImages([...imagesRef.current, ...take.map(({ key }) => ({ key, pending: true }))]);
+    for (const { file, key } of take) {
+      prepareImage(file).then(
+        (f) => place(thread, key, { key, file: f, url: URL.createObjectURL(f) }),
+        (e) => place(thread, key, null, e instanceof ImageError ? e.message : "这张图读不出来，换一张再试"),
+      );
     }
+  };
+  // 处理好的一张放回它占的位置（没处理成就去掉、说原因）
+  const place = (thread, key, att, error) => {
+    const swap = (list) => (att ? list.map((i) => (i.key === key ? att : i)) : list.filter((i) => i.key !== key));
+    const here = shown.current === thread;
+    const list = here ? imagesRef.current : attachments.get(thread) || [];
+    if (!list.some((i) => i.key === key)) {
+      if (att) URL.revokeObjectURL(att.url);
+      return;
+    }
+    if (here) {
+      putImages(swap(list));
+      if (error) setImageError(error);
+    } else keepImages(thread, swap(list));
   };
   const attachRef = useRef(attach);
   attachRef.current = attach;
-  const removeImage = () => {
-    attachSeq.current += 1;
-    setImage(null);
+  const removeImage = (key) => {
+    putImages(imagesRef.current.filter((i) => i.key !== key));
     setImageError(null);
     focus(true);
   };
@@ -343,19 +359,19 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
   const onPaste = (e) => {
     const cd = e.clipboardData;
     if (!cd || cd.types.includes("text/plain")) return;
-    const file = [...cd.files].find((f) => f.type.startsWith("image/"));
-    if (!file) return;
+    const files = [...cd.files].filter((f) => f.type.startsWith("image/"));
+    if (!files.length) return;
     e.preventDefault();
-    attach(file);
+    attach(files);
   };
 
   const send = () => {
     const t = text.trim();
-    if (!t || image?.pending) return;
+    if (!t || processing) return;
     if (sendNow) {
-      onSend(t, image);
-      setImage(null);
-    } else if (canQueue) onSend(t, null);
+      onSend(t, images);
+      putImages([]);
+    } else if (canQueue) onSend(t, []);
     else return;
     setText("");
     setImageError(null);
@@ -364,7 +380,7 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
   };
   const note = imageError ? { text: imageError, warn: true }
     : queueing && hasText && held ? { text: HELD }
-      : queueing && hasText && image ? { text: IMAGE_WAITS } : null;
+      : queueing && hasText && images.length ? { text: IMAGE_WAITS } : null;
   const count = text.length > COUNT_FROM ? Array.from(text).length : 0;
   const keep = (e) => e.preventDefault(); // 按下去不抢光标
   return (
@@ -372,9 +388,9 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
       {above}
       {/* 点输入框这一块的空白处（四周留白、按钮之间，标着 data-blank）也把光标放进去：可点的是整块，不只是一行高的 textarea（第 31 条） */}
       <div className={styles.box} onClick={(e) => { if (e.target === e.currentTarget || e.target.hasAttribute("data-blank")) ref.current?.focus(); }}>
-        {image && <Attachment att={image} onRemove={removeImage} />}
+        {images.length > 0 && <Attachments list={images} onRemove={removeImage} />}
         <textarea ref={ref} rows={1} value={text} aria-label="输入"
-          placeholder={queueing && held ? HELD : image && sendNow ? WITH_IMAGE : PLACEHOLDER[mode] || PLACEHOLDER.busy}
+          placeholder={queueing && held ? HELD : images.length && sendNow ? WITH_IMAGE : PLACEHOLDER[mode] || PLACEHOLDER.busy}
           onChange={(e) => setText(e.target.value)} onPaste={onPaste}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
@@ -389,10 +405,11 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
           }} />
         {note && <div className={styles.note + (note.warn ? " " + styles.warn : "")} role={note.warn ? "alert" : undefined}>{note.warn && <IconWarn size={13} />}<span>{note.text}</span></div>}
         <div className="mt-2 flex items-center gap-1 phone:gap-2" data-blank>
-          <button className={styles.attach} aria-label="添加图片" title="添加一张图：让它改这张图，或照着画" disabled={mode === "opening"} onMouseDown={keep}
+          <button className={styles.attach} aria-label="添加图片" title={images.length >= MAX_IMAGES ? `一句话最多带 ${MAX_IMAGES} 张图` : "添加图片"}
+            disabled={mode === "opening" || images.length >= MAX_IMAGES} onMouseDown={keep}
             onClick={() => fileRef.current?.click()}><IconImage size={16} /></button>
-          <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} hidden tabIndex={-1}
-            onChange={(e) => { attach(e.target.files?.[0]); e.target.value = ""; }} />
+          <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} multiple hidden tabIndex={-1}
+            onChange={(e) => { attach([...(e.target.files || [])]); e.target.value = ""; }} />
           {count > COUNT_FROM && <span className="flex-none text-[12px] whitespace-nowrap text-muted tabular-nums">{count.toLocaleString("en-US")} 字</span>}
           <div className="ml-auto flex min-w-0 items-center" data-blank>{tools}</div>
           {canStop && hasText && (
@@ -402,7 +419,7 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
             ? <button className={styles.send + " " + styles.stop} aria-label={stopping ? "正在停止" : "停止回答"} title={stopping ? "正在停止" : "停止回答（Esc）"} disabled={stopping} onClick={onStop}>
               {stopping ? <Spinner size={14} /> : <IconStop size={13} />}
             </button>
-            : <button className={styles.send} aria-label="发送" disabled={!sendNow || !hasText || !!image?.pending} onClick={send}><IconArrowUp size={15} /></button>}
+            : <button className={styles.send} aria-label="发送" disabled={!sendNow || !hasText || processing} onClick={send}><IconArrowUp size={15} /></button>}
         </div>
       </div>
       <div className={styles.ai}>内容由 AI 生成，请仔细甄别</div>
@@ -410,19 +427,22 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
   );
 }
 
-// 选好要发的图：缩略图（点开看大图）、能拿它做什么，右上角去掉。大图还在本机压缩时先转圈
-function Attachment({ att, onRemove }) {
-  const [viewing, setViewing] = useState(null);
+// 选好要发的图：一排缩略图（点开看大图），每张右上角去掉。大图还在本机压缩时那张先转圈
+function Attachments({ list, onRemove }) {
+  const [viewing, setViewing] = useState(null); // {url, back}
+  const pending = list.some((i) => i.pending);
   return (
-    <div className="mb-2 flex items-center gap-3 phone:mt-1">
-      <div className="relative flex size-12 flex-none items-center justify-center rounded-sm border border-line bg-side text-muted">
-        {att.url
-          ? <button className={styles.open} aria-label="看大图" onClick={(e) => setViewing(e.currentTarget)}><img src={att.url} alt="要发的图" /></button>
-          : <Spinner size={16} />}
-        <button className={styles.remove} aria-label="去掉这张图" onMouseDown={(e) => e.preventDefault()} onClick={onRemove}><IconClose size={12} /></button>
-      </div>
-      <span className="min-w-0 text-[12px] leading-[1.5] text-muted" role="status">{att.url ? "可以让它改这张图、照着它画；它看不到图里的内容" : "正在处理图片…"}</span>
-      {viewing && <Viewer img={{ alt: "要发的图" }} src={att.url} onClose={() => { viewing.focus(); setViewing(null); }} />}
+    <div className="mb-2 flex flex-wrap items-center gap-2 phone:mt-1">
+      {list.map((att, k) => (
+        <div key={att.key} className="relative flex size-12 flex-none items-center justify-center rounded-sm border border-line bg-side text-muted">
+          {att.url
+            ? <button className={styles.open} aria-label={`看第 ${k + 1} 张大图`} onClick={(e) => setViewing({ url: att.url, back: e.currentTarget })}><img src={att.url} alt={`要发的第 ${k + 1} 张图`} /></button>
+            : <Spinner size={16} />}
+          <button className={styles.remove} aria-label={`去掉第 ${k + 1} 张图`} onMouseDown={(e) => e.preventDefault()} onClick={() => onRemove(att.key)}><IconClose size={12} /></button>
+        </div>
+      ))}
+      {pending && <span className="min-w-0 text-[12px] leading-[1.5] text-muted" role="status">正在处理图片…</span>}
+      {viewing && <Viewer img={{ alt: "要发的图" }} src={viewing.url} onClose={() => { viewing.back.focus(); setViewing(null); }} />}
     </div>
   );
 }

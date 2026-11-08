@@ -76,13 +76,13 @@ async function readSse(resp, onEvent, alive) {
 }
 
 const postJson = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-// 带图的话（image 是 File，见 upload.js）发 multipart：body 是这句话的 JSON，image 是图（见后端 api.main 的 _incoming）。
+// 带图的话（images 是 File 的列表，见 upload.js）发 multipart：body 是这句话的 JSON，每张图一个 image 字段，按发的先后（见后端 api.main 的 _incoming）。
 // 图不收时回 413（超过 4 MB）、415（格式不对）、502（传不上去），这时对话里什么都没多出来
-const message = ({ image, ...body }) => {
-  if (!image) return postJson(body);
+const message = ({ images, ...body }) => {
+  if (!images?.length) return postJson(body);
   const fd = new FormData();
   fd.append("body", JSON.stringify(body));
-  fd.append("image", image);
+  for (const f of images) fd.append("image", f);
   return { method: "POST", body: fd };
 };
 
@@ -152,12 +152,12 @@ export async function listModels() {
 }
 
 // 开新对话。opts：model 是选的模型（listModels 里的 id，不给是 Auto；没有了返回 400），定下就不换；
-// thinking 是这句话的思考开关（不给按模型的默认）。下面几个的 opts.thinking 一样。opts.image：这句话带的图（见 message）
+// thinking 是这句话的思考开关（不给按模型的默认）。下面几个的 opts.thinking 一样。opts.images：这句话带的图（见 message）
 export async function createResearchThread(text, opts, onEvent, signal) {
   return sse("/api/research/threads", message({ text, ...opts }), onEvent, signal);
 }
 
-// 接着说，opts.image 同上。运行中、上一轮没跑完时后端返回 409
+// 接着说，opts.images 同上。运行中、上一轮没跑完时后端返回 409
 export async function sayResearch(threadId, text, opts, onEvent, signal) {
   return sse(`/api/research/threads/${threadId}/messages`, message({ text, ...opts }), onEvent, signal);
 }

@@ -2,6 +2,7 @@
 // 生成中按要的比例占好位置，出图后原位淡入；卡片下写明哪个模型画的，可以改这张、看描述、下载、再画一张，点图看大图。
 // 占位没照搬 Fusion 的点阵：灰底上一道斜光扫过，中间写正在生成和用了几秒（2026-10-31 Sean 定）
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { IconClose, IconDownload, IconEdit, IconLoop, Spinner } from "./icons.jsx";
 import styles from "./images.module.css";
 import { useLayer } from "./layers.js";
@@ -177,15 +178,17 @@ function ImageCard({ img, src, name, onOpen, onRegenerate }) {
   );
 }
 
-// 看大图：盖住整个页面，点空白处、按 Esc 或点关闭都收起。光标先放到关闭按钮上，Esc 收的是这一层，不会去停止回答
+// 看大图：盖住整个页面，点空白处、按 Esc 或点关闭都收起。光标先放到关闭按钮上，Esc 收的是这一层，不会去停止回答。
+// 挂到页面最外层：放在缩略图里会吃到缩略图的样式（铺满裁切），大图只剩中间一截
 export function Viewer({ img, src, onClose }) {
   const close = useRef(null);
   useEffect(() => { close.current?.focus(); }, []);
   useLayer(true, onClose);
-  return (
+  return createPortal(
     <div className={styles.viewer} role="dialog" aria-modal="true" aria-label="图片" onClick={onClose}>
       <img src={src} alt={img.alt ?? imageAlt(img.prompt)} onClick={(e) => e.stopPropagation()} />
       <button ref={close} className={styles.close} aria-label="关闭" onClick={onClose}><IconClose size={20} /></button>
-    </div>
+    </div>,
+    document.querySelector(".ws") || document.body,
   );
 }

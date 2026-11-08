@@ -49,6 +49,8 @@ from app.tools.gateway import IMAGE_MIME_TYPES, MAX_UPLOAD_BYTES, GatewayClient
 from app.tools.image_mcp import ImageTool
 from app.tools.maps_mcp import PLACE_TOOL, ROUTE_TOOL, MapsTool
 from app.tools.research_tools import TIME_TOOL, make_research_tools
+from app.tools.vision import ImageUris, view_prompt
+from app.graph.research.history import VIEW_TOOL
 from app.tools.weather_mcp import WEATHER_TOOL, WeatherTool
 from app.tools.web_mcp import READ_TOOL, SEARCH_TOOL, WebTool
 
@@ -100,6 +102,10 @@ class ResearchPlanner(Protocol):
     async def blocked(self, texts: Sequence[str]) -> list[bool]: ...
 
     async def summarize(self, prompt: str) -> str: ...
+
+    async def image_uri(self, image_id: str) -> str | None: ...  # 按编号取图给模型看（data URI）；服务里没了是 None（见 app.tools.vision）
+
+    async def view_image(self, uri: str, question: str) -> str: ...  # 看图工具：看图的模型看这张图、回答问题（见 app.tools.vision）
 
     def dream(self, prompt: str) -> str: ...  # 整理记忆：提示词进，json 文字出（见 graph.research.memory）。后台线程里调，同步的
 
@@ -487,6 +493,7 @@ class LiveResearchPlanner:
         self._summarizer = RoleModel(self.catalog, "summarize", self.usable, timeout=120, max_tokens=SUMMARY_MAX_TOKENS)
         self._dreamer = RoleModel(self.catalog, "dream", self.usable, timeout=300)
         self._router = RoleModel(self.catalog, "route", self.usable, timeout=ROUTE_TIMEOUT, guard="判断难易")  # 熔断单独记，理由和起标题一样
+        self._viewer = RoleModel(self.catalog, "vision", self.usable, timeout=120, guard="看图")  # 看图工具；熔断单独记：它坏了不拦别的用 Flash 的
         # Auto 的两个、备用的先建好：没配 key 在这里就报错，不等到第一个对话
         auto = self.catalog.plan(None, None, self.usable)
         self.chat_model(auto.agent)
@@ -494,6 +501,7 @@ class LiveResearchPlanner:
         self.chat_model(self.catalog.plan(self.catalog.auto.fallback, None, self.usable).agent)
         url, key = config.AGENT_TOOLS_URL, config.AGENT_TOOLS_API_KEY
         self.gateway = gateway or GatewayClient(url, key, scene=scene)  # 按编号取图、删图（图存在 image-service 里）
+        self._image_uris = ImageUris(self.gateway)
         self._tools = make_research_tools(self.clock)
         self._mcp = McpTools(lambda: web_mcp.gateway_target(SEARCH_TOOL, url, key, scene=scene),
                              lambda: web_mcp.gateway_target(READ_TOOL, url, key, scene=scene),
@@ -555,6 +563,14 @@ class LiveResearchPlanner:
         """在 agent 调模型之前那一步里调（点了停止跟着这次运行一起取消），片段标 nostream，不进这次运行的消息流。"""
         out = await self._summarizer.ainvoke([("user", prompt)], config={"tags": [TAG_NOSTREAM], "run_name": "summarize"})
         return str(out.content).strip()
+
+    async def image_uri(self, image_id: str) -> str | None:
+        return await self._image_uris.get(image_id)
+
+    async def view_image(self, uri: str, question: str) -> str:
+        """在工具里调：片段标 nostream，不进这次运行的消息流（页面上只显示“看图”这一步）。"""
+        out = await self._viewer.ainvoke(view_prompt(uri, question), {"tags": [TAG_NOSTREAM], "run_name": "view_image"})
+        return out.text.strip()
 
     def dream(self, prompt: str) -> str:
         """按 JSON 输出（response_format json_object）：开着思考也能用，不像结构化输出要强制调工具。"""
@@ -1058,7 +1074,7 @@ class FakeToolModel(BaseChatModel):
     def _decide(self, messages: list[BaseMessage]) -> tuple[str, list[dict]]:
         # 用户的话：最后一条用户消息，子 agent 请求末尾的预算提醒（<budget>，见 subagent.SubagentPrompt）、插进这一轮的话不算
         i = _turn_start(messages)
-        text, turn = str(messages[i].content), messages[i + 1:]
+        text, turn = history.text_of(messages[i]), messages[i + 1:]
         names = [tc["name"] for m in turn if isinstance(m, AIMessage) for tc in m.tool_calls]
         bad = [tc for m in turn if isinstance(m, AIMessage) for tc in m.invalid_tool_calls]
         hits = _hits(messages)
@@ -1086,6 +1102,8 @@ class FakeToolModel(BaseChatModel):
             return self._maps(text, turn, call)
         if any(k in text for k in ("航班", "高铁", "行程", "接站")) and FLIGHT_TOOL in self.bound:
             return self._travel(text, turn, call)
+        if "图里" in text:
+            return self._look(text, messages, turn, call)
         if any(k in text for k in ("画", "改图", "再生成")) and "generate_image" in self.bound:
             return self._draw(text, messages, turn, call)
         if any(k in text for k in ("子任务", "分头", "派")) and "task" in self.bound:
@@ -1167,15 +1185,28 @@ class FakeToolModel(BaseChatModel):
         if done := next((m for m in reversed(turn) if isinstance(m, ToolMessage) and m.name == "generate_image"), None):
             return ("没画成。" if done.status == "error" else "画好了，看看要不要调整。"), []
         prompt = text.splitlines()[0][:200]
-        # 画的图在生图结果里，用户发的图在那句话后面接的说明里（见 image_mcp.with_attachment_note），都写着 Image id
-        ids = _FAKE_IMAGE_ID.findall("\n".join(str(m.content) for m in messages
-                                                if isinstance(m, HumanMessage) or (isinstance(m, ToolMessage) and m.name == "generate_image")))
+        # 画的图在生图结果里（写着 Image id），用户发的图记在那句话上（见 history.attached_images）
+        ids = [i for m in messages for i in ([a.id for a in history.attached_images(m)] if isinstance(m, HumanMessage) else
+                                             _FAKE_IMAGE_ID.findall(str(m.content)) if isinstance(m, ToolMessage) and m.name == "generate_image" else [])]
         if "改图" in text and ids:
             return call("generate_image", prompt=prompt, source_image_id=ids[-1])
         before = [tc["args"] for m in messages if isinstance(m, AIMessage) for tc in m.tool_calls if tc["name"] == "generate_image"]
         if ("再画" in text or "再生成" in text) and before:
             return call("generate_image", **{**before[-1], "regenerate": True})
         return call("generate_image", prompt=prompt, **({"aspect_ratio": "16:9"} if "横" in text else {}))
+
+    def _look(self, text: str, messages: list[BaseMessage], turn: list[BaseMessage], call) -> tuple[str, list[dict]]:
+        """问“图里”有什么：有看图工具（看不见图的模型）就拿最近一张用户发的图去问，看完照结果回复；
+        没有（看得见图的）回复这次收到了几张图（图片块），测试看给没给图。"""
+        if VIEW_TOOL not in self.bound:
+            seen = sum(1 for m in messages if isinstance(m, HumanMessage) and isinstance(m.content, list)
+                       for b in m.content if isinstance(b, dict) and b.get("type") == "image_url")
+            return f"看到了 {seen} 张图。", []
+        if done := next((m for m in reversed(turn) if isinstance(m, ToolMessage) and m.name == VIEW_TOOL), None):
+            return ("没看成。" if done.status == "error" else f"看了：{done.content}"), []
+        ids = [a.id for m in messages for a in history.attached_images(m)]
+        wanted = m.group(1) if (m := re.search(r"看编号(\S+)", text)) else ids[-1] if ids else "none"
+        return call(VIEW_TOOL, image_id=wanted, question=text.splitlines()[0][:40])
 
     @staticmethod
     def _recall(text: str, messages: list[BaseMessage], turn: list[BaseMessage], call) -> tuple[str, list[dict]]:
@@ -1331,6 +1362,8 @@ class FakeResearchPlanner:
         self.dream_replies: list[str] = []  # 整理记忆时按顺序给这些回答；用完了照 dream 的说明
         self.images = FakeImageService()
         self.gateway = gateway or self.images.gateway_client()
+        self._image_uris = ImageUris(self.gateway)
+        self.fail_view = False
         self._tools = make_research_tools(self.clock)
         self._mcp = McpTools(search or fake_search_server, read or (lambda: fake_read_server(page_repeat)), fake_weather_server,
                              self.images.server, fake_maps_server, fake_flyai_server, fake_docs_server, wrap=wrap_tool)
@@ -1381,6 +1414,16 @@ class FakeResearchPlanner:
             return "（短的用户消息）" + prompt.split("<message>")[-1].strip()[:20]
         ids = list(dict.fromkeys(re.findall(r"\[(s[0-9a-f]{6,10})\]", prompt.split("<turn>")[-1])))[:3]
         return "（短版）这一轮查过了。" + "".join(f"[{i}]" for i in ids)
+
+    async def image_uri(self, image_id: str) -> str | None:
+        return await self._image_uris.get(image_id)
+
+    async def view_image(self, uri: str, question: str) -> str:
+        """看图：照问题回一句（图的 MIME 类型在里面，测试看拿到的是不是那张图）。fail_view 时出错。"""
+        self.calls.append(("view_image", question))
+        if self.fail_view:
+            raise RuntimeError("假模型：看图失败")
+        return f"（看图）{uri.split(';', 1)[0].removeprefix('data:')}：{question}"
 
     def dream(self, prompt: str) -> str:
         """新的几轮里用户说的 FAKE_REMEMBER 后面那句记成一条（之前整理过的几轮不看）。"""
