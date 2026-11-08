@@ -245,8 +245,8 @@ class GeneratedImage(BaseModel):
 
 
 class AttachedImage(BaseModel):
-    """用户发消息时带的一张图（2026-11-06 Sean 定：只拿来改图、照着画，不做看图问答）。
-    灵稿后端收到就传进 image-service（POST /v1/images，归灵稿，和画的图放在一起），记在那条用户消息上；
+    """用户发消息时带的一张图（一句话最多 history.MAX_ATTACHED 张）。灵稿后端收到就传进 image-service（POST /v1/images，归灵稿，
+    和画的图放在一起），记在那条用户消息上。看得见图的模型直接看，看不见的调看图工具（2026-11-08 Sean 定，见 app.tools.vision）；
     改图时它的编号和画的图一样当 source_image_id。跟着对话删，重新回答、改那句话都留着。"""
 
     model_config = ConfigDict(extra="forbid")
@@ -261,7 +261,7 @@ class ToolStep(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     id: str = Field(description="工具调用 id；页面据此把实时进度和存下来的记录对上")
-    kind: Literal["search", "read", "weather", "place", "route", "flight", "train", "itinerary", "image", "task", "library", "docs"]
+    kind: Literal["search", "read", "weather", "place", "route", "flight", "train", "itinerary", "image", "view", "task", "library", "docs"]
     text: str = Field(description="搜索词 / 网址 / 地名 / 查地点的关键词 / 路线、航班、火车的起终点 / 行程方案的标题 / 画图的描述 / 子任务的标题"
                                   " / 找的库名 / 查文档的问题")
     limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制；查地点在哪查；比路线比哪几种方式；航班、火车的日期和条件；查的是哪个库")

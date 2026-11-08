@@ -51,6 +51,7 @@ from app.graph.research.sources import DOCS_TOOL, SEPARATORS, SUBAGENT_TOOL, col
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Source, Turn
 from app.model_catalog import AUTO, LEGACY_MODEL, LEGACY_USE, ModelUse
 from app.model_guard import ContentBlocked, FreeTierUsedUp, Interrupted, ModelUnavailable, free_failed
+from app.tools.vision import with_images
 
 TITLE_CHARS = 30  # 标题最长这么多字（汉字算一个、字母算半个，见 _width）：模型给的超过了不用（见 usable_title）；用户原话超过了截掉（照 Fusion）
 NEW_CHAT = "新对话"  # 模型给的不能用、用户原话里也没有字（纯数字、纯符号）时的标题
@@ -591,12 +592,11 @@ class ModelSelect(AgentMiddleware):
             return await self._sub_call(request, handler)
         turns = request.state.get("turns", [])
         use = (turns[-1].model if turns else None) or LEGACY_USE  # 2026-11-05 之前开始、之后重试的那一轮
-        msgs = _others_without_thinking(request.messages, turns, use)
         update: dict[str, Any] | None = None
         tried = {use.ref}
         while True:  # 出问题换备用，备用再出问题接着换（免费额度 → 直连 → Flash 的免费额度 → Flash），换到头、换回试过的了照常失败
             try:
-                resp = await handler(request.override(model=self.planner.chat_model(use), messages=msgs))
+                resp = await handler(await self._for(request, turns, use))
                 break
             except Exception as e:
                 if not self._failed(use, e) or not turns or (switch := self._backup(request, turns, use, e, tried)) is None:
@@ -608,8 +608,15 @@ class ModelSelect(AgentMiddleware):
                 emit({"type": "model", "ref": backup.ref})
                 use, turns = backup, update["turns"]
                 tried.add(use.ref)
-                msgs = _others_without_thinking(request.messages, turns, use)
         return resp if update is None else ExtendedModelResponse(model_response=resp, command=Command(update=update))
+
+    async def _for(self, request: ModelRequest, turns: list[Turn], use: ModelUse) -> ModelRequest:
+        """这次调 use 这个模型的请求：别的模型答的轮次去掉思考；用户发的图看得见的直接给、看不见的给说明，看图工具只给看不见的
+        （见 app.tools.vision）。一轮里换了备用，按换上的重新组织。"""
+        sees = self.planner.catalog.sees(use.ref)
+        msgs = await with_images(_others_without_thinking(request.messages, turns, use), sees, self.planner.image_uri)
+        tools = [t for t in request.tools if not (sees and getattr(t, "name", None) == history.VIEW_TOOL)]
+        return request.override(model=self.planner.chat_model(use), messages=msgs, tools=tools)
 
     async def _sub_call(self, request: ModelRequest, handler):
         """子 agent：走的是免费额度、这次没成的，换直连的同一个模型，这个子任务剩下的都用直连（写进它的 state）；别的照常失败
@@ -708,12 +715,13 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     from app.tools.flyai_mcp import TravelMiddleware, itinerary_tool
     from app.tools.image_mcp import ImageMiddleware
     from app.tools.maps_mcp import MapsMiddleware
+    from app.tools.vision import make_view_image_tool
     from app.tools.weather_mcp import WeatherMiddleware
     from app.tools.web_mcp import WebToolsMiddleware
 
     # recall 一直都在（工具列表变了前缀缓存整个断），只有压缩换成说明的内容才用得上；页面上不显示这一步。
     # 排行程（present_itinerary）也一直在，查过航班火车才用得上
-    tools = [*planner.tools(), make_task_tool(planner), make_recall_tool(), itinerary_tool()]
+    tools = [*planner.tools(), make_task_tool(planner), make_recall_tool(), itinerary_tool(), make_view_image_tool(planner)]
     return create_agent(
         model=planner.chat_model(planner.catalog.plan(None, None, planner.usable).agent),  # 只是占位：每次调模型由 ModelSelect 换上这一轮的
         tools=tools,
@@ -730,7 +738,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
             MapsMiddleware(),  # 同上：查地点、比路线的结果（地点卡、路线卡要的在 artifact 里）
             WebToolsMiddleware(),  # 同上：搜索、读页的结果带上来源 id
             DocsMiddleware(),  # 同上：查文档的每段带上来源 id（带来源的那几段在 artifact 里）
-            ImageMiddleware(),  # 同上：画图每轮的上限、改图只认这段对话的图、卡片要的东西
+            ImageMiddleware(),  # 同上：画图每轮的上限、改图只认这段对话的图、卡片要的东西（用户发的图怎么给模型在 ModelSelect 里）
             InvalidToolCallRetryMiddleware(INVALID_TOOL_CALL_RETRIES),
             ModelCallCapMiddleware(),  # 在压缩里面：末尾加的说明不经过压缩
             ModelSelect(planner),

@@ -409,7 +409,7 @@ def test_image_route_when_the_service_is_down(monkeypatch):
     assert client.get(f"/api/research/threads/{v['thread_id']}/images/{img['id']}").status_code == 502
 
 
-# ---- 用户发的图：传进服务、记在那句话上、能改、跟着对话删（2026-11-06 Sean 定只做改图、照着画） ----
+# ---- 用户发的图：传进服务、记在那句话上、能改、跟着对话删；看得见图的模型直接看，看不见的调看图工具（2026-11-08 Sean 定） ----
 
 
 def _photo(width: int = 64, height: int = 48, fmt: str = "PNG") -> bytes:
@@ -418,8 +418,9 @@ def _photo(width: int = 64, height: int = 48, fmt: str = "PNG") -> bytes:
     return buf.getvalue()
 
 
-def _send(client, path: str, text: str, data: bytes, **body):
-    return client.post(path, data={"body": json.dumps({"text": text, **body})}, files={"image": ("photo.png", data, "image/png")})
+def _send(client, path: str, text: str, data: bytes | list[bytes], **body):
+    files = [("image", (f"photo{k}.png", d, "image/png")) for k, d in enumerate(data if isinstance(data, list) else [data])]
+    return client.post(path, data={"body": json.dumps({"text": text, **body})}, files=files)
 
 
 def _api() -> tuple[ResearchRunner, TestClient]:
@@ -436,18 +437,18 @@ def test_attached_image_is_kept_on_the_message_and_can_be_edited():
     tid, (turn,) = v["thread_id"], v["turns"]
     (uid,) = service.uploaded
     assert turn["user"] == "改图：换成水彩画"  # 给模型的说明不在存着的话里
-    assert turn["image"] == {"id": uid, "mime_type": "image/png", "width": 64, "height": 48}
+    assert turn["images"] == [{"id": uid, "mime_type": "image/png", "width": 64, "height": 48}]
     (step,) = _image_steps(turn)
     assert step["ok"] and step["edit"] and step["image"]["edited_from"] == uid
     assert service.calls[0]["source_image_id"] == uid  # 模型从说明里拿到了编号，改图认这张
     r = client.get(f"/api/research/threads/{tid}/images/{uid}")
     assert r.status_code == 200 and r.content == data
-    # 接着说也能带图；没带图的那几轮 image 是 None
+    # 接着说也能带图；没带图的那几轮 images 是空的
     v = last(events(_send(client, f"/api/research/threads/{tid}/messages", "直接答：收到", _photo(30, 40, "JPEG"))), "state")
-    second = v["turns"][1]["image"]
+    (second,) = v["turns"][1]["images"]
     assert second["id"] == service.uploaded[1] and (second["mime_type"], second["width"], second["height"]) == ("image/jpeg", 30, 40)
     v = last(events(say(client, tid, "直接答：好的")), "state")
-    assert v["turns"][2]["image"] is None
+    assert v["turns"][2]["images"] == []
 
 
 def test_edit_and_regenerate_keep_the_attached_image_and_delete_removes_it():
@@ -456,10 +457,10 @@ def test_edit_and_regenerate_keep_the_attached_image_and_delete_removes_it():
     tid = last(events(_send(client, "/api/research/threads", "直接答：看看", _photo())), "state")["thread_id"]
     (uid,) = service.uploaded
     v = last(events(client.post(f"/api/research/threads/{tid}/regenerate")), "state")
-    assert v["turns"][0]["image"]["id"] == uid
+    assert [i["id"] for i in v["turns"][0]["images"]] == [uid]
     v = last(events(client.post(f"/api/research/threads/{tid}/edit", json={"text": "改图：加一顶帽子"})), "state")
     (turn,) = v["turns"]
-    assert turn["user"] == "改图：加一顶帽子" and turn["image"]["id"] == uid  # 只改了字，图留着
+    assert turn["user"] == "改图：加一顶帽子" and [i["id"] for i in turn["images"]] == [uid]  # 只改了字，图留着
     drawn = _image_steps(turn)[0]["image"]
     assert drawn["edited_from"] == uid
     last(events(client.post(f"/api/research/threads/{tid}/regenerate")), "state")
@@ -506,17 +507,16 @@ def test_image_sent_while_answering_is_not_kept():
     events(done["resp"])
 
 
-def test_attachment_note_goes_to_the_model_only():
-    iid = str(uuid.uuid4())
-    m = HumanMessage(content="改成水彩", id="h1",
-                     additional_kwargs={history.ATTACHED: {"id": iid, "mime_type": "image/png", "width": 64, "height": 48}})
-    noted = image_mcp.with_attachment_note(m)
-    assert noted.content == "改成水彩\n\n" + prompts.render("tools.generate_image.attached", id=iid, width=64, height=48)
-    assert f"Image id: {iid} (64x48)" in noted.content and m.content == "改成水彩"
+def test_owned_image_ids_cover_attached_and_drawn_images():
+    """用户发的（11-08 以前存的一张、现在的列表）、画好的都算这段对话的图；格式不对的那张不算。"""
+    iid, jid, kid = (str(uuid.uuid4()) for _ in range(3))
+    att = lambda i: {"id": i, "mime_type": "image/png", "width": 64, "height": 48}  # noqa: E731
+    m = HumanMessage(content="改成水彩", id="h1", additional_kwargs={history.ATTACHED: att(iid)})  # 11-08 以前存的一张
+    two = HumanMessage(content="这两张", additional_kwargs={history.ATTACHED: [att(jid), {"id": "x"}, att(kid)]})
     plain = HumanMessage(content="你好")
     broken = HumanMessage(content="x", additional_kwargs={history.ATTACHED: {"id": "x"}})
-    assert image_mcp.with_attachment_note(plain) is plain and image_mcp.with_attachment_note(broken) is broken
+    assert [a.id for a in history.attached_images(two)] == [jid, kid] and history.attached_images(broken) == []
     drawn = {**OLD_IMAGE, "id": str(uuid.uuid4()), "file": None}
     made = ToolMessage(content="", tool_call_id="c1", name="generate_image", artifact={"attempted": True, "image": drawn})
     gone = ToolMessage(content="", tool_call_id="c2", name="generate_image", artifact={"attempted": True, "image": OLD_IMAGE})
-    assert history.owned_image_ids([m, made, gone, plain, broken]) == [iid, drawn["id"]]
+    assert history.owned_image_ids([m, two, made, gone, plain, broken]) == [iid, jid, kid, drawn["id"]]

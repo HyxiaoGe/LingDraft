@@ -57,14 +57,14 @@ export default function Workspace() {
   const [settings, setSettings] = useState(oldPage); // 设置窗口开着时是窗口里的哪一类（见 settings.jsx，"settings" 是刚打开）；关着是 null
   const [theme, setTheme, dark] = useTheme(); // 主题（设置窗口里选，存本机）：跟随系统、浅色、深色
   const [st, setSt] = useState(null);
-  // 这个页面发起或接上的那次执行：{said, image, sentAt, turnsAtStart, items, stage, phase, title, stopping, hidden, edit}
-  // image：这句话带的图（{file, url}），存下来之前先按本机的显示
+  // 这个页面发起或接上的那次执行：{said, images, sentAt, turnsAtStart, items, stage, phase, title, stopping, hidden, edit}
+  // images：这句话带的图（[{key, file, url}]，见 Composer），存下来之前先按本机的显示
   // sentAt：这次说的话或改的话按本机时间记的发送时间，存下来的对话回来以前先显示它
   const [live, setLive] = useState(null);
   const [suggesting, setSuggesting] = useState(false); // 这一轮结束了，推荐问题还在起（同一条事件流里还会再来一次状态）
   const [busy, setBusyState] = useState(false);
   const [error, setError] = useState(null);
-  const [putBack, setPutBack] = useState(null); // 要放回输入框的话：{thread, text, image?, rejected?}，每次是个新对象；image 是一起没发出去的图；rejected 是没发出去被拒的（连着被拒不叠加）
+  const [putBack, setPutBack] = useState(null); // 要放回输入框的话：{thread, text, images?, rejected?}，每次是个新对象；images 是一起没发出去的图；rejected 是没发出去被拒的（连着被拒不叠加）
   // 能选的模型（/api/models，Auto 在第一个）：没取到是 []，不显示选择，新对话按 Auto
   const [models, setModels] = useState(null);
   const [modelNames, setModelNames] = useState({}); // 选项以外、回答开头可能出现的模型的名字和图标（见 listModels）
@@ -407,10 +407,10 @@ export default function Workspace() {
     } catch (e) {
       if (e.aborted || g !== gen.current) return;
       if (r.done) return setSuggesting(false); // 等推荐问题时断了：不再接，下次打开线程能看到
-      const image = extra.image;
+      const images = extra.images?.length ? extra.images : undefined;
       // 带的图没收（超过 4 MB、格式不对、传不上去，见后端 api.main 的 _upload）：这句话没发出去，对话里什么都没多，话和图都放回输入框
-      if (image && [413, 415, 502].includes(e.status)) {
-        setPutBack({ thread: tidRef.current || "new", text: said, image, rejected: true });
+      if (images && [413, 415, 502].includes(e.status)) {
+        setPutBack({ thread: tidRef.current || "new", text: said, images, rejected: true });
         setError(`${uploadErrorText(e.status)}，话和图都放回输入框了`);
         setBusy(false);
         setLive(null);
@@ -419,7 +419,7 @@ export default function Workspace() {
       // 额度用完了（429）：话放回输入框，提示里带上什么时候重置，游客还给登录入口；服务器上没有执行要去接
       if (e.status === 429 && e.detail?.code === "credits_exhausted") {
         const text = said ?? extra.edit;
-        if (text) setPutBack({ thread: tidRef.current || "new", text, image, rejected: true });
+        if (text) setPutBack({ thread: tidRef.current || "new", text, images, rejected: true });
         setError({ text: quotaText(e.detail) + (text ? "刚才那句已经放回输入框。" : ""), login: !!e.detail.guest, quota: true });
         refreshCredits();
         setBusy(false);
@@ -428,7 +428,7 @@ export default function Workspace() {
       }
       // 新对话被拒（比如选的模型刚下架）：话放回输入框，重新取能选的模型
       if (!tidRef.current && e.status === 400 && said) {
-        setPutBack({ thread: "new", text: said, image, rejected: true });
+        setPutBack({ thread: "new", text: said, images, rejected: true });
         setError("这句话没发出去，已经放回输入框：选的模型现在用不了，换一个再发。");
         loadModels().catch(() => {});
         setBusy(false);
@@ -449,8 +449,8 @@ export default function Workspace() {
             return await follow(tidRef.current, g, errs, r);
           }
         } else {
-          setPutBack({ thread: tidRef.current || "new", text, image, rejected: true });
-          setError(errorText(image ? "这句话没发出去，话和图都放回输入框了" : "这句话没发出去，已经放回输入框", e));
+          setPutBack({ thread: tidRef.current || "new", text, images, rejected: true });
+          setError(errorText(images ? "这句话没发出去，话和图都放回输入框了" : "这句话没发出去，已经放回输入框", e));
         }
         setBusy(false);
         setLive(null);
@@ -460,7 +460,7 @@ export default function Workspace() {
       const recoverable = tidRef.current && (!e.status || e.status === 400 || e.status === 409);
       // 被拒的话（说的、改的）服务器没存下来：不再显示在对话里，放回输入框，和排队没排上一样
       const lost = recoverable && e.status ? said ?? extra.edit : null;
-      if (lost) setPutBack({ thread: tidRef.current, text: lost, image });
+      if (lost) setPutBack({ thread: tidRef.current, text: lost, images });
       if (e.status || !recoverable) setError(errorText(lost ? "这句话没发出去，已经放回输入框" : extra.what || (said ? "这句话没发出去" : "这一步没做成"), e));
       if (recoverable) {
         const rejected = e.status ? { said: null, edit: undefined, sentAt: undefined } : {};
@@ -474,12 +474,12 @@ export default function Workspace() {
 
   const act = {
     // 新对话带上选的模型（没取到列表就不带，按 Auto）；之后每句话带上深度思考开关（对话定下的模型能开关才带）。
-    // image：这句话带的图（{file, url}，见 Composer），排着的话不带图
-    start: (text, image) => run((cb, sig) => createResearchThread(text, { model: picked, ...thinkOpts(), image: image?.file }, cb, sig), text, { image }),
-    say: (text, image) => {
+    // images：这句话带的图（[{key, file, url}]，见 Composer），排着的话不带图
+    start: (text, images = []) => run((cb, sig) => createResearchThread(text, { model: picked, ...thinkOpts(), images: images.map((i) => i.file) }, cb, sig), text, { images }),
+    say: (text, images = []) => {
       const id = tidRef.current;
-      const opts = { ...thinkOpts(), image: image?.file };
-      return run((cb, sig) => sayResearch(id, text, opts, cb, sig), text, { image });
+      const opts = { ...thinkOpts(), images: images.map((i) => i.file) };
+      return run((cb, sig) => sayResearch(id, text, opts, cb, sig), text, { images });
     },
     retry: () => run((cb, sig) => retryResearchThread(tidRef.current, cb, sig), null, { what: "没能重试" }),
     // 最后一轮的旧回答先藏起来，新回答在同一轮里接着出现

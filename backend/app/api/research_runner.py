@@ -13,7 +13,7 @@ import contextvars
 import time
 import traceback
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -82,11 +82,11 @@ DELTA_S = 0.08  # 逐字片段攒这么久发一次
 SENT_AT = "sent_at"  # 用户那句话的发送时间，记在消息的 additional_kwargs 里（不会发给模型）
 
 
-def _said(text: str, thinking: bool | None = None, image: AttachedImage | None = None, **kw: Any) -> HumanMessage:
-    """用户的话。thinking 是发的时候输入框旁边的思考开关（没给按选项的默认，见 model_catalog.Catalog.plan）；image 是这句话带的图。"""
+def _said(text: str, thinking: bool | None = None, images: Sequence[AttachedImage] = (), **kw: Any) -> HumanMessage:
+    """用户的话。thinking 是发的时候输入框旁边的思考开关（没给按选项的默认，见 model_catalog.Catalog.plan）；images 是这句话带的图。"""
     extra: dict[str, Any] = {history.THINK: thinking} if thinking is not None else {}
-    if image is not None:
-        extra[history.ATTACHED] = image.model_dump()
+    if images:
+        extra[history.ATTACHED] = [i.model_dump() for i in images]
     return HumanMessage(content=text.strip(), additional_kwargs={SENT_AT: now(), **extra}, **kw)
 
 
@@ -175,9 +175,8 @@ def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
                 cur["items"].append({"type": "guide", "id": m.id, "text": history.text_of(m), "sent_at": m.additional_kwargs.get(SENT_AT, "")})
         elif isinstance(m, HumanMessage):
             t = by_id.get(m.id)
-            img = history.attached_image(m)
             cur = {"id": m.id, "user": history.text_of(m), "sent_at": m.additional_kwargs.get(SENT_AT, ""), "items": [],
-                   "image": img.model_dump() if img else None,
+                   "images": [i.model_dump() for i in history.attached_images(m)],
                    "record": {**t.model_dump(exclude={"id"}), "credits": costs.credits(t)} if t else None}
             out.append(cur)
         elif cur is not None and isinstance(m, AIMessage):
@@ -368,15 +367,15 @@ class ResearchRunner(BaseRunner):
     # ---- 给接口层的同步方法：在别的线程里调，活交给对话的事件循环 ----
 
     # option 是新对话选的模型（models.toml 里选项的 id，没给是 Auto），定下就不换；thinking 是这句话的思考开关（没给按选项的默认）；
-    # image 是这句话带的图（先用 upload_image 传上去；没开始这一轮要自己 discard_image，见 api.main）
+    # images 是这句话带的图（先用 upload_image 一张张传上去；没开始这一轮要自己 discard_images，见 api.main）
 
     def start(self, thread_id: str, text: str, option: str | None = None, thinking: bool | None = None, owner: str | None = None,
-              image: AttachedImage | None = None) -> AsyncIterator[str]:
+              images: Sequence[AttachedImage] = ()) -> AsyncIterator[str]:
         """owner 是这段新对话归谁（见 app.identity 和 run_store 的 thread_owners）；命令行、评测不传，对话就没归谁（页面上谁都看不到）。"""
-        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking, option, owner, image), "new")))
+        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking, option, owner, images), "new")))
 
-    def say(self, thread_id: str, text: str, thinking: bool | None = None, image: AttachedImage | None = None) -> AsyncIterator[str]:
-        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking, image=image), "say")))
+    def say(self, thread_id: str, text: str, thinking: bool | None = None, images: Sequence[AttachedImage] = ()) -> AsyncIterator[str]:
+        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aaccept(thread_id, text, thinking, images=images), "say")))
 
     def upload_image(self, data: bytes) -> AttachedImage:
         """用户发的图传进 image-service（归灵稿，和画的图放在一起），返回记在消息上的信息。
@@ -384,9 +383,10 @@ class ResearchRunner(BaseRunner):
         got = aio.run(self.images.upload_image(data))
         return AttachedImage(id=got["id"], mime_type=got["mime_type"], width=got["width"], height=got["height"])
 
-    def discard_image(self, image_id: str) -> None:
-        """传上去了、这一轮却没开始（运行中、额度、模型不对）：删掉，不留没人指着的图。删不掉只记日志。"""
-        aio.run(self.images.delete_images([image_id]))
+    def discard_images(self, image_ids: list[str]) -> None:
+        """传上去了、这一轮却没开始（运行中、额度、模型不对，后面的图没传上去）：删掉，不留没人指着的图。删不掉只记日志。"""
+        if image_ids:
+            aio.run(self.images.delete_images(image_ids))
 
     def retry(self, thread_id: str) -> AsyncIterator[str]:
         return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aretry_input(thread_id), "retry")))
@@ -806,7 +806,7 @@ class ResearchRunner(BaseRunner):
     # ---- 一轮的输入 ----
 
     async def _aaccept(self, thread_id: str, text: str, thinking: bool | None = None, option: str | None = None, owner: str | None = None,
-                       image: AttachedImage | None = None) -> None:
+                       images: Sequence[AttachedImage] = ()) -> None:
         """把用户的话写进检查点，agent 从这里接着跑（输入为 None）。
 
         先落盘再交出执行：排队时服务重启也查得到这句话，算没跑完，可以重试。
@@ -818,7 +818,7 @@ class ResearchRunner(BaseRunner):
         snap = await self.graph.aget_state(cfg)
         if snap.values and snap.next:
             raise NotIdle("上一轮没跑完，先重试")
-        update: dict[str, Any] = {"messages": [_said(text, thinking, image)]}
+        update: dict[str, Any] = {"messages": [_said(text, thinking, images)]}
         if option is not None:
             if option not in {o.id for o in self.planner.catalog.offered(self.planner.usable)}:
                 raise UnknownModel(f"没有这个模型可选：{option}")
@@ -852,7 +852,7 @@ class ResearchRunner(BaseRunner):
         human = msgs[start]
         turns = [t for t in v.get("turns", []) if t.id != human.id]
         if text is not None:  # 带的图留着：只改了字
-            edited = [_said(text, history.thinking_switch(human) if thinking is None else thinking, history.attached_image(human), id=human.id)]
+            edited = [_said(text, history.thinking_switch(human) if thinking is None else thinking, history.attached_images(human), id=human.id)]
         elif thinking is not None:
             edited = [human.model_copy(update={"additional_kwargs": {**human.additional_kwargs, history.THINK: thinking}})]
         else:

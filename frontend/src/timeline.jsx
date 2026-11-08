@@ -10,7 +10,7 @@ import { listInspirations } from "./api.js";
 import shell from "./card.module.css";
 import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelIcon, ModelTools, Pending, enterSends, focusInput, useAutoHeight, useImageDrop } from "./composer.jsx";
 import { failureText } from "./errors.js";
-import { IconBook, IconCheck, IconChevron, IconCloudSun, IconCopy, IconDownload, IconEdit, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, Spinner } from "./icons.jsx";
+import { IconBook, IconCheck, IconChevron, IconCloudSun, IconCopy, IconDownload, IconEdit, IconEye, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, Spinner } from "./icons.jsx";
 import { ImageCards, Viewer, drawn, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
@@ -171,9 +171,9 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   const dropping = useImageDrop(mainRef, mode !== "opening");
   // 回答时（包括还在排队、正在停止）发的话排着，这一轮答完就发；新对话刚发出去、还没拿到 id 时排不了
   const queueing = !!tid && (mode === "busy" || mode === "queued");
-  const onSend = (text, image) => { // image：带的图（{file, url}），排着的话不带
-    if (mode === "new") return act.start(text, image);
-    if (mode === "idle") return act.say(text, image);
+  const onSend = (text, images) => { // images：带的图（[{key, file, url}]），排着的话不带
+    if (mode === "new") return act.start(text, images);
+    if (mode === "idle") return act.say(text, images);
     if (queueing) return act.queue(text);
     return undefined;
   };
@@ -486,7 +486,7 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models, modelNa
   const turns = st?.turns || [];
   const running = busy || ACTIVE.has(st?.status);
   // 刚说的话还没出现在存下来的对话里：先按页面手上的显示
-  const pending = live?.said && turns.length <= (live.turnsAtStart ?? 0) ? { id: "pending", user: live.said, items: [], record: null, local: live.image?.url } : null;
+  const pending = live?.said && turns.length <= (live.turnsAtStart ?? 0) ? { id: "pending", user: live.said, items: [], record: null, local: live.images?.map((i) => i.url) } : null;
   const all = pending ? [...turns, pending] : turns;
   let shots = 0;
   // 每一轮一个 section：轮次目录跳过来的落点（data-turn 是第几轮，从 0 数；正在发的那句还没 id，按位置记），这一轮在跑时 aria-busy
@@ -525,7 +525,7 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
   const who = ref && models?.length > 0 ? named?.name || modelName(models, ref) : null;
   return (
     <>
-      {t.user && <UserMsg text={live?.edit ?? t.user} image={t.image} src={userImageSrc(t, live, st?.thread_id)} at={live?.sentAt ?? t.sent_at} pinned={last} now={now}
+      {t.user && <UserMsg text={live?.edit ?? t.user} images={userImages(t, live, st?.thread_id)} at={live?.sentAt ?? t.sent_at} pinned={last} now={now}
         editable={last && idle} onEdit={act.edit} />}
       <div className={styles.ai}>
         {who && <div className={styles.aiHead}><ModelIcon m={{ model: ref, name: who, icon: named?.icon }} size={22} />{who}</div>}
@@ -558,26 +558,36 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
 // 发出去的图在本机的地址（图的编号 → blob 地址）：存下来的对话回来以后接着用它显示，不用再从服务器取一遍
 const sentImages = new Map();
 
-// 这句话带的图从哪儿取：刚发出去、还没存下来的用本机的；发出去的这一轮记下本机地址，之后接着用（不再从服务器取一遍）；别的从后端取
-function userImageSrc(t, live, tid) {
-  if (t.local) return t.local;
-  if (!t.image || !tid) return null;
-  if (live?.image?.url && !sentImages.has(t.image.id)) sentImages.set(t.image.id, live.image.url);
-  return sentImages.get(t.image.id) || imageUrl(tid, t.image);
+// 这句话带的图（[{img, src}]）从哪儿取：刚发出去、还没存下来的用本机的；发出去的这一轮记下本机地址（按发的先后对上），之后接着用
+// （不再从服务器取一遍）；别的从后端取
+function userImages(t, live, tid) {
+  if (t.local) return t.local.map((src) => ({ src }));
+  if (!t.images?.length || !tid) return [];
+  return t.images.map((img, k) => {
+    const mine = live?.images?.[k]?.url;
+    if (mine && !sentImages.has(img.id)) sentImages.set(img.id, mine);
+    return { img, src: sentImages.get(img.id) || imageUrl(tid, img) };
+  });
 }
 
-// 用户说的话带的图：气泡上面一张缩略图（不超过 240px 见方），点开看大图；图已经不在了（删掉的）说一声
+// 用户说的话带的图，在气泡上面：一张是缩略图（不超过 240px 见方），几张是一排方块；点开看大图
+function UserImages({ list }) {
+  if (list.length === 1) return <UserImage key={list[0].src} img={list[0].img} src={list[0].src} />;
+  return <div className={styles.userImgs}>{list.map((p, k) => <UserImage key={p.src} img={p.img} src={p.src} n={k + 1} square />)}</div>;
+}
+
+// 一张图：图已经不在了（删掉的）说一声
 const THUMB = 240;
-function UserImage({ img, src }) {
+function UserImage({ img, src, n, square }) {
   const [failed, setFailed] = useState(false);
   const [viewing, setViewing] = useState(null);
-  const k = img?.width && img?.height ? Math.min(THUMB / img.width, THUMB / img.height, 1) : 0;
+  const k = !square && img?.width && img?.height ? Math.min(THUMB / img.width, THUMB / img.height, 1) : 0;
   const box = k ? { width: Math.round(img.width * k), aspectRatio: `${img.width} / ${img.height}` } : undefined;
   return (
-    <div className={styles.userImg} style={box}>
+    <div className={styles.userImg + (square ? " " + styles.square : "")} style={box}>
       {failed ? <span className={styles.userImgGone}>图片取不到了</span> : (
-        <button className={styles.userImgOpen} aria-label="看大图" onClick={(e) => setViewing(e.currentTarget)}>
-          <img src={src} alt="发的图" onError={() => setFailed(true)} />
+        <button className={styles.userImgOpen} aria-label={n ? `看第 ${n} 张大图` : "看大图"} onClick={(e) => setViewing(e.currentTarget)}>
+          <img src={src} alt={n ? `发的第 ${n} 张图` : "发的图"} onError={() => setFailed(true)} />
         </button>
       )}
       {viewing && <Viewer img={{ alt: "发的图" }} src={src} onClose={() => { viewing.focus(); setViewing(null); }} />}
@@ -586,13 +596,13 @@ function UserImage({ img, src }) {
 }
 
 // 用户说的话：下面是发送时间和“复制”，最后一句在空闲时还有“编辑”。都一直显示，pinned（最后一轮）以外的淡一档
-function UserMsg({ text, image, src, at, pinned, now, editable, onEdit }) {
+function UserMsg({ text, images, at, pinned, now, editable, onEdit }) {
   const [editing, setEditing] = useState(false);
   useEffect(() => { if (!editable) setEditing(false); }, [editable]); // 开着编辑框时这一轮又跑起来了（点了重新回答、推荐问题），编辑框就收起
   if (editing && editable) return <EditBox text={text} onCancel={() => { setEditing(false); focusInput(); }} onSend={(t) => { setEditing(false); onEdit(t); }} />;
   return (
     <div className={styles.user}>
-      {src && <UserImage key={src} img={image} src={src} />}
+      {images.length > 0 && <UserImages list={images} />}
       <Bubble text={text} />
       <div className={styles.userFoot + (pinned ? " " + styles.pinned : "")}>
         <Stamp iso={at} now={now} />
@@ -925,7 +935,7 @@ function Thinking({ it, running, thinking }) {
 // 还没有结果的一步（pending）：这一轮在跑就是还在做；没在跑了（这一轮出错停在这一步）就是没有完成，和子任务卡一样说
 function ToolRow({ s, running }) {
   const Icon = { read: IconPage, weather: IconCloudSun, place: IconPin, route: IconRoute, flight: IconPlane, train: IconTrain, itinerary: IconTicket,
-    image: IconImage, docs: IconBook }[s.kind] || IconSearch;
+    image: IconImage, docs: IconBook, view: IconEye }[s.kind] || IconSearch;
   const busy = running && s.pending;
   let main, sub;
   let bad = !s.ok;
@@ -957,6 +967,9 @@ function ToolRow({ s, running }) {
   } else if (s.kind === "docs") { // 灰色小标是哪个库
     main = <>查文档「{s.text}」{s.limits.map((l) => <span key={l} className={proc.lim}>{l}</span>)}</>;
     sub = s.pending ? "查询中…" : s.ok ? (s.hits ? `${s.hits} 段文档` : "没有带出处的文档") : `没查成：${s.message || "出错了"}`;
+  } else if (s.kind === "view") { // 看不见图的模型调看图工具：问的是什么
+    main = <>看图「{s.text}」</>;
+    sub = s.pending ? "查看中…" : s.ok ? "看过了" : s.message || "没看成";
   } else if (s.kind === "image") {
     main = <>{s.edit ? "改图" : "画图"}「{s.text}」</>;
     sub = s.pending ? "生成中…" : s.image ? "已生成" : `没画成：${s.message || "出错了"}`;
@@ -989,6 +1002,7 @@ const PHASES = {
 const WAITING = [
   ["task", (n) => `${n} 个子任务在查`],
   ["image", () => "正在画图"],
+  ["view", () => "正在看图"],
   ["read", (n) => (n > 1 ? `正在读 ${n} 个网页` : "正在读网页")],
   ["search", (n) => (n > 1 ? `正在搜 ${n} 组关键词` : "正在搜索")],
   ["docs", () => "正在查文档"],

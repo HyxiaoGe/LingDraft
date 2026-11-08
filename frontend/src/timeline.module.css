@@ -16,6 +16,11 @@
 .userImgOpen { display: block; width: 100%; height: 100%; cursor: zoom-in; }
 .userImg img { max-width: 240px; max-height: 240px; }
 .userImg[style] img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: cover; }
+/* 几张图：一排方块（照豆包），放不下换行，靠右 */
+.userImgs { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 80%; }
+.userImg.square { width: 112px; height: 112px; max-width: none; flex: none; }
+.userImg.square img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: cover; }
+@media (max-width: 720px) { .userImg.square { width: 88px; height: 88px; } }
 .userImgGone { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; min-height: 48px; padding: 8px 12px; font-size: 12px; color: var(--muted); }
 /* 自己说的话：字和回答、输入框一样 16px（2026-11-07 Sean 定，原来 14），写的和发出去看到的一样大 */
 .bubble { background: var(--side); border: 1px solid var(--line); border-radius: var(--r-lg) var(--r-lg) 4px var(--r-lg); padding: 9px 14px; font-size: 16px; max-width: 80%;

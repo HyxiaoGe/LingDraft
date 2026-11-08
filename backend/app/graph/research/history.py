@@ -37,14 +37,16 @@ from app.graph.research.state import (
 BLOCKED = "lingdraft_blocked"  # 一轮因内容审核停下时，系统补的那条模型消息 response_metadata 里的键，值是原因（见 agent.ContentGuard）
 STOPPED = "lingdraft_stopped"  # 用户点了停止时，已经流出来的那部分正文存成的模型消息 response_metadata 里的键
 GUIDE = "lingdraft_guide"  # 用户插进正在跑的这一轮的话：这条用户消息 additional_kwargs 里的键（见 agent.TurnMiddleware.abefore_model）
-ATTACHED = "lingdraft_image"  # 用户这句话带的图（AttachedImage）：用户消息 additional_kwargs 里的键（不会发给模型，给模型的说明见 image_mcp）
+ATTACHED = "lingdraft_image"  # 用户这句话带的图（AttachedImage 的列表，11-08 以前是一张）：用户消息 additional_kwargs 里的键（给模型的怎么组织见 app.tools.vision）
+MAX_ATTACHED = 4  # 一句话最多带几张图
 IMAGE_TOOL = "generate_image"
+VIEW_TOOL = "view_image"  # 看图工具：看不见图的模型问图里有什么（见 app.tools.vision）
 PLACE_TOOL, ROUTE_TOOL = "place_search", "route_compare"  # 地图的两个工具（见 app.tools.maps_mcp）
 FLIGHT_TOOL, TRAIN_TOOL = "search_flights", "search_trains"  # flyai 的两个工具（见 app.tools.flyai_mcp）
 ITINERARY_TOOL = "present_itinerary"  # 灵稿自己的排行程（见 app.tools.flyai_mcp）
 TRAVEL_KINDS = {FLIGHT_TOOL: "flight", TRAIN_TOOL: "train"}
 STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", PLACE_TOOL: "place", ROUTE_TOOL: "route",
-              **TRAVEL_KINDS, ITINERARY_TOOL: "itinerary", IMAGE_TOOL: "image", SUBAGENT_TOOL: "task", LIBRARY_TOOL: "library", DOCS_TOOL: "docs"}
+              **TRAVEL_KINDS, ITINERARY_TOOL: "itinerary", IMAGE_TOOL: "image", VIEW_TOOL: "view", SUBAGENT_TOOL: "task", LIBRARY_TOOL: "library", DOCS_TOOL: "docs"}
 BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
 # 没画成的原因在页面上的说法（照 Fusion 的图片卡片），没列的都说“图片生成失败”
 IMAGE_FAILURES = {
@@ -213,6 +215,8 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         text, extra = _text(args.get("libraryName")), {}
     elif kind == "docs":
         text, extra = _text(args.get("query")), {"limits": [_text(args.get("libraryId"))] if args.get("libraryId") else []}
+    elif kind == "view":
+        text, extra = _text(args.get("question")), {}
     else:
         text, extra = str(args.get("url" if kind == "read" else "location", "")), {}
     if result is None:
@@ -231,6 +235,8 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         return _itinerary_step(cid, text, result)
     if kind in ("library", "docs"):
         return _docs_step(kind, cid, text, extra, result)
+    if kind == "view":
+        return ToolStep(id=cid, kind=kind, text=text, ok=result.status != "error", message="" if result.status != "error" else "没看成", **extra)
     data = parse(result)
     if kind == "weather":
         return _weather_step(cid, text, data, result)
@@ -601,23 +607,24 @@ def image_of(m: BaseMessage) -> GeneratedImage | None:
         return None
 
 
-def attached_image(m: BaseMessage) -> AttachedImage | None:
-    """用户这句话带的图；没带是 None。"""
+def attached_images(m: BaseMessage) -> list[AttachedImage]:
+    """用户这句话带的图，按发的先后；没带是空的。11-08 以前存的是一张（不是列表），一样认；格式不对的那张不算。"""
     raw = m.additional_kwargs.get(ATTACHED) if isinstance(m, HumanMessage) else None
-    if not isinstance(raw, dict):
-        return None
-    try:
-        return AttachedImage.model_validate(raw)
-    except ValidationError:
-        return None
+    out = []
+    for r in [raw] if isinstance(raw, dict) else raw if isinstance(raw, list) else []:
+        try:
+            out.append(AttachedImage.model_validate(r))
+        except ValidationError:
+            pass
+    return out
 
 
 def owned_image_ids(messages: list[BaseMessage]) -> list[str]:
     """这些消息里存在 image-service 里的图的编号：用户发的、画好的，按先后。删对话、重新回答时删掉它们；改图只认它们。"""
     ids = []
     for m in messages:
-        if att := attached_image(m):
-            ids.append(att.id)
+        if att := attached_images(m):
+            ids += [a.id for a in att]
         elif (img := image_of(m)) and img.stored:
             ids.append(img.id)
     return ids

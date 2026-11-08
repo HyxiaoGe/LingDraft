@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator,
 
 PATH = Path(__file__).with_name("models.toml")
 AUTO = "auto"
-ROLES = ("title", "suggest", "probe", "summarize", "dream", "judge", "route")
+ROLES = ("title", "suggest", "probe", "summarize", "dream", "judge", "route", "vision")
 FREE_TIER = "free_tier"  # 免费额度的调用记账时的价格类型（见 Catalog.rate）
 # 谁在用：游客（没登录也能聊）、登录用户、管理员，从低到高（2026-11-06 Sean 定，credits 的额度也按这三档）。选项的 access 是最低哪一档能选
 TIERS = ("guest", "user", "admin")
@@ -58,6 +58,7 @@ class Option(BaseModel):
     subagent: Subagent | None = None
     status: Literal["", "hidden", "retired"] = ""
     access: Access = "user"  # 不写是要登录：新加的模型默认不给游客
+    vision: bool = False  # 看得见图：用户发的图直接给它看；看不见的调看图工具（见 Catalog.sees）。只写实测过的
 
     def refs(self) -> tuple[str, str]:
         return self.model, (self.subagent.model if self.subagent else self.model)
@@ -148,6 +149,7 @@ class Free(BaseModel):
     icon: str = Field(default="", description="页面上用哪家的图标（厂商前缀，比如 moonshot）；不写按 same_as 的厂商，没有 same_as 按 model 的（托管在百炼上的 Kimi 就要写）")
     until: date = Field(description="控制台写的到期日：这天北京时间 0 点起不再用（不赌控制台的日期算到当天几点）")
     same_as: str = Field(default="", description="直连的同一个模型（某个选项的 model，厂商:模型）；没有对应的选项就不写，只给 Auto 用")
+    vision: bool | None = Field(default=None, description="看不看得见图；不写的有 same_as 跟那个选项，没有的算看不见")
 
 
 class AutoRules(BaseModel):
@@ -291,6 +293,13 @@ class Catalog(BaseModel):
 
     def is_free(self, ref: str) -> bool:
         return any(f.model == ref for f in self.free)
+
+    def sees(self, ref: str) -> bool:
+        """这个模型看不看得见图（models.toml 的 vision，2026-11-08 实测）。看不见的不一定报错：DeepSeek V4 Pro 把图丢了、编一个答案，
+        所以只给写了看得见的发图。免费额度没写的跟 same_as 的选项；都不是的（内部用途单用的）算看不见。"""
+        if f := next((f for f in self.free if f.model == ref), None):
+            return f.vision if f.vision is not None else self.sees(f.same_as) if f.same_as else False
+        return any(o.vision for o in self.options if o.model == ref and o.id != AUTO)
 
     def same_as(self, ref: str) -> str:
         """免费额度对应的直连模型（[[free]] 的 same_as）；不是免费额度、没有对应选项的是空的。"""
