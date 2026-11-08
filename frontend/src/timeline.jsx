@@ -8,10 +8,11 @@
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
 import shell from "./card.module.css";
+import { FileCards, fileVersions, turnCards } from "./artifact.jsx";
 import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelIcon, ModelTools, Pending, enterSends, focusInput, useAutoHeight, useImageDrop } from "./composer.jsx";
 import { failureText } from "./errors.js";
 import { SentFiles, fileIndex, partUnit } from "./files.jsx";
-import { IconBook, IconCheck, IconChevron, IconClip, IconCloudSun, IconCopy, IconDownload, IconEdit, IconEye, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, Spinner } from "./icons.jsx";
+import { IconBook, IconCheck, IconChevron, IconClip, IconCloudSun, IconCopy, IconDownload, IconEdit, IconEye, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, IconWrite, Spinner } from "./icons.jsx";
 import { ImageCards, Viewer, drawn, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
@@ -45,7 +46,8 @@ const readingOf = (id) => { try { return JSON.parse(sessionStorage.getItem(READI
 const keepReadingOf = (id, at) => { try { sessionStorage.setItem(READING + id, JSON.stringify(at)); } catch { /* 存不下就只管这一次打开 */ } };
 export const forgetReading = (id) => { try { sessionStorage.removeItem(READING + id); } catch { /* 没有就算了 */ } };
 
-export function Conversation({ st, live, busy, suggesting, error, now, act: rawAct, tid, putBack, listedTitle, models, modelNames, credits, picker, manage, who }) {
+// files：模型写的文件在右栏怎么开（见 artifact.jsx）：{open(目标), current（右栏正开着的，没开是 null）}
+export function Conversation({ st, live, busy, suggesting, error, now, act: rawAct, tid, putBack, listedTitle, models, modelNames, credits, picker, manage, who, files }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
   const lastTop = useRef(0); // 上一次滚动时的位置：往上滚了才算用户离开底部
@@ -257,7 +259,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
         }}>
         <div className={styles.flow}>
           {!fresh && !opening && <h1 className={styles.printTitle}>{title}</h1>/* 只在打印时出现：屏幕上标题在顶栏，打印不印顶栏（第 49 条） */}
-          {fresh ? <Welcome who={who} /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} modelNames={modelNames} title={title} />}
+          {fresh ? <Welcome who={who} /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} modelNames={modelNames} title={title} files={files} />}
           {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error.text ?? error}</span>
             {error.login && picker.onLogin && <button className="ws-btn ws-error-act" onClick={picker.onLogin}>登录</button>}</div>}
         </div>
@@ -483,8 +485,9 @@ function Inspirations({ onPick }) {
 
 // ---------------- 一轮一轮 ----------------
 
-function Turns({ st, live, busy, suggesting, stopping, now, act, models, modelNames, title }) {
+function Turns({ st, live, busy, suggesting, stopping, now, act, models, modelNames, title, files }) {
   const turns = st?.turns || [];
+  const versions = fileVersions(st, live); // 这段对话里写成了的各份文件、各版：卡片和过程里改文件那一步对上标题
   const running = busy || ACTIVE.has(st?.status);
   // 刚说的话还没出现在存下来的对话里：先按页面手上的显示
   const pending = live?.said && turns.length <= (live.turnsAtStart ?? 0)
@@ -501,7 +504,8 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models, modelNa
         shots += imagesOf(t.items).filter(drawn).length;
         return (
           <section key={t.id} className={styles.turn} data-turn={i} tabIndex={-1} aria-label={`第 ${i + 1} 轮`} aria-busy={last && running ? true : undefined}>
-            <Turn t={t} k={`${st?.thread_id}:${i}`} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} models={models} modelNames={modelNames} title={title} images={images} />
+            <Turn t={t} k={`${st?.thread_id}:${i}`} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} models={models} modelNames={modelNames} title={title} images={images}
+              versions={versions} files={files} />
           </section>
         );
       })}
@@ -510,8 +514,9 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models, modelNa
 }
 
 // k：这一轮在页面上的记号（对话 id + 第几轮）。正在发的这一轮存下来以后 id 会变（见 Turns 的 pending），过程展开没展开按 k 记，不跟着重来
-function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, models, modelNames, title, images }) {
+function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, models, modelNames, title, images, versions, files }) {
   const items = mergeItems(t.items, live);
+  const cards = turnCards(items, live?.drafts, versions); // 这一轮写的文件，正文下面一份一张
   const { process, answer } = splitTurn(items);
   const texts = items.filter((i) => i.type === "text").map((i) => i.text);
   const nums = citeNumbers(texts, st?.sources);
@@ -532,14 +537,15 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
         at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && idle} onEdit={act.edit} />}
       <div className={styles.ai}>
         {who && <div className={styles.aiHead}><ModelIcon m={{ model: ref, name: who, icon: named?.icon }} size={22} />{who}</div>}
-        {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} />}
+        {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} failed={failed} now={now} versions={versions} />}
         {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
         {mapsOf(items).map((card) => <MapCard key={card.key} card={card} />)}
         {travelOf(items).map((card) => <TravelCard key={card.key} card={card} />)}
         {itinerariesOf(items).map((card) => <ItineraryCard key={card.key} card={card} />)}
         <ImageCards steps={imagesOf(items)} tid={st?.thread_id} running={running} onRegenerate={last && idle ? act.say : null} title={title} base={images} />
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
-        {running && <LiveLine live={live} items={items} stopping={stopping} now={now} />}
+        {files && <FileCards cards={cards} running={running} open={files.open} current={files.current} />}
+        {running && <LiveLine live={live} items={items} stopping={stopping} now={now} versions={versions} />}
         {!running && <AnswerSources nums={nums} sources={st?.sources} />}
         {!running && rec?.ended_at && rec.outcome === "no_reply" && <p className={styles.muted}>这一轮没有给出文字回复。</p>}
         {failed && <Failed st={st} act={act} />}
@@ -706,7 +712,7 @@ function CopyButton({ text }) {
 }
 
 // 这一轮的过程：一行“已完成 / 已停止 / 已中断 / 中途停下 + 用时 + 做了什么”，点开看每一步。正在跑时展开，跑完不自动收
-function Process({ k, items, st, nums, rec, running, failed, now }) {
+function Process({ k, items, st, nums, rec, running, failed, now, versions }) {
   const [open, toggle, found] = useFoldOpen(`proc:${k}`, running); // 正在跑、这次打开页面里跑过的展开；重新打开的对话收起
   const shown = open && items.length > 0;
   const time = running ? elapsed(st?.running_since || rec?.started_at, now)
@@ -719,7 +725,7 @@ function Process({ k, items, st, nums, rec, running, failed, now }) {
       {items.length
         ? <button className={proc.head} aria-expanded={shown} onClick={toggle}>{label}<IconChevron size={13} className={"chev" + (shown ? " up" : "")} /></button>
         : <div className={proc.head}>{label}</div>}
-      {items.length > 0 && <Fold open={shown} onFound={found}><div className={proc.body}><ProcItems items={items} st={st} nums={nums} running={running} /></div></Fold>}
+      {items.length > 0 && <Fold open={shown} onFound={found}><div className={proc.body}><ProcItems items={items} st={st} nums={nums} running={running} versions={versions} /></div></Fold>}
     </div>
   );
 }
@@ -739,11 +745,12 @@ function didText(items) {
 
 // 过程里的一条条：思考、中途说的话、工具步骤，子任务是一张卡片。子任务卡里是它的子 agent 的这些，排法一样。
 // hideUnknown：子 agent 还在跑，它查到的来源要等它做完才进这一轮的来源表，还对不上的引用先不显示（不然先冒一个问号）
-function ProcItems({ items, st, nums, running, hideUnknown = false }) {
+// versions：这段对话写成了的文件（见 artifact.fileVersions），改文件那一步按它写出是哪份
+function ProcItems({ items, st, nums, running, hideUnknown = false, versions }) {
   const cite = (sid) => (hideUnknown && !st?.sources?.[sid] ? null : <Mark n={nums[sid]} s={st?.sources?.[sid]} nums={nums} sources={st?.sources} />);
   const files = items.some((i) => i.kind === "file") ? fileIndex(st?.turns) : null; // 读文件那一步对上文件名、类型
   return items.map((it) => (it.type === "step" ? (it.kind === "task" ? <TaskCard key={`step:${it.id}`} s={it} st={st} nums={nums} running={running} />
-    : <ToolRow key={`step:${it.id}`} s={it} running={running} files={files} />)
+    : <ToolRow key={`step:${it.id}`} s={it} running={running} files={files} versions={versions} />)
     : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} running={running} thinking={running && it.live && it.ms == null} />
       : it.type === "blocked" ? <div key={`blocked:${it.id}`} className={proc.tool + " " + proc.bad}><IconWarn size={12} /><span className={proc.main}>内容审核没通过，这个子任务停在这里</span></div>
         : it.type === "guide" ? <GuideNote key={`guide:${it.id}`} it={it} />
@@ -940,9 +947,9 @@ function Thinking({ it, running, thinking }) {
 
 // 还没有结果的一步（pending）：这一轮在跑就是还在做；没在跑了（这一轮出错停在这一步）就是没有完成，和子任务卡一样说。
 // files：这段对话里用户发过的文件（见 fileIndex），读文件那一步用
-function ToolRow({ s, running, files }) {
+function ToolRow({ s, running, files, versions }) {
   const Icon = { read: IconPage, weather: IconCloudSun, place: IconPin, route: IconRoute, flight: IconPlane, train: IconTrain, itinerary: IconTicket,
-    image: IconImage, docs: IconBook, view: IconEye, file: IconClip }[s.kind] || IconSearch;
+    image: IconImage, docs: IconBook, view: IconEye, file: IconClip, write: IconWrite }[s.kind] || IconSearch;
   const busy = running && s.pending;
   let main, sub;
   let bad = !s.ok;
@@ -983,6 +990,10 @@ function ToolRow({ s, running, files }) {
     const unit = partUnit(f?.type);
     main = <>读文件{name && <>「{name}」</>}{s.limits.map((l) => <span key={l} className={proc.lim}>找「{l}」</span>)}{s.parts && <span className={proc.lim}>第 {s.parts} {unit}</span>}</>;
     sub = s.pending ? "读取中…" : !s.ok ? s.message || "没读成" : s.limits.length ? (s.hits ? `找到 ${s.hits} ${unit}` : "没找到") : "读过了";
+  } else if (s.kind === "write") { // 模型写文件、改文件：标题（改的没给新标题，按改的那份对上），写成了是第几版
+    const name = s.text || versions?.get(s.target)?.at(-1)?.title;
+    main = <>{s.edit ? "改文件" : "写文件"}{name && <>「{name}」</>}</>;
+    sub = s.pending ? "保存中…" : s.file ? `第 ${s.file.version} 版` : s.message || "没写成";
   } else if (s.kind === "image") {
     main = <>{s.edit ? "改图" : "画图"}「{s.text}」</>;
     sub = s.pending ? "生成中…" : s.image ? "已生成" : `没画成：${s.message || "出错了"}`;
@@ -1017,6 +1028,7 @@ const WAITING = [
   ["image", () => "正在画图"],
   ["view", () => "正在看图"],
   ["file", () => "正在读文件"],
+  ["write", () => "正在保存文件"],
   ["read", (n) => (n > 1 ? `正在读 ${n} 个网页` : "正在读网页")],
   ["search", (n) => (n > 1 ? `正在搜 ${n} 组关键词` : "正在搜索")],
   ["docs", () => "正在查文档"],
@@ -1033,16 +1045,21 @@ const SLOW = 30000; // 同一步这么久没有新进展：说一声比平常慢
 
 // 正在跑的这一轮最下面一行：在等什么、等了几秒（思考、正文在出字时这一行空着，它们自己在动）。
 // 不是读屏的活区：阶段一变就播会打断，开始、答完由 useAnnounce 说
-function LiveLine({ live, items, stopping, now }) {
+function LiveLine({ live, items, stopping, now, versions }) {
   const lastItem = items.at(-1);
   const pending = items.filter((i) => i.type === "step" && i.pending);
   const streaming = lastItem?.live && (lastItem.type === "text" || (lastItem.type === "thinking" && lastItem.ms == null));
   const kind = WAITING.find(([k]) => pending.some((i) => i.kind === k));
+  // 模型正在写文件（参数还在流出来，还没有那一步）：写的字在卡片和右栏里，这里说在写哪份
+  const drafting = Object.values(live?.drafts || {}).filter((d) => !items.some((i) => i.type === "step" && i.id === d.id));
+  const d = drafting.at(-1);
+  const draftName = d && (d.title || versions?.get(d.file_id)?.at(-1)?.title);
+  const draftLine = d && `${d.name === "edit_file" ? "正在修改" : "正在写"}${draftName ? `《${draftName}》` : "文件"}`;
   const stage = stopping ? "正在停止…" : live?.stage || (kind ? kind[1](pending.filter((i) => i.kind === kind[0]).length)
-    : streaming ? null : PHASES[live?.phase] || "正在准备…");
+    : draftLine || (streaming ? null : PHASES[live?.phase] || "正在准备…"));
   // 看得到的进展：条目多了、字长了、子任务里有动静、阶段变了。变了就重新计时
   const sub = pending.filter((i) => i.kind === "task").map((i) => `${i.items?.length ?? 0}.${i.items?.at(-1)?.text?.length ?? 0}.${i.phase}`).join(",");
-  const waited = useWaited(`${items.length}:${lastItem?.text?.length ?? 0}:${pending.length}:${live?.phase}:${stage}:${sub}`, now);
+  const waited = useWaited(`${items.length}:${lastItem?.text?.length ?? 0}:${pending.length}:${live?.phase}:${stage}:${sub}:${drafting.map((d) => d.text.length).join(",")}`, now);
   const secs = stage && !stopping && waited >= SHOW_WAIT ? Math.floor(waited / 1000) : 0;
   return (
     <div className={proc.waiting}>

@@ -16,6 +16,8 @@ import { SettingsDialog } from "./settings.jsx";
 import { Sidebar, withCurrent } from "./sidebar.jsx";
 import { MOBILE, NavContext, isSearchKey, isSideKey, useMedia } from "./nav.jsx";
 import { ACTIVE, QUEUED, addLive, itemKey, saveFile, threadMarkdown, useNow } from "./research.js";
+import { FilePanel } from "./artifact.jsx";
+import { opener } from "./layers.js";
 import { useDoneAlert } from "./alert.jsx";
 import { Conversation, forgetReading } from "./timeline.jsx";
 import { UndoToast, useUndo } from "./undo.jsx";
@@ -98,6 +100,26 @@ export default function Workspace() {
   const [drawer, setDrawer] = useState(false);
   const navFocus = useRef(null); // 收起、展开、关抽屉以后焦点去哪个按钮（按下的那个按钮没了）
   const undo = useUndo(); // 删了能撤销（见 undo.jsx）：对话、记忆共用一条提示
+  // 右栏开着的模型写的文件（见 artifact.jsx）：{call}（正在写的那次调用）或 {series, id}（某份文件的某一版）；换对话就关上。
+  // 用户看着这一轮生成时，头一次收到某次写文件就自动打开（onEvent 里），判断记在这里，不跟着卡片、右栏的组件换来换去丢掉（Fusion 踩过）；
+  // 同一次调用只自动开一次，用户关了就不再开。手机上不自动开：全屏会盖住对话，卡片上看得到在写，点开再看
+  const [file, setFile] = useState(null);
+  const [fileFocus, setFileFocus] = useState(0); // 用户点开的每次加一：光标挪进右栏（自动打开的不抢光标）
+  const autoOpened = useRef(new Set());
+  const fileOpener = useRef(null); // 点开右栏的那个按钮：关上以后光标回去
+  const mobileRef = useRef(mobile);
+  mobileRef.current = mobile;
+  const openFile = (target) => {
+    fileOpener.current = opener();
+    setFile(target);
+    setFileFocus((n) => n + 1);
+  };
+  const closeFile = () => {
+    setFile(null);
+    const back = fileOpener.current;
+    fileOpener.current = null;
+    if (back?.isConnected) back.focus({ preventScroll: true });
+  };
   const [gone, setGone] = useState(() => new Set()); // 点了删除、还在等撤销的对话：列表里不显示（隔几秒取回的列表里还有它）
 
   const setBusy = (b) => {
@@ -211,6 +233,8 @@ export default function Workspace() {
     setSuggesting(false);
     setError(null);
     setBusy(false);
+    setFile(null);
+    autoOpened.current.clear();
     if (how !== "none") navigate(chatPath(id), how === "push");
     if (id) restore(id, gen.current);
   };
@@ -361,6 +385,15 @@ export default function Workspace() {
       refreshList();
     } else if (ev === "delta" || ev === "step" || ev === "restart" || ev === "model") {
       setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
+    } else if (ev === "draft") { // 模型正在写文件：攒着（见 addLive），头一次收到这次调用时在右栏打开（见上面 file）
+      setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
+      if (data.name && !autoOpened.current.has(data.id)) {
+        autoOpened.current.add(data.id);
+        if (!mobileRef.current) {
+          setFile({ call: data.id });
+          setFileFocus(0); // 不抢光标：用户可能正在输入框里打字
+        }
+      }
     } else if (ev === "guide") { // 等着插的话放进这一轮了：从下面挪进过程里。之后又插了一句的话以服务器为准
       setLive((l) => addLive(l, ev, data));
       setSt((s) => (s?.guided_message?.text === data.text ? { ...s, guided_message: null } : s));
@@ -712,13 +745,15 @@ export default function Workspace() {
 
   return (
     <NavContext.Provider value={nav}>
-      <div className={"ws" + (sideOff ? " side-off" : "") + (mobile && drawer ? " drawer" : "")} data-theme={dark ? "dark" : "light"}>
+      <div className={"ws" + (sideOff ? " side-off" : "") + (mobile && drawer ? " drawer" : "") + (file && !mobile ? " with-file" : "")} data-theme={dark ? "dark" : "light"}>
         <Sidebar threads={shownThreads} current={tid} st={st} live={live} busy={busy} now={now} href={chatPath} onSelect={fromSide(select)} manage={manage}
           onSettings={fromSide(() => setSettings("settings"))} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
         <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
           who={auth.ready ? (auth.me ? auth.me.name || "" : null) : earlyWho}
           models={models} modelNames={modelNames} credits={credits} manage={manage}
-          picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }} />
+          picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }}
+          files={{ open: openFile, current: file }} />
+        {file && <FilePanel tid={tid} st={shown} live={live} target={file} onTarget={setFile} onClose={closeFile} focus={fileFocus} />}
         {search && (
           <SearchDialog threads={shownThreads && withCurrent(shownThreads, tid, st, live, busy)} now={now} href={chatPath}
             onOpen={(id) => { setSearch(false); select(id); }} onClose={() => setSearch(false)} />

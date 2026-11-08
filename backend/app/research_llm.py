@@ -50,7 +50,7 @@ from app.tools.image_mcp import ImageTool
 from app.tools.maps_mcp import PLACE_TOOL, ROUTE_TOOL, MapsTool
 from app.tools.research_tools import TIME_TOOL, make_research_tools
 from app.tools.vision import ImageUris, view_prompt
-from app.graph.research.history import FILE_TOOL, VIEW_TOOL
+from app.graph.research.history import CREATE_TOOL, EDIT_TOOL, FILE_TOOL, VIEW_TOOL, WRITE_TOOLS
 from app.tools.weather_mcp import WEATHER_TOOL, WeatherTool
 from app.tools.web_mcp import READ_TOOL, SEARCH_TOOL, WebTool
 
@@ -519,7 +519,7 @@ class LiveResearchPlanner:
         sub 不影响建出来的模型（主 agent、子 agent 用同一个模型时熔断一起断开），只是离线的假实现用它分开主 agent 和子 agent。"""
         if (m := self._models.get(use)) is None:
             m = self._models[use] = make_chat_model(use.ref, thinking=use.thinking, effort=use.effort, callbacks=[ThinkingTimer()],
-                                                    first_token_s=FIRST_TOKEN_S)
+                                                    first_token_s=FIRST_TOKEN_S, max_tokens=self.catalog.max_output)
         return m
 
     def tools(self) -> list:
@@ -1095,6 +1095,8 @@ class FakeToolModel(BaseChatModel):
             return call(TIME_TOOL)
         if "直接答" in text:
             return "直接回答：这个问题不用查。", []
+        if any(k in text for k in ("写文档", "写网页", "写代码文件", "改文档", "重写文档")) and CREATE_TOOL in self.bound:
+            return self._write(text, messages, turn, call)
         if "天气" in text and WEATHER_TOOL in self.bound and WEATHER_TOOL not in names:
             return call(WEATHER_TOOL, location=text.split("天气")[0].strip()[:8] or "广州")
         if "文档" in text and LIBRARY_TOOL in self.bound:
@@ -1228,6 +1230,31 @@ class FakeToolModel(BaseChatModel):
         return f"看到了 {len(tags)} 个文件：" + "、".join(name + ("（开头）" if brief else "") for name, brief in tags) + "。", []
 
     @staticmethod
+    def _write(text: str, messages: list[BaseMessage], turn: list[BaseMessage], call) -> tuple[str, list[dict]]:
+        """写文件：“写文档《X》”新建（“写网页”“写代码文件”换类型），“改文档把A改成B”按片段改最近写的那份，“重写文档”整篇重写；
+        话里有“截断”的，这次输出算到了最长被截断（finish_reason=length）。写完照结果回复。"""
+        if done := next((m for m in reversed(turn) if isinstance(m, ToolMessage) and m.name in WRITE_TOOLS), None):
+            return ("没写成。" if done.status == "error" else "写好了，在右边。"), []
+        cut = {"cut": True} if "截断" in text else {}
+        files = list(history.written_files(messages).values())
+        if files and "改文档" in text and (m := re.search(r"把(.+?)改成(.+?)(?:$|，|。|\s)", text)):
+            return "", [{**call(EDIT_TOOL, file_id=files[-1].series, change_note="按要求改了一处",
+                                edits=[{"old_text": m.group(1), "new_text": m.group(2)}])[1][0], **cut}]
+        if files and "重写文档" in text:
+            return "", [{**call(EDIT_TOOL, file_id=files[-1].series, change_note="整篇重写", content=f"# {files[-1].title}\n\n重写后的内容。\n")[1][0],
+                         **cut}]
+        title = m.group(1) if (m := re.search(r"《(.+?)》", text)) else "调研报告"
+        if "网页" in text:
+            kind, body = "html", f"<!doctype html><html><body><h1>{title}</h1><script>document.body.append('ok')</script></body></html>"
+        elif "代码文件" in text:
+            kind, title, body = "code", "main.py", "def main():\n    print('hello')\n\n\nmain()\n"
+        else:
+            hits = _hits(messages)
+            cite = f" [{hits[0]['id']}]" if hits else ""
+            kind, body = "markdown", f"# {title}\n\n## 一、背景\n\n第一段内容{cite}。\n\n## 二、结论\n\n可以用但不稳定。\n"
+        return "", [{**call(CREATE_TOOL, title=title, type=kind, content=body)[1][0], **cut}]
+
+    @staticmethod
     def _recall(text: str, messages: list[BaseMessage], turn: list[BaseMessage], call) -> tuple[str, list[dict]]:
         """“取回第N轮”取回那一轮；“取回”取回这段对话里第一次搜索的第一个来源。取到了就回复取到的开头。"""
         if done := next((m for m in reversed(turn) if isinstance(m, ToolMessage) and m.name == RECALL), None):
@@ -1254,11 +1281,12 @@ class FakeToolModel(BaseChatModel):
         content, calls = self._decide(messages)
         if content and not calls and (said := [history.text_of(m) for m in messages[_turn_start(messages):] if history.is_guide(m)]):
             content = f"收到：{'；'.join(said)}。{content}"
-        valid = [{**c, "type": "tool_call"} for c in calls if not c.get("invalid")]
+        valid = [{"name": c["name"], "args": c["args"], "id": c["id"], "type": "tool_call"} for c in calls if not c.get("invalid")]
         invalid = [{"name": c["name"], "args": c["args"], "id": c["id"], "error": "bad json", "type": "invalid_tool_call"}
                    for c in calls if c.get("invalid")]
+        meta = {"finish_reason": "length"} if any(c.get("cut") for c in calls) else {}  # 到了最长输出被截断（测写文件，见 _write）
         return AIMessage(content=content, tool_calls=valid, invalid_tool_calls=invalid, id=f"{self.prefix}-{len(messages)}-{uuid4().hex[:8]}",
-                         additional_kwargs={"reasoning_content": "（假思考）先想一想。"}, usage_metadata=FAKE_USAGE)
+                         additional_kwargs={"reasoning_content": "（假思考）先想一想。"}, usage_metadata=FAKE_USAGE, response_metadata=meta)
 
     def _ready(self, messages: list[BaseMessage]) -> AIMessage:
         for g in self.gates:
@@ -1280,7 +1308,8 @@ class FakeToolModel(BaseChatModel):
                for k, tc in enumerate(msg.tool_calls)]
         tcc += [{"name": tc["name"], "args": tc["args"], "id": tc["id"], "index": len(tcc) + k, "type": "tool_call_chunk"}
                 for k, tc in enumerate(msg.invalid_tool_calls)]
-        chunks.append(AIMessageChunk(content="", id=msg.id, tool_call_chunks=tcc, usage_metadata=FAKE_USAGE, chunk_position="last"))
+        chunks.append(AIMessageChunk(content="", id=msg.id, tool_call_chunks=tcc, usage_metadata=FAKE_USAGE, chunk_position="last",
+                                     response_metadata=dict(msg.response_metadata)))
         return chunks
 
     def _pieces(self, msg: AIMessage, messages: list[BaseMessage]) -> Iterator[ChatGenerationChunk]:

@@ -67,7 +67,7 @@ CHINA_TZ = timezone(timedelta(hours=8))
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 # 系统提示词按这个顺序拼（见 prompts.toml 的 [agent]）
 # memory 是长期记忆，没有记忆时不拼（见 memory.py）
-SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "memory", "language")
+SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "files", "memory", "language")
 MEMORY_SECTION = "agent.memory"
 AGENT_PROMPT = tuple(f"agent.{k}" for k in SYSTEM_SECTIONS)
 
@@ -85,8 +85,10 @@ class ChatContext:
     title: str | None = None
     # 这段对话归谁（见 app.identity）：系统提示词里放这个人的记忆。游客的、没归谁的（登录以前的老对话）没有记忆这一段
     owner: str | None = None
-    # 用户发的文件的服务（app.files.service.FileService）：拼给模型、read_file 按编号取文字。命令行、评测没有，文件都当读不了
+    # 文件服务（app.files.service.FileService）：用户发的拼给模型、read_file 按编号取文字，模型写的存进去（create_file / edit_file）。
+    # 命令行、评测没有：用户发的都当读不了，写文件说存不了
     files: Any = None
+    thread_id: str | None = None  # 这段对话的编号：模型写的文件记在这个工作区下
 
 
 def now() -> str:
@@ -436,7 +438,12 @@ class InvalidToolCallRetryMiddleware(AgentMiddleware[_RetryState]):
     @hook_config(can_jump_to=["model"])
     def after_model(self, state: _RetryState, runtime) -> dict[str, Any] | None:
         last = state["messages"][-1] if state.get("messages") else None
-        if not isinstance(last, AIMessage) or last.tool_calls or not last.invalid_tool_calls:
+        if not isinstance(last, AIMessage) or not last.invalid_tool_calls:
+            return None
+        for tc in last.invalid_tool_calls:  # 写文件的参数坏了：页面上流出来的半截换成“没写成”（重试了也照样列着，和存下来的对得上）
+            if step := history.broken_write(tc):  # type: ignore[arg-type]
+                emit({"type": "step", "step": step.model_dump()})
+        if last.tool_calls:
             return None
         n = state.get("invalid_retries", 0)
         if n >= self.max_retries:
@@ -723,10 +730,12 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     from app.tools.vision import make_view_image_tool
     from app.tools.weather_mcp import WeatherMiddleware
     from app.tools.web_mcp import WebToolsMiddleware
+    from app.tools.write_file import make_write_tools
 
     # recall 一直都在（工具列表变了前缀缓存整个断），只有压缩换成说明的内容才用得上；页面上不显示这一步。
     # 排行程（present_itinerary）也一直在，查过航班火车才用得上
-    tools = [*planner.tools(), make_task_tool(planner), make_recall_tool(), itinerary_tool(), make_view_image_tool(planner), make_read_file_tool()]
+    tools = [*planner.tools(), make_task_tool(planner), make_recall_tool(), itinerary_tool(), make_view_image_tool(planner), make_read_file_tool(),
+             *make_write_tools()]
     return create_agent(
         model=planner.chat_model(planner.catalog.plan(None, None, planner.usable).agent),  # 只是占位：每次调模型由 ModelSelect 换上这一轮的
         tools=tools,

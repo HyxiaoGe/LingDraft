@@ -392,9 +392,21 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
       attachRef.current(e.detail);
       focus(true);
     };
+    // 右栏文件里选中一段点了“引用”（见 artifact.jsx 的 quoteText）：放在已经写着的字前面（它自己带着空行），光标停在它后面，接着说怎么改
+    const quote = (e) => {
+      const q = e.detail;
+      if (!q) return;
+      const cur = textRef.current;
+      const next = cur.trim() ? q + cur : q;
+      selectNext.current = [q.length, q.length];
+      setText(next);
+      focus(true);
+    };
     addEventListener("ws-attach-image", take);
+    addEventListener("ws-quote", quote);
     return () => {
       removeEventListener("ws-attach-image", take);
+      removeEventListener("ws-quote", quote);
     };
   }, []);
   useEffect(() => {

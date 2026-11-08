@@ -1,4 +1,5 @@
 """上传的文件：传上来、后台解析、发消息时绑到对话、删对话一起删（2026-11-08 Sean 定，见 docs/图片和文件理解方案.md 的“二、文件”）。
+模型写的文件（Artifact）也在这里存：一版一行、不用解析（见 write、app.tools.write_file）。
 
 - 上传是单独的接口，不经过对话的运行器：存好原件、记一行就回编号，解析排进后台（一次一个，在单独的子进程里，有超时），页面问状态。
   模型正在回答时也能传，别的对话不受影响；要等的只是这句话本身（页面上有文件还在解析，发送按钮先不能点）。
@@ -23,9 +24,9 @@ from pathlib import Path
 from typing import Any
 
 from app import config
-from app.files import parse
-from app.files.parse import Part, Unreadable
-from app.files.store import FAILED, PARSING, READY, FileRow, FileStore
+from app.files import artifacts, parse
+from app.files.parse import OUTLINE_MAX, Part, Unreadable
+from app.files.store import FAILED, GENERATED, PARSING, READY, FileRow, FileStore
 from app.graph.research.history import MAX_FILES
 from app.graph.research.state import AttachedFile
 from app.quota import day_start
@@ -262,7 +263,7 @@ class FileService:
         return [attached(r) for r in rows if r is not None]
 
     async def content(self, fid: str) -> tuple[FileRow, list[Part]] | None:
-        """给模型的：文件的那一行和全部段落。上传的原件不会变，按编号缓存，超过 CACHE_CHARS 先丢最久没用的。"""
+        """给模型的：文件的那一行和全部段落。上传的原件、模型写的每一版都不会变，按编号缓存，超过 CACHE_CHARS 先丢最久没用的。"""
         if (got := self._cache.get(fid)) is not None:
             self._cache.move_to_end(fid)
             return got
@@ -277,14 +278,54 @@ class FileService:
             self._cached -= sum(len(p.text) for p in old)
         return row, parts
 
-    async def delete_workspace(self, workspace_id: str) -> None:
-        """删对话：这段对话的文件、文字、原件一起删。原件没删掉只记日志（没人指着，只占磁盘）。"""
-        rows = await self.store.of_workspace(workspace_id)
+    # ---- 模型写的文件（见 app.tools.write_file）----
+
+    async def write(self, *, owner: str, workspace_id: str, turn_id: str, title: str, kind: str, content: str, note: str = "",
+                    prev_id: str | None = None, series_id: str | None = None, version: int = 1) -> FileRow:
+        """存一版：原件写进数据卷，全文切段（段落拼起来就是原文，见 files.artifacts）一起记进表，直接是 READY。
+        第一版不给 prev_id、series_id；之后的给上一版的编号、第一版的编号和这一版是第几版（版本号按对话里的消息数，见 history.written_files）。"""
+        fid = f"file-{uuid.uuid4().hex[:16]}"
+        rel = f"{fid[5:7]}/{fid}"
+        data = content.encode()
+        name = artifacts.file_name(title, kind)
+        meta: dict[str, Any] = {"title": title, "chars": len(content), "note": note}
+        if kind == artifacts.CODE:
+            meta["lang"] = artifacts.lang_of(name)
+        if kind == artifacts.MARKDOWN:
+            meta["outline"] = artifacts.outline(content)[:OUTLINE_MAX]
+        row = FileRow(id=fid, owner=owner, workspace_id=workspace_id, origin=GENERATED, name=name, type=kind, size=len(data), storage=rel,
+                      status=READY, meta=meta, version=version, prev_id=prev_id, series_id=series_id or fid, turn_id=turn_id)
+        await asyncio.to_thread(self._write, rel, data)
+        try:
+            await self.store.add(row, artifacts.split(content, kind))
+        except BaseException:
+            await asyncio.to_thread(self._unlink, rel)
+            raise
+        got = await self.store.get(fid)
+        assert got is not None
+        return got
+
+    async def text(self, fid: str) -> str | None:
+        """模型写的一版的全文（段落拼起来）；没有了是 None。"""
+        got = await self.content(fid)
+        return "".join(p.text for p in got[1]) if got is not None else None
+
+    async def delete_turn(self, workspace_id: str, turn_id: str) -> int:
+        """重新回答、改了那句话：那一轮写的各版都删掉（连同进程崩掉时写了、对话里没记下的），返回删了几个。"""
+        rows = [r for r in await self.store.of_workspace(workspace_id) if r.origin == GENERATED and r.turn_id == turn_id]
+        await self._drop(rows)
+        return len(rows)
+
+    async def _drop(self, rows: list[FileRow]) -> None:
         await self.store.delete([r.id for r in rows])
         for r in rows:
             if (got := self._cache.pop(r.id, None)) is not None:
                 self._cached -= sum(len(p.text) for p in got[1])
             await asyncio.to_thread(self._unlink, r.storage)
+
+    async def delete_workspace(self, workspace_id: str) -> None:
+        """删对话：这段对话的文件、文字、原件一起删。原件没删掉只记日志（没人指着，只占磁盘）。"""
+        await self._drop(await self.store.of_workspace(workspace_id))
 
     # ---- 清理 ----
 

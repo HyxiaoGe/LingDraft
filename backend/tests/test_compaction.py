@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +16,7 @@ from pydantic import Field
 from app import aio, config
 from app.graph.research import compaction as cp
 from app.graph.research import history
+from app.graph.research.agent import system_prompt
 from app.graph.research.compaction import CompactionMiddleware, compact, recall_source, recall_turn, tokens, turn_order
 from app.graph.research.state import Compaction
 from app.research_llm import FakeResearchPlanner, FakeToolModel
@@ -40,15 +42,19 @@ def tools_tokens() -> float:
     from app.tools.files import make_read_file_tool
     from app.tools.flyai_mcp import itinerary_tool
     from app.tools.vision import make_view_image_tool
+    from app.tools.write_file import make_write_tools
 
     p = FakeResearchPlanner()
     aio.run(p.connect_tools())  # 和运行器里一样，连上 MCP 的工具（搜索、读页、天气……）
     # 和 agent.build_agent 的工具列表一样
-    tools = [*p.tools(), make_task_tool(p), cp.make_recall_tool(), itinerary_tool(), make_view_image_tool(p), make_read_file_tool()]
+    tools = [*p.tools(), make_task_tool(p), cp.make_recall_tool(), itinerary_tool(), make_view_image_tool(p), make_read_file_tool(),
+             *make_write_tools()]
     return CompactionMiddleware(p, tools).tools_tokens
 
 
 TOOLS = tools_tokens()
+# 下面的触发线、目标是按系统提示词约 2700 token 定的（2026-11-08 加写文件那一段以前）：多出来的也加上，系统提示词再改不用重调
+SYSTEM_EXTRA = cp.tokens(system_prompt(datetime.now(UTC))) - 2700
 
 
 def planner(page_repeat: int = 60) -> FakeResearchPlanner:
@@ -59,9 +65,9 @@ def planner(page_repeat: int = 60) -> FakeResearchPlanner:
 
 @pytest.fixture
 def low(monkeypatch):
-    """每轮原样约 1500 token、第一层压过约 300，系统提示词约 2400（再加工具定义）：第三轮过线，之前两轮压完回到目标以下。"""
-    monkeypatch.setattr(config, "COMPACT_TRIGGER_TOKENS", 6000 + TOOLS)
-    monkeypatch.setattr(config, "COMPACT_TARGET_TOKENS", 4500 + TOOLS)
+    """每轮原样约 1500 token、第一层压过约 300，系统提示词约 2700（再加工具定义）：第三轮过线，之前两轮压完回到目标以下。"""
+    monkeypatch.setattr(config, "COMPACT_TRIGGER_TOKENS", 6000 + TOOLS + SYSTEM_EXTRA)
+    monkeypatch.setattr(config, "COMPACT_TARGET_TOKENS", 4500 + TOOLS + SYSTEM_EXTRA)
 
 
 @pytest.fixture
@@ -267,8 +273,8 @@ def test_no_compaction_below_the_line():
 @pytest.fixture
 def summarize_low(monkeypatch):
     """第一层压完还超：目标定得比之前几轮都压过第一层还低，短版按很短估。"""
-    monkeypatch.setattr(config, "COMPACT_TRIGGER_TOKENS", 6000 + TOOLS)
-    monkeypatch.setattr(config, "COMPACT_TARGET_TOKENS", 3000 + TOOLS)
+    monkeypatch.setattr(config, "COMPACT_TRIGGER_TOKENS", 6000 + TOOLS + SYSTEM_EXTRA)
+    monkeypatch.setattr(config, "COMPACT_TARGET_TOKENS", 3000 + TOOLS + SYSTEM_EXTRA)
     monkeypatch.setattr(cp, "SUMMARY_GUESS", 50)
 
 

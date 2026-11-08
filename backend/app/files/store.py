@@ -2,7 +2,9 @@
 
 - 文件按工作区归属：现在一段对话就是一个工作区（workspace_id = 对话编号），以后跨对话的项目是一个工作区挂几段对话，表不用改。
   刚传上来、还没发出去的不归哪个工作区（workspace_id 为空），发出去时绑上（bind）；没发出去的过一天清掉（见 service）。
-- 上传的文件只读（Sean 定）：模型要改只能产出新文件。version、prev_id 留给以后 Artifact 改文件出新版本用，上传的永远是 1。
+- 上传的文件只读（Sean 定）：模型要改只能产出新文件。上传的 version 永远是 1。
+- 模型写的文件（origin = generated，见 app.tools.write_file）每改一次出新一版、一版一行、存全文：prev_id 指上一版，
+  series_id 是第一版的编号（各版串起来），turn_id 是哪一轮写的（那一轮用户那句话的编号）。上传的这两列是空的。
 - 原件存在数据卷上（storage 是相对 config.FILES_DIR 的路径），文字存这里的 file_parts（段号从 1 起，PDF 段号就是页码）。
 
 和运行记录同一个 Postgres、同一个连接池（见 ResearchRunner）；测试用内存的。都是协程，在对话的事件循环里调。
@@ -20,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.files.parse import Part
 
 PARSING, READY, FAILED = "parsing", "ready", "failed"
-UPLOAD = "upload"
+UPLOAD, GENERATED = "upload", "generated"
 DOCUMENT = "document"
 
 
@@ -32,7 +34,7 @@ class FileRow(BaseModel):
     origin: Literal["upload", "generated"] = UPLOAD
     kind: Literal["document", "image"] = DOCUMENT
     name: str
-    type: str  # parse.TYPES 之一
+    type: str  # 上传的是 parse.TYPES 之一；模型写的是 markdown / html / code
     size: int
     storage: str
     status: Literal["parsing", "ready", "failed"] = PARSING
@@ -40,6 +42,8 @@ class FileRow(BaseModel):
     meta: dict[str, Any] = Field(default_factory=dict)
     version: int = 1
     prev_id: str | None = None
+    series_id: str | None = None
+    turn_id: str | None = None
     created_at: str = ""
 
 
@@ -53,7 +57,7 @@ def _iso(t: Any) -> str:
 
 class FileStore(Protocol):
     async def setup(self) -> None: ...
-    async def add(self, row: FileRow) -> None: ...
+    async def add(self, row: FileRow, parts: list[Part] | None = None) -> None: ...  # 模型写的直接带着文字（READY）
     async def get(self, file_id: str) -> FileRow | None: ...
     async def finish(self, file_id: str, status: str, meta: dict, error: str, parts: list[Part]) -> None: ...  # 解析完：状态、文字一起写
     async def parts(self, file_id: str) -> list[Part]: ...
@@ -62,7 +66,7 @@ class FileStore(Protocol):
     async def delete(self, file_ids: list[str]) -> None: ...  # 行和文字一起删（原件由 service 删）
     async def unbound_before(self, at: datetime) -> list[FileRow]: ...
     async def with_status(self, status: str) -> list[FileRow]: ...
-    async def uploads_since(self, owner: str, at: datetime) -> int: ...
+    async def uploads_since(self, owner: str, at: datetime) -> int: ...  # 只算上传的
 
 
 class MemoryFileStore:
@@ -76,10 +80,12 @@ class MemoryFileStore:
     async def setup(self) -> None:
         pass
 
-    async def add(self, row: FileRow) -> None:
+    async def add(self, row: FileRow, parts: list[Part] | None = None) -> None:
         at = _now()
         self._rows[row.id] = row.model_copy(update={"created_at": _iso(at)})
         self._at[row.id] = at
+        if parts is not None:
+            self._parts[row.id] = list(parts)
 
     async def get(self, file_id: str) -> FileRow | None:
         r = self._rows.get(file_id)
@@ -118,7 +124,7 @@ class MemoryFileStore:
         return [r.model_copy(deep=True) for r in self._rows.values() if r.status == status]
 
     async def uploads_since(self, owner: str, at: datetime) -> int:
-        return sum(1 for i, r in self._rows.items() if r.owner == owner and self._at[i] >= at)
+        return sum(1 for i, r in self._rows.items() if r.owner == owner and r.origin == UPLOAD and self._at[i] >= at)
 
 
 _DDL = (
@@ -133,9 +139,12 @@ _DDL = (
     "CREATE INDEX IF NOT EXISTS files_status_idx ON files (status)",
     """CREATE TABLE IF NOT EXISTS file_parts (
         file_id text NOT NULL, n integer NOT NULL, title text NOT NULL, text text NOT NULL, PRIMARY KEY (file_id, n))""",
+    # 2026-11-08 模型写的文件（Artifact）加的两列；表是 PR #102 建的，已经有了的照这里补上
+    "ALTER TABLE files ADD COLUMN IF NOT EXISTS series_id text",
+    "ALTER TABLE files ADD COLUMN IF NOT EXISTS turn_id text",
 )
 _COLS = ("id", "owner", "workspace_id", "origin", "kind", "name", "type", "size", "storage", "status", "error", "meta", "version", "prev_id",
-         "created_at")
+         "series_id", "turn_id", "created_at")
 
 
 class PostgresFileStore:
@@ -157,9 +166,14 @@ class PostgresFileStore:
             cur = await conn.execute(sql, params)
             return cur.rowcount
 
-    async def add(self, row: FileRow) -> None:
+    async def add(self, row: FileRow, parts: list[Part] | None = None) -> None:
         values = row.model_dump() | {"meta": Jsonb(row.meta), "created_at": _now()}
-        await self._exec(f"INSERT INTO files ({', '.join(_COLS)}) VALUES ({', '.join(['%s'] * len(_COLS))})", tuple(values[c] for c in _COLS))
+        async with self.pool.connection() as conn, conn.transaction():
+            await conn.execute(f"INSERT INTO files ({', '.join(_COLS)}) VALUES ({', '.join(['%s'] * len(_COLS))})", tuple(values[c] for c in _COLS))
+            if parts:
+                async with conn.cursor() as cur:
+                    await cur.executemany("INSERT INTO file_parts (file_id, n, title, text) VALUES (%s, %s, %s, %s)",
+                                          [(row.id, n, p.title, p.text) for n, p in enumerate(parts, 1)])
 
     async def get(self, file_id: str) -> FileRow | None:
         rows = await self._rows(f"SELECT {', '.join(_COLS)} FROM files WHERE id = %s", (file_id,))
@@ -203,5 +217,5 @@ class PostgresFileStore:
 
     async def uploads_since(self, owner: str, at: datetime) -> int:
         async with self.pool.connection() as conn:
-            cur = await conn.execute("SELECT count(*) AS n FROM files WHERE owner = %s AND created_at >= %s", (owner, at))
+            cur = await conn.execute("SELECT count(*) AS n FROM files WHERE owner = %s AND origin = %s AND created_at >= %s", (owner, UPLOAD, at))
             return (await cur.fetchone())["n"]

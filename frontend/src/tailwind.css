@@ -112,6 +112,13 @@
      手机上能点的都至少 44px 见方（看得见的部分不一定这么大，用透明的点按区补，在各自的 module 里） */
   @media (max-width: 1100px) { .ws { grid-template-columns: 220px minmax(0, 1fr); } }
   @media (max-width: 720px) { .ws { grid-template-columns: minmax(0, 1fr); } }
+  /* 右栏开着模型写的文件（artifact.jsx）：桌面上和对话分栏，对话变窄，能边看边聊（2026-11-08 Sean 定）。
+     放不下两栏的窄桌面（1023 以下），右栏盖在对话上（见 artifact.module.css），这里不改 */
+  @media (min-width: 1024px) {
+    .ws.with-file { grid-template-columns: 248px minmax(360px, 1fr) minmax(420px, 1.1fr); }
+    .ws.with-file.side-off { grid-template-columns: minmax(360px, 1fr) minmax(420px, 1.1fr); }
+  }
+  @media (min-width: 1024px) and (max-width: 1100px) { .ws.with-file:not(.side-off) { grid-template-columns: 220px minmax(340px, 1fr) minmax(400px, 1fr); } }
 
   /* 打印、另存 PDF（第 49 条，按 Cmd/Ctrl+P）：只印对话本身——标题、每一轮的问题、回答和卡片；
      左栏、顶栏、输入框、轮次目录、各种按钮、接着问都不印。过程只印收起来那一行；回答下面的来源全部展开，每条印出网址。

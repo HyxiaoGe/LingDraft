@@ -23,15 +23,16 @@ const LANG_NAMES = {
 };
 const HTML = new Set(["html", "htm"]);
 
-// lang：小写的语言标记（没写是 ""）；text：代码原文；download：HTML 能不能下载（过程里的话不给）；ready：回答写完了
-export function CodeBlock({ lang, text, download = false, ready = false }) {
+// lang：小写的语言标记（没写是 ""）；text：代码原文；download：HTML 能不能下载（过程里的话不给）；ready：回答写完了。
+// bare：右栏里看整个文件（artifact.jsx）：只要行号和代码，不折叠、没有上面那条（复制、下载在右栏顶上）；还在写的不上色（每来一批字都要整篇重新上色）
+export function CodeBlock({ lang, text, download = false, ready = false, bare = false, still = false }) {
   const [open, setOpen] = useState(false);
   const [copy, setCopy] = useState("idle"); // idle / copying / copied / failed
   const timer = useRef(null);
   const turn = useRef(0); // 代码变了、卸掉了：之前那次复制回来不再改提示
   const id = useId();
   const plain = PLAIN.has(lang);
-  const color = useLazy("code", !plain);
+  const color = useLazy("code", !plain && !still);
   const html = download && HTML.has(lang);
 
   useEffect(() => {
@@ -59,13 +60,36 @@ export function CodeBlock({ lang, text, download = false, ready = false }) {
 
   const lines = text.split("\n");
   const total = lines.length;
-  const long = total > FOLD;
+  const long = !bare && total > FOLD;
   const folded = long && !open;
   const shown = folded ? lines.slice(0, FOLD).join("\n") : text;
   const colored = useMemo(() => (color ? color(shown, lang) : null), [color, shown, lang]);
   const name = plain ? "纯文本" : LANG_NAMES[lang] || lang.toUpperCase();
   const nums = Array.from({ length: folded ? FOLD : total }, (_, i) => i + 1).join("\n");
 
+  const body = (
+    <div id={id} className={styles.scroll} role="region" aria-label={`${name}代码`} tabIndex={0}>
+      <div className={styles.row}>
+        <div className={styles.gutter} aria-hidden="true" style={{ width: `${Math.max(String(total).length * 0.6 + 1, 2.5)}rem` }}>{nums}</div>
+        <div className={styles.column}>
+          <pre className={styles.code}>
+            {colored != null ? <code className="hljs" dangerouslySetInnerHTML={{ __html: colored }} /> : <code>{shown}</code>}
+          </pre>
+          {folded && (
+            <div className={styles.expand}>
+              <div>
+                <button type="button" className={styles.expandButton} onClick={() => setOpen(true)} aria-expanded="false" aria-controls={id}>
+                  <ChevronDown aria-hidden="true" />
+                  <span>显示剩余 {total - FOLD} 行代码</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+  if (bare) return <div className={styles.block + " " + styles.bare}>{body}</div>;
   return (
     <div className={styles.box}>
       <div className={styles.block} data-code-block="true">
@@ -102,26 +126,7 @@ export function CodeBlock({ lang, text, download = false, ready = false }) {
 
         {copy === "failed" && <p role="alert" className={styles.error}>没复制成，可以选中代码手动复制，或者再点一次。</p>}
 
-        <div id={id} className={styles.scroll} role="region" aria-label={`${name}代码`} tabIndex={0}>
-          <div className={styles.row}>
-            <div className={styles.gutter} aria-hidden="true" style={{ width: `${Math.max(String(total).length * 0.6 + 1, 2.5)}rem` }}>{nums}</div>
-            <div className={styles.column}>
-              <pre className={styles.code}>
-                {colored != null ? <code className="hljs" dangerouslySetInnerHTML={{ __html: colored }} /> : <code>{shown}</code>}
-              </pre>
-              {folded && (
-                <div className={styles.expand}>
-                  <div>
-                    <button type="button" className={styles.expandButton} onClick={() => setOpen(true)} aria-expanded="false" aria-controls={id}>
-                      <ChevronDown aria-hidden="true" />
-                      <span>显示剩余 {total - FOLD} 行代码</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+        {body}
       </div>
     </div>
   );

@@ -270,14 +270,31 @@ class AttachedFile(BaseModel):
     chars: int = Field(default=0, description="抽出来的字数")
 
 
+class WrittenFile(BaseModel):
+    """模型写的一份文件的一版（create_file / edit_file，见 app.tools.write_file）。每一版是文件表里的一行、存全文；
+    各版用第一版的编号串起来（series），模型认的是它，读、改的总是这段对话里最新的一版。记在工具结果的 artifact 里，页面画成文件卡片、右栏按 id 取全文。"""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(description="这一版的编号（文件表的行）：页面按它取全文、下载")
+    series: str = Field(description="第一版的编号：模型认的、各版串起来的")
+    version: int
+    title: str
+    type: Literal["markdown", "html", "code"]
+    name: str = Field(description="下载用的文件名（文档 .md、网页 .html，代码是模型给的文件名）")
+    lang: str = Field(default="", description="代码的语言（按扩展名，给高亮用）")
+    chars: int
+    note: str = Field(default="", description="这一版改了什么（模型写的，第 1 版没有）")
+
+
 class ToolStep(BaseModel):
     """一次工具调用，给页面的过程记录用。"""
 
     model_config = ConfigDict(extra="forbid")
     id: str = Field(description="工具调用 id；页面据此把实时进度和存下来的记录对上")
-    kind: Literal["search", "read", "weather", "place", "route", "flight", "train", "itinerary", "image", "view", "file", "task", "library", "docs"]
+    kind: Literal["search", "read", "weather", "place", "route", "flight", "train", "itinerary", "image", "view", "file", "write", "task", "library",
+                  "docs"]
     text: str = Field(description="搜索词 / 网址 / 地名 / 查地点的关键词 / 路线、航班、火车的起终点 / 行程方案的标题 / 画图的描述 / 子任务的标题"
-                                  " / 找的库名 / 查文档的问题 / 读的文件名（还没读完、没读成的是文件编号）")
+                                  " / 找的库名 / 查文档的问题 / 读的文件名（还没读完、没读成的是文件编号）/ 写的文件标题（改文件没给新标题、还没结果的是空的）")
     limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制；查地点在哪查；比路线比哪几种方式；航班、火车的日期和条件；查的是哪个库")
     ok: bool = True
     hits: int = 0  # 搜索返回的条数；找到的候选库、查到的文档段数；在文件里找到的段数
@@ -293,9 +310,11 @@ class ToolStep(BaseModel):
     itinerary: Itinerary | None = Field(default=None, description="排好的行程方案，页面画成行程卡")
     image: GeneratedImage | None = Field(default=None, description="画好的图，页面画成图片卡片")
     aspect_ratio: str = Field(default="", description="画图时要的比例：还没出图时页面按它占位；改图没给比例时是空的")
-    edit: bool = Field(default=False, description="画图是在改之前的一张图")
+    edit: bool = Field(default=False, description="画图是在改之前的一张图；写文件是在改之前的一份（edit_file）")
     prompt: str = Field(default="", description="子任务：主 agent 交给子 agent 的完整说明")
     parts: str = Field(default="", description="读文件：读的哪几段（参数原样，比如 3、5-8、2,7）；PDF 的段就是页，PPT 是张。在文件里找的不填，找的词在 limits")
+    file: WrittenFile | None = Field(default=None, description="写好的一版，页面画成文件卡片")
+    target: str = Field(default="", description="改文件：改的是哪份（文件编号，第一版的）")
 
     @field_validator("title")
     @classmethod
