@@ -35,6 +35,15 @@ def windows(q: Quota, who: Identity):
     return aio.run(q.windows(who))
 
 
+def test_free_tier_calls_count_at_the_normal_price():
+    """免费额度的调用账上是 0 元，额度按算给用户的（billed）扣；之前记的行没有 billed，按 yuan（2026-11-09 Sean 定，见 app.costs）。"""
+    q, u, _ = make()
+    u.put({**row("u1", 0.0), "billed": 0.03})
+    u.put(row("u1", 0.0))  # 改之前的免费额度：没有 billed
+    u.put({**row("u1", 0.01), "billed": 0.01})
+    assert windows(q, U1)[0].used == 40
+
+
 def test_windows_follow_the_beijing_day_and_week():
     q, u, _ = make()
     u.put(row("u1", 0.02))  # 今天：20 credits
@@ -192,10 +201,11 @@ def test_postgres_usage_counts_like_the_memory_one():
     led = costs.PostgresLedger(config.DATABASE_URL)
     led([_full("u1", 0.05, "turn1", now), _full("u1", 0.07, "turn2", now), _full("u1", 0.5, "turn3", now),  # turn3 出错了不算
          _full("u1", 0.9, "turn2", now, purpose="title"), _full("u1", None, "turn2", now), _full("u1", 0.2, "turn2", now - timedelta(days=2)),
-         _full("guest:a", 0.004, "turn9", now), _full("guest:b", 0.006, "turn9", now)])
+         _full("guest:a", 0.004, "turn9", now), _full("guest:b", 0.006, "turn9", now),
+         {**_full("u1", 0.0, "turn2", now), "billed": 0.04}])  # 免费额度的：账上 0 元，算给用户的按正常价
     led._close()
-    assert aio.run(usage.spent("u1", now - timedelta(hours=1))) == pytest.approx(0.12)
-    assert aio.run(usage.spent("u1", now - timedelta(days=3))) == pytest.approx(0.32)
+    assert aio.run(usage.spent("u1", now - timedelta(hours=1))) == pytest.approx(0.16)
+    assert aio.run(usage.spent("u1", now - timedelta(days=3))) == pytest.approx(0.36)
     assert aio.run(usage.spent_by_guests(now - timedelta(hours=1))) == pytest.approx(0.01)
     assert aio.run(usage.spent("nobody", now - timedelta(days=3))) == 0
     assert aio.run(usage.last_reset("u1")) is None

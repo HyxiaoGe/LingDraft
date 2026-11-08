@@ -3,6 +3,8 @@
 2026-11-06 Sean 定：1 credit = ¥0.001 的 API 成本（CREDITS_PER_YUAN），按各模型命中缓存、没命中、输出的单价分开算，要和厂商的账单对得上。
 价格表在 app/models.toml 的 [prices]、[peak]（手动维护，查单价见 model_catalog.Catalog.rate）。额度按这里的账扣（见 app.quota）。
 工具调用也算钱（2026-11-06 Sean 定“都扣”）：画图、搜索、读页这些按次计价（models.toml 的 [tools]），只算成功的，没列的（task、recall、排行程）不收。
+免费额度（models.toml 的 [[free]]）是灵稿省下的钱，不是用户的（2026-11-09 Sean 定）：账上照实记 0 元（yuan），用户的额度照常扣，
+按没有免费额度时会用的那个模型的价格算（billed，见 model_catalog.Catalog.billed_as）。别的调用 billed 就是 yuan。
 
 - 记在哪：model_costs 表（和对话同一个 Postgres），每次调用一行，起标题、推荐问题、压缩、整理记忆、评测这些不算给用户的也记，对账才对得上。
   工具调用也是一行（provider、purpose 都是 tool，model 是工具名）。每行记着对话归谁（owner，登录用户的 id 或 guest:xxx），额度按这个人算。
@@ -39,7 +41,7 @@ from app import config, model_catalog
 
 log = logging.getLogger(__name__)
 
-COST = "lingdraft_cost"  # 模型消息 response_metadata 里的键：这次调用多少元（没填价格、接口没返回用量的没有这个键）
+COST = "lingdraft_cost"  # 模型消息 response_metadata 里的键：这次调用算给用户多少元（billed；没填价格、接口没返回用量的没有这个键）
 CREDITS_PER_YUAN = 1000
 AGENT = "agent"  # 主 agent、子 agent 用的模型的用途；内部用途是 models.toml [roles] 的名字（title、suggest……）
 SUBAGENT = "subagent"
@@ -103,25 +105,35 @@ def _row(ref: str, purpose: str, started: datetime, status: str) -> dict[str, An
     provider, _, model = ref.partition(":")
     return {"started_at": started, "provider": provider, "model": model, "purpose": SUBAGENT if purpose == AGENT and scope.subagent else purpose,
             "thread_id": scope.thread_id, "turn_id": scope.turn_id, "owner": scope.owner, "status": status,
-            "input_tokens": None, "cached_tokens": None, "output_tokens": None, "yuan": None, "rate": None, "version": config.VERSION or None}
+            "input_tokens": None, "cached_tokens": None, "output_tokens": None, "yuan": None, "billed": None, "rate": None,
+            "version": config.VERSION or None}
+
+
+def _rate(kind: str, rate: model_catalog.Rate) -> dict[str, Any]:
+    return {"kind": kind, "cached": rate.cached, "input": rate.input, "output": rate.output}
 
 
 def charge(ref: str, purpose: str, started: datetime, usage: UsageMetadata | None) -> float | None:
-    """一次调完的调用：算钱、记一行，返回多少元。没填价格、接口没给用量的钱数记成不知道，返回 None。"""
-    row, yuan = _row(ref, purpose, started, NO_USAGE), None
+    """一次调完的调用：算钱、记一行，返回算给用户多少元（免费额度的按正常价，见模块说明）。没填价格、接口没给用量的钱数记成不知道，返回 None。"""
+    row, billed = _row(ref, purpose, started, NO_USAGE), None
     if usage:
         inp, out = usage.get("input_tokens") or 0, usage.get("output_tokens") or 0
         cached = (usage.get("input_token_details") or {}).get("cache_read") or 0
         row.update(status=OK, input_tokens=inp, cached_tokens=cached, output_tokens=out)
         cat = _catalog()
-        for msg in cat.stale(ref, started):
+        billed_ref = cat.billed_as(ref)
+        for msg in {*cat.stale(ref, started), *cat.stale(billed_ref, started)}:
             _warn_once(msg)
         if found := cat.rate(ref, started, inp):
             kind, rate = found
-            yuan = rate.yuan(inp, cached, out)
-            row.update(yuan=yuan, rate={"kind": kind, "cached": rate.cached, "input": rate.input, "output": rate.output})
+            row.update(yuan=rate.yuan(inp, cached, out), rate=_rate(kind, rate))
+            billed = row["yuan"]
+            if billed_ref != ref and (found := cat.rate(billed_ref, started, inp)):  # 免费额度：按哪个模型、哪组单价扣的也记上，对得上
+                billed = found[1].yuan(inp, cached, out)
+                row["rate"]["billed_as"] = {"model": billed_ref, **_rate(*found)}
+            row["billed"] = billed
     LEDGER.put(row)
-    return yuan
+    return billed
 
 
 def lost(ref: str, purpose: str, started: datetime, status: str) -> None:
@@ -140,7 +152,7 @@ def charge_tool(name: str, started: datetime) -> float | None:
     if (yuan := tool_price(name)) is None:
         return None
     row = _row(f"{TOOL}:{name}", TOOL, started, OK)
-    row.update(yuan=yuan, rate={"kind": "per_call", "call": yuan})
+    row.update(yuan=yuan, billed=yuan, rate={"kind": "per_call", "call": yuan})
     LEDGER.put(row)
     return yuan
 
@@ -303,7 +315,7 @@ class Ledger:
 LEDGER = Ledger()
 
 _COLUMNS = ("started_at", "provider", "model", "purpose", "thread_id", "turn_id", "owner", "status",
-            "input_tokens", "cached_tokens", "output_tokens", "yuan", "rate", "version")
+            "input_tokens", "cached_tokens", "output_tokens", "yuan", "billed", "rate", "version")
 _DDL = (
     """CREATE TABLE IF NOT EXISTS model_costs (
         seq BIGSERIAL PRIMARY KEY,
@@ -319,6 +331,7 @@ _DDL = (
         cached_tokens INTEGER,
         output_tokens INTEGER,
         yuan DOUBLE PRECISION,
+        billed DOUBLE PRECISION,
         rate JSONB,
         version TEXT
     )""",
@@ -326,6 +339,8 @@ _DDL = (
     "CREATE INDEX IF NOT EXISTS model_costs_turn ON model_costs (thread_id, turn_id)",
     "ALTER TABLE model_costs ADD COLUMN IF NOT EXISTS owner TEXT",  # 2026-11-06 加的（额度按人算），之前建好的表补上
     "CREATE INDEX IF NOT EXISTS model_costs_owner ON model_costs (owner, started_at)",
+    # 2026-11-09 加的：算给用户的（免费额度按正常价）。之前的行是空的，额度按 yuan 算（免费额度的那些就是 0）
+    "ALTER TABLE model_costs ADD COLUMN IF NOT EXISTS billed DOUBLE PRECISION",
 )
 
 

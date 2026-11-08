@@ -5,6 +5,7 @@
   别让游客体验打折）；管理员不限。所有游客合计每天 50000（约 50 元）：防脚本批量领游客身份刷，配合每个地址一天 5 个游客身份
   （identity.GuestTokens）。数字在 config 的 CREDITS_*，环境变量能改。
 - 怎么算：从账上（model_costs）把这个人在窗口里算给用户的三样（主 agent、子 agent 的模型调用，做成了的工具调用）加起来；
+  加的是 billed（免费额度的按正常价，2026-11-09 Sean 定，见 app.costs），之前的行没有，用 yuan；
   出错、丢了的那一轮（运行记录里这一轮最后一次执行是 error/lost）不算：用户没拿到回答不该付钱（出错前调完的模型厂商照收，算灵稿的）。
   点了停止的照算。账上记的是对话归谁（owner），游客期间花的记在游客身份上，登录并进账号后不跟过去。
 - 只在开始前查（和 Fusion 一样）：说话、排话、重新回答、改话、重试时额度用完了就拒（429，detail 里带 code、什么时候重置），
@@ -140,7 +141,7 @@ class MemoryUsage:
         return bool(last) and last[-1]["status"] in FAILED
 
     def _sum(self, rows: list[dict], since: datetime) -> float:
-        return sum(r["yuan"] for r in rows
+        return sum(r["yuan"] if r.get("billed") is None else r["billed"] for r in rows
                    if r["yuan"] is not None and r["purpose"] in PURPOSES and r["started_at"] >= since and not self._failed(r["turn_id"]))
 
     async def spent(self, owner: str, since: datetime) -> float:
@@ -157,7 +158,7 @@ class MemoryUsage:
 
 
 _SPENT = """
-SELECT coalesce(sum(c.yuan), 0) AS yuan FROM model_costs c
+SELECT coalesce(sum(coalesce(c.billed, c.yuan)), 0) AS yuan FROM model_costs c
 WHERE {owner} AND c.started_at >= %s AND c.purpose = ANY(%s) AND c.yuan IS NOT NULL
   AND coalesce((SELECT r.status FROM runs r WHERE r.turn_id = c.turn_id ORDER BY r.seq DESC LIMIT 1), '') <> ALL(%s)
 """
