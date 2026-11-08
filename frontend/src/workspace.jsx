@@ -616,6 +616,19 @@ export default function Workspace() {
   // 执行中这一轮的来源跟着事件来（库里一轮跑完才有），叠在已存的来源上：正文里的引用据此显示成编号
   const shown = st && live?.sources ? { ...st, sources: { ...st.sources, ...live.sources } } : st;
 
+  // 回答开头要写名字的模型（每轮记下的、正在答的这一轮用的），能选的模型和名字表里都没有的：多半是页面打开以后才加的免费额度，
+  // 重新取一次；每个只取一次，取回来还没有的就是真不再提供了，照写“已不再提供的模型”（见 research.js 的 modelName）
+  const namesAsked = useRef(new Set());
+  const shownRefs = [...(st?.turns || []).map((t) => t.record?.model?.ref), live?.model, st?.model_ref].filter(Boolean).join(" ");
+  useEffect(() => {
+    if (!models?.length) return;
+    const unknown = shownRefs.split(" ").filter((r) => r && !modelNames[r] && !models.slice(1).some((m) => m.model === r) && !namesAsked.current.has(r));
+    if (!unknown.length) return;
+    unknown.forEach((r) => namesAsked.current.add(r));
+    loadModels().catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownRefs, models, modelNames]);
+
   // 游客开登录弹窗（左栏、额度、设置窗口、报错里的登录，点“登录后可用”的模型）。点模型进来的带着那个模型；从按钮直接进来的参数是点击事件，不算
   const onLogin = auth.login && !auth.me ? (want) => {
     const m = want?.id && want.locked ? want : null;
