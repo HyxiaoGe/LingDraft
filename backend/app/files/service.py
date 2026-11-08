@@ -310,6 +310,11 @@ class FileService:
         got = await self.content(fid)
         return "".join(p.text for p in got[1]) if got is not None else None
 
+    async def discard(self, fid: str) -> None:
+        """同一轮里模型又改了这一轮刚写的那版（见 app.tools.write_file）：那一版作废，行、文字、原件一起删。"""
+        if (row := await self.store.get(fid)) is not None and row.origin == GENERATED:
+            await self._drop([row])
+
     async def delete_turn(self, workspace_id: str, turn_id: str) -> int:
         """重新回答、改了那句话：那一轮写的各版都删掉（连同进程崩掉时写了、对话里没记下的），返回删了几个。"""
         rows = [r for r in await self.store.of_workspace(workspace_id) if r.origin == GENERATED and r.turn_id == turn_id]
