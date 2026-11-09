@@ -41,3 +41,15 @@ export function opener() {
   if (a && a !== document.body) return a;
   return pressed?.isConnected && Date.now() - pressedAt < 2000 ? pressed : null; // 很早以前按的不算：这层是用快捷键开的
 }
+
+// 大窗口（设置、知识库）里 Tab 每一下都自己挪，只在窗口里转（和登录窗口一样：Safari 默认 Tab 跳过按钮）。box 是窗口那个元素
+const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+export function trapTab(e, box) {
+  if (e.key !== "Tab" || !box) return;
+  const els = [...box.querySelectorAll(FOCUSABLE)].filter((x) => x.offsetParent !== null);
+  if (!els.length) return;
+  e.preventDefault();
+  const i = els.indexOf(document.activeElement);
+  const n = els.length;
+  els[i < 0 ? (e.shiftKey ? n - 1 : 0) : (i + (e.shiftKey ? n - 1 : 1)) % n].focus();
+}

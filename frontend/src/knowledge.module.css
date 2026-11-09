@@ -1,4 +1,8 @@
-/* 知识库（knowledge.jsx，放在设置窗口里）：上面一张卡是几个文件、一句说明和上传；下面一张卡是文件，一个一行。和记忆页（memory.module.css）一个样子 */
+/* 知识库（knowledge.jsx）：自己一个窗口（外壳见 dialog.module.css），上面一行标题和关闭，和设置窗口那一行一样高。
+   下面上面一张卡是几个文件、一句说明和上传；下面一张卡是文件，一个一行。和记忆页（memory.module.css）一个样子 */
+.top { flex: none; display: flex; align-items: center; gap: 8px; height: 56px; padding: 0 12px 0 24px; }
+.title { flex: 1; min-width: 0; font-size: 16px; font-weight: 600; }
+.body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 24px 24px; }
 .kb { padding-top: 8px; }
 .kb > :global(.ws-error) { margin: 16px 0 0; }
 .head { padding: 16px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); }
@@ -28,6 +32,8 @@ button.main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2
 }
 
 @media (max-width: 720px) {
+  .top { height: auto; padding: 4px 4px 4px 16px; border-bottom: 1px solid var(--line); }
+  .body { padding: 8px 16px 24px; }
   .head :global(.ws-btn), .status :global(.ws-btn) { height: 44px; padding: 0 16px; font-size: 14px; }
   .full { display: block; margin: 8px 0 0; }
   .main { min-height: 56px; }
