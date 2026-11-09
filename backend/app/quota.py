@@ -4,7 +4,7 @@
 - 窗口和 Fusion 一样：北京时间的自然日、自然周（周一起）。游客每天 1000；登录用户每天 10000、每周 50000（项目前期要用户量，给足，
   别让游客体验打折）；管理员不限。所有游客合计每天 50000（约 50 元）：防脚本批量领游客身份刷，配合每个地址一天 5 个游客身份
   （identity.GuestTokens）。数字在 config 的 CREDITS_*，环境变量能改。
-- 怎么算：从账上（model_costs）把这个人在窗口里算给用户的三样（主 agent、子 agent 的模型调用，做成了的工具调用）加起来；
+- 怎么算：从账上（model_costs）把这个人在窗口里算给用户的几样（主 agent、子 agent 的模型调用，做成了的工具调用，知识库建好了的索引）加起来；
   加的是 billed（免费额度的按正常价，2026-11-09 Sean 定，见 app.costs），之前的行没有，用 yuan；
   出错、丢了的那一轮（运行记录里这一轮最后一次执行是 error/lost）不算：用户没拿到回答不该付钱（出错前调完的模型厂商照收，算灵稿的）。
   点了停止的照算。账上记的是对话归谁（owner），游客期间花的记在游客身份上，登录并进账号后不跟过去。
@@ -33,7 +33,7 @@ from app.identity import ADMIN, GUEST, GUEST_PREFIX, Identity
 log = logging.getLogger(__name__)
 
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
-PURPOSES = (costs.AGENT, costs.SUBAGENT, costs.TOOL)  # 算给用户的（起标题、推荐问题、压缩、整理记忆不算）
+PURPOSES = (costs.AGENT, costs.SUBAGENT, costs.TOOL, costs.KB_INDEX)  # 算给用户的（起标题、推荐问题、压缩、整理记忆、知识库查询时的向量和重排不算）
 FAILED = (ERROR, LOST)
 DAY, WEEK, GUESTS = "day", "week", "guests"  # 窗口：这个人今天的、这个人这周的、所有游客今天合起来的
 EXHAUSTED = "credits_exhausted"  # 429 的 detail.code

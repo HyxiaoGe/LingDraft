@@ -47,11 +47,12 @@ from app import costs
 from app.graph.research import history, prompts
 from app.graph.research.memory import MemoryBook
 from app.identity import is_guest_sub
-from app.graph.research.sources import DOCS_TOOL, SEPARATORS, SUBAGENT_TOOL, collect_sources, parse, search_hits
+from app.graph.research.sources import DOCS_TOOL, KB_TOOL, SEPARATORS, SUBAGENT_TOOL, collect_sources, parse, search_hits
 from app.graph.research.state import INVALID_TOOL_CALL_RETRIES, ResearchState, Source, Turn
 from app.model_catalog import AUTO, LEGACY_MODEL, LEGACY_USE, ModelUse
 from app.model_guard import ContentBlocked, FreeTierUsedUp, Interrupted, ModelUnavailable, free_failed
 from app.tools.files import with_files
+from app.tools.knowledge import for_files
 from app.tools.vision import with_images
 
 TITLE_CHARS = 30  # 标题最长这么多字（汉字算一个、字母算半个，见 _width）：模型给的超过了不用（见 usable_title）；用户原话超过了截掉（照 Fusion）
@@ -89,6 +90,8 @@ class ChatContext:
     # 命令行、评测没有：用户发的都当读不了，写文件说存不了
     files: Any = None
     thread_id: str | None = None  # 这段对话的编号：模型写的文件记在这个工作区下
+    # 知识库（app.knowledge.service.KnowledgeBase）：查知识库、read_file 读知识库的文件、第一轮取文件列表。命令行、评测没有：这个工具不出现
+    kb: Any = None
 
 
 def now() -> str:
@@ -147,7 +150,7 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
 
     def before_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         """同步跑时（测试直接 invoke）：Auto 不判断难易，当复杂。"""
-        return self._begin(state, runtime, None)
+        return self._begin(state, runtime, None, [])
 
     async def abefore_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         """开始一轮：记下开始时间和这一轮用的模型。用哪个模型只在这里定（以后查权限、余额也在这里），一轮里不换，出错重试接着用；
@@ -161,7 +164,22 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
             except Exception as e:  # 点了停止（CancelledError）照常往外抛
                 log.warning("Auto 判断难易失败，当复杂：%s: %s", type(e).__name__, e)
                 simple = False
-        return self._begin(state, runtime, simple)
+        return self._begin(state, runtime, simple, await self._kb_files(state, runtime))
+
+    @staticmethod
+    async def _kb_files(state: ResearchState, runtime) -> list[str]:
+        """知识库的文件列表，每段对话只在第一轮（2026-11-09 以前的对话是那之后的第一轮）取一次，之后沿用：工具说明不变，前缀缓存接得上。
+        取不到的（库出问题）当没有，这段对话就没有查知识库的工具。"""
+        if "kb_files" in state:
+            return state["kb_files"]
+        ctx = runtime.context if runtime else None
+        if ctx is None or ctx.kb is None:
+            return []
+        try:
+            return await ctx.kb.names(ctx.owner)
+        except Exception as e:  # 点了停止（CancelledError）照常往外抛
+            log.warning("取知识库的文件列表没取到，这段对话不查知识库：%s: %s", type(e).__name__, e)
+            return []
 
     def _plan(self, state: ResearchState, runtime, simple: bool | None = None):
         """这一轮的模型。Auto 的对话按定下的 auto_model；还没定的这时定：simple 是第一句话判断的难易，没判断的（老对话、同步跑）当复杂。"""
@@ -171,7 +189,7 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         pick = state.get("auto_model") or catalog.pick(bool(simple), _guest(runtime), self.planner.usable, now)
         return catalog.plan(state.get("option"), thinking, self.planner.usable, pick=pick, now=now)
 
-    def _begin(self, state: ResearchState, runtime, simple: bool | None) -> dict[str, Any]:
+    def _begin(self, state: ResearchState, runtime, simple: bool | None, kb_files: list[str]) -> dict[str, Any]:
         msgs = state["messages"]
         human = msgs[history.last_human(msgs)]
         # 按 planner 的时钟（评测回放时挪到录像那时，见 app.clock）；结束时间这些模型看不到的照常用系统时钟
@@ -181,6 +199,8 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         out: dict[str, Any] = {"turns": list(state.get("turns", [])) + [turn]}
         if state.get("option") != plan.option:
             out["option"] = plan.option
+        if "kb_files" not in state:
+            out["kb_files"] = kb_files
         # Auto 用的模型记下来，之后每轮都用它：免费的到期了、用完了换成备用，也记成备用，不再换回来
         if plan.option == AUTO and state.get("auto_model") != plan.pick:
             out["auto_model"] = plan.pick  # 走免费额度以前的（直连的）：下一轮再看免费额度还能不能用
@@ -627,6 +647,8 @@ class ModelSelect(AgentMiddleware):
         msgs = await with_files(_others_without_thinking(request.messages, turns, use), getattr(request.runtime.context, "files", None))
         msgs = await with_images(msgs, sees, self.planner.image_uri)
         tools = [t for t in request.tools if not (sees and getattr(t, "name", None) == history.VIEW_TOOL)]
+        kb_files = request.state.get("kb_files") or []  # 知识库：第一轮时有文件才给，说明里列着那时的文件（见 app.tools.knowledge）
+        tools = [for_files(t, kb_files) if getattr(t, "name", None) == KB_TOOL else t for t in tools if kb_files or getattr(t, "name", None) != KB_TOOL]
         return request.override(model=self.planner.chat_model(use), messages=msgs, tools=tools)
 
     async def _sub_call(self, request: ModelRequest, handler):
@@ -726,6 +748,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     from app.tools.files import make_read_file_tool
     from app.tools.flyai_mcp import TravelMiddleware, itinerary_tool
     from app.tools.image_mcp import ImageMiddleware
+    from app.tools.knowledge import make_search_knowledge_tool
     from app.tools.maps_mcp import MapsMiddleware
     from app.tools.vision import make_view_image_tool
     from app.tools.weather_mcp import WeatherMiddleware
@@ -734,8 +757,9 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
 
     # recall 一直都在（工具列表变了前缀缓存整个断），只有压缩换成说明的内容才用得上；页面上不显示这一步。
     # 排行程（present_itinerary）也一直在，查过航班火车才用得上
+    # 查知识库（search_knowledge）也一直在，这段对话第一轮时知识库里没有文件的调模型时去掉（见 ModelSelect._for）
     tools = [*planner.tools(), make_task_tool(planner), make_recall_tool(), itinerary_tool(), make_view_image_tool(planner), make_read_file_tool(),
-             *make_write_tools()]
+             make_search_knowledge_tool(), *make_write_tools()]
     return create_agent(
         model=planner.chat_model(planner.catalog.plan(None, None, planner.usable).agent),  # 只是占位：每次调模型由 ModelSelect 换上这一轮的
         tools=tools,

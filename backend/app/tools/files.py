@@ -5,8 +5,8 @@
   - 长的、这句话里放不下的只给目录、开头（HEAD_CHARS 字），模型用 read_file 按段读、在文件里找；
   - 之前几轮的，压缩第一层压过了（见 compaction）也只给目录和开头。
   整篇还是只给开头，只看这句话带的文件的字数和压没压过，不看别的：同一句话每次拼出来都一样，前缀缓存接得上。
-- read_file：只认这段对话里用户发的文件（history.owned_file_ids）和模型写的文件（history.written_files，读的是最新一版），
-  一次最多回 READ_MAX_CHARS 字。不收钱（models.toml 的 [tools] 没定价）。
+- read_file：只认这段对话里用户发的文件（history.owned_file_ids）、模型写的文件（history.written_files，读的是最新一版）
+  和这个人知识库里建好了的文件（查知识库的结果里给编号，见 app.tools.knowledge），一次最多回 READ_MAX_CHARS 字。不收钱（models.toml 的 [tools] 没定价）。
   只给主 agent：子 agent 看不到用户发的文件，要用的内容主 agent 写进交代里。
 """
 
@@ -237,6 +237,8 @@ def make_read_file_tool():
         elif fid in owned_file_ids(messages):
             f = next(a for m in messages if isinstance(m, HumanMessage) for a in attached_files(m) if a.id == fid)
             name, ftype, row_id, extra = f.name, f.type, fid, {}
+        elif (kb := getattr(runtime.context, "kb", None)) is not None and (row := await kb.readable(runtime.context.owner, fid)) is not None:
+            name, ftype, row_id, extra = row.name, row.type, fid, {"knowledge": True}  # 知识库的：页面按 knowledge 认，不在这段对话的文件里找名字
         else:
             raise ToolException(prompts.render("tools.read_file.not_found", id=fid))
         got = await service.content(row_id) if service is not None else None

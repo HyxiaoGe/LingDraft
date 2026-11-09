@@ -13,7 +13,8 @@ from pydantic import ValidationError
 
 from app.costs import COST
 from app.graph.research import prompts
-from app.graph.research.sources import DOCS_TOOL, LIBRARY_TOOL, SUBAGENT_TOOL, collect_sources, doc_snippets, parse, search_hits, subagent_messages
+from app.graph.research.sources import (DOCS_TOOL, KB_TOOL, LIBRARY_TOOL, SUBAGENT_TOOL, collect_sources, doc_snippets, kb_hits, parse, search_hits,
+                                         subagent_messages)
 from app.graph.research.state import (
     AttachedFile,
     AttachedImage,
@@ -55,7 +56,7 @@ ITINERARY_TOOL = "present_itinerary"  # 灵稿自己的排行程（见 app.tools
 TRAVEL_KINDS = {FLIGHT_TOOL: "flight", TRAIN_TOOL: "train"}
 STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", PLACE_TOOL: "place", ROUTE_TOOL: "route",
               **TRAVEL_KINDS, ITINERARY_TOOL: "itinerary", IMAGE_TOOL: "image", VIEW_TOOL: "view", FILE_TOOL: "file", CREATE_TOOL: "write", EDIT_TOOL: "write", SUBAGENT_TOOL: "task",
-              LIBRARY_TOOL: "library", DOCS_TOOL: "docs"}
+              LIBRARY_TOOL: "library", DOCS_TOOL: "docs", KB_TOOL: "knowledge"}
 BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
 # 没画成的原因在页面上的说法（照 Fusion 的图片卡片），没列的都说“图片生成失败”
 IMAGE_FAILURES = {
@@ -239,6 +240,8 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         text, extra = _text(args.get("query")), {"limits": [_text(args.get("libraryId"))] if args.get("libraryId") else []}
     elif kind == "view":
         text, extra = _text(args.get("question")), {}
+    elif kind == "knowledge":
+        text, extra = _text(args.get("query")), {}
     elif kind == "write":  # 标题在参数里，写好了用结果里的（改文件没给新标题的是空的）；改的是哪份记在 target，页面按它对上标题、归到同一份文件
         w = written_of(result) if result is not None else None
         text = w.title if w else _text(args.get("title"))
@@ -269,6 +272,11 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         return _docs_step(kind, cid, text, extra, result)
     if kind == "view":
         return ToolStep(id=cid, kind=kind, text=text, ok=result.status != "error", message="" if result.status != "error" else "没看成", **extra)
+    if kind == "knowledge":  # 查到几块、它们的来源（同一段的几块是一个来源）
+        if result.status == "error":
+            return ToolStep(id=cid, kind=kind, text=text, ok=False, message="没查成", **extra)
+        hits = kb_hits(result)
+        return ToolStep(id=cid, kind=kind, text=text, hits=len(hits), source_ids=list(dict.fromkeys(h["id"] for h in hits)), **extra)
     if kind == "write":
         if w := written_of(result):
             return ToolStep(id=cid, kind=kind, text=text, file=w, **extra)

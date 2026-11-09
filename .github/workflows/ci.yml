@@ -19,9 +19,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     services:
-      # 对话存在 Postgres 里：整套测试在内存里跑一遍，再在这个库上跑一遍（每个测试前清空）。版本跟 dev 上的库一样
+      # 对话存在 Postgres 里：整套测试在内存里跑一遍，再在这个库上跑一遍（每个测试前清空）。版本跟 dev 上的库一样，带 pgvector（知识库）
       postgres:
-        image: postgres:15
+        image: pgvector/pgvector:pg15
         env:
           POSTGRES_PASSWORD: postgres
         ports:

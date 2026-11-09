@@ -30,6 +30,12 @@ FILE_MAX_BYTES = 20 * 1024 * 1024  # 单个文件上限（Sean 定 20 MB）
 FILE_PARSE_TIMEOUT_S = float(os.environ.get("FILE_PARSE_TIMEOUT_S", "60"))
 FILE_PARSE_ISOLATED = True  # 在单独的子进程里解析（容器只有 512 MB，解析出事不拖垮对话）；测试里换成线程（见 tests/conftest.py）
 FILE_UPLOADS_DAILY = {"guest": 20, "user": 100}  # 每人每天能传几个（防磁盘被灌满）；管理员不限
+# 知识库（2026-11-09 Sean 定，见 app.knowledge）：每人一个库，游客没有。单个文件的上限和对话里一样（FILE_MAX_BYTES），知识库的上传不算进每天的个数
+KB_MAX_FILES = 100
+KB_MAX_CHARS = 10_000_000  # 一个人知识库里的文件加起来最多这么多字
+KB_EMBED_MODEL = "text-embedding-v4"  # 百炼的向量模型，1024 维（11-09 实验比智谱 embedding-3 好）
+KB_RERANK_MODEL = "qwen3-rerank"
+KB_RERANK_URL = os.environ.get("KB_RERANK_URL", "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank")
 
 ARK_BASE_URL = os.environ.get("ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
 ARK_API_KEY = os.environ.get("ARK_API_KEY")

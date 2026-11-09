@@ -5,6 +5,7 @@
 搜索结果有两种样子（search_hits 两种都认）：11-05 起是搜索服务的结果（{"ok": true, "query", "results": [...]}，每条带 id、
 title、url、snippet、published_at），之前存下的是一串条目（每条带 id、title、url、description、content、published_at）。
 查文档（Context7 的 query-docs）的每段文档按它的出处算一个来源，带来源的那几段记在结果的 artifact 里（见 doc_snippets、app.tools.docs_mcp）。
+查知识库（search_knowledge）的每一段（文件的第几段，网址是 kb://<文件编号>/<段号>）算一个来源，查到的块记在结果的 artifact 里（见 app.tools.knowledge）。
 子 agent 的搜索、读页结果在 task 工具结果的 artifact 里（见 subagent_messages），也算这条线程的来源。
 """
 
@@ -24,6 +25,7 @@ from app.graph.research.state import Source
 SUBAGENT_TOOL = "task"  # 主 agent 派子 agent 的工具（见 app.graph.research.subagent）
 LIBRARY_TOOL = "resolve-library-id"  # 查文档前先按库名找库（Context7，见 app.tools.docs_mcp）
 DOCS_TOOL = "query-docs"  # 查文档（Context7，见 app.tools.docs_mcp）
+KB_TOOL = "search_knowledge"  # 查用户的知识库（见 app.tools.knowledge）
 EXCERPT_CHARS = 400  # 来源卡上显示的原文开头；模型自己看的是完整的工具结果
 SEPARATORS = (",", ":")  # 搜索、读页的结果给模型的 JSON 不带空格（照搜索、读页服务给的，省 token）
 SOURCE_ID = re.compile(r"\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\]")  # 正文里的引用：[s3fa9c1]
@@ -98,6 +100,17 @@ def doc_snippets(m: BaseMessage) -> list[dict]:
     return [s for s in art.get("snippets") or [] if isinstance(s, dict) and s.get("id") and s.get("url")]
 
 
+def kb_url(file_id: str, part: int) -> str:
+    """知识库里一个文件的一段当来源时的网址（只用来算 id、页面认出是知识库的，打不开）。"""
+    return f"kb://{file_id}/{part}"
+
+
+def kb_hits(m: BaseMessage) -> list[dict]:
+    """一条查知识库结果里查到的块（artifact 里，每块有 id、url、file_id、name、part、title、content）。别的消息、没有的是空的。"""
+    art = m.artifact if isinstance(m, ToolMessage) and m.name == KB_TOOL and isinstance(m.artifact, dict) else {}
+    return [h for h in art.get("hits") or [] if isinstance(h, dict) and h.get("id") and h.get("url")]
+
+
 def subagent_messages(m: BaseMessage) -> list[BaseMessage]:
     """一条 task 工具结果里带着的子 agent 的整段消息（artifact 里，模型看不到；存的是 messages_to_dict）。别的消息、没带的是空的。"""
     art = m.artifact if isinstance(m, ToolMessage) and m.name == SUBAGENT_TOOL else None
@@ -143,6 +156,13 @@ def collect_sources(messages: list[BaseMessage]) -> list[Source]:
                 excerpt = {"excerpt": str(s.get("content") or "")[:EXCERPT_CHARS], "excerpt_kind": "docs"}
                 by_id[s["id"]] = (Source(id=s["id"], url=s["url"], title=s.get("title") or "", retrieved_at=when, **excerpt) if old is None
                                   else old.model_copy(update={**excerpt, "title": old.title or s.get("title") or ""}))
+        elif m.name == KB_TOOL:
+            for h in kb_hits(m):
+                if h["id"] in by_id:  # 同一段的几块：用先查到的那块
+                    continue
+                title = f"{h.get('name') or ''} · {h['title']}" if h.get("title") else str(h.get("name") or "")
+                by_id[h["id"]] = Source(id=h["id"], url=h["url"], title=title, retrieved_at=when, excerpt=str(h.get("content") or "")[:EXCERPT_CHARS],
+                                        excerpt_kind="knowledge", file_id=h.get("file_id"), part=h.get("part"))
         elif m.name == "read_page" and isinstance(data, dict) and data.get("ok") and data.get("id"):
             content = data.get("content") or ""
             if not content.strip():  # 没有正文不算读到，不能拿空串顶掉搜索摘要
