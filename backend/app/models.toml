@@ -197,15 +197,9 @@ fallback = "deepseek-flash"  # 选项 id；固定用 DeepSeek Flash（Sean 定�
 # 没有对应选项的只有 K3（已经旧了）。翻译、角色扮演、写代码、看图的专用模型和预览版、要下线的不放；
 # TokenHub 的 deepseek-v4-flash-202605 是 V4 Flash 0731，比直连的旧，也不放。
 # 2026-11-08 百炼：qwen3.8-max-0902 只剩 3 万多、用完即停没开，不放。
+# 2026-11-09 百炼的 kimi-k3、deepseek-v4.1-flash-1017 报了免费额度用完，删了（Sean 定：百炼的试用额度用完了）；kimi-k3.1-pro 还没报，留着。
 
 # -- Auto 判为简单的用 --
-[[free]]
-model = "dashscope:kimi-k3"
-vision = true
-name = "Kimi K3"
-icon = "moonshot"
-until = 2026-11-17
-
 # 下面 TokenHub 的：2026-11-08 Sean 整理的接入点列表，每个 100 万 token；腾讯混元自己的（hy4、hy3）是选项，在同一个接入点上，开了后付费，不在这里
 [[free]]
 model = "tokenhub:kimi-k3"
@@ -228,11 +222,6 @@ same_as = "moonshot:kimi-k3.1-pro"
 # DeepSeek：直连的 deepseek-flash 2026-10-17 起是 V4.1-Flash-1017，deepseek-v4-pro 是 2026-08-13 的正式版（DeepSeek 文档的更新记录）。
 # 下面写了版本的控制台上就是这两个版本；TokenHub 的 deepseek-v4.1-flash、deepseek-v4-pro 控制台没写版本，核对不了，按名字当同一个模型。
 # 2026-11-08 都实测过：关思考、强制调工具（结构化输出）、JSON 输出、思考强度
-[[free]]
-model = "dashscope:deepseek-v4.1-flash-1017"
-until = 2027-01-17
-same_as = "deepseek:deepseek-flash"
-
 [[free]]
 model = "tokenhub:deepseek/deepseek-flash"  # 控制台写的 DeepSeek-V4.1-Flash-1017
 until = 2027-10-21

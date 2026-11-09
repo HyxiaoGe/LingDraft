@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from app import aio, config, free_used_up, model_catalog
 from app.graph.research import agent as agent_mod
-from app.model_catalog import AUTO, CHINA_TZ, FREE_TIER, ZERO, Catalog, ModelUse
+from app.model_catalog import AUTO, CHINA_TZ, FREE_TIER, ZERO, Catalog, Free, ModelUse
 from app.model_guard import Breaker, FreeTierUsedUp, GuardedChatModel, Interrupted, ModelUnavailable
 from app.research_llm import FAKE_SIMPLE, FailingModel, FakeResearchPlanner, FakeToolModel
 from tests.research_helpers import run_async
@@ -38,14 +38,16 @@ def _always(_ref: str) -> bool:
 
 
 def _catalog(days: tuple[int, ...] = (9, 70, 86)) -> Catalog:
-    """真的那份，只留百炼的三个免费额度（K3、V4.1 Flash 给 Auto，K3.1 Pro 是选项 Kimi 的 same_as），
-    到期日改成今天往后这么多天（测试不随日子过去失效）。TokenHub 的另外测（见 test_tokenhub_*）。
-    V4.1 Flash 在仓库里是 Flash 的 same_as，这里改成只给 Auto 的：测 Auto 按到期日挑要两个；Flash 先走免费额度的另外测（见 _flash_catalog）。"""
+    """真的那份，免费额度换成百炼的三个（K3、V4.1 Flash 给 Auto，K3.1 Pro 是选项 Kimi 的 same_as），
+    到期日按 days 的顺序改成今天往后这么多天（测试不随日子过去失效）。TokenHub 的另外测（见 test_tokenhub_*）。
+    K3、V4.1 Flash 的百炼额度 2026-11-09 用完、从 models.toml 删了，这里照原来的写上：测 Auto 按到期日挑要两个只给 Auto 的
+    （V4.1 Flash 原来是 Flash 的 same_as，这里不写）；Flash 先走免费额度的另外测（见 _flash_catalog）。"""
     c = model_catalog.load()
     today = datetime.now(CHINA_TZ).date()
-    bailian = [f for f in c.free if f.model.startswith("dashscope:")]
+    k31 = next(f for f in c.free if f.model == K31)
+    bailian = [Free(model=K3, vision=True, name="Kimi K3", icon="moonshot", until=today), k31,
+               Free(model=V41, name="DeepSeek V4.1 Flash", icon="deepseek", until=today)]
     free = [f.model_copy(update={"until": today + timedelta(days=d)}) for f, d in zip(bailian, days, strict=True)]
-    free = [f.model_copy(update={"same_as": "", "name": "DeepSeek V4.1 Flash", "icon": "deepseek"}) if f.model == V41 else f for f in free]
     return c.model_copy(update={"free": free})
 
 
@@ -69,20 +71,20 @@ def _model_events(events: list[dict]) -> list[str]:
 
 
 def test_models_toml_free_pool_and_roles():
-    """仓库里那份：给 Auto 的（没有 same_as 的）只有 K3，按到期日排着，百炼的先用；DeepSeek 的都是直连的同一个模型（same_as），
+    """仓库里那份：给 Auto 的（没有 same_as 的）只有 TokenHub 的 K3（百炼的 2026-11-09 用完删了）；DeepSeek 的都是直连的同一个模型（same_as），
     写了版本的 Pro 排在没写的前面；备用是 Flash（游客也能用）；判断难易、推荐问题都用 Flash。
     页面上的名字：same_as 的不写就是那个选项的名字、图标。"""
     c = model_catalog.load()
     by_until = sorted(c.free, key=lambda f: f.until)
-    assert [f.model for f in by_until if not f.same_as] == [K3, TK_K3]
-    assert [f.model for f in by_until if f.same_as == FLASH] == [V41, TK_FLASH, TK_V41, TK_V41_1017]
+    assert [f.model for f in by_until if not f.same_as] == [TK_K3]
+    assert [f.model for f in by_until if f.same_as == FLASH] == [TK_FLASH, TK_V41, TK_V41_1017]
     assert [f.model for f in by_until if f.same_as == PRO] == [TK_PRO_0813, TK_PRO_202606, TK_PRO]
     assert c.fallback().model == FLASH and c.fallback().allows("guest")
     assert c.roles["route"].model == FLASH and c.roles["suggest"].model == FLASH
     names = c.names()
-    assert set(names) == {f.model for f in c.free} and names[K3] == {"name": "Kimi K3", "icon": "moonshot"}
+    assert set(names) == {f.model for f in c.free} and names[TK_K3] == {"name": "Kimi K3", "icon": "moonshot"}
     assert names[TK_PRO] == {"name": c.option("deepseek-v4-pro").name, "icon": "deepseek"} and names[K31]["icon"] == "moonshot"
-    assert names[V41] == {"name": c.option("deepseek-flash").name, "icon": "deepseek"}
+    assert names[TK_FLASH] == {"name": c.option("deepseek-flash").name, "icon": "deepseek"}
 
 
 def test_catalog_rejects_free_pool_mistakes():
@@ -554,20 +556,19 @@ def test_tokenhub_quota_errors_are_free_tier_used_up(breaker):
 
 
 def test_tokenhub_same_model_goes_free_first_and_auto_simple_skips_it():
-    """仓库里那份（按 11-08 看）：选了 Pro、Auto 判为复杂的，主 agent 先走 TokenHub 上的 Pro，pick 记直连的；子 agent 先走百炼上的 Flash；
+    """仓库里那份（按 11-08 看）：选了 Pro、Auto 判为复杂的，主 agent 先走 TokenHub 上的 Pro，pick 记直连的；子 agent 先走 TokenHub 上的 Flash；
     Kimi 有两份免费的，百炼的先到期先用；Auto 判为简单的不挑 same_as 的。"""
     c = model_catalog.load()
     for option in ("deepseek-v4-pro", AUTO):
         plan = c.plan(option, None, _always, pick=PRO if option == AUTO else None, now=NOW)
-        assert plan.agent.ref == TK_PRO_0813 and plan.pick == PRO and plan.subagent == ModelUse(ref=V41, thinking=True, effort="high")
+        assert plan.agent.ref == TK_PRO_0813 and plan.pick == PRO and plan.subagent == ModelUse(ref=TK_FLASH, thinking=True, effort="high")
         assert c.plan(option, None, _always, pick=PRO, now=NOW, free=False).agent.ref == PRO
     assert c.plan("kimi-k3-1-pro", None, _always, now=NOW).agent.ref == K31
     c.used_up(K31)
     assert c.plan("kimi-k3-1-pro", None, _always, now=NOW).agent.ref == TK_K31
-    c.used_up(K3)
     assert c.pick(True, False, _always, NOW) == TK_K3
     c.used_up(TK_K3)
-    assert c.pick(True, False, _always, NOW) == FLASH and c.plan(AUTO, None, _always, pick=FLASH, now=NOW).agent.ref == V41  # 备用照样先走免费额度
+    assert c.pick(True, False, _always, NOW) == FLASH and c.plan(AUTO, None, _always, pick=FLASH, now=NOW).agent.ref == TK_FLASH  # 备用照样先走免费额度
     assert c.plan("hy4", None, _always, now=NOW).agent.ref == "hunyuan:hy4"  # 混元自己的不在 [[free]] 里
     for f in (TK_PRO_0813, TK_PRO_202606):
         c.used_up(f)
