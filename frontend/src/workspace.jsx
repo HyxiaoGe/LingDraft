@@ -9,6 +9,7 @@ import { createResearchThread, deleteResearchThread, editResearchThread, followR
 import { localWho } from "./auth.js";
 import { setDraft } from "./drafts.js";
 import { AFTER_RUN_ERROR, errorText, quotaText } from "./errors.js";
+import { KnowledgeDialog } from "./knowledge.jsx";
 import { LoginDialog, useAuth } from "./login.jsx";
 import { saveThinkDefault, thinkDefault, useTheme } from "./prefs.js";
 import { SearchDialog } from "./search.jsx";
@@ -58,6 +59,7 @@ export default function Workspace() {
   const [tid, setTid] = useState(routeId);
   const [search, setSearch] = useState(false); // 搜对话的窗口开着没有（见 search.jsx）
   const [settings, setSettings] = useState(oldPage); // 设置窗口开着时是窗口里的哪一类（见 settings.jsx，"settings" 是刚打开）；关着是 null
+  const [kb, setKb] = useState(false); // 知识库窗口开没开（左栏“知识库”）
   const [theme, setTheme, dark] = useTheme(); // 主题（设置窗口里选，存本机）：跟随系统、浅色、深色
   const [st, setSt] = useState(null);
   // 这个页面发起或接上的那次执行：{said, images, sentAt, turnsAtStart, items, stage, phase, title, stopping, hidden, edit}
@@ -749,7 +751,7 @@ export default function Workspace() {
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
   }, []);
-  // 在抽屉里点了一条对话、新对话、设置、登录：换过去（登录弹窗打开），抽屉收起
+  // 在抽屉里点了一条对话、新对话、知识库、设置、登录：换过去（弹窗打开），抽屉收起
   const fromSide = (fn) => (...args) => {
     setDrawer(false);
     return fn(...args);
@@ -761,7 +763,7 @@ export default function Workspace() {
     <NavContext.Provider value={nav}>
       <div className={"ws" + (sideOff ? " side-off" : "") + (mobile && drawer ? " drawer" : "") + (file && !mobile ? " with-file" : "")} data-theme={dark ? "dark" : "light"}>
         <Sidebar threads={shownThreads} current={tid} st={st} live={live} busy={busy} now={now} href={chatPath} onSelect={fromSide(select)} manage={manage}
-          onSettings={fromSide(() => setSettings("settings"))} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
+          onSettings={fromSide(() => setSettings("settings"))} onKnowledge={auth.login || auth.me ? fromSide(() => setKb(true)) : null} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
         <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
           who={auth.ready ? (auth.me ? auth.me.name || "" : null) : earlyWho}
           models={models} modelNames={modelNames} credits={credits} manage={manage}
@@ -779,8 +781,11 @@ export default function Workspace() {
           <SettingsDialog view={settings} onView={setSettings} onClose={() => setSettings(null)} mobile={mobile} auth={auth}
             onLogin={onLogin && (() => { setSettings(null); onLogin(); })}
             theme={theme} onTheme={setTheme} think={thinkOn} onThink={changeThinkDefault}
-            undo={undo} threads={shownThreads} onOpen={(id) => { setSettings(null); select(id); }}
-            onOpenKnowledge={(f) => { setSettings(null); openFile({ kb: f }); }} />
+            undo={undo} threads={shownThreads} onOpen={(id) => { setSettings(null); select(id); }} />
+        )}
+        {kb && (
+          <KnowledgeDialog onClose={() => setKb(false)} auth={auth} onLogin={onLogin && (() => { setKb(false); onLogin(); })} undo={undo}
+            onOpenFile={(f) => { setKb(false); openFile({ kb: f }); }} />
         )}
         <LoginDialog open={loginOpen} crowded={auth.crowded} want={loginWant} credits={credits} onClose={closeLogin} />
         <UndoToast undo={undo} />

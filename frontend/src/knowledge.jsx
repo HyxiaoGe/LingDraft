@@ -1,20 +1,56 @@
-// 知识库（2026-11-09 Sean 定，后端见 app/knowledge）：每人一个，放在设置窗口里“记忆”的下面，游客那里写着登录了才有。
+// 知识库（2026-11-09 Sean 定，后端见 app/knowledge）：每人一个，游客那里写着登录了才有。
+// 入口 11-10 起在左栏“新对话”下面（Sean：放在设置里，不点开设置不知道有），点开是自己一个窗口，和设置一样大（手机上从底部升起）。
 // 传上来的文件后台解析、建索引，好了以后对话里模型自己判断查不查，查到的段落当来源（点了在右栏翻到那一段，见 workspace-files.jsx）。
 // 这里能传（一次能选几个）、看每个处理到哪了、点开在右栏看、删（5 秒内能撤销，同记忆）。上限照后端给的写（limits）。
 // 不讲后台怎么处理（解析、建索引都叫“处理中”），照记忆页只说能做什么
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { deleteKnowledgeFile, getKnowledge, getKnowledgeFile, uploadKnowledge } from "./api.js";
 import { errorText } from "./errors.js";
 import { Badge, fileFacts } from "./files.jsx";
 import { IconArrowUp, IconClose, IconTrash, Spinner } from "./icons.jsx";
+import { opener, trapTab, useLayer } from "./layers.js";
 import { fileErrorText, isImage, tooBig } from "./upload.js";
+import dialog from "./dialog.module.css";
 import styles from "./knowledge.module.css";
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 let slots = 0;
 
-// onLogin：游客去登录；undo：对话页的撤销（同一条提示）；onOpenFile(f)：关掉设置窗口、在右栏看这个文件（f 是 {id, name, type, size, pages}）
-export function KnowledgeSettings({ auth, onLogin, undo, onOpenFile }) {
+// 知识库窗口：上面标题和关闭，下面是知识库（Knowledge）。点窗口外、Esc、关闭都能关，后面的对话不动。
+// 关上以后焦点回到左栏的“知识库”；手机上那一行在收起的抽屉里看不见，就回到开抽屉的钮（同搜对话）。
+// onLogin：游客去登录（先关这个窗口）；undo：对话页的撤销；onOpenFile(f)：关窗口、在右栏看这个文件
+export function KnowledgeDialog({ onClose, auth, onLogin, undo, onOpenFile }) {
+  const box = useRef(null);
+  const closing = useRef(onClose);
+  closing.current = onClose;
+  const titleId = useId();
+  useEffect(() => {
+    const back = opener();
+    box.current?.focus({ preventScroll: true });
+    return () => {
+      const ok = back?.isConnected && back.checkVisibility?.({ visibilityProperty: true }) !== false;
+      (ok ? back : document.querySelector('[data-nav="drawer"]'))?.focus({ preventScroll: true });
+    };
+  }, []);
+  useLayer(true, () => closing.current());
+  return (
+    <div className={`${dialog.overlay} ${dialog.large}`} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={box} className={`${dialog.dialog} ${dialog.large} ${dialog.narrow} ${dialog.side} flex flex-col`}
+        role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onKeyDown={(e) => trapTab(e, box.current)}>
+        <div className={styles.top}>
+          <h2 id={titleId} className={styles.title}>知识库</h2>
+          <button className={`${dialog.close} ${dialog.inline}`} aria-label="关闭" onClick={onClose}><IconClose size={16} /></button>
+        </div>
+        <div className={styles.body}>
+          <Knowledge auth={auth} onLogin={onLogin} undo={undo} onOpenFile={onOpenFile} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// onLogin：游客去登录；undo：对话页的撤销（同一条提示）；onOpenFile(f)：在右栏看这个文件（f 是 {id, name, type, size, pages}）
+function Knowledge({ auth, onLogin, undo, onOpenFile }) {
   const [data, setData] = useState(null); // getKnowledge 回的
   const [error, setError] = useState(null);
   const [local, setLocal] = useState([]); // 还没传上去的、没传上去的：{key, name, size, status: uploading / failed, reason, detail}
@@ -30,7 +66,7 @@ export function KnowledgeSettings({ auth, onLogin, undo, onOpenFile }) {
   useEffect(() => {
     alive.current = true;
     if (!guest) load();
-    return () => { alive.current = false; undo?.flush("knowledge"); }; // 切到别的设置、关掉窗口：删了的不等了
+    return () => { alive.current = false; undo?.flush("knowledge"); }; // 关掉窗口：删了的不等了
   }, [guest]); // eslint-disable-line react-hooks/exhaustive-deps
   const put = (fn) => setData((d) => (d ? { ...d, files: fn(d.files) } : d));
   const patch = (id, v) => put((fs) => fs.map((x) => (x.id === id ? { ...x, ...v } : x)));
