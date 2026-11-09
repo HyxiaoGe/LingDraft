@@ -714,9 +714,14 @@ function CopyButton({ text }) {
 }
 
 // 这一轮的过程：一行“已完成 / 已停止 / 已中断 / 中途停下 + 用时 + 做了什么”，点开看每一步。正在跑时展开，正文一出来就收成这一行
-// （2026-11-09 Sean 定，原来跑完不收：过程往往很长，开着把回答推远）。正文后面模型又去搜、读，那段字就算进过程，过程再展开
+// （2026-11-09 Sean 定，原来跑完不收：过程往往很长，开着把回答推远）。收了这次就不再自动展开：模型有时先写一句“我先查一下”再去搜，
+// 那句字刚出来时算正文、过程收起，搜索来了它归回过程，这时也不再展开（收起是结束动作，Sean 定），在做什么看下面那一行。
+// 按这次运行记（running_since），重新回答是新的一次，又从展开开始
+const settled = new Set();
 function Process({ k, items, st, nums, rec, running, answering, failed, now, versions }) {
-  const [open, toggle, found] = useFoldOpen(`proc:${k}`, running && !answering); // 正在跑、正文还没出来的展开；自己点过的照点的来
+  const run = running ? `${k}@${st?.running_since ?? ""}` : null;
+  if (run && answering) settled.add(run);
+  const [open, toggle, found] = useFoldOpen(`proc:${k}`, running && !settled.has(run)); // 这次运行正文还没出来过的展开；自己点过的照点的来
   const shown = open && items.length > 0;
   const time = running ? elapsed(st?.running_since || rec?.started_at, now)
     : rec?.ended_at ? elapsed(rec.started_at, Date.parse(rec.ended_at)) : "";
