@@ -391,6 +391,8 @@ export function FilePanel({ tid, st, live, target, onTarget, onNav, onClose, foc
     stick.current = true;
     const el = bodyRef.current;
     if (el) el.scrollTop = streaming ? el.scrollHeight : 0;
+    // 只在换了文件、换了一版时跑：写着写着 streaming 变了不重新滚
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shownKey]);
   useLayoutEffect(() => {
     const el = bodyRef.current;

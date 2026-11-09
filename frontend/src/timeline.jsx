@@ -111,7 +111,6 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
     holding.current = at;
     clearTimeout(holdTimer.current);
     holdTimer.current = setTimeout(() => { holding.current = null; }, 3000);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [st?.thread_id]);
   useEffect(() => {
     const release = () => { holding.current = null; };
@@ -128,7 +127,6 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
       removeEventListener("pagehide", keepReading);
       keepReading();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useLayoutEffect(() => {
     const el = scrollRef.current;
