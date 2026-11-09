@@ -22,6 +22,7 @@ from app.files.service import FileService
 from app.files.store import MemoryFileStore
 from app.graph.research import compaction, history, prompts
 from app.graph.research.agent import ChatContext
+from app.tools.files import make_read_file_tool
 from app.tools.write_file import make_write_tools
 from tests.auth_helpers import USER
 from tests.research_helpers import events, last, run_async
@@ -131,6 +132,12 @@ def test_create_then_edit_reads_and_versions(tmp_path):
         assert await files.text(w.id) == "# 报告\n\n甲乙丙\n"  # 旧版还在
         msgs.append(v2)
         assert history.written_files(msgs) == {w.series: w2}
+        # 模型写的也能读：按编号读最新一版，整篇读、在文件里找都行
+        read = make_read_file_tool().coroutine
+        whole, art = await read(_runtime(msgs, files, "call-3"), file_id=w.series)
+        assert "甲二丙" in whole and (art["name"], art["version"]) == ("报告", 2)
+        found, art = await read(_runtime(msgs, files, "call-3"), file_id=w.series, query="甲二")
+        assert 'match "甲二"' in found and "报告" in found and art["found"] == 1
         # 对不上、出现两次、没变化、没给改什么、编号不对、用户发的文件
         fails = [await edit(_runtime(msgs, files, "call-2"), file_id=w.series, change_note="x", edits=[_edit("丁", "x")]),
                  await edit(_runtime(msgs, files, "call-2"), file_id=w.series, change_note="x", edits=[_edit("\n", "x")]),

@@ -245,7 +245,7 @@ def make_read_file_tool():
         all_parts = got[1]
         art = {"name": name, "file_id": fid, "type": ftype, **extra}
         if query and query.strip():
-            text, found = search(f.name, all_parts, query)
+            text, found = search(name, all_parts, query)
             return text, {**art, "query": query.strip(), "found": found}
         if parts and parts.strip():
             wanted = _wanted(parts, len(all_parts))
