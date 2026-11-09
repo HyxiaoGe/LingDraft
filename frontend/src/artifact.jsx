@@ -12,7 +12,7 @@ import { IconBack, IconCheck, IconChevron, IconClose, IconCopy, IconDownload, Ic
 import { useLayer } from "./layers.js";
 import { Markdown } from "./markdown.jsx";
 import { NavContext } from "./nav.jsx";
-import { CITE, citeNumbers, copyText, itemKey, num, sourceName, tidyTyping } from "./research.js";
+import { CITE, citeNumbers, copyText, itemKey, num, sourceLine, tidyTyping } from "./research.js";
 import { Sheet } from "./sheet.jsx";
 import { AnswerSources, Mark } from "./sources.jsx";
 import styles from "./artifact.module.css";
@@ -156,7 +156,7 @@ export function fileExport(file, text, sources) {
   if (file.type !== "markdown") return text;
   const nums = citeNumbers([text], sources);
   const body = text.replace(CITE, (_, sid) => (nums[sid] ? `[${nums[sid]}]` : "")).trimEnd();
-  const used = Object.entries(nums).map(([sid, n]) => `${n}. [${sourceName(sources[sid]).replace(/[[\]]/g, "")}](${sources[sid].url})`);
+  const used = Object.entries(nums).map(([sid, n]) => `${n}. ${sourceLine(sources[sid], true)}`);
   return used.length ? `${body}\n\n## 参考来源\n\n${used.join("\n")}\n` : `${body}\n`;
 }
 

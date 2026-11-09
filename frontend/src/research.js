@@ -105,6 +105,14 @@ export const domain = (url) => {
 
 export const sourceName = (s) => s.title || domain(s.url);
 
+// 知识库里的来源（url 是 kb://文件编号/第几段，见后端 sources.kb_url）：没有网址可开，点了在右栏看那个文件、翻到那一段
+export const isKnowledge = (s) => s?.excerpt_kind === "knowledge";
+// 复制、导出时一个来源写成什么：网页带网址（links 时写成 Markdown 链接），知识库的写明是知识库（kb:// 在别处打不开）
+export function sourceLine(s, links = false) {
+  if (isKnowledge(s)) return `${sourceName(s).replace(/[[\]]/g, "")}（知识库）`;
+  return links ? `[${sourceName(s).replace(/[[\]]/g, "")}](${s.url})` : `${sourceName(s)} ${s.url}`;
+}
+
 // 正文里的引用：模型写的是来源 id，[s3fa9c1]
 export const CITE = /\[(s[0-9a-f]{6}(?:[0-9a-f]{4})?)\]/g;
 // 写到一半的引用（正文还在逐字出现，或者停在了半路）先不显示，免得露出 [sc91d6 这样的半截 id
@@ -220,7 +228,7 @@ export function answerText(items, sources, { links = false } = {}) {
     .map((i) => cutPartialCite(i.text).replace(CITE, (_, sid) => (nums[sid] ? `[${nums[sid]}]` : ""))).join("\n\n").trim();
   const used = Object.entries(nums).map(([sid, n]) => {
     const s = sources[sid];
-    return links ? `${n}. [${sourceName(s).replace(/[[\]]/g, "")}](${s.url})` : `[${n}] ${sourceName(s)} ${s.url}`;
+    return links ? `${n}. ${sourceLine(s, true)}` : `[${n}] ${sourceLine(s)}`;
   });
   return used.length ? `${body}\n\n来源：\n${links ? "\n" : ""}${used.join("\n")}` : body;
 }

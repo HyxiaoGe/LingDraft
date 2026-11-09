@@ -17,7 +17,7 @@ import { Sidebar, withCurrent } from "./sidebar.jsx";
 import { MOBILE, NavContext, SPLIT, focusInput, isSearchKey, isSideKey, typeNext, useMedia } from "./nav.jsx";
 import { ACTIVE, QUEUED, addLive, itemKey, saveFile, threadMarkdown, useNow } from "./research.js";
 import { FilePanel } from "./artifact.jsx";
-import { FileList, SentPanel } from "./workspace-files.jsx";
+import { FileList, KnowledgePanel, SentPanel } from "./workspace-files.jsx";
 import { opener } from "./layers.js";
 import { useDoneAlert } from "./alert.jsx";
 import { Conversation, forgetReading } from "./timeline.jsx";
@@ -712,7 +712,9 @@ export default function Workspace() {
     setDrawer(false);
   };
   const openSearch = () => { setDrawer(false); setSearch(true); };
-  const nav = { mobile, collapsed: sideOff, drawer, toggleSide, openDrawer: () => setDrawer(true), closeDrawer, newChat: () => select(null), search: openSearch };
+  // openKnowledge(f, at)：在右栏看知识库里的文件（f：{id, name?, type?…}），at 是翻到第几段（点回答里引用的知识库来源）
+  const nav = { mobile, collapsed: sideOff, drawer, toggleSide, openDrawer: () => setDrawer(true), closeDrawer, newChat: () => select(null), search: openSearch,
+    openKnowledge: (f, at = null) => openFile({ kb: f, at }) };
   useEffect(() => {
     const to = navFocus.current;
     navFocus.current = null;
@@ -767,6 +769,7 @@ export default function Workspace() {
           files={{ open: openFile, current: file, toggle: toggleFiles }} />
         {file && (file.list ? <FileList tid={tid} st={shown} live={live} title={live?.title || shown?.title || listedTitle} onNav={navFile} onClose={closeFile} focus={fileFocus} />
           : file.sent ? <SentPanel tid={tid} f={file.sent} back={file.back} onNav={navFile} onClose={closeFile} focus={fileFocus} />
+            : file.kb ? <KnowledgePanel f={file.kb} at={file.at} onClose={closeFile} focus={fileFocus} />
             : <FilePanel tid={tid} st={shown} live={live} target={file} onTarget={setFile} onNav={navFile} onClose={closeFile} focus={fileFocus} />)}
         {search && (
           <SearchDialog threads={shownThreads && withCurrent(shownThreads, tid, st, live, busy)} now={now} href={chatPath}
@@ -776,7 +779,8 @@ export default function Workspace() {
           <SettingsDialog view={settings} onView={setSettings} onClose={() => setSettings(null)} mobile={mobile} auth={auth}
             onLogin={onLogin && (() => { setSettings(null); onLogin(); })}
             theme={theme} onTheme={setTheme} think={thinkOn} onThink={changeThinkDefault}
-            undo={undo} threads={shownThreads} onOpen={(id) => { setSettings(null); select(id); }} />
+            undo={undo} threads={shownThreads} onOpen={(id) => { setSettings(null); select(id); }}
+            onOpenKnowledge={(f) => { setSettings(null); openFile({ kb: f }); }} />
         )}
         <LoginDialog open={loginOpen} crowded={auth.crowded} want={loginWant} credits={credits} onClose={closeLogin} />
         <UndoToast undo={undo} />

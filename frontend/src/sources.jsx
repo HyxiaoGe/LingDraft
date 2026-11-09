@@ -1,12 +1,14 @@
 // 来源的显示：正文里的引用角标（桌面悬停预览、点了钉住；手机点了从底部弹出），和每条回答下面这条回答用到的来源。
+// 知识库里的来源（2026-11-09）：图标是文件夹，网址那行写“知识库 · 第几段”，“查看原文”在右栏（手机上整屏）打开那个文件、翻到那一段（见 workspace-files.jsx）。
 // 也放着能收起的内容共用的 Fold：收起来不卸掉，浏览器的查找搜得到
 import React, { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { IconChevron, IconClose, IconExternal } from "./icons.jsx";
+import { partUnit } from "./files.jsx";
+import { IconChevron, IconClose, IconExternal, IconFolder } from "./icons.jsx";
 import { useLayer } from "./layers.js";
 import { NavContext } from "./nav.jsx";
 import { Sheet } from "./sheet.jsx";
-import { domain, sourceName } from "./research.js";
+import { domain, isKnowledge, sourceName } from "./research.js";
 import styles from "./sources.module.css";
 
 // 来源网站的图标，后端代取（/api/favicon/域名）；取不到显示域名首字母。取不到的域名记下来，这个页面里不再请求
@@ -23,6 +25,26 @@ function Favicon({ url }) {
   const [failed, setFailed] = useState(null);
   if (!host || noIcon.has(host) || failed === host) return <span className={styles.fav + " " + styles.letter} aria-hidden="true">{(domain(url) || "?")[0].toUpperCase()}</span>;
   return <img className={styles.fav} src={`/api/favicon/${host}`} alt="" loading="lazy" onError={() => { noIcon.add(host); setFailed(host); }} />;
+}
+
+// 一条来源的图标：网页是网站图标，知识库的是文件夹
+function SourceIcon({ s }) {
+  if (isKnowledge(s)) return <span className={styles.fav + " " + styles.folder} aria-hidden="true"><IconFolder size={10} /></span>;
+  return <Favicon url={s.url} />;
+}
+
+// 知识库来源的文件名（标题是“文件名 · 段的标题”，见后端 sources.collect_sources）和在哪：“知识库 · 第 3 段”（PDF 第几页、PPT 第几张）
+const kbFile = (s) => (s.title || "").split(" · ")[0];
+const kbExt = (s) => (/\.([A-Za-z0-9]{1,5})$/.exec(kbFile(s))?.[1] || "").toLowerCase();
+const place = (s) => (isKnowledge(s) ? `知识库${s.part ? ` · 第 ${s.part} ${partUnit(kbExt(s))}` : ""}` : where(s.url));
+
+// 在右栏打开知识库来源的那个文件、翻到那一段。done：先收起来源卡、弹层
+function useOpenKnowledge() {
+  const nav = useContext(NavContext);
+  return (s, done) => {
+    done?.();
+    nav?.openKnowledge?.({ id: s.file_id, name: kbFile(s) }, s.part || null);
+  };
 }
 
 // 一个角标的来源卡（桌面）：悬停或键盘移上去是预览，移开就收；点一下钉住：滚动时跟着角标走（评审第 21 条：查来源常在滚动着读的时候），
@@ -118,7 +140,7 @@ function floatStyle(rect, width, height) {
 const layer = (node) => createPortal(node, document.querySelector(".ws") || document.body);
 
 // 来源卡上那段开头是从哪来的：读到的全文、查文档（Context7）查到的文档、只有搜索摘要。说法照术语表（已读全文 / 仅摘要）
-const EXCERPT_BADGES = { body: "已读全文", docs: "文档摘录", summary: "仅摘要" };
+const EXCERPT_BADGES = { body: "已读全文", docs: "文档摘录", summary: "仅摘要", knowledge: "知识库" };
 
 // 网址写成“域名 + 路径的开头”：同一个网站的几篇靠它分得清
 function where(url) {
@@ -131,8 +153,10 @@ function where(url) {
   }
 }
 
-// 一条来源：编号和徽标、标题、网址和发布日期、开头一段、打开原文。桌面的来源卡和手机的底部弹层共用
-function SourceBody({ s, n, onClose }) {
+// 一条来源：编号和徽标、标题、网址和发布日期、开头一段、打开原文（知识库的是在右栏看）。桌面的来源卡和手机的底部弹层共用。
+// onClose：卡上的关闭（桌面）；onDone：在右栏看之前先把卡、弹层收起来
+function SourceBody({ s, n, onClose, onDone }) {
+  const openKb = useOpenKnowledge();
   return (
     <>
       <div className={styles.top}>
@@ -141,10 +165,11 @@ function SourceBody({ s, n, onClose }) {
         {onClose && <button className={"ws-icon-btn " + styles.close} aria-label="关闭" onClick={onClose}><IconClose size={14} /></button>}
       </div>
       <div className={styles.name}>{sourceName(s)}</div>
-      <div className={styles.site}><Favicon url={s.url} />{where(s.url)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""}</div>
+      <div className={styles.site}><SourceIcon s={s} />{place(s)}{s.published_at ? ` · 发布 ${s.published_at.slice(0, 10)}` : ""}</div>
       {s.excerpt && <div className={styles.excerpt}>{s.excerpt.length > 180 ? s.excerpt.slice(0, 180) + "…" : s.excerpt}</div>}
       <div className={styles.actions}>
-        <a href={s.url} target="_blank" rel="noreferrer" className="ws-btn ghost sm" data-source-link><IconExternal size={13} />打开原文</a>
+        {isKnowledge(s) ? <button className="ws-btn ghost sm" data-source-link onClick={() => openKb(s, onDone)}><IconFolder size={13} />查看原文</button>
+          : <a href={s.url} target="_blank" rel="noreferrer" className="ws-btn ghost sm" data-source-link><IconExternal size={13} />打开原文</a>}
       </div>
     </>
   );
@@ -154,7 +179,7 @@ function SourcePop({ boxRef, rect, s, n, onEnter, onLeave, onClose }) {
   return layer(
     <div ref={boxRef} className={styles.pop} style={floatStyle(rect, 340, 220)} role="dialog" aria-label={`来源 ${n}`}
       onMouseEnter={onEnter} onMouseLeave={onLeave} onFocus={onEnter} onBlur={onLeave}>
-      <SourceBody s={s} n={n} onClose={onClose} />
+      <SourceBody s={s} n={n} onClose={onClose} onDone={onClose} />
     </div>,
   );
 }
@@ -184,14 +209,14 @@ function SourceSheet({ n, nums, sources, onClose }) {
               <li key={x.id}>
                 <button aria-current={k === cur ? "true" : undefined} onClick={() => { setCur(k); setList(false); }}>
                   <span className={styles.lb}>{k}</span>
-                  <span className={styles.txt}><span className={styles.t}>{sourceName(x)}</span><span className={styles.meta}>{where(x.url)}{x.published_at ? ` · ${x.published_at.slice(0, 10)}` : ""}</span></span>
+                  <span className={styles.txt}><span className={styles.t}>{sourceName(x)}</span><span className={styles.meta}>{place(x)}{x.published_at ? ` · ${x.published_at.slice(0, 10)}` : ""}</span></span>
                 </button>
               </li>
             ))}
           </ol>
         ) : s && (
           <>
-            <SourceBody s={s} n={cur} />
+            <SourceBody s={s} n={cur} onDone={onClose} />
             {all.length > 1 && <button className={"ws-btn ghost " + styles.all} onClick={() => setList(true)}>这一轮的全部 {all.length} 个来源</button>}
           </>
         )}
@@ -253,13 +278,14 @@ export function useFoldOpen(key, auto) {
 // 每条：标题最多两行，下面一行是“域名 + 路径的开头”和发布日期，同一个网站的几篇分得清（评审第 21 条）
 export function AnswerSources({ nums, sources }) {
   const [open, setOpen] = useState(false);
+  const openKb = useOpenKnowledge();
   const used = Object.entries(nums).map(([sid, n]) => [n, sources?.[sid]]).filter(([, s]) => s);
   if (!used.length) return null;
-  const sites = [...new Map(used.map(([, s]) => [hostOf(s.url), s.url])).values()].slice(0, 6); // 同一个网站只放一个图标
+  const sites = [...new Map(used.map(([, s]) => [isKnowledge(s) ? "kb:" : hostOf(s.url), s])).values()].slice(0, 6); // 同一个网站只放一个图标，知识库的一个文件夹
   return (
     <div className={styles.cited}>
       <button className={styles.citedHead} aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span className={styles.sites} aria-hidden="true">{sites.map((url) => <Favicon key={url} url={url} />)}</span>
+        <span className={styles.sites} aria-hidden="true">{sites.map((s) => <SourceIcon key={s.id} s={s} />)}</span>
         {used.length} 个来源
         <IconChevron size={13} className={"chev" + (open ? " up" : "")} />
       </button>
@@ -269,9 +295,10 @@ export function AnswerSources({ nums, sources }) {
             <li key={s.id}>
               <span className={styles.lb}>{n}</span>
               <span className={styles.txt}>
-                <a href={s.url} target="_blank" rel="noreferrer" title={s.title ? `${s.title}\n${s.url}` : s.url}>{sourceName(s)}</a>
-                <span className={styles.meta}><Favicon url={s.url} />{where(s.url)}{s.published_at ? ` · ${s.published_at.slice(0, 10)}` : ""}</span>
-                <span className={styles.url}>{s.url}</span>{/* 只在打印时出现：纸上点不了链接，印出网址 */}
+                {isKnowledge(s) ? <button className={styles.kbLink} title={s.title} onClick={() => openKb(s)}>{sourceName(s)}</button>
+                  : <a href={s.url} target="_blank" rel="noreferrer" title={s.title ? `${s.title}\n${s.url}` : s.url}>{sourceName(s)}</a>}
+                <span className={styles.meta}><SourceIcon s={s} />{place(s)}{s.published_at ? ` · ${s.published_at.slice(0, 10)}` : ""}</span>
+                {!isKnowledge(s) && <span className={styles.url}>{s.url}</span>}{/* 只在打印时出现：纸上点不了链接，印出网址 */}
               </span>
             </li>
           ))}

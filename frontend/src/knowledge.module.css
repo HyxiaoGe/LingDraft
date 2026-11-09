@@ -1,0 +1,35 @@
+/* 知识库（knowledge.jsx，放在设置窗口里）：上面一张卡是几个文件、一句说明和上传；下面一张卡是文件，一个一行。和记忆页（memory.module.css）一个样子 */
+.kb { padding-top: 8px; }
+.kb > :global(.ws-error) { margin: 16px 0 0; }
+.head { padding: 16px; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); }
+.head b { display: block; margin-bottom: 4px; font-weight: 500; }
+.head p { font-size: 12.5px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
+.head :global(.ws-btn) { margin-top: 12px; gap: 6px; }
+.full { margin-left: 10px; font-size: 12.5px; color: var(--muted); }
+.status { color: var(--muted); font-size: 13px; margin: 16px 16px 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.list { margin: 16px 0 0; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; }
+.item { display: flex; align-items: center; gap: 8px; padding: 4px 12px 4px 4px; }
+.item + .item { border-top: 1px solid var(--line); }
+/* 左边是角标、文件名和一行说明；好了的整块能点（在右栏看） */
+.main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: var(--r-sm); text-align: left; color: inherit; }
+button.main { transition: background .15s var(--ease); }
+@media (hover: hover) { button.main:hover { background: var(--hover); } }
+button.main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.main > span:first-child { flex: none; }
+.spin { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 7px; background: var(--paper); border: 1px solid var(--line); color: var(--muted); } /* 和 files.module.css 的角标一样大 */
+.text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub.bad { color: var(--warn); white-space: normal; }
+.item > :global(.ws-icon-btn) { flex: none; color: var(--faint); }
+@media (hover: hover) {
+  .item > :global(.ws-icon-btn):hover { color: var(--ink); }
+  .item > :global(.ws-icon-btn.danger):hover { color: var(--danger); background: var(--danger-soft); }
+}
+
+@media (max-width: 720px) {
+  .head :global(.ws-btn), .status :global(.ws-btn) { height: 44px; padding: 0 16px; font-size: 14px; }
+  .full { display: block; margin: 8px 0 0; }
+  .main { min-height: 56px; }
+  .item > :global(.ws-icon-btn) { width: 44px; height: 44px; }
+}

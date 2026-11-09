@@ -4,8 +4,10 @@
 // - 用户发的文件在右栏看（SentPanel，2026-11-09 Sean 定）：PDF 在桌面上用浏览器自带的 PDF 查看器看原件；别的看抽出来的文字——
 //   Markdown、Word 和正文一样排，PPT、表格每段一个小标题（第几张、哪张表哪几行），代码带行号和高亮，纯文字照原样。
 //   手机上 PDF 点了直接下载（见 files.jsx 的 previewable）。太长的只显示前面一部分，底下能下载原件。选中一段能引用到输入框。
+// - 知识库里的文件也在这里看（kb，2026-11-09）：从设置里的知识库点开，或者点回答里引用的知识库来源——那样会翻到引用的那一段并标出来，
+//   PDF 翻到那一页。
 import { useContext, useEffect, useRef, useState } from "react";
-import { downloadThreadFile, threadFileBlob, threadFileParts } from "./api.js";
+import { downloadKnowledgeFile, downloadThreadFile, getKnowledgeFile, knowledgeFileBlob, knowledgeFileParts, threadFileBlob, threadFileParts } from "./api.js";
 import { CopyAll, FileCards, PanelShell, QuoteButton, fileVersions, turnCards, useSelected } from "./artifact.jsx";
 import { CodeBlock } from "./code-block.jsx";
 import { Badge as FileBadge, SentFile, fileFacts, partUnit } from "./files.jsx";
@@ -132,35 +134,41 @@ function Tile({ it, tid, onOpen }) {
 
 // ---- 用户发的文件在右栏看 ----
 
-// 抽出来的文字：从后端取，原件不会变，取过的记着（这次打开的页面里）
+// 抽出来的文字：从后端取，原件不会变，取过的记着（这次打开的页面里）。文件编号对话里的、知识库里的不会重
 const parts = new Map();
-function useParts(tid, id) {
+
+// 文件从哪取：对话里发的（按对话编号）还是知识库里的。key 变了才重新取
+const fromThread = (tid) => ({ key: tid, parts: (id, sig) => threadFileParts(tid, id, sig), blob: (id, sig) => threadFileBlob(tid, id, sig),
+  download: (f) => downloadThreadFile(tid, f) });
+const fromKnowledge = { key: "kb", parts: knowledgeFileParts, blob: knowledgeFileBlob, download: downloadKnowledgeFile };
+
+function useParts(src, id) {
   const [, bump] = useState(0);
   const [error, setError] = useState(null);
   const [tries, setTries] = useState(0);
   useEffect(() => {
     setError(null);
-    if (!tid || !id || parts.has(id)) return undefined;
+    if (!src.key || !id || parts.has(id)) return undefined;
     const ctl = new AbortController();
-    threadFileParts(tid, id, ctl.signal).then((d) => { parts.set(id, d); bump((n) => n + 1); })
+    src.parts(id, ctl.signal).then((d) => { parts.set(id, d); bump((n) => n + 1); })
       .catch((e) => { if (!ctl.signal.aborted) setError(e.status === 404 ? "gone" : "failed"); });
     return () => ctl.abort();
-  }, [tid, id, tries]);
+  }, [src.key, id, tries]); // eslint-disable-line react-hooks/exhaustive-deps -- src 每次是新的，key 一样就是同一处
   return { data: id ? parts.get(id) ?? null : null, error, retry: () => setTries((n) => n + 1) };
 }
 
 // PDF 原件：要带登录信息，取成 blob 给 iframe（浏览器自带的 PDF 查看器）。关上右栏就放掉，再开时浏览器缓存里有，不用再下一遍
-function usePdf(tid, id) {
+function usePdf(src, id) {
   const [url, setUrl] = useState(null);
   const [error, setError] = useState(null);
   const [tries, setTries] = useState(0);
   useEffect(() => {
     setUrl(null);
     setError(null);
-    if (!tid || !id) return undefined;
+    if (!src.key || !id) return undefined;
     const ctl = new AbortController();
     let made = null;
-    threadFileBlob(tid, id, ctl.signal).then((b) => {
+    src.blob(id, ctl.signal).then((b) => {
       if (ctl.signal.aborted) return;
       made = URL.createObjectURL(new Blob([b], { type: "application/pdf" }));
       setUrl(made);
@@ -169,7 +177,7 @@ function usePdf(tid, id) {
       ctl.abort();
       if (made) URL.revokeObjectURL(made);
     };
-  }, [tid, id, tries]);
+  }, [src.key, id, tries]); // eslint-disable-line react-hooks/exhaustive-deps -- 同上
   return { url, error, retry: () => setTries((n) => n + 1) };
 }
 
@@ -185,7 +193,9 @@ function fullText({ type, parts: ps }) {
   return ps.map((p) => `${p.title}\n\n${p.text}`).join("\n\n");
 }
 
-function SentBody({ data, name }) {
+// at：要翻到、标出来的第几段（知识库来源引用的那段）：每段分开排，那一段有底色。没有就照上面整篇排
+function SentBody({ data, name, at }) {
+  if (at) return <PartsBody data={data} at={at} />;
   if (data.type === "code") return <CodeBlock lang={ext(name)} text={fullText(data)} bare />;
   if (data.type === "text") return <pre className={styles.plain}>{fullText(data)}</pre>;
   if (DOC_LIKE.has(data.type)) return <div className={pstyles.doc}><Markdown text={fullText(data)} cite={noCite} /></div>;
@@ -201,12 +211,65 @@ function SentBody({ data, name }) {
   );
 }
 
-// 右栏看用户发的一个文件（f：{id, name, type, size, pages}）。back：从文件列表点开的，左上角回列表
-export function SentPanel({ tid, f, back, onNav, onClose, focus }) {
+function PartsBody({ data, at }) {
+  const lines = LINES.has(data.type);
+  const titled = !lines && !DOC_LIKE.has(data.type);
+  return (
+    <div className={lines ? styles.lines : pstyles.doc}>
+      {data.parts.map((p, k) => (
+        <section key={k} data-part={k + 1} className={styles.part + (k + 1 === at ? " " + styles.hit : "")}>
+          {titled && <h3 className={styles.partTitle}>{p.title}</h3>}
+          {lines ? <pre className={styles.plain}>{p.text}</pre>
+            : p.text.trim() ? <Markdown text={p.text} cite={noCite} /> : <p className={styles.empty}>这一{partUnit(data.type)}没有文字</p>}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+// 知识库里的文件在右栏看。从来源点开的只知道编号和第几段（f：{id, name?}），先取一次这个文件的类型、大小（PDF 要不要用原件看）。
+// at：翻到第几段
+const kbFiles = new Map();
+export function KnowledgePanel({ f, at, onClose, focus }) {
+  const [, bump] = useState(0);
+  const [error, setError] = useState(null);
+  const [tries, setTries] = useState(0);
+  const known = f.type ? f : kbFiles.get(f.id);
+  useEffect(() => {
+    setError(null);
+    if (known) return undefined;
+    const ctl = new AbortController();
+    getKnowledgeFile(f.id, ctl.signal).then((v) => {
+      if (v.status !== "ready") return setError("gone");
+      kbFiles.set(f.id, v.file);
+      bump((n) => n + 1);
+    }).catch((e) => { if (!ctl.signal.aborted) setError(e.status === 404 ? "gone" : "failed"); });
+    return () => ctl.abort();
+  }, [f.id, tries]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (known) return <SentPanel f={known} kb at={at} onClose={onClose} focus={focus} />;
+  return (
+    <PanelShell label={`知识库：${f.name || "文件"}`} title={f.name || "知识库的文件"} badge={<span className={styles.headBadge}><FileBadge name={f.name || ""} /></span>}
+      facts={<span>知识库</span>} onClose={onClose} focus={focus}>
+      <div className={pstyles.body + " " + pstyles.padded}>
+        {error ? (
+          <div className={pstyles.note}>
+            {error === "gone" ? "这个文件已经从知识库里删掉了。" : "内容没取到。"}
+            {error !== "gone" && <button className="ws-btn sm" onClick={() => setTries((n) => n + 1)}>再试一次</button>}
+          </div>
+        ) : <div className={pstyles.loading} role="status" aria-label="正在打开"><Spinner size={16} /></div>}
+      </div>
+    </PanelShell>
+  );
+}
+
+// 右栏看用户发的一个文件（f：{id, name, type, size, pages}）。back：从文件列表点开的，左上角回列表。
+// kb：知识库里的（不归哪段对话），at：翻到第几段（见 KnowledgePanel）
+export function SentPanel({ tid, f, back, kb = false, at = null, onNav, onClose, focus }) {
   const mobile = !!useContext(NavContext)?.mobile;
   const pdf = f.type === "pdf" && !mobile;
-  const text = useParts(tid, pdf ? null : f.id);
-  const original = usePdf(tid, pdf ? f.id : null);
+  const src = kb ? fromKnowledge : fromThread(tid);
+  const text = useParts(src, pdf ? null : f.id);
+  const original = usePdf(src, pdf ? f.id : null);
   const { data } = text;
   const error = pdf ? original.error : text.error;
   const retry = pdf ? original.retry : text.retry;
@@ -215,12 +278,21 @@ export function SentPanel({ tid, f, back, onNav, onClose, focus }) {
   const sel = useSelected(bodyRef, !pdf && !!data);
   const [saving, setSaving] = useState(null); // busy / failed
   useEffect(() => setSaving(null), [f.id]);
-  useEffect(() => { if (bodyRef.current) bodyRef.current.scrollTop = 0; }, [f.id]);
+  // 换了文件回到顶上；要翻到某一段的，文字到了以后滚到那一段（PDF 的翻页在地址里）
+  const shown = !!data && !pdf;
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const target = at && shown ? el.querySelector(`[data-part="${at}"]`) : null;
+    if (target) target.scrollIntoView({ block: "start" });
+    else el.scrollTop = 0;
+  }, [f.id, at, shown]);
+  const missing = at && data && !pdf && at > data.parts.length; // 引用的那段在只显示了前面一部分之后
   const download = async () => {
     if (saving === "busy") return;
     setSaving("busy");
     try {
-      await downloadThreadFile(tid, f);
+      await src.download(f);
       setSaving(null);
     } catch {
       setSaving("failed");
@@ -235,7 +307,7 @@ export function SentPanel({ tid, f, back, onNav, onClose, focus }) {
       </button>
     </>
   );
-  const facts = saving === "failed" ? <span className={pstyles.bad}>没下载成，再点一次</span> : <span>{fileFacts(f)}</span>;
+  const facts = saving === "failed" ? <span className={pstyles.bad}>没下载成，再点一次</span> : <span>{kb ? `知识库 · ${fileFacts(f)}` : fileFacts(f)}</span>;
 
   let body;
   if (error) body = (
@@ -245,10 +317,16 @@ export function SentPanel({ tid, f, back, onNav, onClose, focus }) {
     </div>
   );
   else if (!ready) body = <div className={pstyles.loading} role="status" aria-label="正在打开"><Spinner size={16} /></div>;
-  else if (pdf) body = <iframe className={pstyles.frame} title={`${f.name}（PDF）`} src={original.url} />;
+  else if (pdf) body = <iframe className={pstyles.frame} title={`${f.name}（PDF）`} src={at ? `${original.url}#page=${at}` : original.url} />;
   else body = (
     <>
-      <SentBody data={data} name={f.name} />
+      {missing && (
+        <div className={styles.more + " " + styles.ahead}>
+          <span>引用的第 {at} {partUnit(data.type)}在后面，这里只显示了前面一部分</span>
+          <button className="ws-btn sm" onClick={download}><IconDownload size={13} />下载原件</button>
+        </div>
+      )}
+      <SentBody data={data} name={f.name} at={missing ? null : at} />
       {data.more && (
         <div className={styles.more}>
           <span>只显示了前面一部分</span>

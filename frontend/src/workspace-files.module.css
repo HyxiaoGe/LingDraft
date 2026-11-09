@@ -36,6 +36,12 @@
 .part + .part { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
 .partTitle { margin: 0 0 8px; font-size: 13px; font-weight: 500; color: var(--muted); }
 .empty { margin: 0; font-size: 14px; color: var(--faint); }
+/* 知识库来源引用的那一段：每段分开排，那一段左边一道强调色、浅底（翻到这里）。纯文字、代码按行切的段之间不画线 */
+.lines .part + .part { margin-top: 0; padding-top: 0; border-top: 0; }
+.hit { margin-left: -14px; margin-right: -14px; padding: 10px 14px; border-radius: var(--r-sm); background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); scroll-margin-top: 16px; }
+.part + .part.hit { padding-top: 10px; }
+.part.hit + .part { border-top: 0; }
 /* 太长只显示了前面：底下一行说一声，能下载原件 */
 .more { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 12px; max-width: 760px; margin: 32px auto 0; padding: 14px 16px;
   border: 1px dashed var(--line2); border-radius: var(--r); font-size: 13px; color: var(--muted); }
+.more.ahead { margin: 0 auto 24px; }
