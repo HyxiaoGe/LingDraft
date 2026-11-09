@@ -308,7 +308,6 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
   useEffect(() => {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(save, 300);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text]);
   useEffect(() => {
     addEventListener("pagehide", save);
@@ -317,7 +316,6 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
       save();
       keepImages(shown.current, imagesRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 光标放回输入框（批次 G 第 42 条，2026-11-07 Sean 定）：
@@ -382,7 +380,6 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
     setText(next);
     if (putBack.images?.length) putImages(putBack.images);
     focus(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [putBack]);
   useEffect(() => {
     // 图上点了“改这张”（见 images.jsx）、拖进对话区松手（见 useImageDrop）：当成选了这些图，桌面上光标进输入框好接着说
@@ -643,7 +640,6 @@ export function ModelTools({ models, loading, current, locked, onPick, thinking,
     const down = (e) => !box.current?.contains(e.target) && setOpen(false);
     addEventListener("mousedown", down);
     return () => removeEventListener("mousedown", down);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   useLayer(open, close);
   useEffect(() => { setOpen(false); }, [mobile]); // 窗口拉宽、变窄：菜单和弹层不是一个东西

@@ -189,10 +189,8 @@ export default function Workspace() {
     document.head.prepend(m); // 好几条都对得上时浏览器用最前面那条
     return () => m.remove();
   }, [dark]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { loadModels().catch(() => setModels([])); }, []);
   // 身份定了取一次额度；每轮结束（busy 回到 false）再取：这一轮花的已经记上了
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (auth.ready && !busy) refreshCredits(); }, [auth.ready, busy]);
   // 额度到点重置：最早的那个重置时间过了一两秒再取一次，左栏圆环和额度面板马上变成新的（原来要刷新页面才变）。
   // 标签页在后台时浏览器会拖着定时器，切回来时已经过了点也补取一次；这里的钟比服务器快、取回来还没重置的，隔 5 秒再取
@@ -208,7 +206,6 @@ export default function Workspace() {
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", back);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [credits]);
   // 领不到游客身份（同一网络今天领得太多，2026-11-06 Sean 定每网络每天 5 个）：弹登录框，说清为什么、登录后会怎样（第 26 条）；
   // 没有登录功能的部署只能说明天再来
@@ -687,7 +684,6 @@ export default function Workspace() {
     if (!unknown.length) return;
     unknown.forEach((r) => namesAsked.current.add(r));
     loadModels().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shownRefs, models, modelNames]);
 
   // 游客开登录弹窗（左栏、额度、设置窗口、报错里的登录，点“登录后可用”的模型）。点模型进来的带着那个模型；从按钮直接进来的参数是点击事件，不算

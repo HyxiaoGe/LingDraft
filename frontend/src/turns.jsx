@@ -176,7 +176,6 @@ export function TurnIndexButton({ entries, scroller, onJump }) {
     const down = (e) => { if (!box.current?.contains(e.target) && !btn.current?.contains(e.target)) close(false); };
     addEventListener("mousedown", down);
     return () => removeEventListener("mousedown", down);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
   useLayer(open, () => close()); // Esc：收起，焦点回到按钮
   useEffect(() => { setOpen(false); }, [mobile]);
