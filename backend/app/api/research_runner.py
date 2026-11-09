@@ -37,8 +37,8 @@ from app.files.service import NOT_HERE, FileService, NotSendable
 from app.files.store import FileRow, FileStore, MemoryFileStore, PostgresFileStore
 from app.knowledge import remote as kb_remote
 from app.knowledge.remote import HashEmbedder
+from app.knowledge.libraries import Library, LibraryStore, MemoryLibraryStore, PostgresLibraryStore
 from app.knowledge.service import KnowledgeBase
-from app.knowledge.service import workspace as kb_workspace
 from app.knowledge.store import ChunkStore, MemoryChunkStore, PostgresChunkStore
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, fallback_title, now, stop_turn
@@ -303,8 +303,13 @@ def open_files(runs: RunStore) -> FileStore:
 
 
 def open_chunks(runs: RunStore) -> ChunkStore:
-    """知识库的块（pgvector）：和文件表一样，跟着运行记录放。"""
+    """资料库的块（pgvector）：和文件表一样，跟着运行记录放。"""
     return PostgresChunkStore(runs.pool) if isinstance(runs, PostgresRunStore) else MemoryChunkStore()
+
+
+def open_libraries(runs: RunStore) -> LibraryStore:
+    """资料库（名字、说明）：和文件表一样，跟着运行记录放。"""
+    return PostgresLibraryStore(runs.pool) if isinstance(runs, PostgresRunStore) else MemoryLibraryStore()
 
 
 def _memory_row(m: dict) -> dict:
@@ -342,10 +347,11 @@ class ResearchRunner(BaseRunner):
         # 用户发的文件：原件在数据卷上，文字和文件表在运行记录的库里；在这里起后台的解析、清理（见 app.files.service）
         self.files = files or FileService(open_files(self.run_store), config.FILES_DIR, isolated=config.FILE_PARSE_ISOLATED,
                                           timeout=config.FILE_PARSE_TIMEOUT_S)
-        # 知识库：文件也在文件表里，解析好了交给它建索引（先挂上再起文件服务：重启时还没建完的会被交回来）；块的表连着文件表，文件服务起来以后再建。
+        # 资料库：文件也在文件表里，解析好了交给它建索引（先挂上再起文件服务：重启时还没建完的会被交回来）；块的表连着文件表、
+        # 资料库建表时要搬文件表里 11-10 以前的行，都在文件服务起来以后建。
         # 假模型跑的（本机、测试）用假向量、不重排，不调百炼
         embedder, reranker = (HashEmbedder(), None) if fake else kb_remote.live()
-        self.kb = KnowledgeBase(self.files, open_chunks(self.run_store), embedder, reranker)
+        self.kb = KnowledgeBase(self.files, open_chunks(self.run_store), embedder, reranker, open_libraries(self.run_store))
         aio.run(self.files.start())
         aio.run(self.kb.start())
         self.workers = workers or config.RESEARCH_WORKERS
@@ -439,14 +445,24 @@ class ResearchRunner(BaseRunner):
         """这段对话里用户发的文件抽出来的文字（右栏预览，见 FileService.preview）。"""
         return aio.run(self.files.preview(file_id, thread_id))
 
-    # ---- 知识库（见 app.knowledge）----
+    # ---- 资料库（见 app.knowledge）----
 
     def kb_overview(self, who: Identity) -> dict:
         return aio.run(self.kb.overview(who))
 
-    def kb_upload(self, who: Identity, name: str | None, data: bytes) -> FileRow:
-        """传进知识库：马上返回（解析中），后台解析、建索引。不收的抛 UploadRejected（游客、满了、太大、类型不对）。"""
-        return aio.run(self.kb.upload(who, name, data))
+    def kb_create(self, who: Identity, name: str, description: str) -> Library:
+        """建一个资料库。不收的抛 LibraryRejected（游客、名字不对、满了、重名）。"""
+        return aio.run(self.kb.create(who, name, description))
+
+    def kb_update(self, who: Identity, library_id: str, name: str | None, description: str | None) -> Library | None:
+        return aio.run(self.kb.update(who, library_id, name, description))
+
+    def kb_remove(self, who: Identity, library_id: str) -> bool:
+        return aio.run(self.kb.remove(who, library_id))
+
+    def kb_upload(self, who: Identity, library_id: str, name: str | None, data: bytes) -> FileRow:
+        """传进一个资料库：马上返回（解析中），后台解析、建索引。不收的抛 UploadRejected（游客、资料库没有、满了、太大、类型不对）。"""
+        return aio.run(self.kb.upload(who, library_id, name, data))
 
     def kb_file(self, who: Identity, file_id: str) -> FileRow | None:
         return aio.run(self.kb.get(who, file_id))
@@ -455,11 +471,17 @@ class ResearchRunner(BaseRunner):
         return aio.run(self.kb.delete(who, file_id))
 
     def kb_preview(self, who: Identity, file_id: str) -> tuple[FileRow, list[Part], bool] | None:
-        """知识库里的文件抽出来的文字（右栏预览，和对话里的文件一样）。游客、别人的、没建好的是 None。"""
-        return None if who.guest else aio.run(self.files.preview(file_id, kb_workspace(who.sub)))
+        """资料库里的文件抽出来的文字（右栏预览，和对话里的文件一样）。游客、别人的、没建好的是 None。"""
+        async def go():
+            row = await self.kb.get(who, file_id)
+            return None if row is None else await self.files.preview(file_id, row.workspace_id)
+        return aio.run(go())
 
     def kb_original(self, who: Identity, file_id: str) -> tuple[Path, FileRow] | None:
-        return None if who.guest else aio.run(self.files.original(file_id, kb_workspace(who.sub)))
+        async def go():
+            row = await self.kb.get(who, file_id)
+            return None if row is None else await self.files.original(file_id, row.workspace_id)
+        return aio.run(go())
 
     def upload_image(self, data: bytes) -> AttachedImage:
         """用户发的图传进 image-service（归灵稿，和画的图放在一起），返回记在消息上的信息。

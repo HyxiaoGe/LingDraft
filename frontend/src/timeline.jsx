@@ -749,7 +749,7 @@ function didText(items) {
     else if (i.kind === "read" && i.body) read++; // 和 ToolRow 一样：读到原文的才算
   });
   count(items);
-  return [kb && `查了 ${kb} 次知识库`, search && `搜了 ${search} 次`, read && `读了 ${read} 页`, tasks && `${tasks} 个子任务`].filter(Boolean).join(" · ");
+  return [kb && `查了 ${kb} 次资料库`, search && `搜了 ${search} 次`, read && `读了 ${read} 页`, tasks && `${tasks} 个子任务`].filter(Boolean).join(" · ");
 }
 
 // 过程里的一条条：思考、中途说的话、工具步骤，子任务是一张卡片。子任务卡里是它的子 agent 的这些，排法一样。
@@ -999,8 +999,8 @@ function ToolRow({ s, running, files, versions }) {
     const unit = partUnit(f?.type);
     main = <>读文件{name && <>「{name}」</>}{s.limits.map((l) => <span key={l} className={proc.lim}>找「{l}」</span>)}{s.parts && <span className={proc.lim}>第 {s.parts} {unit}</span>}</>;
     sub = s.pending ? "读取中…" : !s.ok ? s.message || "没读成" : s.limits.length ? (s.hits ? `找到 ${s.hits} ${unit}` : "没找到") : "读过了";
-  } else if (s.kind === "knowledge") { // 查用户的知识库：查的话，找到几段（同一段的几块算一段）
-    main = <>查知识库「{s.text}」</>;
+  } else if (s.kind === "knowledge") { // 查用户的资料库：查的话，找到几段（同一段的几块算一段）；只查了一个库的，灰色小标是哪个
+    main = <>查资料库「{s.text}」{s.limits.map((l) => <span key={l} className={proc.lim}>只查「{l}」</span>)}</>;
     sub = s.pending ? "查找中…" : !s.ok ? s.message || "没查成" : s.source_ids?.length ? `找到 ${s.source_ids.length} 段` : "没找到";
   } else if (s.kind === "write") { // 模型写文件、改文件：标题（改的没给新标题，按改的那份对上），写成了是第几版
     const name = s.text || versions?.get(s.target)?.at(-1)?.title;
@@ -1040,7 +1040,7 @@ const WAITING = [
   ["image", () => "正在画图"],
   ["view", () => "正在看图"],
   ["file", () => "正在读文件"],
-  ["knowledge", () => "正在查知识库"],
+  ["knowledge", () => "正在查资料库"],
   ["write", () => "正在保存文件"],
   ["read", (n) => (n > 1 ? `正在读 ${n} 个网页` : "正在读网页")],
   ["search", (n) => (n > 1 ? `正在搜 ${n} 组关键词` : "正在搜索")],

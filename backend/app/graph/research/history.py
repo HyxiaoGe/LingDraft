@@ -240,8 +240,8 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         text, extra = _text(args.get("query")), {"limits": [_text(args.get("libraryId"))] if args.get("libraryId") else []}
     elif kind == "view":
         text, extra = _text(args.get("question")), {}
-    elif kind == "knowledge":
-        text, extra = _text(args.get("query")), {}
+    elif kind == "knowledge":  # 只查了一个资料库的：limits 是那个库的名字
+        text, extra = _text(args.get("query")), {"limits": [_text(args.get("library"))] if args.get("library") else []}
     elif kind == "write":  # 标题在参数里，写好了用结果里的（改文件没给新标题的是空的）；改的是哪份记在 target，页面按它对上标题、归到同一份文件
         w = written_of(result) if result is not None else None
         text = w.title if w else _text(args.get("title"))

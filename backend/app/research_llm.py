@@ -1108,7 +1108,7 @@ class FakeToolModel(BaseChatModel):
             return self._travel(text, turn, call)
         if "图里" in text:
             return self._look(text, messages, turn, call)
-        if "知识库里" in text:
+        if "知识库里" in text or "资料库" in text:
             return self._knowledge(text, turn, call, KB_TOOL in self.bound)
         if "文件里" in text:
             return self._read_file(text, messages, turn, call)
@@ -1224,7 +1224,10 @@ class FakeToolModel(BaseChatModel):
             if done.status == "error":
                 return "知识库没查成。", []
             return (f"知识库里说 [{hits[0]['id']}]。" if (hits := kb_hits(done)) else "知识库里没有。"), []
-        return call(KB_TOOL, query=text.split("知识库里", 1)[1].strip() or text)
+        # “知识库里X”查全部；“资料库「名字」里X”只查那一个
+        m = re.search(r"(?:知识库|资料库(?:「(.+?)」)?)里(.*)", text, re.S)
+        lib, q = (m.group(1), m.group(2).strip()) if m else (None, "")
+        return call(KB_TOOL, query=q or text, **({"library": lib} if lib else {}))
 
     @staticmethod
     def _read_file(text: str, messages: list[BaseMessage], turn: list[BaseMessage], call) -> tuple[str, list[dict]]:

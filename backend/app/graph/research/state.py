@@ -299,7 +299,7 @@ class ToolStep(BaseModel):
     text: str = Field(description="搜索词 / 网址 / 地名 / 查地点的关键词 / 路线、航班、火车的起终点 / 行程方案的标题 / 画图的描述 / 子任务的标题"
                                   " / 找的库名 / 查文档的问题 / 读的文件名（还没读完、没读成的是文件编号）/ 写的文件标题（改文件没给新标题、还没结果的是空的）"
                                   " / 查知识库的词")
-    limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制；查地点在哪查；比路线比哪几种方式；航班、火车的日期和条件；查的是哪个库")
+    limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制；查地点在哪查；比路线比哪几种方式；航班、火车的日期和条件；查的是哪个库；只查一个资料库时是哪个")
     ok: bool = True
     hits: int = 0  # 搜索返回的条数；找到的候选库、查到的文档段数；在文件里找到的段数；查知识库查到的块数
     body: bool = False  # 读页读到了正文
@@ -387,5 +387,7 @@ class ResearchState(AgentState):
     auto_model: NotRequired[str]
     turns: NotRequired[list[Turn]]
     compaction: NotRequired[Compaction]
-    # 这段对话第一轮时知识库里能查的文件名（见 agent.TurnMiddleware）：有的才给查知识库的工具，说明里列出来；之后沿用，不让前缀变
+    # 这段对话第一轮时能查的资料库：[{name, description, files}]（见 agent.TurnMiddleware、KnowledgeBase.catalog）：有的才给查资料库的工具，
+    # 说明里列出来；之后沿用，不让前缀变。kb_files 是 11-10 以前（一人一个库）取的文件名，那样的对话接着用它（当成“我的资料”）
+    kb_libraries: NotRequired[list[dict]]
     kb_files: NotRequired[list[str]]

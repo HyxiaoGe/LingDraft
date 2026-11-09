@@ -9,7 +9,7 @@ import { createResearchThread, deleteResearchThread, editResearchThread, followR
 import { localWho } from "./auth.js";
 import { setDraft } from "./drafts.js";
 import { AFTER_RUN_ERROR, errorText, quotaText } from "./errors.js";
-import { KnowledgeDialog } from "./knowledge.jsx";
+import { LibraryPage } from "./knowledge.jsx";
 import { LoginDialog, useAuth } from "./login.jsx";
 import { saveThinkDefault, thinkDefault, useTheme } from "./prefs.js";
 import { SearchDialog } from "./search.jsx";
@@ -32,6 +32,9 @@ const NEW_PATH = "/chat/new";
 const chatPath = (id) => (id ? `/chat/${id}` : NEW_PATH);
 // 以前的设置页、记忆页地址（/settings、/memory，11-07 改成窗口之前）：打开的话弹出设置窗口的那一页，地址换成对话的
 const oldPage = () => location.pathname.match(/^\/(settings|memory)\/?$/)?.[1] || null;
+// 资料库页（2026-11-10，见 knowledge.jsx）：占对话那一栏，左栏照旧。去资料库时开着的对话不断开（在跑的接着跑），点回来马上接上
+const LIBRARY_PATH = "/library";
+const atLibrary = () => /^\/library\/?$/.test(location.pathname);
 const routeId = () => {
   const m = location.pathname.match(/^\/chat\/([^/]+)\/?$/);
   return m && m[1] !== "new" ? m[1] : null;
@@ -59,7 +62,7 @@ export default function Workspace() {
   const [tid, setTid] = useState(routeId);
   const [search, setSearch] = useState(false); // 搜对话的窗口开着没有（见 search.jsx）
   const [settings, setSettings] = useState(oldPage); // 设置窗口开着时是窗口里的哪一类（见 settings.jsx，"settings" 是刚打开）；关着是 null
-  const [kb, setKb] = useState(false); // 知识库窗口开没开（左栏“知识库”）
+  const [page, setPageState] = useState(() => (atLibrary() ? "library" : null)); // 对话那一栏放的是什么：null 是对话，"library" 是资料库页
   const [theme, setTheme, dark] = useTheme(); // 主题（设置窗口里选，存本机）：跟随系统、浅色、深色
   const [st, setSt] = useState(null);
   // 这个页面发起或接上的那次执行：{said, images, sentAt, turnsAtStart, items, stage, phase, title, stopping, hidden, edit}
@@ -92,6 +95,11 @@ export default function Workspace() {
   const refreshCredits = () => getCredits().then(setCredits).catch(() => {});
   const gen = useRef(0); // 每切一次线程加一：旧线程的连接和回调发现对不上，就不再改页面
   const tidRef = useRef(tid);
+  const pageRef = useRef(page);
+  const setPage = (p) => {
+    pageRef.current = p;
+    setPageState(p);
+  };
   const ctl = useRef(new AbortController()); // 当前线程的连接；切走、或开始新的一次执行时断开（服务器上的执行照常跑）
   const lastEvent = useRef(null); // 收到的最后一个事件 id，断线后凭它接着读
   const busyRef = useRef(false);
@@ -117,7 +125,7 @@ export default function Workspace() {
   const focusAfterOpen = () => {
     if (matchMedia(SPLIT).matches) {
       setFileFocus(0); // 右栏换成别的（列表、文件）挂上时不拿以前的数去挪光标
-      focusInput(true);
+      if (!pageRef.current) focusInput(true); // 资料库页没有输入框：光标留在点的那一行
     } else setFileFocus((n) => n + 1);
   };
   const openFile = (target) => {
@@ -130,7 +138,8 @@ export default function Workspace() {
     setFile(null);
     const back = fileOpener.current;
     fileOpener.current = null;
-    typeNext(back?.isConnected ? back : null);
+    if (pageRef.current) back?.isConnected && back.focus({ preventScroll: true }); // 资料库页：回到点开它的那一行
+    else typeNext(back?.isConnected ? back : null);
   };
   const navFile = (target) => {
     setFile(target);
@@ -151,7 +160,7 @@ export default function Workspace() {
 
   useEffect(() => {
     refreshList();
-    navigate(chatPath(tid), false);
+    navigate(pageRef.current === "library" ? LIBRARY_PATH : chatPath(tid), false);
     if (tid) restore(tid, gen.current);
     // 浏览器前进后退、手动改了地址：地址栏已经是了，只换页面（去海报页时这个页面会被换掉，不用管）
     const onPop = () => {
@@ -161,7 +170,8 @@ export default function Workspace() {
         setSettings(p);
         return navigate(chatPath(tidRef.current), false);
       }
-      if (routeId() !== tidRef.current) select(routeId(), "none");
+      if (atLibrary()) return openLibrary(null);
+      if (pageRef.current || routeId() !== tidRef.current) select(routeId(), "none");
     };
     addEventListener("popstate", onPop);
     return () => { // 切去别的页：断开连接，旧的回调不再改页面
@@ -180,9 +190,9 @@ export default function Workspace() {
   const title = live?.title || st?.title; // 执行中起好的标题跟着事件来，库里一轮跑完才有（之前是用户的原话）
   const done = useDoneAlert(tid, busy || ACTIVE.has(st?.status), st, title); // 用户没在看时答完了：标题前加“（答完了）”，见 alert.jsx
   useEffect(() => {
-    const base = title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : "灵稿 · 新对话";
+    const base = page === "library" ? "资料库 · 灵稿" : title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : "灵稿 · 新对话";
     document.title = (done ? `（${done}）` : "") + base;
-  }, [title, tid, done]);
+  }, [title, tid, done, page]);
 
   // 深色（批次 G 第 16 条；设置窗口里能选跟随系统、浅色、深色）：深色时浏览器顶栏跟着深；只在对话页加，海报页还是浅色（index.html 里那条白的）
   useEffect(() => {
@@ -230,8 +240,14 @@ export default function Workspace() {
 
   // ---- 切换线程 ----
 
-  // how：push 记进浏览器历史（点左栏的对话、新对话）；replace 换掉当前这条（当前对话删了、打不开）；none 地址栏已经是了
+  // how：push 记进浏览器历史（点左栏的对话、新对话）；replace 换掉当前这条（当前对话删了、打不开）；none 地址栏已经是了。
+  // 在资料库页时：回到对话那一栏（右栏看的资料库文件关上）；点的就是刚才开着的那个对话（包括还没发的新对话），原样放回来
   const select = (id, how = "push") => {
+    if (pageRef.current) {
+      setPage(null);
+      setFile(null);
+      if (id === tidRef.current) return how !== "none" && navigate(chatPath(id), how === "push");
+    }
     if (id === tidRef.current && id) return;
     if (!id) thinkSet.current.delete("new"); // 新对话：深度思考回到默认
     setThinkingState(thinkSet.current.get(id ?? "new") ?? thinkOnRef.current);
@@ -386,7 +402,7 @@ export default function Workspace() {
           thinkSet.current.set(data.thread_id, thinkSet.current.get("new"));
           thinkSet.current.delete("new");
         }
-        navigate(chatPath(data.thread_id), false); // 新对话有了 id：换掉 /chat/new，后退不回到空白的新对话
+        if (!pageRef.current) navigate(chatPath(data.thread_id), false); // 新对话有了 id：换掉 /chat/new，后退不回到空白的新对话（去了资料库的不动地址）
       }
       setLive((l) => (l ? { ...l, stage: data.queued ? QUEUED : l.stage } : l));
       refreshList();
@@ -714,7 +730,14 @@ export default function Workspace() {
     setDrawer(false);
   };
   const openSearch = () => { setDrawer(false); setSearch(true); };
-  // openKnowledge(f, at)：在右栏看知识库里的文件（f：{id, name?, type?…}），at 是翻到第几段（点回答里引用的知识库来源）
+  // 去资料库页（左栏那一行、前进后退）：对话那一栏换成资料库，右栏开着的这段对话的文件关上。push 是 null 时地址栏已经是了
+  const openLibrary = (push = true) => {
+    if (pageRef.current === "library") return;
+    setPage("library");
+    setFile(null);
+    if (push !== null) navigate(LIBRARY_PATH, push);
+  };
+  // openKnowledge(f, at)：在右栏看资料库里的文件（f：{id, name?, type?…}），at 是翻到第几段（点回答里引用的资料库来源）
   const nav = { mobile, collapsed: sideOff, drawer, toggleSide, openDrawer: () => setDrawer(true), closeDrawer, newChat: () => select(null), search: openSearch,
     openKnowledge: (f, at = null) => openFile({ kb: f, at }) };
   useEffect(() => {
@@ -751,7 +774,7 @@ export default function Workspace() {
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
   }, []);
-  // 在抽屉里点了一条对话、新对话、知识库、设置、登录：换过去（弹窗打开），抽屉收起
+  // 在抽屉里点了一条对话、新对话、资料库、设置、登录：换过去（弹窗打开），抽屉收起
   const fromSide = (fn) => (...args) => {
     setDrawer(false);
     return fn(...args);
@@ -763,12 +786,14 @@ export default function Workspace() {
     <NavContext.Provider value={nav}>
       <div className={"ws" + (sideOff ? " side-off" : "") + (mobile && drawer ? " drawer" : "") + (file && !mobile ? " with-file" : "")} data-theme={dark ? "dark" : "light"}>
         <Sidebar threads={shownThreads} current={tid} st={st} live={live} busy={busy} now={now} href={chatPath} onSelect={fromSide(select)} manage={manage}
-          onSettings={fromSide(() => setSettings("settings"))} onKnowledge={auth.login || auth.me ? fromSide(() => setKb(true)) : null} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
-        <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
+          onSettings={fromSide(() => setSettings("settings"))} onLibrary={auth.login || auth.me ? fromSide(() => openLibrary()) : null} library={page === "library"} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
+        {page === "library" ? (
+          <LibraryPage auth={auth} onLogin={onLogin} undo={undo} onOpenFile={(f) => openFile({ kb: f })} openFileId={file?.kb?.id} />
+        ) : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
           who={auth.ready ? (auth.me ? auth.me.name || "" : null) : earlyWho}
           models={models} modelNames={modelNames} credits={credits} manage={manage}
           picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }}
-          files={{ open: openFile, current: file, toggle: toggleFiles }} />
+          files={{ open: openFile, current: file, toggle: toggleFiles }} />}
         {file && (file.list ? <FileList tid={tid} st={shown} live={live} title={live?.title || shown?.title || listedTitle} onNav={navFile} onClose={closeFile} focus={fileFocus} />
           : file.sent ? <SentPanel tid={tid} f={file.sent} back={file.back} onNav={navFile} onClose={closeFile} focus={fileFocus} />
             : file.kb ? <KnowledgePanel f={file.kb} at={file.at} onClose={closeFile} focus={fileFocus} />
@@ -782,10 +807,6 @@ export default function Workspace() {
             onLogin={onLogin && (() => { setSettings(null); onLogin(); })}
             theme={theme} onTheme={setTheme} think={thinkOn} onThink={changeThinkDefault}
             undo={undo} threads={shownThreads} onOpen={(id) => { setSettings(null); select(id); }} />
-        )}
-        {kb && (
-          <KnowledgeDialog onClose={() => setKb(false)} auth={auth} onLogin={onLogin && (() => { setKb(false); onLogin(); })} undo={undo}
-            onOpenFile={(f) => { setKb(false); openFile({ kb: f }); }} />
         )}
         <LoginDialog open={loginOpen} crowded={auth.crowded} want={loginWant} credits={credits} onClose={closeLogin} />
         <UndoToast undo={undo} />

@@ -1,4 +1,4 @@
-// 左栏：对话列表。最上面品牌、搜对话、收起（手机上是关闭抽屉），下面“新对话”和“知识库”，再下面按时间分组的对话，最下面额度和账号。
+// 左栏：对话列表。最上面品牌、搜对话、收起（手机上是关闭抽屉），下面“新对话”和“资料库”，再下面按时间分组的对话，最下面额度和账号。
 // 手机上是左边滑出的抽屉（遮罩也在这里）。简单的排版写在元素上（Tailwind），悬停、选中、伪元素、动画和手机抽屉在 sidebar.module.css。
 // 照 Fusion 的样子（2026-11-07 Sean 嫌单调）：每行前面一个对话图标（正在回答换成转圈、没跑完换成感叹号），选中的那行是白底浮起来的一块，“新对话”用写字的图标
 import { CircleAlert, LibraryBig, MessageSquare, MessagesSquare, SquarePen } from "lucide-react";
@@ -65,8 +65,9 @@ export function withCurrent(threads, current, st, live, busy) {
 // 抽屉里的菜单、改名框开着时，Esc 先归它们
 const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
-// href：对话 id → 地址（新对话是 null）；onKnowledge：打开知识库窗口（没有登录功能的部署没有知识库，是 null，不放这一行）
-export function Sidebar({ threads, current, st, live, busy, now, href, onSelect, manage, onSettings, onKnowledge, onSearch, auth, onLogin, credits, onCredits, nav }) {
+// href：对话 id → 地址（新对话是 null）；onLibrary：去资料库页（没有登录功能的部署没有资料库，是 null，不放这一行）；
+// library：现在在资料库页（那一行是选中的，对话、新对话都不是）
+export function Sidebar({ threads, current, st, live, busy, now, href, onSelect, manage, onSettings, onLibrary, library, onSearch, auth, onLogin, credits, onCredits, nav }) {
   const [menu, setMenu] = useState(null); // 打开菜单的那一行：{id, anchor: 那一行的“⋯”}
   const [renaming, setRenaming] = useState(null); // 正在改名的线程 id
   const box = useRef(null);
@@ -119,7 +120,7 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
         </div>
       );
     }
-    const sel = t.thread_id === current;
+    const sel = !library && t.thread_id === current;
     const open = menu?.id === t.thread_id;
     const status = ACTIVE.has(t.status) ? "active" : t.status === "failed" ? "failed" : "idle";
     const twin = seen[twinKey(t)] > 1 && stamp(t.updated_at, now);
@@ -166,15 +167,16 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
         </div>
         <div className="flex flex-col gap-1">
           <button ref={newBtn} className={cx(styles.newChat, "flex h-10 items-center gap-2 rounded-md border border-line2 bg-paper px-3 py-0 text-[13.5px] font-medium phone:h-11")}
-            onClick={() => onSelect(null)} aria-current={!current ? "page" : undefined}>
+            onClick={() => onSelect(null)} aria-current={!current && !library ? "page" : undefined}>
             <SquarePen size={15} strokeWidth={1.8} className="text-accent" /> 新对话
           </button>
-          {/* 知识库（11-10 从设置里搬出来）：一行字，图标、字和下面对话那几行对齐 */}
-          {onKnowledge && (
-            <button className="flex h-9 items-center gap-[9px] rounded-md border-0 bg-transparent px-2.5 py-0 text-[13px] text-ink transition-colors hover:bg-hover phone:h-11"
-              aria-haspopup="dialog" onClick={onKnowledge}>
-              <LibraryBig size={15} strokeWidth={1.8} className="text-muted" />知识库
-            </button>
+          {/* 资料库（11-10 从设置里搬出来，同一天改成自己一页、叫资料库）：一行字，图标、字和下面对话那几行对齐；在资料库页时和选中的对话一个样子 */}
+          {onLibrary && (
+            <a href="/library" className={cx(styles.place, "flex h-9 items-center gap-[9px] rounded-md px-2.5 text-[13px] text-ink no-underline phone:h-11")}
+              aria-current={library ? "page" : undefined}
+              onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onLibrary(); }}>
+              <LibraryBig size={15} strokeWidth={1.8} className={library ? "text-accent" : "text-muted"} />资料库
+            </a>
           )}
         </div>
         <nav ref={list} className="-mx-1 flex flex-1 flex-col gap-[18px] overflow-y-auto px-1" aria-label="对话列表">

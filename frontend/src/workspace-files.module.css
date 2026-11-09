@@ -36,7 +36,7 @@
 .part + .part { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
 .partTitle { margin: 0 0 8px; font-size: 13px; font-weight: 500; color: var(--muted); }
 .empty { margin: 0; font-size: 14px; color: var(--faint); }
-/* 知识库来源引用的那一段：每段分开排，那一段左边一道强调色、浅底（翻到这里）。纯文字、代码按行切的段之间不画线 */
+/* 资料库来源引用的那一段：每段分开排，那一段左边一道强调色、浅底（翻到这里）。纯文字、代码按行切的段之间不画线 */
 .lines .part + .part { margin-top: 0; padding-top: 0; border-top: 0; }
 .hit { margin-left: -14px; margin-right: -14px; padding: 10px 14px; border-radius: var(--r-sm); background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); scroll-margin-top: 16px; }
 .part + .part.hit { padding-top: 10px; }

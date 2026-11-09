@@ -222,21 +222,43 @@ export async function threadFileParts(threadId, id, signal) {
   return resp.json();
 }
 
-// ---- 知识库（见后端 app/knowledge）：每人一个，游客没有。传上去后台解析、建索引，问到 ready 才查得到 ----
+// ---- 资料库（见后端 app/knowledge，以前叫知识库）：一个人能有几个，游客没有。传上去后台解析、建索引，问到 ready 才查得到 ----
 
-// {available, files: [同 getKnowledgeFile 回的 + created_at], limits: {files, chars, mb}, used: {files, chars}}；游客 available 是 false
+// {available, libraries: [{id, name, description, created_at, files: [同 getKnowledgeFile 回的 + created_at]}],
+//  limits: {files, chars, mb, libraries, name, description}, used: {files, chars}}；游客 available 是 false。文件个数、字数按人算
 export async function getKnowledge(signal) {
   const resp = await authFetch("/api/knowledge", { signal });
   if (!resp.ok) throw await httpError(resp);
   return resp.json();
 }
 
-// 传进知识库，马上回 {id, name, type, size, status, reason?, file?}（status 是 parsing，建好索引才是 ready）。
-// 不收时抛 httpError，detail 是 {code: "file_rejected", reason, …}：403 login_required、409 kb_full（带 limit）、413、415
-export async function uploadKnowledge(file, signal) {
+// 建一个资料库，回 {id, name, description, created_at}。不收时抛 httpError，detail 是 {code: "library_rejected", reason, …}：
+// 403 login_required、422 bad_name / bad_description（带 limit）、409 libraries_full（带 limit）/ name_taken
+export async function createLibrary({ name, description }) {
+  const resp = await authFetch("/api/knowledge/libraries", postJson({ name, description }));
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 改名字、说明（没给的不改），回改好的。不收的同 createLibrary；删了的 404
+export async function updateLibrary(id, { name, description }) {
+  const resp = await authFetch(`/api/knowledge/libraries/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, description }) });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 删一个资料库，里面的文件一起删。keepalive：关页面时撤销还没过期，照样发出去
+export async function deleteLibrary(id, { keepalive = false } = {}) {
+  const resp = await authFetch(`/api/knowledge/libraries/${encodeURIComponent(id)}`, { method: "DELETE", keepalive });
+  if (!resp.ok && resp.status !== 404) throw await httpError(resp);
+}
+
+// 传进一个资料库，马上回 {id, name, type, size, status, reason?, file?}（status 是 parsing，建好索引才是 ready）。
+// 不收时抛 httpError，detail 是 {code: "file_rejected", reason, …}：403 login_required、404 no_library、409 kb_full（带 limit）、413、415
+export async function uploadKnowledge(libraryId, file, signal) {
   const fd = new FormData();
   fd.append("file", file);
-  const resp = await authFetch("/api/knowledge/files", { method: "POST", body: fd, signal });
+  const resp = await authFetch(`/api/knowledge/libraries/${encodeURIComponent(libraryId)}/files`, { method: "POST", body: fd, signal });
   if (!resp.ok) throw await httpError(resp);
   return resp.json();
 }
@@ -254,14 +276,14 @@ export async function deleteKnowledgeFile(id, { keepalive = false } = {}) {
   if (!resp.ok && resp.status !== 404) throw await httpError(resp);
 }
 
-// 右栏看知识库里的文件：同 threadFileParts
+// 右栏看资料库里的文件：同 threadFileParts
 export async function knowledgeFileParts(id, signal) {
   const resp = await authFetch(`/api/knowledge/files/${encodeURIComponent(id)}/parts`, { signal });
   if (!resp.ok) throw await httpError(resp);
   return resp.json();
 }
 
-// 知识库里文件的原件（blob），下载、右栏看 PDF 用
+// 资料库里文件的原件（blob），下载、右栏看 PDF 用
 export async function knowledgeFileBlob(id, signal) {
   const resp = await authFetch(`/api/knowledge/files/${encodeURIComponent(id)}/original`, { signal });
   if (!resp.ok) throw await httpError(resp);

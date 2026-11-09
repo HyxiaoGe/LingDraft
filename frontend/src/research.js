@@ -105,11 +105,11 @@ export const domain = (url) => {
 
 export const sourceName = (s) => s.title || domain(s.url);
 
-// 知识库里的来源（url 是 kb://文件编号/第几段，见后端 sources.kb_url）：没有网址可开，点了在右栏看那个文件、翻到那一段
+// 资料库里的来源（url 是 kb://文件编号/第几段，见后端 sources.kb_url）：没有网址可开，点了在右栏看那个文件、翻到那一段
 export const isKnowledge = (s) => s?.excerpt_kind === "knowledge";
-// 复制、导出时一个来源写成什么：网页带网址（links 时写成 Markdown 链接），知识库的写明是知识库（kb:// 在别处打不开）
+// 复制、导出时一个来源写成什么：网页带网址（links 时写成 Markdown 链接），资料库的写明是资料库（kb:// 在别处打不开）
 export function sourceLine(s, links = false) {
-  if (isKnowledge(s)) return `${sourceName(s).replace(/[[\]]/g, "")}（知识库）`;
+  if (isKnowledge(s)) return `${sourceName(s).replace(/[[\]]/g, "")}（资料库）`;
   return links ? `[${sourceName(s).replace(/[[\]]/g, "")}](${s.url})` : `${sourceName(s)} ${s.url}`;
 }
 

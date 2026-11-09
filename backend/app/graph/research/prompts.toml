@@ -343,12 +343,12 @@ failed = """The image could not be viewed this time because the viewing service 
 
 [tools.read_file]
 # 读用户发的文件（app.tools.files）：短的文件整篇在那句话前面，长的只有目录和开头，模型用它按段读、在文件里找（2026-11-08 Sean 定）
-description = """Read a file in this conversation: one the user attached, or one you wrote with create_file or edit_file (always its latest version). It also reads files in the user's knowledge base, by the file id given in search_knowledge results. Each attached file is shown in the user's message inside <file> tags with its id: a short file is shown in full, a long one only by its outline and beginning, and files from earlier turns may have been shortened to save space. A file you wrote is identified by the file_id in the create_file result; its content in earlier turns may have been omitted to save space. Files are split into numbered parts (for a PDF, part n is page n; for a presentation, slide n). Use this to read specific parts, or to search the file for words, when what you need is not already shown. Read what you need before answering or editing; never guess what a part says."""
-file_id = "Id of a file the user attached, as given in its <file> tag, the file_id of a file you wrote in this conversation, or the file id of a knowledge base file from search_knowledge results."
+description = """Read a file in this conversation: one the user attached, or one you wrote with create_file or edit_file (always its latest version). It also reads files in the user's libraries (资料库), by the file id given in search_knowledge results. Each attached file is shown in the user's message inside <file> tags with its id: a short file is shown in full, a long one only by its outline and beginning, and files from earlier turns may have been shortened to save space. A file you wrote is identified by the file_id in the create_file result; its content in earlier turns may have been omitted to save space. Files are split into numbered parts (for a PDF, part n is page n; for a presentation, slide n). Use this to read specific parts, or to search the file for words, when what you need is not already shown. Read what you need before answering or editing; never guess what a part says."""
+file_id = "Id of a file the user attached, as given in its <file> tag, the file_id of a file you wrote in this conversation, or the file id of a library file from search_knowledge results."
 parts = "Part numbers to read, such as \"3\", \"5-8\", or \"2,7,9\". Leave empty to read from the beginning."
 query = "Words or a phrase to search for in the file, in the file's language. Matching parts are returned with the text around each match. Use this instead of parts when you do not know where something is."
 # 工具结果
-not_found = """No file with id {{ id }} exists in this conversation or the user's knowledge base. Use an id given in a <file> tag, a create_file result, or search_knowledge results; do not guess ids."""
+not_found = """No file with id {{ id }} exists in this conversation or the user's libraries. Use an id given in a <file> tag, a create_file result, or search_knowledge results; do not guess ids."""
 unavailable = """The file {{ name }} can no longer be read. Tell the user plainly if it matters; do not guess what it says."""
 bad_parts = """"{{ parts }}" is not a valid part range. This file has parts 1 to {{ count }}; give numbers like "3", "5-8", or "2,7,9"."""
 out_of_range = """This file has parts 1 to {{ count }} only."""
@@ -358,20 +358,28 @@ cut = """[Output limit reached. Continue with parts="{{ next }}-{{ count }}" if 
 part_cut = """[Part {{ n }} is longer than the output limit and was cut here.]"""
 
 [tools.search_knowledge]
-# 查用户的知识库（app.tools.knowledge，2026-11-09 Sean 定）：知识库里有文件才有这个工具，说明里列出文件名（Fusion #372：只写库名时模型老是跳过知识库直接上网搜）。
-# 文件列表每段对话第一轮取一次，后面沿用（前缀缓存）。“不一定相关、没有就直说”写在结果开头，不写在说明里（Fusion #373、#374：写在说明里 DeepSeek、豆包不照做）
-description = """Search the user's knowledge base: documents the user has saved to use across all conversations. It holds these files{% if more %} (the first {{ files | length }} of {{ files | length + more }}){% endif %}:
-{% for f in files %}- {{ f }}
-{% endfor %}When the request may be answered by these documents, search them before searching the web: their content, the user's own plans, notes, reports, or materials, or anything the user refers to as their documents or knowledge base. Results are the passages closest in meaning to the query, each with its file, part number, file id, and source id."""
+# 查用户的资料库（app.tools.knowledge，2026-11-09 Sean 定；11-10 起界面叫“资料库”、一个人能有几个）：有文件才有这个工具，说明里列出每个资料库的名字、
+# 说明和文件名（Fusion #372：只写库名时模型老是跳过知识库直接上网搜）。告诉模型界面上叫“资料库”，它回答时说法和页面一样。
+# 列表每段对话第一轮取一次，后面沿用（前缀缓存）。“不一定相关、没有就直说”写在结果开头，不写在说明里（Fusion #373、#374：写在说明里 DeepSeek、豆包不照做）
+# 11-10 Sean 定（方案 A）：几个资料库都自动能查；默认查全部，模型可以给 library 只查一个
+description = """Search the user's libraries: documents the user has saved to use across all conversations, grouped into named libraries. The interface calls them 资料库; use that word when you mention them to the user. The libraries and their files:
+{% for lib in libraries %}
+Library "{{ lib.name }}"{% if lib.description %}: {{ lib.description }}{% endif %}
+{% for f in lib.files %}- {{ f }}
+{% endfor %}{% if lib.more %}- and {{ lib.more }} more files
+{% endif %}{% endfor %}
+When the request may be answered by these documents, search them before searching the web: their content, the user's own plans, notes, reports, or materials, or anything the user refers to as their documents, library, or knowledge base. Every library is searched unless you name one in library; name one only when the request clearly concerns that library. Results are the passages closest in meaning to the query, each with its library, file, part number, file id, and source id."""
 query = "What to find: the question or the specific facts you need, in the language of the documents. Search one topic at a time; if the results miss, search again with different words."
-results = """Passages from the user's knowledge base closest to "{{ query }}", most relevant first. Closest does not mean relevant: use only passages that actually answer the request, and cite each one you use by its source id. If none of them answers it, say plainly that the knowledge base does not cover this rather than guessing, and then decide whether to search the web. To see the text around a passage, read that part with read_file using its file id and part number.
+library = "Name of one library to search, exactly as listed. Leave empty to search all of them."
+results = """Passages from {% if library %}the user's library "{{ library }}"{% else %}the user's libraries{% endif %} closest to "{{ query }}", most relevant first. Closest does not mean relevant: use only passages that actually answer the request, and cite each one you use by its source id. If none of them answers it, say plainly that the user's documents do not cover this rather than guessing, and then decide whether to search the web. To see the text around a passage, read that part with read_file using its file id and part number.
 {% for h in hits %}
-[{{ loop.index }}] {{ h.name }}{% if h.title %} · {{ h.title }}{% endif %} (file id {{ h.file_id }}, part {{ h.part }})
+[{{ loop.index }}] {{ h.name }}{% if h.title %} · {{ h.title }}{% endif %} (library "{{ h.library }}", file id {{ h.file_id }}, part {{ h.part }})
 Source id: {{ h.id }}
 {{ h.content }}
 {% endfor %}"""
-no_hits = """Nothing in the user's knowledge base matches "{{ query }}". If the wording may be the problem, search again with different words; otherwise say plainly that the knowledge base does not cover this rather than guessing, and decide whether to search the web."""
-unavailable = "The knowledge base could not be searched just now. Tell the user if it matters, and do not guess what their documents say."
+no_hits = """Nothing in {% if library %}the user's library "{{ library }}"{% else %}the user's libraries{% endif %} matches "{{ query }}". If the wording may be the problem, search again with different words{% if library %} or search all libraries{% endif %}; otherwise say plainly that the user's documents do not cover this rather than guessing, and decide whether to search the web."""
+no_such_library = """There is no library named "{{ library }}". {% if names %}The user's libraries are {% for n in names %}"{{ n }}"{{ ", " if not loop.last }}{% endfor %}. Use one of these names exactly, or leave library empty to search all of them.{% else %}The user has no libraries now.{% endif %}"""
+unavailable = "The user's libraries could not be searched just now. Tell the user if it matters, and do not guess what their documents say."
 empty_query = "The query is empty. Give the question or the facts you need."
 
 [tools.create_file]
