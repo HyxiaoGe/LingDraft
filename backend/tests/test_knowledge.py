@@ -146,7 +146,7 @@ def test_limits_on_files_and_characters(monkeypatch):
 
 
 class Broken(HashEmbedder):
-    ref = model = "dashscope:text-embedding-v4"
+    ref = model = "dashscope:qwen3.7-text-embedding-flash"
 
     def __init__(self, fail_after: int = 0) -> None:
         self.calls, self.fail_after = 0, fail_after
@@ -229,7 +229,7 @@ def test_deleted_while_indexing_leaves_no_chunks():
 class Reverse:
     """假重排：倒过来排（看得出重排的结果用上了）。"""
 
-    ref = "dashscope:qwen3-rerank"
+    ref = "dashscope:qwen3.7-text-rerank"
 
     async def rerank(self, query, documents, top_n):
         return list(reversed(range(len(documents))))[:top_n], 100
@@ -260,7 +260,7 @@ def test_rerank_decides_the_order_and_its_failure_falls_back(ledger):
     plain = _search(_kb(), "违约金 保密 首付款", docs)
     assert [h.part for h in _search(_kb(reranker=Reverse()), "违约金 保密 首付款", docs)] == [h.part for h in reversed(plain)]
     assert [h.part for h in _search(_kb(reranker=BrokenRerank()), "违约金 保密 首付款", docs)] == [h.part for h in plain]
-    assert {r["model"] for r in ledger if r["purpose"] == costs.KB_SEARCH} == {"hash", "qwen3-rerank"}
+    assert {r["model"] for r in ledger if r["purpose"] == costs.KB_SEARCH} == {"hash", "qwen3.7-text-rerank"}
 
 
 def test_keywords_still_work_when_embedding_fails_and_nothing_found_is_an_error():

@@ -2,7 +2,7 @@
 
 - 向量走百炼的 OpenAI 兼容接口，直接用 openai 的客户端：LangChain 的 OpenAIEmbeddings 只给向量、不给用量，建索引要按实际 token 扣。
   换智谱、混元这些兼容接口的只换参数。一次最多 10 条（百炼的上限）。
-- 重排（qwen3-rerank）只有百炼自己的接口，用 httpx 调。
+- 重排（qwen3.7-text-rerank）只有百炼自己的接口，用 httpx 调。
 - 没配百炼的 key、假模型跑的（本机、测试）用 HashEmbedder：按词算的假向量，同样的词靠得近，不调接口；不重排。
 """
 
