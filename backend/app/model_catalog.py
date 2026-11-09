@@ -182,7 +182,8 @@ class Catalog(BaseModel):
     auto: AutoRules
     free: list[Free] = Field(default_factory=list)
     max_output: int = Field(gt=0, description="主 agent、子 agent 每次最多输出多少 token（见 models.toml）")
-    _used_up: set[str] = PrivateAttr(default_factory=set)  # 报过额度用完的免费模型：只在进程内存里，重启后最多再撞一次就又记上
+    _used_up: set[str] = PrivateAttr(default_factory=set)  # 报过额度用完的免费模型；对话存在库里的也记在库里，重启后照样不用（见 app.free_used_up）
+    _on_used_up: Callable[[Free], None] | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def _check(self) -> Catalog:
@@ -317,8 +318,21 @@ class Catalog(BaseModel):
         return next((f.same_as for f in self.free if f.model == ref), "")
 
     def used_up(self, ref: str) -> None:
-        """这个免费模型报了额度用完：之后的对话不再挑它，正在用它的对话下一次调模型改用备用。"""
+        """这个免费模型报了额度用完：之后的对话不再挑它，正在用它的对话下一次调模型改用备用。头一次报的交给 track_used_up 给的去记下来。"""
+        if ref in self._used_up:
+            return
         self._used_up.add(ref)
+        f = next((f for f in self.free if f.model == ref), None)
+        if f and self._on_used_up:
+            self._on_used_up(f)
+
+    def track_used_up(self, known: set[tuple[str, date]], on_used_up: Callable[[Free], None]) -> set[str]:
+        """接上记下来的（见 app.free_used_up）：known 是以前报过用完的（模型, 那时的到期日），到期日对得上 models.toml 现在写的才算
+        （续了额度、改了到期日的重新能用），返回算上的；之后头一次报用完的交给 on_used_up 记下来。"""
+        marked = {f.model for f in self.free if (f.model, f.until) in known}
+        self._used_up |= marked
+        self._on_used_up = on_used_up
+        return marked
 
     def names(self) -> dict[str, dict[str, str]]:
         """选项以外、页面上可能出现的模型（免费额度的）：名字和图标（厂商前缀）。"""

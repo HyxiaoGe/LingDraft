@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timedelta
 
 import httpx2
@@ -13,7 +14,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, Tool
 from langchain_core.outputs import ChatGenerationChunk
 from pydantic import ValidationError
 
-from app import model_catalog
+from app import aio, config, free_used_up, model_catalog
 from app.graph.research import agent as agent_mod
 from app.model_catalog import AUTO, CHINA_TZ, FREE_TIER, ZERO, Catalog, ModelUse
 from app.model_guard import Breaker, FreeTierUsedUp, GuardedChatModel, Interrupted, ModelUnavailable
@@ -109,6 +110,45 @@ def test_simple_goes_to_the_soonest_free_model_complex_to_pro():
     assert c.pick(True, False, lambda ref: ref != K3, now) == V41  # 没配 key
     c.used_up(V41)
     assert c.pick(True, False, lambda ref: ref != K3, now) == FLASH  # K3.1 Pro 是选项 Kimi 的 same_as：Auto 判为简单的不用
+
+
+def test_used_up_is_remembered_by_model_and_until():
+    """报过用完的记下来（起服务时交回来的、之后头一次报的，见 app.free_used_up）：到期日对得上的才算，续了额度、改了到期日的重新能用；
+    同一个只交出去记一次，不是免费额度的不记。"""
+    c = _catalog((9, 70, 86))
+    now = datetime.now(CHINA_TZ)
+    k3, v41 = (next(f for f in c.free if f.model == m) for m in (K3, V41))
+    saved = []
+    c.track_used_up({(K3, k3.until), (V41, v41.until - timedelta(days=1))}, saved.append)
+    assert c.pick(True, False, _always, now) == V41  # K3 记过用完；V4.1 Flash 记的是以前的到期日，现在又能用
+    c.used_up(V41)
+    c.used_up(V41)
+    c.used_up(K3)
+    c.used_up(FLASH)
+    assert saved == [v41] and c.pick(True, False, _always, now) == FLASH
+
+
+@pytest.mark.skipif(not config.DATABASE_URL, reason="要 Postgres（设 LINGDRAFT_TEST_DATABASE_URL）")
+def test_used_up_survives_a_restart_in_postgres():
+    """记在库里：重启（新的一份 catalog）以后照样不用；续了额度（models.toml 改了到期日）的重新能用。
+    报用完的可能在别的线程里（起标题这些内部用途），交回对话的事件循环去写。"""
+    from app.api.research_runner import open_storage
+
+    _, _, runs = aio.run(open_storage(config.DATABASE_URL))
+    c = _catalog()
+    aio.run(free_used_up.attach(c, runs._exec))
+    c.used_up(K3)
+    for _ in range(100):  # 不等写完（见 attach），这里等它写进去
+        if aio.run(runs._exec("SELECT model FROM free_used_up", ())):
+            break
+        time.sleep(0.02)
+    now = datetime.now(CHINA_TZ)
+    again = _catalog()
+    aio.run(free_used_up.attach(again, runs._exec))
+    assert again.pick(True, False, _always, now) == V41
+    renewed = _catalog((20, 70, 86))
+    aio.run(free_used_up.attach(renewed, runs._exec))
+    assert renewed.pick(True, False, _always, now) == K3
 
 
 def test_plan_follows_the_pick_and_drops_expired_or_used_up():
