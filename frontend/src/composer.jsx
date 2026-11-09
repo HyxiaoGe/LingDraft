@@ -606,7 +606,9 @@ function Attachments({ list, docs, onRemove, onRemoveDoc }) {
 }
 
 // 输入框里发送按钮左边：深度思考开关（选的模型能开关才有）和选模型。新对话随便选；对话开始后模型定下不换，
-// 点开只说明一句、列出能选的给开新对话时参考。思考开关每句话都能改，按下去不抢光标（输入框里的字和光标都留着）。
+// 模型按钮点不开（2026-11-09 Sean 定：点开了又选不了，体验不好），桌面悬停、键盘移上去时在上方说一句（LOCKED_NOTE），去掉下拉箭头；
+// 手机没有悬停：模型能开关思考的，点开弹层只有思考开关和这句话（思考开关在手机上只在这里），不能开关的点了浮出这句话、几秒后收起。
+// 思考开关每句话都能改，按下去不抢光标（输入框里的字和光标都留着）。
 // 模型分两组：可用（“自动”排第一个，只写名字，不写它现在用哪个、不加说明：2026-11-07 Sean 定）、登录后可用（游客锁着的，默认收起）。
 // 每个模型前面是厂商的小图标（见 ModelIcon），输入框里的模型按钮上也有。
 // 桌面是菜单：往放得下的那边开（新对话的输入框在页面中间，往下开），高度按那边剩下的空间，再多就在里面滚，第一项不会被切掉。
@@ -614,11 +616,19 @@ function Attachments({ list, docs, onRemove, onRemoveDoc }) {
 // 菜单、弹层打开时光标在里面：Esc 只收起它们，不会停掉正在跑的这一轮（见 Composer 的 Esc）；点外面、关闭钮也能收起。
 // locked：对话开始了，模型不能换。游客看到的要登录的模型（m.locked）点了去登录（onLogin），登录了还锁着的（只给管理员的）不列，见 ModelList。
 // loading：模型列表还没取到、或者打开的对话状态还没回来，先放一块占位（输入框照常能打字、能发，按 Auto）
+const LOCKED_NOTE = "对话开始后不能换模型，想换模型请开新对话";
 export function ModelTools({ models, loading, current, locked, onPick, thinking, onThinking, onLogin }) {
   const mobile = !!useContext(NavContext)?.mobile;
   const [open, setOpen] = useState(false);
+  const [tip, setTip] = useState(false); // 定下以后那句说明浮着
   const box = useRef(null);
   const btn = useRef(null);
+  useLayer(tip, () => setTip(false)); // 说明浮着时 Esc 先收说明，再按才停止回答（和思考开关的说明一样）
+  useEffect(() => {
+    if (!tip || !mobile) return undefined;
+    const t = setTimeout(() => setTip(false), 3000);
+    return () => clearTimeout(t);
+  }, [tip, mobile]);
   // 收起：桌面光标回到输入框；手机上回到模型按钮（放回输入框会弹出键盘）
   const close = () => {
     setOpen(false);
@@ -637,31 +647,39 @@ export function ModelTools({ models, loading, current, locked, onPick, thinking,
   }, [open]);
   useLayer(open, close);
   useEffect(() => { setOpen(false); }, [mobile]); // 窗口拉宽、变窄：菜单和弹层不是一个东西
+  useEffect(() => { setOpen(false); setTip(false); }, [locked]); // 开着菜单时发出了第一句、换到别的对话
   const opt = models?.find((m) => m.id === current);
   if (loading) return <span className="inline-block h-7 w-[120px] rounded-full bg-hover" aria-hidden="true" />;
   if (!models?.length || !current) return null;
   const toggle = opt?.thinking === "toggle";
   const name = opt?.name || current;
-  const note = locked ? "对话开始后不能换模型，想换模型请开新对话" : "开始对话后不能换模型";
-  const list = (
-    <ModelList models={models} current={current} locked={locked} onLogin={onLogin}
-      onChoose={(m) => { close(); if (m.locked) onLogin?.(m); else if (!locked) onPick(m.id); }} />
+  const opens = !locked || (mobile && toggle); // 定下以后只有手机上能开关思考的还点得开（弹层里只有思考开关）
+  const hint = locked && !opens;
+  const list = !locked && (
+    <ModelList models={models} current={current} onLogin={onLogin} onChoose={(m) => { close(); if (m.locked) onLogin?.(m); else onPick(m.id); }} />
   );
   return (
     <div className="relative flex min-w-0 items-center gap-1" ref={box}>
       {toggle && !mobile && <ThinkToggle on={thinking} onChange={onThinking} />}
-      <button ref={btn} className={styles.modelBtn} aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={open}
+      <button ref={btn} className={styles.modelBtn} aria-haspopup={opens ? (mobile ? "dialog" : "menu") : undefined} aria-expanded={opens ? open : undefined}
+        aria-disabled={hint || undefined} aria-describedby={hint ? "ws-model-tip" : undefined}
         aria-label={mobile && toggle ? `${name}，深度思考${thinking ? "已开" : "已关"}` : undefined}
-        title={mobile ? undefined : locked ? "这段对话用的模型" : "选模型"} onClick={() => (open ? close() : setOpen(true))}>
+        title={mobile || locked ? undefined : "选模型"}
+        onClick={() => (hint ? mobile && setTip(!tip) : open ? close() : setOpen(true))}
+        onMouseEnter={() => hint && !mobile && setTip(true)} onMouseLeave={() => hint && !mobile && setTip(false)}
+        onFocus={(e) => { if (hint && !mobile && e.currentTarget.matches(":focus-visible")) setTip(true); }} onBlur={() => hint && setTip(false)}>
         {mobile && toggle && <IconBulb size={14} className={styles.bulb + (thinking ? " " + styles.on : "")} />}
         {opt && <ModelIcon m={opt} auto={opt === models[0]} />}
-        <span className="min-w-0 truncate">{name}</span><IconChevron size={13} className={styles.caret} />
+        <span className="min-w-0 truncate">{name}</span>{opens && <IconChevron size={13} className={styles.caret} />}
       </button>
-      {open && !mobile && <ModelMenu anchor={box} note={note} onLeave={() => setOpen(false)}>{list}</ModelMenu>}
+      {hint && <span id="ws-model-tip" role="tooltip" className={styles.tip + " " + styles.tipLine + (tip ? " " + styles.show : "")}>{LOCKED_NOTE}</span>}
+      {open && !mobile && !locked && (
+        <ModelMenu anchor={box} note="开始对话后不能换模型" onLeave={() => setOpen(false)}>{list}</ModelMenu>
+      )}
       {open && mobile && (
-        <ModelSheet title={locked ? "这段对话的模型" : "选模型"} onClose={close}>
+        <ModelSheet title={locked ? name : "选模型"} onClose={close}>
           {toggle && <ThinkSwitch on={thinking} onChange={onThinking} />}
-          <div className={menu.note}>{note}</div>
+          <div className={menu.note}>{locked ? LOCKED_NOTE : "开始对话后不能换模型"}</div>
           {list}
         </ModelSheet>
       )}
@@ -785,7 +803,7 @@ export function ModelIcon({ m, auto, size }) {
 
 // 模型列表（菜单和弹层共用）：可用（“自动”第一个）/ 登录后可用（N，默认收起；正在用的在里面就展开）。只有一组时不写组名。↑↓ 在能点的之间挪。
 // 锁着的只给能登录的游客看（点了开登录弹窗，说登录后就能用它）；登录了、或者没有登录功能，锁着的就是怎么都选不了，不列（第 28 条：原来列成“暂不开放”）
-function ModelList({ models, current, locked, onLogin, onChoose }) {
+function ModelList({ models, current, onLogin, onChoose }) {
   const auto = models[0];
   const free = models.filter((m) => !m.locked);
   const shut = onLogin ? models.filter((m) => m.locked) : [];
@@ -804,7 +822,7 @@ function ModelList({ models, current, locked, onLogin, onChoose }) {
   }, [showShut]);
   const row = (m, note) => (
     <button key={m.id} role="menuitemradio" aria-checked={m.id === current} className={styles.row + (m.locked ? " " + styles.locked : "")}
-      disabled={m.locked ? !onLogin : locked && m.id !== current} onClick={() => onChoose(m)}>
+      disabled={m.locked && !onLogin} onClick={() => onChoose(m)}>
       <ModelIcon m={m} auto={m === auto} />
       <span className="flex min-w-0 flex-1 flex-col"><b className={styles.name}>{m.name}</b>{note && <small className={styles.desc}>{note}</small>}</span>
       {m.id === current ? <IconCheck size={15} /> : m.locked && <IconLock size={13} className={styles.lock} />}
