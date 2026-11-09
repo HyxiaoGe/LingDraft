@@ -109,6 +109,11 @@
 .tip.show { visibility: visible; opacity: 1; transform: none; transition: opacity .15s var(--ease) .2s, transform .15s var(--ease) .2s, visibility 0s linear .2s; }
 .tip b { font-size: 13px; font-weight: 500; color: var(--ink); }
 .tip .cur { color: var(--ink2); }
+/* 对话开始后模型按钮上那一句：按字的宽度，窄屏放不下再折行 */
+.tipLine { width: max-content; max-width: min(300px, calc(100vw - 32px)); color: var(--ink2); }
+/* 对话开始后点不开的模型按钮：不像能点（没有悬停底色、没有下拉箭头），右边补回箭头的位置 */
+.modelBtn[aria-disabled="true"] { padding-right: 8px; cursor: default; }
+@media (hover: hover) { .modelBtn[aria-disabled="true"]:hover { background: transparent; } }
 
 /* 选模型的菜单（桌面）：位置和最高多高由页面按剩下的空间算（见 ModelMenu），里面滚 */
 .menu { position: absolute; right: 0; z-index: 60; width: 320px; overflow-y: auto; overscroll-behavior: contain; padding: 6px;
