@@ -45,7 +45,10 @@ COST = "lingdraft_cost"  # 模型消息 response_metadata 里的键：这次调�
 CREDITS_PER_YUAN = 1000
 AGENT = "agent"  # 主 agent、子 agent 用的模型的用途；内部用途是 models.toml [roles] 的名字（title、suggest……）
 SUBAGENT = "subagent"
-TOOL = "tool"  # 工具调用的用途（也是它的 provider）；算给用户的就是 AGENT、SUBAGENT、TOOL 这三样（见 quota）
+TOOL = "tool"  # 工具调用的用途（也是它的 provider）；算给用户的是 AGENT、SUBAGENT、TOOL 和 KB_INDEX（见 quota）
+# 知识库（app.knowledge）：建索引调向量模型（按实际 token 算给用户；没建成的记 KB_INDEX_FAILED，不算给用户），
+# 查的时候调向量、重排（KB_SEARCH，不算给用户：用户按次付 search_knowledge 的价，见 models.toml 的 [tools]）
+KB_INDEX, KB_INDEX_FAILED, KB_SEARCH = "kb_index", "kb_index_failed", "kb_search"
 OK, NO_USAGE, STOPPED, ERROR = "ok", "no_usage", "stopped", "error"  # 一行账的状态：算了钱的、接口没给用量的、流到一半停了的、断了的
 
 

@@ -7,6 +7,8 @@
 - 认类型看内容（parse.sniff），传上来时就认：不收的直接回 415，不用等解析。
 - 刚传上来的不归哪段对话（新对话还没有编号），发出去时绑上（bind）；没发出去的过一天清掉（sweep）。服务重启时还在解析的重新排上。
 - 每人每天能传几个有上限（config.FILE_UPLOADS_DAILY），管理员不限。
+- 知识库的文件也从这里传（upload 给 workspace_id，传上来就归知识库，个数上限由知识库自己管）。解析好了交给知识库建索引（follow_up），
+  建好之前一直是解析中；服务重启时解析好了、还在建索引的直接交回知识库，不重新解析。
 
 都是协程，在对话的事件循环里调（见 ResearchRunner）。
 """
@@ -22,7 +24,7 @@ import uuid
 from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from app import config
 from app.files import artifacts, parse
@@ -120,9 +122,20 @@ def view(row: FileRow) -> dict:
             **({"file": attached(row).model_dump()} if row.status == READY else {})}
 
 
+INDEXING = "indexing"  # meta 的 stage：解析好了，在建索引（知识库）
+
+
+class FollowUp(Protocol):
+    """解析好了还要接着处理的（知识库建索引，见 app.knowledge）：wants 认哪些文件归它，enqueue 排进它自己的后台。"""
+
+    def wants(self, row: FileRow) -> bool: ...
+    def enqueue(self, file_id: str) -> None: ...
+
+
 class FileService:
     def __init__(self, store: FileStore, root: Path, isolated: bool = True, timeout: float = 60.0) -> None:
         self.store, self.root, self.isolated, self.timeout = store, root, isolated, timeout
+        self.follow_up: FollowUp | None = None  # 知识库起来时挂上（见 KnowledgeBase）
         self._queue: asyncio.Queue[str] | None = None
         self._tasks: set[asyncio.Task] = set()
         self._cache: OrderedDict[str, tuple[FileRow, list[Part]]] = OrderedDict()
@@ -146,13 +159,14 @@ class FileService:
 
     # ---- 上传 ----
 
-    async def upload(self, owner: str, tier: str, name: str | None, data: bytes) -> FileRow:
+    async def upload(self, owner: str, tier: str, name: str | None, data: bytes, workspace_id: str | None = None) -> FileRow:
+        """workspace_id 不给的是对话里传的（发出去时绑到对话，算每天的个数）；给了的直接归那个工作区（知识库），不算每天的个数。"""
         name = clean_name(name)
         if len(data) > config.FILE_MAX_BYTES:
             raise UploadRejected(413, TOO_BIG, f"文件不能超过 {config.FILE_MAX_BYTES // (1024 * 1024)} MB", mb=config.FILE_MAX_BYTES // (1024 * 1024))
         if not data:
             raise UploadRejected(415, EMPTY_FILE, "文件是空的")
-        limit = config.FILE_UPLOADS_DAILY.get(tier)
+        limit = config.FILE_UPLOADS_DAILY.get(tier) if workspace_id is None else None
         if limit is not None and await self.store.uploads_since(owner, day_start(datetime.now(UTC))) >= limit:
             guest = tier == "guest"
             more = f"，登录后每天能传 {config.FILE_UPLOADS_DAILY['user']} 个" if guest else "，明天再传"
@@ -165,7 +179,7 @@ class FileService:
         fid = f"file-{uuid.uuid4().hex[:16]}"
         rel = f"{fid[5:7]}/{fid}"
         await asyncio.to_thread(self._write, rel, data)
-        await self.store.add(FileRow(id=fid, owner=owner, name=name, type=kind, size=len(data), storage=rel))
+        await self.store.add(FileRow(id=fid, owner=owner, workspace_id=workspace_id, name=name, type=kind, size=len(data), storage=rel))
         assert self._queue is not None, "FileService.start 还没调"
         self._queue.put_nowait(fid)
         row = await self.store.get(fid)
@@ -202,6 +216,10 @@ class FileService:
         row = await self.store.get(fid)
         if row is None or row.status != PARSING:
             return
+        if row.meta.get("stage") == INDEXING:  # 解析好了、索引没建完服务就重启了：交回知识库接着建
+            if self.follow_up is not None:
+                self.follow_up.enqueue(fid)
+            return
         path = self.root / row.storage
         if not path.exists():
             await self.store.finish(fid, FAILED, {"code": "missing"}, NOT_READ, [])
@@ -211,7 +229,12 @@ class FileService:
         took = time.monotonic() - t0
         if out[0] == "ok":
             parsed = out[1]
-            await self.store.finish(fid, READY, parsed.meta, "", parsed.parts)
+            follow = self.follow_up is not None and self.follow_up.wants(row)
+            await self.store.finish(fid, PARSING if follow else READY, {**parsed.meta, "stage": INDEXING} if follow else parsed.meta, "",
+                                    parsed.parts)
+            if follow:
+                assert self.follow_up is not None
+                self.follow_up.enqueue(fid)
             log.info("解析好了 %s（%s，%d 字节）：%d 段 %d 字，%.1f 秒", fid, row.type, row.size, len(parsed.parts), parsed.chars, took)
         elif out[0] == "unreadable":
             await self.store.finish(fid, FAILED, {"code": out[1]}, out[2], [])
@@ -349,16 +372,17 @@ class FileService:
     async def discard(self, fid: str) -> None:
         """同一轮里模型又改了这一轮刚写的那版（见 app.tools.write_file）：那一版作废，行、文字、原件一起删。"""
         if (row := await self.store.get(fid)) is not None and row.origin == GENERATED and row.kind == DOCUMENT:
-            await self._drop([row])
+            await self.drop([row])
 
     async def delete_turn(self, workspace_id: str, turn_id: str) -> int:
         """重新回答、改了那句话：那一轮写的各版、画的图（登记的行；图本身由调用的地方从 image-service 删）都删掉
         （连同进程崩掉时写了、对话里没记下的），返回删了几行。用户那句话带的图、文件留着。"""
         rows = [r for r in await self.store.of_workspace(workspace_id) if r.origin == GENERATED and r.turn_id == turn_id]
-        await self._drop(rows)
+        await self.drop(rows)
         return len(rows)
 
-    async def _drop(self, rows: list[FileRow]) -> None:
+    async def drop(self, rows: list[FileRow]) -> None:
+        """这几行连同文字、缓存、原件一起删。"""
         await self.store.delete([r.id for r in rows])
         for r in rows:
             if (got := self._cache.pop(r.id, None)) is not None:
@@ -368,7 +392,7 @@ class FileService:
 
     async def delete_workspace(self, workspace_id: str) -> None:
         """删对话：这段对话的文件、文字、原件、图的登记一起删。原件没删掉只记日志（没人指着，只占磁盘）。"""
-        await self._drop(await self.store.of_workspace(workspace_id))
+        await self.drop(await self.store.of_workspace(workspace_id))
 
     # ---- 清理 ----
 

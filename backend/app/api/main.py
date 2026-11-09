@@ -435,6 +435,68 @@ def file_remove(file_id: str, who: Who):
     return {"ok": True}
 
 
+# ---- 知识库（见 app.knowledge，2026-11-09 Sean 定）：每人一个，游客没有。页面在设置窗口里（第二个 PR） ----
+
+
+@app.get("/api/knowledge")
+def knowledge_view(who: Who):
+    """知识库页：文件（先传的在前，每个带状态，同 /api/files/{id}）、上限（limits：个数、字数、单个多少 MB）、用了多少（used）。
+    游客的 available 是 false、没有文件。"""
+    return research().kb_overview(who)
+
+
+@app.post("/api/knowledge/files")
+def knowledge_upload(who: Who, up: Annotated[_Upload, Depends(_uploaded)]):  # 先认人再读表单
+    """传进知识库：存好原件、排进后台解析和建索引，马上返回（status 是 parsing，建好索引才是 ready），页面接着问 /api/knowledge/files/{id}。
+    不收的 detail 和 /api/files 一样是 {code: "file_rejected", reason, message, …}：游客 403（login_required）、满了 409（kb_full，带 limit），
+    太大 413、类型不对 415。知识库的上传不算每天的个数。"""
+    try:
+        row = research().kb_upload(who, up.name, up.data)
+    except UploadRejected as e:
+        raise HTTPException(e.status, {"code": "file_rejected", "reason": e.code, "message": e.message, **e.extra}) from None
+    return file_view(row)
+
+
+@app.get("/api/knowledge/files/{file_id}")
+def knowledge_file(file_id: str, who: Who):
+    """处理好了没有：status 是 parsing（解析、建索引都算）/ ready / failed，failed 的 reason 是原因（除了对话里文件的那些，
+    还有 kb_chars 知识库的字数到上限、index_failed 索引没建成、no_text 没有文字）。别人的、没有的 404。"""
+    row = research().kb_file(who, file_id)
+    if row is None:
+        raise HTTPException(404, "没有这个文件")
+    return file_view(row)
+
+
+@app.delete("/api/knowledge/files/{file_id}")
+def knowledge_delete(file_id: str, who: Who):
+    """删一个文件，删了马上搜不到。正在处理的也能删。别人的、没有的 404。"""
+    if not research().kb_delete(who, file_id):
+        raise HTTPException(404, "没有这个文件")
+    return {"ok": True}
+
+
+@app.get("/api/knowledge/files/{file_id}/parts")
+def knowledge_file_parts(file_id: str, who: Who):
+    """右栏预览知识库里的文件（和对话里的文件一样，见 research_file_parts）。没处理好的、别人的 404。"""
+    got = research().kb_preview(who, file_id)
+    if got is None:
+        raise HTTPException(404, "没有这个文件")
+    row, parts, more = got
+    return {"id": row.id, "name": row.name, "type": row.type, "parts": [{"title": p.title, "text": p.text} for p in parts], "more": more}
+
+
+@app.get("/api/knowledge/files/{file_id}/original")
+def knowledge_file_original(file_id: str, who: Who):
+    """下载知识库里的文件（原件）。别人的、原件没了 404。"""
+    got = research().kb_original(who, file_id)
+    if got is None:
+        raise HTTPException(404, "没有这个文件")
+    path, row = got
+    mime = mimetypes.guess_type(row.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=mime, filename=row.name, content_disposition_type="attachment",
+                        headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
+
 # ---- 身份（见 app.identity） ----
 
 

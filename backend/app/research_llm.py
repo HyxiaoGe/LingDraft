@@ -39,7 +39,7 @@ from app.clock import Clock
 from app.costs import MeteredChatModel
 from app.graph.research import history, prompts
 from app.graph.research.compaction import RECALL_TOOL as RECALL
-from app.graph.research.sources import DOCS_TOOL, doc_snippets, search_hits
+from app.graph.research.sources import DOCS_TOOL, KB_TOOL, doc_snippets, kb_hits, search_hits
 from app.model_catalog import Catalog, ModelUse
 from app.model_guard import ContentBlocked, FreeTierUsedUp, GuardedChatModel, Interrupted, ModelUnavailable, free_failed, guard_key
 from app.tools import docs_mcp, flyai_mcp, image_mcp, maps_mcp, web_mcp, weather_mcp
@@ -1050,6 +1050,7 @@ class FakeToolModel(BaseChatModel):
     - “一直搜”：每次并行搜两个，不管预算，直到请求末尾的预算提醒说搜索用完了（子 agent 才有这条提醒）。
     - “取回”：用 recall 取回这段对话第一次搜索的第一个来源；“取回第N轮”：取回第 N 轮。取到后回复取到的开头。
     - “文件里”：读用户发的文件（read_file，见 _read_file），或者回复收到了哪几个文件。
+    - “知识库里”：查知识库，查的是“知识库里”后面那段，引用查到的第一个来源；没有这个工具就说没有。
     用户插进这一轮的话不改这些路径，给出文字回复时开头说一声收到了哪些（测试据此看模型有没有看到）。
     内容审核（模拟服务商）：请求里任何地方有 FAKE_BLOCKED 就整个拒绝；用户的话里有“查完就拦”时，有工具结果就拒绝；
     有“输出拦截”时，吐完思考后输出被截断。
@@ -1107,6 +1108,8 @@ class FakeToolModel(BaseChatModel):
             return self._travel(text, turn, call)
         if "图里" in text:
             return self._look(text, messages, turn, call)
+        if "知识库里" in text:
+            return self._knowledge(text, turn, call, KB_TOOL in self.bound)
         if "文件里" in text:
             return self._read_file(text, messages, turn, call)
         if any(k in text for k in ("画", "改图", "再生成")) and "generate_image" in self.bound:
@@ -1212,6 +1215,16 @@ class FakeToolModel(BaseChatModel):
         ids = [a.id for m in messages for a in history.attached_images(m)]
         wanted = m.group(1) if (m := re.search(r"看编号(\S+)", text)) else ids[-1] if ids else "none"
         return call(VIEW_TOOL, image_id=wanted, question=text.splitlines()[0][:40])
+
+    @staticmethod
+    def _knowledge(text: str, turn: list[BaseMessage], call, offered: bool) -> tuple[str, list[dict]]:
+        if not offered:
+            return "没有知识库可查。", []
+        if done := next((m for m in reversed(turn) if isinstance(m, ToolMessage) and m.name == KB_TOOL), None):
+            if done.status == "error":
+                return "知识库没查成。", []
+            return (f"知识库里说 [{hits[0]['id']}]。" if (hits := kb_hits(done)) else "知识库里没有。"), []
+        return call(KB_TOOL, query=text.split("知识库里", 1)[1].strip() or text)
 
     @staticmethod
     def _read_file(text: str, messages: list[BaseMessage], turn: list[BaseMessage], call) -> tuple[str, list[dict]]:

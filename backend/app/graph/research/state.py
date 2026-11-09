@@ -28,7 +28,8 @@ def tidy_title(title: str) -> str:
 
 
 class Source(BaseModel):
-    """一个网页。id 由网址算出来（见 sources.source_id），同一个网址在整条线程里都是同一个 id。"""
+    """一个网页，或者知识库里一个文件的一段（file_id、part 有值，url 是 kb://<文件编号>/<段号>）。id 由网址算出来（见 sources.source_id），
+    同一个网址在整条线程里都是同一个 id。"""
 
     model_config = ConfigDict(extra="forbid")
     id: str
@@ -36,8 +37,10 @@ class Source(BaseModel):
     title: str = ""
     retrieved_at: str = ""
     published_at: str | None = None
-    excerpt: str = Field(default="", description="原文开头；没读正文、查文档查到过的是第一段文档；都没有的是搜索摘要")
-    excerpt_kind: Literal["body", "summary", "docs"] = "summary"
+    excerpt: str = Field(default="", description="原文开头；没读正文、查文档查到过的是第一段文档；都没有的是搜索摘要；知识库的是查到的第一块")
+    excerpt_kind: Literal["body", "summary", "docs", "knowledge"] = "summary"
+    file_id: str | None = Field(default=None, description="知识库的来源：哪个文件（页面点开在右栏看这个文件）")
+    part: int | None = Field(default=None, description="知识库的来源：第几段（页面滚到这一段）")
 
     @field_validator("title")
     @classmethod
@@ -292,12 +295,13 @@ class ToolStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(description="工具调用 id；页面据此把实时进度和存下来的记录对上")
     kind: Literal["search", "read", "weather", "place", "route", "flight", "train", "itinerary", "image", "view", "file", "write", "task", "library",
-                  "docs"]
+                  "docs", "knowledge"]
     text: str = Field(description="搜索词 / 网址 / 地名 / 查地点的关键词 / 路线、航班、火车的起终点 / 行程方案的标题 / 画图的描述 / 子任务的标题"
-                                  " / 找的库名 / 查文档的问题 / 读的文件名（还没读完、没读成的是文件编号）/ 写的文件标题（改文件没给新标题、还没结果的是空的）")
+                                  " / 找的库名 / 查文档的问题 / 读的文件名（还没读完、没读成的是文件编号）/ 写的文件标题（改文件没给新标题、还没结果的是空的）"
+                                  " / 查知识库的词")
     limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制；查地点在哪查；比路线比哪几种方式；航班、火车的日期和条件；查的是哪个库")
     ok: bool = True
-    hits: int = 0  # 搜索返回的条数；找到的候选库、查到的文档段数；在文件里找到的段数
+    hits: int = 0  # 搜索返回的条数；找到的候选库、查到的文档段数；在文件里找到的段数；查知识库查到的块数
     body: bool = False  # 读页读到了正文
     title: str = ""  # 读到的页面标题；查天气时是和风的地名
     source_ids: list[str] = Field(default_factory=list, description="这一步得到的来源")
@@ -383,3 +387,5 @@ class ResearchState(AgentState):
     auto_model: NotRequired[str]
     turns: NotRequired[list[Turn]]
     compaction: NotRequired[Compaction]
+    # 这段对话第一轮时知识库里能查的文件名（见 agent.TurnMiddleware）：有的才给查知识库的工具，说明里列出来；之后沿用，不让前缀变
+    kb_files: NotRequired[list[str]]

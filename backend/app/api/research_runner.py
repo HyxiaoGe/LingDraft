@@ -35,6 +35,11 @@ from app.api.runner import BaseRunner, RunConflict, _sse_text, jsonable, log
 from app.files.parse import Part
 from app.files.service import NOT_HERE, FileService, NotSendable
 from app.files.store import FileRow, FileStore, MemoryFileStore, PostgresFileStore
+from app.knowledge import remote as kb_remote
+from app.knowledge.remote import HashEmbedder
+from app.knowledge.service import KnowledgeBase
+from app.knowledge.service import workspace as kb_workspace
+from app.knowledge.store import ChunkStore, MemoryChunkStore, PostgresChunkStore
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, fallback_title, now, stop_turn
 from app.graph.research.graph import NO_POSTGRES, build_graph, make_serde, postgres_pool, thread_ids
@@ -297,6 +302,11 @@ def open_files(runs: RunStore) -> FileStore:
     return PostgresFileStore(runs.pool) if isinstance(runs, PostgresRunStore) else MemoryFileStore()
 
 
+def open_chunks(runs: RunStore) -> ChunkStore:
+    """知识库的块（pgvector）：和文件表一样，跟着运行记录放。"""
+    return PostgresChunkStore(runs.pool) if isinstance(runs, PostgresRunStore) else MemoryChunkStore()
+
+
 def _memory_row(m: dict) -> dict:
     """记忆页上的一条：thread_id 是记下（或最后改它）的那段对话，页面拿它点回去；对话删了、整理时没记（很早的几条）就点不了。"""
     return {k: m.get(k) for k in ("id", "text", "created_at", "updated_at", "thread_id")}
@@ -332,7 +342,12 @@ class ResearchRunner(BaseRunner):
         # 用户发的文件：原件在数据卷上，文字和文件表在运行记录的库里；在这里起后台的解析、清理（见 app.files.service）
         self.files = files or FileService(open_files(self.run_store), config.FILES_DIR, isolated=config.FILE_PARSE_ISOLATED,
                                           timeout=config.FILE_PARSE_TIMEOUT_S)
+        # 知识库：文件也在文件表里，解析好了交给它建索引（先挂上再起文件服务：重启时还没建完的会被交回来）；块的表连着文件表，文件服务起来以后再建。
+        # 假模型跑的（本机、测试）用假向量、不重排，不调百炼
+        embedder, reranker = (HashEmbedder(), None) if fake else kb_remote.live()
+        self.kb = KnowledgeBase(self.files, open_chunks(self.run_store), embedder, reranker)
         aio.run(self.files.start())
+        aio.run(self.kb.start())
         self.workers = workers or config.RESEARCH_WORKERS
         self._slots = asyncio.BoundedSemaphore(self.workers)  # 同时跑的执行
         self._inflight = 0  # 交出去、还没结束的执行（排队的也算）：据此告诉页面这次要不要排队
@@ -423,6 +438,28 @@ class ResearchRunner(BaseRunner):
     def file_preview(self, thread_id: str, file_id: str) -> tuple[FileRow, list[Part], bool] | None:
         """这段对话里用户发的文件抽出来的文字（右栏预览，见 FileService.preview）。"""
         return aio.run(self.files.preview(file_id, thread_id))
+
+    # ---- 知识库（见 app.knowledge）----
+
+    def kb_overview(self, who: Identity) -> dict:
+        return aio.run(self.kb.overview(who))
+
+    def kb_upload(self, who: Identity, name: str | None, data: bytes) -> FileRow:
+        """传进知识库：马上返回（解析中），后台解析、建索引。不收的抛 UploadRejected（游客、满了、太大、类型不对）。"""
+        return aio.run(self.kb.upload(who, name, data))
+
+    def kb_file(self, who: Identity, file_id: str) -> FileRow | None:
+        return aio.run(self.kb.get(who, file_id))
+
+    def kb_delete(self, who: Identity, file_id: str) -> bool:
+        return aio.run(self.kb.delete(who, file_id))
+
+    def kb_preview(self, who: Identity, file_id: str) -> tuple[FileRow, list[Part], bool] | None:
+        """知识库里的文件抽出来的文字（右栏预览，和对话里的文件一样）。游客、别人的、没建好的是 None。"""
+        return None if who.guest else aio.run(self.files.preview(file_id, kb_workspace(who.sub)))
+
+    def kb_original(self, who: Identity, file_id: str) -> tuple[Path, FileRow] | None:
+        return None if who.guest else aio.run(self.files.original(file_id, kb_workspace(who.sub)))
 
     def upload_image(self, data: bytes) -> AttachedImage:
         """用户发的图传进 image-service（归灵稿，和画的图放在一起），返回记在消息上的信息。
@@ -698,7 +735,7 @@ class ResearchRunner(BaseRunner):
         它的片段、进度、阶段带上 task（调用 id），页面放进那张子任务卡；它的节点做完不发 node。它的片段 langgraph_node 也是 model，只按节点名分不开。
         做完的 step 带着工具结果（result，不发给页面），记进 done：点停止时它那一步可能还没提交，收尾时补上（见 _write_stop）。"""
         ctx = ChatContext(take_guide=lambda: self._take_guide(thread_id), title=self._titles.get(thread_id),
-                          owner=await self.run_store.owner_of(thread_id), files=self.files, thread_id=thread_id)
+                          owner=await self.run_store.owner_of(thread_id), files=self.files, thread_id=thread_id, kb=self.kb)
         async for ns, mode, chunk in self.graph.astream(inp, self._cfg(thread_id), context=ctx, stream_mode=["messages", "updates", "custom"],
                                                         subgraphs=True, durability=self.durability):
             task = tasks.get(ns[0]) if ns else None

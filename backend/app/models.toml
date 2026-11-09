@@ -341,6 +341,13 @@ search_trains = 0.002
 get_weather = 0.001
 resolve-library-id = 0.001
 query-docs = 0.001
+search_knowledge = 0.005  # 查知识库：一次查询向量加一次重排，和搜索一个价（2026-11-09 Sean 定）
+
+# 知识库（app.knowledge）用的向量模型：建索引按实际 token 算给用户（costs.KB_INDEX），查询时的只记账。
+# 单价没在官方页面查到人民币价（11-09）：国际站北京地域 $0.072/百万 token，按 ¥0.5 记，待在百炼控制台核实。
+# 重排 qwen3-rerank 的官方价也没查到，先不填：账上那几行的钱数记成不知道（查询时的不算给用户，不影响额度），核实了补上
+[prices."dashscope:text-embedding-v4"]
+regular = { cached = 0.5, input = 0.5, output = 0 }
 
 [prices."deepseek:deepseek-v4-pro"]
 regular = { cached = 0.30, input = 9.0, output = 27.0 }

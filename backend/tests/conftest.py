@@ -12,6 +12,7 @@ from app import aio, config
 from app.api import research_runner
 from app.api.run_store import MemoryRunStore
 from app.files.store import MemoryFileStore
+from app.knowledge.store import MemoryChunkStore
 from app.graph.poster.graph import build_graph, memory_checkpointer
 from app.graph.research import graph as research_graph
 from app.llm import FakePlanner
@@ -54,17 +55,18 @@ def _storage(monkeypatch):
     设了：开真的 Postgres，每个测试前清空，测试完关掉每个运行器的连接池，免得连接数攒满。"""
     if not config.DATABASE_URL:
         shared = (research_graph.memory_checkpointer(), InMemoryStore(), MemoryRunStore())
-        files = MemoryFileStore()
+        files, chunks = MemoryFileStore(), MemoryChunkStore()
 
         async def in_memory(url):
             return shared
         monkeypatch.setattr(research_runner, "open_storage", in_memory)
         monkeypatch.setattr(research_runner, "open_files", lambda runs: files if runs is shared[2] else MemoryFileStore())
+        monkeypatch.setattr(research_runner, "open_chunks", lambda runs: chunks if runs is shared[2] else MemoryChunkStore())
         yield
         return
     with psycopg.connect(config.DATABASE_URL, autocommit=True) as c:
         for sql in ("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes", "TRUNCATE runs", "TRUNCATE pending_messages", "TRUNCATE store",
-                    "TRUNCATE model_costs", "TRUNCATE quota_resets", "TRUNCATE files, file_parts", "TRUNCATE free_used_up"):
+                    "TRUNCATE model_costs", "TRUNCATE quota_resets", "TRUNCATE files, file_parts CASCADE", "TRUNCATE free_used_up"):
             try:
                 c.execute(sql)
             except psycopg.errors.UndefinedTable:  # 还没有哪个测试建过表
