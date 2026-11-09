@@ -239,14 +239,12 @@ export function Fold({ open, onFound, children }) {
 }
 
 // 能收起的一块展开没展开。用户点过的、查找时搜到的按用户的来（chosen）；没点过的：auto（比如这一轮正在跑）就展开，
-// keep 的（过程）这次打开页面以后跑过的（ran）跑完也不自动收；不 keep 的（思考）跑完就收；重新打开的对话里收着。
-// 记在模块里，不放组件状态：正在发的那一轮存下来以后换了 id、整块重新挂上，展开的不会自己收回去
+// 跑完就收（过程、思考都是）；重新打开的对话里收着。
+// 记在模块里，不放组件状态：正在发的那一轮存下来以后整块重新挂上，用户点开的不会自己收回去
 const chosen = new Map();
-const ran = new Set();
-export function useFoldOpen(key, auto, keep = true) {
+export function useFoldOpen(key, auto) {
   const [, bump] = useState(0);
-  if (auto && keep) ran.add(key);
-  const open = chosen.has(key) ? chosen.get(key) : auto || ran.has(key);
+  const open = chosen.has(key) ? chosen.get(key) : auto;
   const set = (v) => { chosen.set(key, v); bump((n) => n + 1); };
   return [open, () => set(!open), () => set(true)];
 }

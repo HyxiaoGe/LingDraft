@@ -1,6 +1,6 @@
 // 对话。一轮是用户的一句话加上模型这一轮做的事：先是过程（思考、搜索、读页按发生的先后），然后是天气卡片、画的图，再是正文和这条回答用到的来源；
 // 最后一轮下面是推荐问题（起的时候先说一声）。回答时又说的话排着（最多一句），贴在输入框上沿，这一轮答完就发，能撤回到输入框；
-// 也能插进这一轮：模型做完手上这一步就看到它，插进去以后排在过程里。过程正在跑时展开，跑完不自动收起（用户自己收）；重新打开的对话里收成一行
+// 也能插进这一轮：模型做完手上这一步就看到它，插进去以后排在过程里。过程正在跑时展开，跑完就收成一行（重新打开的对话里也收着）
 // “已完成 25 秒 · 搜了 6 次 · 读了 4 页”，点开看每一步。收起的内容还留在页面里，浏览器的查找搜得到（见 Fold）。
 // 每一轮是一个 section（data-turn），回答开头有“灵稿”的标识；三轮起右边（宽屏）或顶栏（窄屏）有轮次目录，见 TurnIndex。
 // 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。这些一直显示，之前各轮的淡一档。
@@ -713,9 +713,10 @@ function CopyButton({ text }) {
   );
 }
 
-// 这一轮的过程：一行“已完成 / 已停止 / 已中断 / 中途停下 + 用时 + 做了什么”，点开看每一步。正在跑时展开，跑完不自动收
+// 这一轮的过程：一行“已完成 / 已停止 / 已中断 / 中途停下 + 用时 + 做了什么”，点开看每一步。正在跑时展开，跑完就收成这一行
+// （2026-11-09 Sean 定，原来跑完不收：过程往往很长，开着把回答推远）
 function Process({ k, items, st, nums, rec, running, failed, now, versions }) {
-  const [open, toggle, found] = useFoldOpen(`proc:${k}`, running); // 正在跑、这次打开页面里跑过的展开；重新打开的对话收起
+  const [open, toggle, found] = useFoldOpen(`proc:${k}`, running); // 正在跑的展开；自己点过的照点的来
   const shown = open && items.length > 0;
   const time = running ? elapsed(st?.running_since || rec?.started_at, now)
     : rec?.ended_at ? elapsed(rec.started_at, Date.parse(rec.ended_at)) : "";
@@ -929,7 +930,7 @@ function useMd(it) {
 // 重新打开的对话里也收着，点开看原文；自己点开、收起的照点的来
 function Thinking({ it, thinking }) {
   const text = useTyped(`thinking:${it.id}`, it.text, it.live, false);
-  const [shown, toggle, found] = useFoldOpen(`thinking:${it.id}`, thinking || text.length < it.text.length, false);
+  const [shown, toggle, found] = useFoldOpen(`thinking:${it.id}`, thinking || text.length < it.text.length);
   const box = useRef(null);
   useLayoutEffect(() => { // 正在想的时候框里跟着最新的字
     if (thinking && box.current) box.current.scrollTop = box.current.scrollHeight;
