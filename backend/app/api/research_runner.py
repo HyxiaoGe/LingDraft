@@ -28,7 +28,7 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.store.postgres.aio import AsyncPostgresStore
 from psycopg_pool import PoolTimeout
 
-from app import aio, config, costs, quota
+from app import aio, config, costs, free_used_up, quota
 from app.api.drafts import DraftTracker
 from app.api.run_store import ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, Pending, PostgresRunStore, RunStore
 from app.api.runner import BaseRunner, RunConflict, _sse_text, jsonable, log
@@ -326,6 +326,8 @@ class ResearchRunner(BaseRunner):
         self.graph = build_graph(self.planner, checkpointer, self.memory)
         self.run_store = run_store or MemoryRunStore()
         self.quota = quota.Quota(quota.usage_for(self.run_store))  # 额度按账上的记录算（见 app.quota）
+        if isinstance(self.run_store, PostgresRunStore):  # 免费额度用完的记在库里，重启后照样不用（见 app.free_used_up）
+            aio.run(free_used_up.attach(self.planner.catalog, self.run_store._exec))
         self.images = self.planner.gateway  # 画好的图存在 image-service 里，按编号取、删（见 app.tools.gateway）
         # 用户发的文件：原件在数据卷上，文字和文件表在运行记录的库里；在这里起后台的解析、清理（见 app.files.service）
         self.files = files or FileService(open_files(self.run_store), config.FILES_DIR, isolated=config.FILE_PARSE_ISOLATED,

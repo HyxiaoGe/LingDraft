@@ -64,7 +64,7 @@ def _storage(monkeypatch):
         return
     with psycopg.connect(config.DATABASE_URL, autocommit=True) as c:
         for sql in ("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes", "TRUNCATE runs", "TRUNCATE pending_messages", "TRUNCATE store",
-                    "TRUNCATE model_costs", "TRUNCATE quota_resets", "TRUNCATE files, file_parts"):
+                    "TRUNCATE model_costs", "TRUNCATE quota_resets", "TRUNCATE files, file_parts", "TRUNCATE free_used_up"):
             try:
                 c.execute(sql)
             except psycopg.errors.UndefinedTable:  # 还没有哪个测试建过表
