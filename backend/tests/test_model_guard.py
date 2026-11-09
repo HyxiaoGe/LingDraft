@@ -94,7 +94,7 @@ def test_reasons_come_from_the_protocol():
     assert unavailable_reason(openai.APITimeoutError(request=REQ)) == "超时"
     assert unavailable_reason(StreamChunkTimeoutError(120.0, model_name="deepseek-v4-pro")) == "超时"  # 异步流式太久没片段
     assert unavailable_reason(openai.APIConnectionError(request=REQ)) == "连接失败"
-    assert [unavailable_reason(status(c)) for c in (401, 402, 500, 503)] == ["密钥无效", "余额不足", "服务端出错", "服务端出错"]
+    assert [unavailable_reason(status(c)) for c in (401, 402, 403, 500, 503)] == ["密钥无效", "余额不足", "没有权限", "服务端出错", "服务端出错"]
     assert unavailable_reason(openai.APIError("流里的错误", REQ, body={"message": "boom"})) == "服务端出错"
     assert unavailable_reason(status(400)) is None and unavailable_reason(status(404)) is None and unavailable_reason(ValueError()) is None
 

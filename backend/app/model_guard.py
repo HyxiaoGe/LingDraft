@@ -8,7 +8,7 @@ SDK 只重试发请求那一下（拿到状态码为止）。模型开始生成�
 
 首字超时：对话 agent 的流式调用发出去以后太久（建模型时给的秒数，见 research_llm.FIRST_TOKEN_S）没收到第一个有内容的片段（思考、正文、工具调用都算，
 服务端排队时的保活注释、开头只带角色的空片段不算）就当不可用，断开这次请求，调用方换备用（2026-11-08 Sean 定 30 秒）。
-免费额度用完：厂商用一种固定的错误说额度用完了（百炼开了“用完即停”时是 AllocationQuota.FreeTierOnly），换成 FreeTierUsedUp，不算熔断（服务答复了）。
+免费额度用完：厂商用一种固定的错误说额度用完了（见 FREE_TIER_CODES），换成 FreeTierUsedUp，不算熔断（服务答复了）。
 
 熔断：同一个模型连续 FAILURES 次不可用就断开 COOLDOWN_S 秒，这期间的调用直接失败、不发请求；
 冷却完放一个调用去试，成功就恢复，失败接着断开。请求本身的错误（400 之类）说明服务答复了，不算不可用。
@@ -31,12 +31,15 @@ import openai
 FAILURES = 2
 COOLDOWN_S = 180
 BLOCKED_MESSAGE = "Content Exists Risk"  # DeepSeek 内容审核拦下请求时 error.message 的固定文字（HTTP 400）
-# 厂商说免费额度用完了的错误码（2026-11-08 查的官方文档）：
-# - 百炼开了“免费额度用完即停”时额度用完：AllocationQuota.FreeTierOnly（“新人免费额度”）
+# 厂商说免费额度用完了的错误码（2026-11-08 查的官方文档，11-09 照实际回的补上）：
+# - 百炼开了“免费额度用完即停”时额度用完：文档写的是 AllocationQuota.FreeTierOnly（“新人免费额度”）；
+#   OpenAI 兼容接口实际回的是 HTTP 403、code insufficient_quota（“Free quota exhausted ... disable the "use free tier only" mode”，
+#   11-09 百炼上的 DeepSeek V4.1 Flash）。OpenAI 自己余额不够也用 insufficient_quota，但那是 429，所以它只在 403 时算（FREE_TIER_CODES_403）
 # - 腾讯 TokenHub 没开后付费时（HTTP 402，error.code）：401008 免费体验额度已耗尽、401007 没有可用的免费体验额度（到期了也是）
 #   （https://cloud.tencent.com/document/product/1823/131595）。开了后付费的接着按量收、不报错，所以免费的那些不能开
 # 火山接进来时把它的加在这里
 FREE_TIER_CODES = {"AllocationQuota.FreeTierOnly", "401007", "401008"}
+FREE_TIER_CODES_403 = {"insufficient_quota"}
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +84,8 @@ def is_free_tier_used_up(e: BaseException) -> bool:
     if not isinstance(e, openai.APIStatusError):
         return False
     body = e.body if isinstance(e.body, dict) else {}
-    return str(getattr(e, "code", None)) in FREE_TIER_CODES or str(body.get("code")) in FREE_TIER_CODES  # TokenHub 的 code 有时是数字
+    codes = {str(getattr(e, "code", None)), str(body.get("code"))}  # TokenHub 的 code 有时是数字
+    return bool(codes & FREE_TIER_CODES) or e.status_code == 403 and bool(codes & FREE_TIER_CODES_403)
 
 
 def has_content(chunk: Any) -> bool:
@@ -100,8 +104,10 @@ def unavailable_reason(e: BaseException) -> str | None:
         return "连接失败"
     if isinstance(e, openai.APIStatusError):
         code = e.status_code
-        if code in (401, 403):
+        if code == 401:
             return "密钥无效"
+        if code == 403:  # 没开通这个模型、地区不对……；免费额度用完的上面已经认出来了
+            return "没有权限"
         if code == 402:
             return "余额不足"
         return "服务端出错" if code >= 500 else None

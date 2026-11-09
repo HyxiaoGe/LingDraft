@@ -484,6 +484,22 @@ def test_breaker_is_per_provider_and_model(monkeypatch):
 # ---- 腾讯 TokenHub 的免费额度 ----
 
 
+def test_bailian_openai_compatible_quota_error_is_free_tier_used_up(breaker):
+    """百炼 OpenAI 兼容接口实际回的（2026-11-09 撞到，原样）：HTTP 403、code insufficient_quota，不是文档写的 AllocationQuota.FreeTierOnly。
+    原来当成密钥无效、算进熔断，断开 180 秒以后又去撞。OpenAI 余额不够也是 insufficient_quota 但是 429，那个不算免费额度用完。"""
+    body = {"message": 'Free quota exhausted. To continue accessing the model on a paid basis, please add funds or disable the "use free tier only" '
+            'mode in the management console.', "id": "e62de711", "type": "insufficient_quota", "code": "insufficient_quota"}
+    real = openai.PermissionDeniedError("Error code: 403", response=httpx2.Response(403, request=REQ), body=body)
+    m = Guarded(script=[real, real, real])
+    for _ in range(3):
+        with pytest.raises(FreeTierUsedUp):
+            m.invoke("hi")
+    assert len(m.calls) == 3  # 不算熔断
+    paid = openai.RateLimitError("Error code: 429", response=httpx2.Response(429, request=REQ), body={**body, "message": "You exceeded your current quota"})
+    with pytest.raises(ModelUnavailable, match="请求太频繁"):
+        Guarded(script=[paid]).invoke("hi")
+
+
 def test_tokenhub_quota_errors_are_free_tier_used_up(breaker):
     """TokenHub 没开后付费时额度用完、没有免费额度（到期了也是）：HTTP 402，error.code 是 401008 / 401007（有时是数字）。"""
     def err(code):
