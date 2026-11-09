@@ -9,7 +9,7 @@ import { FileCard, fileFacts } from "./files.jsx";
 import { IconArrowDown, IconArrowUp, IconBulb, IconCheck, IconChevron, IconClip, IconClose, IconInsert, IconLock, IconStop, IconUndo, IconWarn, Spinner } from "./icons.jsx";
 import { Viewer } from "./images.jsx";
 import { useLayer } from "./layers.js";
-import { NavContext, byKeyboard, touch, typeNext } from "./nav.jsx";
+import { NavContext, byKeyboard, focusInput, touch, typeNext } from "./nav.jsx";
 import { QUEUED, creditsLeft, creditsLine, loginLine } from "./research.js";
 import { ImageError, MAX_FILES, MAX_IMAGES, fileErrorText, fileShortError, isImage, prepareImage, tooBig } from "./upload.js";
 import styles from "./composer.module.css";
