@@ -345,10 +345,14 @@ search_knowledge = 0.005  # 查知识库：一次查询向量加一次重排，�
 
 # 知识库（app.knowledge）用的向量模型：建索引按实际 token 算给用户（costs.KB_INDEX），查询时的只记账。
 # qwen3.7-text-embedding-flash 每千 token 0.000125 元（百炼“通用文本向量同步接口”文档的北京地域价，11-10 查）。
-# 有 100 万 token 免费额度（到 2026-11-30），这里不分免费不免费，都按这个价记（多记的不到 ¥0.2）。
-# 重排 qwen3.7-text-rerank 的官方价没查到，先不填：账上那几行的钱数记成不知道（查询时的不算给用户，不影响额度），核实了补上
+# 向量、重排各有 100 万 token 免费额度（到 2026-11-30），这里不分免费不免费，都按价记（多记的加起来不到 ¥0.7）。
+# 重排 qwen3.7-text-rerank 文本输入 0.5 元/百万 token（Sean 在百炼控制台核实，11-10），查询时的只记账、不算给用户。
+# 这两个模型都没开“免费额度用完即停”：额度用完接着按这个价收，不会报错停掉。
 [prices."dashscope:qwen3.7-text-embedding-flash"]
 regular = { cached = 0.125, input = 0.125, output = 0 }
+
+[prices."dashscope:qwen3.7-text-rerank"]
+regular = { cached = 0.5, input = 0.5, output = 0 }
 
 [prices."deepseek:deepseek-v4-pro"]
 regular = { cached = 0.30, input = 9.0, output = 27.0 }
