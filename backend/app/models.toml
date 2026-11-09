@@ -183,7 +183,7 @@ thinking = "always"
 fallback = "deepseek-flash"  # 选项 id；固定用 DeepSeek Flash（Sean 定，起标题、推荐问题、写短版也是它）
 
 # 免费额度：各家给的试用额度（百炼控制台“模型用量 → 免费额度”、腾讯 TokenHub 控制台“在线推理服务”能看到剩多少、哪天到期）。用完了、到期了自动不用：
-# - 不记还剩多少：厂商报额度用完就当用完了（百炼 AllocationQuota.FreeTierOnly，TokenHub 401007/401008），见 model_guard.FreeTierUsedUp。
+# - 不记还剩多少：厂商报额度用完就当用完了（百炼 403 insufficient_quota 或 AllocationQuota.FreeTierOnly，TokenHub 401007/401008），见 model_guard.FreeTierUsedUp。
 # - 前提：用完了不接着收钱。百炼要开着这个模型的“免费额度用完即停”；TokenHub 要关着这个接入点的后付费（开了的用完接着按量收、不报错），
 #   不然我们记成 0 元其实在花钱（没有这种开关的厂商不往这里放）。
 # - until 照控制台的到期日写（北京时间；TokenHub 接口给的是 UTC，要换算），这天北京时间 0 点起不再用；过了的删掉就行。
