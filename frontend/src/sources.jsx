@@ -1,5 +1,5 @@
 // 来源的显示：正文里的引用角标（桌面悬停预览、点了钉住；手机点了从底部弹出），和每条回答下面这条回答用到的来源。
-// 知识库里的来源（2026-11-09）：图标是文件夹，网址那行写“知识库 · 第几段”，“查看原文”在右栏（手机上整屏）打开那个文件、翻到那一段（见 workspace-files.jsx）。
+// 资料库里的来源（2026-11-09，11-10 起叫资料库）：图标是文件夹，网址那行写“资料库 · 第几段”，“查看原文”在右栏（手机上整屏）打开那个文件、翻到那一段（见 workspace-files.jsx）。
 // 也放着能收起的内容共用的 Fold：收起来不卸掉，浏览器的查找搜得到
 import React, { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -27,18 +27,18 @@ function Favicon({ url }) {
   return <img className={styles.fav} src={`/api/favicon/${host}`} alt="" loading="lazy" onError={() => { noIcon.add(host); setFailed(host); }} />;
 }
 
-// 一条来源的图标：网页是网站图标，知识库的是文件夹
+// 一条来源的图标：网页是网站图标，资料库的是文件夹
 function SourceIcon({ s }) {
   if (isKnowledge(s)) return <span className={styles.fav + " " + styles.folder} aria-hidden="true"><IconFolder size={10} /></span>;
   return <Favicon url={s.url} />;
 }
 
-// 知识库来源的文件名（标题是“文件名 · 段的标题”，见后端 sources.collect_sources）和在哪：“知识库 · 第 3 段”（PDF 第几页、PPT 第几张）
+// 资料库来源的文件名（标题是“文件名 · 段的标题”，见后端 sources.collect_sources）和在哪：“资料库 · 第 3 段”（PDF 第几页、PPT 第几张）
 const kbFile = (s) => (s.title || "").split(" · ")[0];
 const kbExt = (s) => (/\.([A-Za-z0-9]{1,5})$/.exec(kbFile(s))?.[1] || "").toLowerCase();
-const place = (s) => (isKnowledge(s) ? `知识库${s.part ? ` · 第 ${s.part} ${partUnit(kbExt(s))}` : ""}` : where(s.url));
+const place = (s) => (isKnowledge(s) ? `资料库${s.part ? ` · 第 ${s.part} ${partUnit(kbExt(s))}` : ""}` : where(s.url));
 
-// 在右栏打开知识库来源的那个文件、翻到那一段。done：先收起来源卡、弹层
+// 在右栏打开资料库来源的那个文件、翻到那一段。done：先收起来源卡、弹层
 function useOpenKnowledge() {
   const nav = useContext(NavContext);
   return (s, done) => {
@@ -140,7 +140,7 @@ function floatStyle(rect, width, height) {
 const layer = (node) => createPortal(node, document.querySelector(".ws") || document.body);
 
 // 来源卡上那段开头是从哪来的：读到的全文、查文档（Context7）查到的文档、只有搜索摘要。说法照术语表（已读全文 / 仅摘要）
-const EXCERPT_BADGES = { body: "已读全文", docs: "文档摘录", summary: "仅摘要", knowledge: "知识库" };
+const EXCERPT_BADGES = { body: "已读全文", docs: "文档摘录", summary: "仅摘要", knowledge: "资料库" };
 
 // 网址写成“域名 + 路径的开头”：同一个网站的几篇靠它分得清
 function where(url) {
@@ -153,7 +153,7 @@ function where(url) {
   }
 }
 
-// 一条来源：编号和徽标、标题、网址和发布日期、开头一段、打开原文（知识库的是在右栏看）。桌面的来源卡和手机的底部弹层共用。
+// 一条来源：编号和徽标、标题、网址和发布日期、开头一段、打开原文（资料库的是在右栏看）。桌面的来源卡和手机的底部弹层共用。
 // onClose：卡上的关闭（桌面）；onDone：在右栏看之前先把卡、弹层收起来
 function SourceBody({ s, n, onClose, onDone }) {
   const openKb = useOpenKnowledge();
@@ -281,7 +281,7 @@ export function AnswerSources({ nums, sources }) {
   const openKb = useOpenKnowledge();
   const used = Object.entries(nums).map(([sid, n]) => [n, sources?.[sid]]).filter(([, s]) => s);
   if (!used.length) return null;
-  const sites = [...new Map(used.map(([, s]) => [isKnowledge(s) ? "kb:" : hostOf(s.url), s])).values()].slice(0, 6); // 同一个网站只放一个图标，知识库的一个文件夹
+  const sites = [...new Map(used.map(([, s]) => [isKnowledge(s) ? "kb:" : hostOf(s.url), s])).values()].slice(0, 6); // 同一个网站只放一个图标，资料库的一个文件夹
   return (
     <div className={styles.cited}>
       <button className={styles.citedHead} aria-expanded={open} onClick={() => setOpen(!open)}>

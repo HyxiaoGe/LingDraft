@@ -30,9 +30,13 @@ FILE_MAX_BYTES = 20 * 1024 * 1024  # 单个文件上限（Sean 定 20 MB）
 FILE_PARSE_TIMEOUT_S = float(os.environ.get("FILE_PARSE_TIMEOUT_S", "60"))
 FILE_PARSE_ISOLATED = True  # 在单独的子进程里解析（容器只有 512 MB，解析出事不拖垮对话）；测试里换成线程（见 tests/conftest.py）
 FILE_UPLOADS_DAILY = {"guest": 20, "user": 100}  # 每人每天能传几个（防磁盘被灌满）；管理员不限
-# 知识库（2026-11-09 Sean 定，见 app.knowledge）：每人一个库，游客没有。单个文件的上限和对话里一样（FILE_MAX_BYTES），知识库的上传不算进每天的个数
+# 资料库（2026-11-09 Sean 定，见 app.knowledge；11-10 起叫资料库、一个人能有几个）：游客没有。单个文件的上限和对话里一样（FILE_MAX_BYTES），
+# 资料库的上传不算进每天的个数。文件个数、字数按人算（几个资料库加起来），不按库算
 KB_MAX_FILES = 100
-KB_MAX_CHARS = 10_000_000  # 一个人知识库里的文件加起来最多这么多字
+KB_MAX_CHARS = 10_000_000  # 一个人所有资料库里的文件加起来最多这么多字
+KB_MAX_LIBRARIES = 20
+KB_NAME_CHARS = 30  # 资料库的名字最多几个字
+KB_DESCRIPTION_CHARS = 300  # 说明最多几个字（工具说明里给模型看，Fusion 也是截到 300）
 # 百炼的向量、重排模型（向量 1024 维）。11-10 换成 qwen3.7 这一对：11-09 实验那 36 道题，第 1 条命中 25 → 30、前 8 条 30 → 34
 # （v4 + qwen3-rerank 比；脚本和结果见 docs/知识库方案.md）。换向量模型要重算已有的块（块上记着 model），11-10 换时 dev 上还没有块
 KB_EMBED_MODEL = "qwen3.7-text-embedding-flash"

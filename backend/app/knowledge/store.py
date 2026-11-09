@@ -1,4 +1,4 @@
-"""知识库的块：一块一行，向量和关键词都在这张表上查（pgvector，和文件表同一个库、同一个连接池）。
+"""资料库（以前叫知识库）的块：一块一行，向量和关键词都在这张表上查（pgvector，和文件表同一个库、同一个连接池）。
 
 - file_id 外键连着文件表，删文件时块在同一个事务里没了（Fusion 把向量放在 Milvus，才多了清理任务表、清理 worker）。
 - 向量索引先不建：按账号过滤后精确算，一个人几千块几十毫秒（11-09 dev 上演练过，2 万块 130–360 ms）。总量大了再建 HNSW，
@@ -49,8 +49,9 @@ class ChunkStore(Protocol):
     async def setup(self) -> None: ...
     async def replace(self, file_id: str, chunks: list[StoredChunk], model: str) -> None: ...  # 这个文件的块整个换掉
     async def delete(self, file_id: str) -> None: ...
-    async def by_vector(self, owner: str, emb: Sequence[float], k: int) -> list[Found]: ...
-    async def by_terms(self, owner: str, terms: list[str], k: int) -> list[Found]: ...  # 任一词出现的，按命中排
+    # file_ids：只在这些文件里找（只查还在的资料库、指定的那一个，见 service.search）；None 是这个人的全部
+    async def by_vector(self, owner: str, emb: Sequence[float], k: int, file_ids: list[str] | None = None) -> list[Found]: ...
+    async def by_terms(self, owner: str, terms: list[str], k: int, file_ids: list[str] | None = None) -> list[Found]: ...  # 任一词出现的，按命中排
     async def count(self, owner: str) -> int: ...
 
 
@@ -67,22 +68,22 @@ class MemoryChunkStore:
     async def delete(self, file_id: str) -> None:
         self.rows.pop(file_id, None)
 
-    def _of(self, owner: str) -> list[StoredChunk]:
-        return [c for cs in self.rows.values() for c in cs if c.owner == owner]
+    def _of(self, owner: str, file_ids: list[str] | None = None) -> list[StoredChunk]:
+        return [c for cs in self.rows.values() for c in cs if c.owner == owner and (file_ids is None or c.file_id in file_ids)]
 
     @staticmethod
     def _found(c: StoredChunk) -> Found:
         return Found(c.file_id, c.part, c.idx, c.name, c.title, c.content)
 
-    async def by_vector(self, owner: str, emb: Sequence[float], k: int) -> list[Found]:
+    async def by_vector(self, owner: str, emb: Sequence[float], k: int, file_ids: list[str] | None = None) -> list[Found]:
         def cos(v: Sequence[float]) -> float:
             n = math.sqrt(sum(x * x for x in v)) * math.sqrt(sum(x * x for x in emb))
             return sum(a * b for a, b in zip(v, emb, strict=True)) / n if n else 0.0
-        return [self._found(c) for c in sorted(self._of(owner), key=lambda c: cos(c.emb), reverse=True)[:k]]
+        return [self._found(c) for c in sorted(self._of(owner, file_ids), key=lambda c: cos(c.emb), reverse=True)[:k]]
 
-    async def by_terms(self, owner: str, terms: list[str], k: int) -> list[Found]:
+    async def by_terms(self, owner: str, terms: list[str], k: int, file_ids: list[str] | None = None) -> list[Found]:
         scored = []
-        for c in self._of(owner):
+        for c in self._of(owner, file_ids):
             words = c.terms.split()
             if score := sum(words.count(t) for t in terms):
                 scored.append((score, c))
@@ -107,6 +108,11 @@ _COLS = "file_id, part, idx, name, title, content"
 
 def _vec(v: Sequence[float]) -> str:
     return "[" + ",".join(f"{x:.7g}" for x in v) + "]"  # 库里存的是 float4，7 位有效数字就够
+
+
+def _within(file_ids: list[str] | None) -> tuple[str, tuple]:
+    """只在这些文件里找：加一个条件和它的参数。"""
+    return ("", ()) if file_ids is None else (" AND file_id = ANY(%s)", (list(file_ids),))
 
 
 def _tsquery(terms: list[str]) -> str:
@@ -143,14 +149,17 @@ class PostgresChunkStore:
             cur = await conn.execute(sql, params)
             return [Found(r["file_id"], r["part"], r["idx"], r["name"], r["title"], r["content"]) for r in await cur.fetchall()]
 
-    async def by_vector(self, owner: str, emb: Sequence[float], k: int) -> list[Found]:
-        return await self._found(f"SELECT {_COLS} FROM kb_chunks WHERE owner = %s ORDER BY emb <=> %s::vector LIMIT %s", (owner, _vec(emb), k))
+    async def by_vector(self, owner: str, emb: Sequence[float], k: int, file_ids: list[str] | None = None) -> list[Found]:
+        within, extra = _within(file_ids)
+        return await self._found(f"SELECT {_COLS} FROM kb_chunks WHERE owner = %s{within} ORDER BY emb <=> %s::vector LIMIT %s",
+                                 (owner, *extra, _vec(emb), k))
 
-    async def by_terms(self, owner: str, terms: list[str], k: int) -> list[Found]:
+    async def by_terms(self, owner: str, terms: list[str], k: int, file_ids: list[str] | None = None) -> list[Found]:
         if not terms:
             return []
-        return await self._found(f"SELECT {_COLS} FROM kb_chunks, to_tsquery('simple', %s) q WHERE owner = %s AND tsv @@ q"
-                                 " ORDER BY ts_rank_cd(tsv, q) DESC LIMIT %s", (_tsquery(terms), owner, k))
+        within, extra = _within(file_ids)
+        return await self._found(f"SELECT {_COLS} FROM kb_chunks, to_tsquery('simple', %s) q WHERE owner = %s{within} AND tsv @@ q"
+                                 " ORDER BY ts_rank_cd(tsv, q) DESC LIMIT %s", (_tsquery(terms), owner, *extra, k))
 
     async def count(self, owner: str) -> int:
         async with self.pool.connection() as conn:

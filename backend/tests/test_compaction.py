@@ -41,6 +41,7 @@ def tools_tokens() -> float:
     from app.graph.research.subagent import make_task_tool
     from app.tools.files import make_read_file_tool
     from app.tools.flyai_mcp import itinerary_tool
+    from app.tools.knowledge import make_search_knowledge_tool
     from app.tools.vision import make_view_image_tool
     from app.tools.write_file import make_write_tools
 
@@ -48,7 +49,7 @@ def tools_tokens() -> float:
     aio.run(p.connect_tools())  # 和运行器里一样，连上 MCP 的工具（搜索、读页、天气……）
     # 和 agent.build_agent 的工具列表一样
     tools = [*p.tools(), make_task_tool(p), cp.make_recall_tool(), itinerary_tool(), make_view_image_tool(p), make_read_file_tool(),
-             *make_write_tools()]
+             make_search_knowledge_tool(), *make_write_tools()]
     return CompactionMiddleware(p, tools).tools_tokens
 
 

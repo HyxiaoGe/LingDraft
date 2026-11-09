@@ -1,4 +1,4 @@
-/* 弹窗的外壳：登录（login.jsx）、设置（settings.jsx）、搜对话（search.jsx）、知识库（knowledge.jsx）共用。
+/* 弹窗的外壳：登录（login.jsx）、设置（settings.jsx）、搜对话（search.jsx）、资料库的新建和修改（knowledge.jsx）共用。
    批次 E 整个弹窗收拾了一遍：内边距 24、标题 20（原来 26/22、18 不在刻度上），手机上按钮、输入框、关闭键都到 44。
    弹窗本身能拿焦点（触屏打开时焦点落在它上面，不自己弹键盘）；它不是按钮，焦点不画外圈（外圈套在边框外像两层边），换成边框染上强调色 */
 .overlay { position: fixed; inset: 0; z-index: 80; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: 16px;
@@ -17,8 +17,6 @@
 .overlay.large { padding: 48px 24px; }
 .dialog.large { max-width: 960px; height: min(880px, 100vh - 96px); height: min(880px, 100dvh - 96px); max-height: none; padding: 0; overflow: hidden; }
 .dialog.side { background: var(--side); }
-/* 知识库窗口只有一页（没有左边分类），窄一点：和设置窗口右边那一栏一样宽（2026-11-10） */
-.dialog.large.narrow { max-width: 720px; }
 
 @keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 @keyframes sheet-up { from { transform: translateY(100%); } }

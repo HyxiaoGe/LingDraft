@@ -29,6 +29,7 @@ from app.files.service import NotSendable, UploadRejected, view as file_view
 from app.graph.research.memory import TEXT_MAX as MEMORY_TEXT_MAX
 from app.graph.research.memory import DreamSchedule
 from app.identity import ADMIN, Authenticator, AuthUnavailable, BadToken, Identity, make_authenticator
+from app.knowledge.service import LibraryRejected, library_view
 from app.quota import Exhausted, Limits
 from app.graph.research import history
 from app.graph.research.state import AttachedImage
@@ -435,23 +436,65 @@ def file_remove(file_id: str, who: Who):
     return {"ok": True}
 
 
-# ---- 知识库（见 app.knowledge，2026-11-09 Sean 定）：每人一个，游客没有。页面在设置窗口里（第二个 PR） ----
+# ---- 资料库（见 app.knowledge，2026-11-09 Sean 定，11-10 起叫资料库、一个人能有几个）：游客没有。页面在 /library ----
+
+
+class LibraryBody(BaseModel):
+    name: str | None = Field(default=None, max_length=200)  # 建的时候要有；改的时候没给的不改
+    description: str | None = Field(default=None, max_length=2000)
+
+
+def _library_rejected(e: LibraryRejected) -> HTTPException:
+    return HTTPException(e.status, {"code": "library_rejected", "reason": e.code, "message": e.message, **e.extra})
 
 
 @app.get("/api/knowledge")
 def knowledge_view(who: Who):
-    """知识库页：文件（先传的在前，每个带状态，同 /api/files/{id}）、上限（limits：个数、字数、单个多少 MB）、用了多少（used）。
-    游客的 available 是 false、没有文件。"""
+    """资料库页：几个资料库（libraries，先建的在前，每个有 id、name、description、created_at 和 files：先传的在前，每个带状态，
+    同 /api/files/{id}），上限（limits：文件个数、字数、单个多少 MB、几个资料库、名字和说明各多少字）、用了多少（used，按人算）。
+    游客的 available 是 false、没有资料库。"""
     return research().kb_overview(who)
 
 
-@app.post("/api/knowledge/files")
-def knowledge_upload(who: Who, up: Annotated[_Upload, Depends(_uploaded)]):  # 先认人再读表单
-    """传进知识库：存好原件、排进后台解析和建索引，马上返回（status 是 parsing，建好索引才是 ready），页面接着问 /api/knowledge/files/{id}。
-    不收的 detail 和 /api/files 一样是 {code: "file_rejected", reason, message, …}：游客 403（login_required）、满了 409（kb_full，带 limit），
-    太大 413、类型不对 415。知识库的上传不算每天的个数。"""
+@app.post("/api/knowledge/libraries")
+def library_create(body: LibraryBody, who: Who):
+    """建一个资料库：名字（必填，同一个人不重名，不分大小写）、说明（选填，给模型看它是干什么的）。
+    不收的 detail 是 {code: "library_rejected", reason, message, …}：游客 403（login_required）、名字说明不对 422（bad_name / bad_description，带 limit）、
+    满了 409（libraries_full，带 limit）、重名 409（name_taken）。"""
     try:
-        row = research().kb_upload(who, up.name, up.data)
+        lib = research().kb_create(who, body.name or "", body.description or "")
+    except LibraryRejected as e:
+        raise _library_rejected(e) from None
+    return library_view(lib)
+
+
+@app.patch("/api/knowledge/libraries/{library_id}")
+def library_update(library_id: str, body: LibraryBody, who: Who):
+    """改名字、说明（没给的不改）。不收的同建的时候；别人的、没有的 404。"""
+    try:
+        lib = research().kb_update(who, library_id, body.name, body.description)
+    except LibraryRejected as e:
+        raise _library_rejected(e) from None
+    if lib is None:
+        raise HTTPException(404, "没有这个资料库")
+    return library_view(lib)
+
+
+@app.delete("/api/knowledge/libraries/{library_id}")
+def library_delete(library_id: str, who: Who):
+    """删一个资料库，里面的文件一起删，删了马上搜不到。别人的、没有的 404。"""
+    if not research().kb_remove(who, library_id):
+        raise HTTPException(404, "没有这个资料库")
+    return {"ok": True}
+
+
+@app.post("/api/knowledge/libraries/{library_id}/files")
+def knowledge_upload(library_id: str, who: Who, up: Annotated[_Upload, Depends(_uploaded)]):  # 先认人再读表单
+    """传进一个资料库：存好原件、排进后台解析和建索引，马上返回（status 是 parsing，建好索引才是 ready），页面接着问 /api/knowledge/files/{id}。
+    不收的 detail 和 /api/files 一样是 {code: "file_rejected", reason, message, …}：游客 403（login_required）、资料库没有 404（no_library）、
+    满了 409（kb_full，带 limit，几个资料库加起来算），太大 413、类型不对 415。资料库的上传不算每天的个数。"""
+    try:
+        row = research().kb_upload(who, library_id, up.name, up.data)
     except UploadRejected as e:
         raise HTTPException(e.status, {"code": "file_rejected", "reason": e.code, "message": e.message, **e.extra}) from None
     return file_view(row)
@@ -460,7 +503,7 @@ def knowledge_upload(who: Who, up: Annotated[_Upload, Depends(_uploaded)]):  # �
 @app.get("/api/knowledge/files/{file_id}")
 def knowledge_file(file_id: str, who: Who):
     """处理好了没有：status 是 parsing（解析、建索引都算）/ ready / failed，failed 的 reason 是原因（除了对话里文件的那些，
-    还有 kb_chars 知识库的字数到上限、index_failed 索引没建成、no_text 没有文字）。别人的、没有的 404。"""
+    还有 kb_chars 资料库的字数到上限、index_failed 索引没建成、no_text 没有文字）。别人的、没有的 404。"""
     row = research().kb_file(who, file_id)
     if row is None:
         raise HTTPException(404, "没有这个文件")
@@ -477,7 +520,7 @@ def knowledge_delete(file_id: str, who: Who):
 
 @app.get("/api/knowledge/files/{file_id}/parts")
 def knowledge_file_parts(file_id: str, who: Who):
-    """右栏预览知识库里的文件（和对话里的文件一样，见 research_file_parts）。没处理好的、别人的 404。"""
+    """右栏预览资料库里的文件（和对话里的文件一样，见 research_file_parts）。没处理好的、别人的 404。"""
     got = research().kb_preview(who, file_id)
     if got is None:
         raise HTTPException(404, "没有这个文件")
@@ -487,7 +530,7 @@ def knowledge_file_parts(file_id: str, who: Who):
 
 @app.get("/api/knowledge/files/{file_id}/original")
 def knowledge_file_original(file_id: str, who: Who):
-    """下载知识库里的文件（原件）。别人的、原件没了 404。"""
+    """下载资料库里的文件（原件）。别人的、原件没了 404。"""
     got = research().kb_original(who, file_id)
     if got is None:
         raise HTTPException(404, "没有这个文件")

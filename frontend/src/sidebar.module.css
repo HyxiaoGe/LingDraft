@@ -28,6 +28,10 @@
 @media (hover: hover) { .row:hover { background: var(--hover); } }
 .row.sel { background: var(--paper); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(20, 24, 31, .05); }
 .row.renaming { display: block; padding: 4px; }
+/* “资料库”那一行（sidebar.jsx）：悬停和对话那几行一样，在资料库页时和选中的对话一个样子 */
+.place { transition: background .12s; }
+@media (hover: hover) { .place:hover { background: var(--hover); } }
+.place[aria-current] { background: var(--paper); box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(20, 24, 31, .05); font-weight: 500; }
 
 /* 一行里排成两层：上面图标、标题、时间，下面的小字（进行中用了多久、重名的日期）从标题下面一直铺到时间下面，不挤在标题那一栏里折行 */
 .link { flex: 1; min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; padding: 8px 4px 8px 10px;

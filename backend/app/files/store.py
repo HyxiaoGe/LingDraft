@@ -8,7 +8,8 @@
 - 原件存在数据卷上（storage 是相对 config.FILES_DIR 的路径），文字存这里的 file_parts（段号从 1 起，PDF 段号就是页码）。
 - 图片（kind = image）在 image-service 里，这里只登记归哪段对话、哪一轮（行的编号、storage 都是图的编号），没有文字；
   用户发的 origin = upload，画的 origin = generated（turn_id 是哪一轮画的）。上传的次数、额度只算文件，不算图。
-- 知识库（app.knowledge）也是一个工作区，不挂对话：workspace_id = "kb:<账号>"（KB_PREFIX），传上来就归它，不会被当成没发出去的清掉。
+- 资料库（app.knowledge，以前叫知识库）也是工作区，不挂对话：一个资料库一个，workspace_id = "kb:<资料库编号>"（KB_PREFIX；11-10 以前是 "kb:<账号>"），
+  传上来就归它，不会被当成没发出去的清掉。
   解析好了还要建索引，建好之前一直是 parsing（meta 的 stage 记着到哪一步），建好了才 ready（mark）。
 
 和运行记录同一个 Postgres、同一个连接池（见 ResearchRunner）；测试用内存的。都是协程，在对话的事件循环里调。
@@ -28,7 +29,7 @@ from app.files.parse import Part
 PARSING, READY, FAILED = "parsing", "ready", "failed"
 UPLOAD, GENERATED = "upload", "generated"
 DOCUMENT, IMAGE = "document", "image"
-KB_PREFIX = "kb:"  # 知识库的工作区：kb:<账号>
+KB_PREFIX = "kb:"  # 资料库的工作区：kb:<资料库编号>
 
 
 class FileRow(BaseModel):
@@ -69,6 +70,7 @@ class FileStore(Protocol):
     async def parts(self, file_id: str) -> list[Part]: ...
     async def bind(self, file_ids: list[str], owner: str, workspace_id: str) -> int: ...  # 还没归哪个工作区、解析好了的才绑，返回绑了几个
     async def of_workspace(self, workspace_id: str) -> list[FileRow]: ...
+    async def of_owner_in(self, owner: str, prefix: str) -> list[FileRow]: ...  # 这个人、工作区以 prefix 开头的（一个人所有资料库里的文件）
     async def delete(self, file_ids: list[str]) -> None: ...  # 行和文字一起删（原件由 service 删）
     async def unbound_before(self, at: datetime) -> list[FileRow]: ...
     async def with_status(self, status: str) -> list[FileRow]: ...
@@ -122,6 +124,9 @@ class MemoryFileStore:
 
     async def of_workspace(self, workspace_id: str) -> list[FileRow]:
         return [r.model_copy(deep=True) for r in self._rows.values() if r.workspace_id == workspace_id]
+
+    async def of_owner_in(self, owner: str, prefix: str) -> list[FileRow]:
+        return [r.model_copy(deep=True) for r in self._rows.values() if r.owner == owner and (r.workspace_id or "").startswith(prefix)]
 
     async def delete(self, file_ids: list[str]) -> None:
         for i in file_ids:
@@ -217,6 +222,9 @@ class PostgresFileStore:
 
     async def of_workspace(self, workspace_id: str) -> list[FileRow]:
         return await self._rows(f"SELECT {', '.join(_COLS)} FROM files WHERE workspace_id = %s ORDER BY seq", (workspace_id,))
+
+    async def of_owner_in(self, owner: str, prefix: str) -> list[FileRow]:
+        return await self._rows(f"SELECT {', '.join(_COLS)} FROM files WHERE owner = %s AND starts_with(workspace_id, %s) ORDER BY seq", (owner, prefix))
 
     async def delete(self, file_ids: list[str]) -> None:
         if not file_ids:
