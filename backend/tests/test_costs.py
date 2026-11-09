@@ -188,7 +188,7 @@ def test_free_tier_costs_us_nothing_but_users_pay_the_normal_price(rows):
     有 same_as 的按那个选项的模型，没有的（Auto 判为简单的用的 K3）按 Auto 的备用 Flash；消息上的钱数（每轮的额度）是算给用户的。"""
     c = model_catalog.load()
     k31 = Metered(ref="dashscope:kimi-k3.1-pro").invoke("问")
-    k3 = Metered(ref="dashscope:kimi-k3").invoke("问")
+    k3 = Metered(ref="tokenhub:kimi-k3").invoke("问")
     kimi = c.prices["moonshot:kimi-k3.1-pro"].regular.yuan(10_000, 8_000, 1_000)
     flash_kind, flash = c.rate(FLASH, FRI_10, 10_000)
     assert k31.response_metadata[COST] == pytest.approx(kimi) and k3.response_metadata[COST] == pytest.approx(flash.yuan(10_000, 8_000, 1_000))
