@@ -187,11 +187,13 @@ def test_create_rename_and_delete_libraries(monkeypatch):
     assert other.get("/api/knowledge").json()["libraries"] == []
     # 删资料库：里面的文件、块、原件一起删，别的资料库不动
     f = _kb_upload(rr, client, "合同.md", PLAN.encode(), a)
-    g = _kb_upload(rr, client, "攻略.md", "# 酒店\n\n出差住在公司附近的酒店。".encode(), b["id"])
+    of_f = aio.run(rr.kb.chunks.count("u1"))
+    _kb_upload(rr, client, "攻略.md", "# 酒店\n\n出差住在公司附近的酒店。".encode(), b["id"])
+    of_g = aio.run(rr.kb.chunks.count("u1")) - of_f
     path = rr.files.root / aio.run(rr.files.store.get(f["id"])).storage
     assert client.delete(f"/api/knowledge/libraries/{a}").json() == {"ok": True}
     assert not path.exists() and aio.run(rr.files.store.get(f["id"])) is None
-    assert {c.file_id for cs in rr.kb.chunks.rows.values() for c in cs} == {g["id"]}
+    assert of_f > 0 and of_g > 0 and aio.run(rr.kb.chunks.count("u1")) == of_g  # 只剩另一个资料库的块
     view = client.get("/api/knowledge").json()
     assert [x["name"] for x in view["libraries"]] == ["travel notes"] and view["used"]["files"] == 1
     assert client.delete(f"/api/knowledge/libraries/{a}").status_code == 404
