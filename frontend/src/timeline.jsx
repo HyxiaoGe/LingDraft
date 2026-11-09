@@ -13,7 +13,7 @@ import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelIcon, ModelTool
 import { failureText } from "./errors.js";
 import { SentFiles, fileIndex, partUnit } from "./files.jsx";
 import { FilesButton, workspaceFiles } from "./workspace-files.jsx";
-import { IconBook, IconCheck, IconChevron, IconClip, IconCloudSun, IconCopy, IconDownload, IconEdit, IconEye, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, IconWrite, Spinner } from "./icons.jsx";
+import { IconBook, IconCheck, IconChevron, IconClip, IconCloudSun, IconCopy, IconDownload, IconEdit, IconEye, IconFolder, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, IconWrite, Spinner } from "./icons.jsx";
 import { ImageCards, Viewer, drawn, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
@@ -740,15 +740,16 @@ function Process({ k, items, st, nums, rec, running, answering, failed, now, ver
 
 // 收起来那一行带上做了什么：搜了几次、读了几页（子任务里的也算），开了几个子任务；做成了的才算
 function didText(items) {
-  let search = 0, read = 0, tasks = 0;
+  let search = 0, read = 0, tasks = 0, kb = 0;
   const count = (xs) => xs.forEach((i) => {
     if (i.type !== "step" || i.pending) return;
     if (i.kind === "task") { tasks++; count(i.items || []); }
     else if (i.kind === "search" && i.ok) search++;
+    else if (i.kind === "knowledge" && i.ok) kb++;
     else if (i.kind === "read" && i.body) read++; // 和 ToolRow 一样：读到原文的才算
   });
   count(items);
-  return [search && `搜了 ${search} 次`, read && `读了 ${read} 页`, tasks && `${tasks} 个子任务`].filter(Boolean).join(" · ");
+  return [kb && `查了 ${kb} 次知识库`, search && `搜了 ${search} 次`, read && `读了 ${read} 页`, tasks && `${tasks} 个子任务`].filter(Boolean).join(" · ");
 }
 
 // 过程里的一条条：思考、中途说的话、工具步骤，子任务是一张卡片。子任务卡里是它的子 agent 的这些，排法一样。
@@ -957,7 +958,7 @@ function Thinking({ it, thinking }) {
 // files：这段对话里用户发过的文件（见 fileIndex），读文件那一步用
 function ToolRow({ s, running, files, versions }) {
   const Icon = { read: IconPage, weather: IconCloudSun, place: IconPin, route: IconRoute, flight: IconPlane, train: IconTrain, itinerary: IconTicket,
-    image: IconImage, docs: IconBook, view: IconEye, file: IconClip, write: IconWrite }[s.kind] || IconSearch;
+    image: IconImage, docs: IconBook, view: IconEye, file: IconClip, write: IconWrite, knowledge: IconFolder }[s.kind] || IconSearch;
   const busy = running && s.pending;
   let main, sub;
   let bad = !s.ok;
@@ -998,6 +999,9 @@ function ToolRow({ s, running, files, versions }) {
     const unit = partUnit(f?.type);
     main = <>读文件{name && <>「{name}」</>}{s.limits.map((l) => <span key={l} className={proc.lim}>找「{l}」</span>)}{s.parts && <span className={proc.lim}>第 {s.parts} {unit}</span>}</>;
     sub = s.pending ? "读取中…" : !s.ok ? s.message || "没读成" : s.limits.length ? (s.hits ? `找到 ${s.hits} ${unit}` : "没找到") : "读过了";
+  } else if (s.kind === "knowledge") { // 查用户的知识库：查的话，找到几段（同一段的几块算一段）
+    main = <>查知识库「{s.text}」</>;
+    sub = s.pending ? "查找中…" : !s.ok ? s.message || "没查成" : s.source_ids?.length ? `找到 ${s.source_ids.length} 段` : "没找到";
   } else if (s.kind === "write") { // 模型写文件、改文件：标题（改的没给新标题，按改的那份对上），写成了是第几版
     const name = s.text || versions?.get(s.target)?.at(-1)?.title;
     main = <>{s.edit ? "改文件" : "写文件"}{name && <>「{name}」</>}</>;
@@ -1036,6 +1040,7 @@ const WAITING = [
   ["image", () => "正在画图"],
   ["view", () => "正在看图"],
   ["file", () => "正在读文件"],
+  ["knowledge", () => "正在查知识库"],
   ["write", () => "正在保存文件"],
   ["read", (n) => (n > 1 ? `正在读 ${n} 个网页` : "正在读网页")],
   ["search", (n) => (n > 1 ? `正在搜 ${n} 组关键词` : "正在搜索")],

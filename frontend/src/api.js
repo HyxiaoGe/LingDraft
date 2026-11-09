@@ -196,8 +196,12 @@ export async function threadFileBlob(threadId, id, signal) {
 
 // 下载对话里发过的文件（原件）：取成 blob 再存，文件名用原来的
 export async function downloadThreadFile(threadId, f) {
-  const url = URL.createObjectURL(await threadFileBlob(threadId, f.id));
-  const a = Object.assign(document.createElement("a"), { href: url, download: f.name });
+  saveBlob(await threadFileBlob(threadId, f.id), f.name);
+}
+
+function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement("a"), { href: url, download: name });
   document.body.append(a);
   a.click();
   a.remove();
@@ -216,6 +220,56 @@ export async function threadFileParts(threadId, id, signal) {
   const resp = await authFetch(`/api/research/threads/${encodeURIComponent(threadId)}/files/${encodeURIComponent(id)}/parts`, { signal });
   if (!resp.ok) throw await httpError(resp);
   return resp.json();
+}
+
+// ---- 知识库（见后端 app/knowledge）：每人一个，游客没有。传上去后台解析、建索引，问到 ready 才查得到 ----
+
+// {available, files: [同 getKnowledgeFile 回的 + created_at], limits: {files, chars, mb}, used: {files, chars}}；游客 available 是 false
+export async function getKnowledge(signal) {
+  const resp = await authFetch("/api/knowledge", { signal });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 传进知识库，马上回 {id, name, type, size, status, reason?, file?}（status 是 parsing，建好索引才是 ready）。
+// 不收时抛 httpError，detail 是 {code: "file_rejected", reason, …}：403 login_required、409 kb_full（带 limit）、413、415
+export async function uploadKnowledge(file, signal) {
+  const fd = new FormData();
+  fd.append("file", file);
+  const resp = await authFetch("/api/knowledge/files", { method: "POST", body: fd, signal });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 处理好了没有；failed 的 reason 多了 kb_chars、index_failed、no_text。删了的 404
+export async function getKnowledgeFile(id, signal) {
+  const resp = await authFetch(`/api/knowledge/files/${encodeURIComponent(id)}`, { signal });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 删一个文件，删了马上查不到。keepalive：关页面时撤销还没过期，照样发出去
+export async function deleteKnowledgeFile(id, { keepalive = false } = {}) {
+  const resp = await authFetch(`/api/knowledge/files/${encodeURIComponent(id)}`, { method: "DELETE", keepalive });
+  if (!resp.ok && resp.status !== 404) throw await httpError(resp);
+}
+
+// 右栏看知识库里的文件：同 threadFileParts
+export async function knowledgeFileParts(id, signal) {
+  const resp = await authFetch(`/api/knowledge/files/${encodeURIComponent(id)}/parts`, { signal });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 知识库里文件的原件（blob），下载、右栏看 PDF 用
+export async function knowledgeFileBlob(id, signal) {
+  const resp = await authFetch(`/api/knowledge/files/${encodeURIComponent(id)}/original`, { signal });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.blob();
+}
+
+export async function downloadKnowledgeFile(f) {
+  saveBlob(await knowledgeFileBlob(f.id), f.name);
 }
 
 export async function getResearchState(threadId) {

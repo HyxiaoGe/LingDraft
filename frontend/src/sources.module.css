@@ -16,6 +16,7 @@
 /* 来源网站的图标，放在域名前；取不到时是域名首字母 */
 .fav { display: inline-block; width: 12px; height: 12px; margin-right: 5px; border-radius: 2px; vertical-align: -2px; object-fit: contain; }
 .fav.letter { background: var(--hover); color: var(--muted); font: 600 8.5px/12px var(--sans); text-align: center; }
+.fav.folder { display: inline-flex; align-items: center; justify-content: center; background: var(--accent-soft); color: var(--accent); }
 
 /* 来源卡：编号和徽标（读到全文、只有摘要）、标题、网址和发布日期、开头一段、打开原文。桌面是贴着角标的浮层（.pop），手机放在底部弹层里（.sheet） */
 .pop { position: fixed; z-index: 50; animation: rise .15s var(--ease); background: var(--paper); border: 1px solid var(--line2); border-radius: var(--r-lg);
@@ -35,7 +36,7 @@
 .sheet .name { font-size: 16px; }
 .sheet .site { font-size: 13px; }
 .sheet .excerpt { font-size: 14px; max-height: none; }
-.sheet .actions a { min-height: 44px; padding: 0 16px; font-size: 14px; }
+.sheet .actions a, .sheet .actions button { min-height: 44px; padding: 0 16px; font-size: 14px; }
 .all { width: 100%; min-height: 44px; margin-top: 16px; justify-content: center; font-size: 14px; } /* 和 .ws-btn.ghost 一起用 */
 .list { margin: 0; padding: 0; }
 .list button { display: flex; align-items: flex-start; gap: 12px; width: 100%; min-height: 52px; padding: 8px; border-radius: var(--r); text-align: left;
@@ -55,8 +56,9 @@
 .citedHead .fav.letter { line-height: 14px; }
 .cited ol { margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .cited li { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.6; min-width: 0; }
-.cited a { min-height: 24px; color: var(--ink2); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
-@media (hover: hover) { .cited a:hover { color: var(--accent); } }
+.cited a, .kbLink { min-height: 24px; color: var(--ink2); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; }
+.kbLink { text-align: left; font: inherit; line-height: inherit; text-decoration: underline; text-decoration-color: var(--line2); text-underline-offset: 3px; }
+@media (hover: hover) { .cited a:hover, .kbLink:hover { color: var(--accent); } }
 .url { display: none; } /* 只在打印时出现：纸上点不了链接，印出网址 */
 
 @keyframes rise { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
@@ -66,7 +68,7 @@
   /* 看得见 28，透明点按区补到 44 */
   .citedHead { position: relative; }
   .citedHead::after { content: ""; position: absolute; inset: -8px 0; }
-  .cited a { padding: 12px 0; }
+  .cited a, .kbLink { padding: 12px 0; }
 }
 
 /* 打印：来源卡不印；回答下面的来源全部展开，每条印出网址，不从中间断开 */

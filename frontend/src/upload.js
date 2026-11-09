@@ -104,6 +104,7 @@ export function fileErrorText(reason, d = {}) {
     case "empty_file": return "文件是空的";
     case "daily_limit": return `今天传的文件到上限了（${d.limit} 个），${d.guest && d.login_limit ? `登录后每天能传 ${d.login_limit} 个` : "明天再传"}`;
     case "image": return "图片请直接作为图片发送";
+    case "kb_image": return "知识库只放文档，图片放不进来";
     case "legacy_office": return "老格式的 doc、xls、ppt 和加了密码的 Office 文件读不了，另存成 docx、xlsx、pptx 再传";
     case "encrypted": return "这个 PDF 有密码，读不了";
     case "broken": return "文件打不开，可能已经损坏";
@@ -115,12 +116,18 @@ export function fileErrorText(reason, d = {}) {
     case "expired": return "文件已经过期了";
     case "offline": return "没传上去，网络好像断了";
     case "busy": return "现在传不上去，稍后再传";
+    // 知识库（见后端 app/knowledge/service.py）
+    case "login_required": return "登录后才能用知识库";
+    case "kb_full": return `知识库最多放 ${d.limit} 个文件，删掉一些再传`;
+    case "kb_chars": return "知识库的文字到上限了，删掉一些再传";
+    case "index_failed": return "没处理好，删掉重新上传试试";
+    case "no_text": return "文件里没有能读出来的文字";
     default: return "文件没读成";
   }
 }
 
 // 卡片上那行短的：还没传上去的（传之前就挡下、后端不收、网络断了）和传上去了读不了的
-const NOT_UPLOADED = new Set(["too_large", "empty_file", "daily_limit", "offline", "busy"]);
+const NOT_UPLOADED = new Set(["too_large", "empty_file", "daily_limit", "offline", "busy", "login_required", "kb_full"]);
 export const fileShortError = (reason) => (NOT_UPLOADED.has(reason) ? "没传上去" : reason === "expired" ? "已经过期" : "读不了");
 
 // 发消息时带的文件不能发（400，detail.code 是 files_not_sendable）

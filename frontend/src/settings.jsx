@@ -4,10 +4,12 @@
 // - 外观：主题，跟随系统 / 浅色 / 深色，存本机（prefs.js），默认跟随系统；
 // - 通知：答完通知，现在浏览器允不允许、开没开，能开能关；浏览器拒绝了说清去哪改（评审第 46 条的尾巴）。开关只在这里（等待行旁边的“答完通知我”2026-11-07 去掉了），记在 alert.jsx；
 // - 记忆：现有的记忆列表（memory.jsx），游客那里写着登录了才有；没有登录功能的部署谁都没有记忆，不放这一类。
+// - 知识库（2026-11-09）：传、看、删知识库里的文件（knowledge.jsx），和记忆一样游客那里写着登录了才有、没有登录功能的部署不放。
 // 游客也能打开，主题、深度思考对游客一样生效。手机上从底部升起：先是分类列表，点进去一类，左上角“设置”回到列表
 import { useEffect, useId, useRef, useState } from "react";
 import { permission, setWants, wants } from "./alert.jsx";
-import { IconBell, IconBook, IconCheck, IconChevron, IconClose, IconSliders, IconSun } from "./icons.jsx";
+import { IconBell, IconBook, IconCheck, IconChevron, IconClose, IconFolder, IconSliders, IconSun } from "./icons.jsx";
+import { KnowledgeSettings } from "./knowledge.jsx";
 import { opener, useLayer } from "./layers.js";
 import { Avatar } from "./login.jsx";
 import { MemoryPanel } from "./memory.jsx";
@@ -21,13 +23,16 @@ const SECTIONS = [
   { key: "look", label: "外观", Icon: IconSun },
   { key: "notify", label: "通知", Icon: IconBell },
   { key: "memory", label: "记忆", Icon: IconBook },
+  { key: "knowledge", label: "知识库", Icon: IconFolder },
 ];
+const ACCOUNT = new Set(["memory", "knowledge"]); // 按账号分的：有登录功能的部署才放
 
 // view：打开的是哪一类（上面的 key）；"settings" 是刚打开（桌面上是第一类，手机上是分类列表）。onView 换；onClose 关窗口。
 // mobile：窄屏。theme、onTheme：主题（见 prefs.useTheme）；think、onThink：新对话默认开不开深度思考；
-// onLogin：游客去登录（先关这个窗口再开登录窗口）；undo、threads、onOpen：给记忆列表（删了能撤销、对出出处、点出处关窗口打开那段对话）
-export function SettingsDialog({ view, onView, onClose, mobile, auth, onLogin, theme, onTheme, think, onThink, undo, threads, onOpen }) {
-  const sections = SECTIONS.filter((x) => x.key !== "memory" || auth.login || auth.me);
+// onLogin：游客去登录（先关这个窗口再开登录窗口）；undo、threads、onOpen：给记忆列表（删了能撤销、对出出处、点出处关窗口打开那段对话）；
+// onOpenKnowledge(f)：关窗口、在右栏看知识库里的文件
+export function SettingsDialog({ view, onView, onClose, mobile, auth, onLogin, theme, onTheme, think, onThink, undo, threads, onOpen, onOpenKnowledge }) {
+  const sections = SECTIONS.filter((x) => !ACCOUNT.has(x.key) || auth.login || auth.me);
   const cur = sections.find((x) => x.key === view) || (mobile ? null : sections[0]); // 手机上 null 是分类列表
   const box = useRef(null);
   const body = useRef(null);
@@ -105,6 +110,7 @@ export function SettingsDialog({ view, onView, onClose, mobile, auth, onLogin, t
               )}
               {cur.key === "notify" && <NotifyGroup />}
               {cur.key === "memory" && <MemoryPanel auth={auth} onLogin={onLogin} undo={undo} threads={threads} onOpen={onOpen} />}
+              {cur.key === "knowledge" && <KnowledgeSettings auth={auth} onLogin={onLogin} undo={undo} onOpenFile={onOpenKnowledge} />}
             </div>
           </section>
         )}
