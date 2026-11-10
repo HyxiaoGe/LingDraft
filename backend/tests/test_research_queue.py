@@ -109,6 +109,17 @@ class _Running:
             self.evs = events(self.resp["r"])
 
 
+def test_health_counts_running_turns_so_deploys_can_wait(client, rr):
+    """部署前看 /api/health 的 busy，等正在跑的回答跑完再重启（见 .github/workflows/ci.yml）：一轮在跑多 1 个，跑完回去。"""
+    busy = lambda: client.get("/api/health").json()["busy"]  # noqa: E731
+    before = busy()
+    tid = new(client, "直接答：先说一句")["thread_id"]
+    with _Running(client, rr, tid, "直接答：第二句"):
+        assert busy() == before + 1
+    _settled(client, tid, 2)
+    assert wait_until(lambda: busy() == before)
+
+
 def test_said_while_running_goes_after_the_turn(client, rr):
     """答着的时候又说了一句：排着；再说一句不收（没发出去的话最多一句）。这一轮答完自动发成新的一轮。排着话的这一轮不起推荐问题。"""
     tid = new(client, "直接答：先说一句")["thread_id"]

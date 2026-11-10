@@ -25,6 +25,7 @@ from app.api.inspiration import InspirationError, Inspirations
 from app.api.research_runner import AlreadyPending, NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner, UnknownModel
 from app.api.run_store import STATUSES
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
+from app.api.runner import busy as runner_busy
 from app.files.service import NotSendable, UploadRejected, view as file_view
 from app.graph.research.memory import TEXT_MAX as MEMORY_TEXT_MAX
 from app.graph.research.memory import DreamSchedule
@@ -933,8 +934,9 @@ async def favicon(host: str):
 
 @app.get("/api/health")
 async def health():
-    """探活（容器健康检查、uptime-kuma）：进程在、能回话就行，不碰数据库和外部服务。version 是部署的提交号，看部署上去的是哪一版。"""
-    return {"ok": True, "version": config.VERSION or None}
+    """探活（容器健康检查、uptime-kuma）：进程在、能回话就行，不碰数据库和外部服务。version 是部署的提交号，看部署上去的是哪一版。
+    busy 是排着队、在跑的回答有几个：部署时等它变成 0 再重启容器，不打断正在跑的回答（见 .github/workflows/ci.yml）。"""
+    return {"ok": True, "version": config.VERSION or None, "busy": runner_busy()}
 
 
 class Pages(StaticFiles):

@@ -57,6 +57,7 @@ class RunRegistry(Protocol):
     def request_stop(self, key: str) -> bool: ...
     def stop_requested(self, key: str) -> bool: ...
     def release(self, key: str) -> None: ...
+    def busy(self) -> int: ...  # 占着位的（排着队、在跑的）有几个
 
 
 class LocalRunRegistry:
@@ -98,8 +99,17 @@ class LocalRunRegistry:
         with self._mu:
             self._runs.pop(key, None)
 
+    def busy(self) -> int:
+        with self._mu:
+            return len(self._runs)
+
 
 _runs = LocalRunRegistry()
+
+
+def busy() -> int:
+    """这个进程里排着队、在跑的执行有几个。部署前看它，等正在跑的回答跑完再重启（见 /api/health、.github/workflows/ci.yml）。"""
+    return _runs.busy()
 
 
 class EventLog(Protocol):

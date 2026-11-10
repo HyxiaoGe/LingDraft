@@ -60,16 +60,35 @@ jobs:
     needs: test
     if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
     runs-on: self-hosted
-    timeout-minutes: 20
+    timeout-minutes: 30  # 最多等正在跑的回答 10 分钟，加上建镜像、等健康
     concurrency:
       group: deploy-dev
       cancel-in-progress: false
     steps:
-      - name: 部署
+      - name: 建镜像
         run: |
           cd ~/project/LingDraft
           git pull --ff-only
-          LINGDRAFT_VERSION=$(git rev-parse --short HEAD) docker compose up -d --build
+          LINGDRAFT_VERSION=$(git rev-parse --short HEAD) docker compose build
+      - name: 等正在跑的回答跑完
+        # 重启容器会打断正在跑的回答（记成 lost，用户得重问）。建镜像时旧容器照常服务；
+        # 这里每 15 秒看一次 /api/health 的 busy（排着队、在跑的回答有几个），是 0 就往下走，最多等 10 分钟，到了照常重启。
+        # 旧版本没有 busy、容器没在跑、读不到，都当 0。
+        run: |
+          for i in $(seq 1 40); do
+            n=$(docker exec lingdraft python -c "import json, urllib.request; print(json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)).get('busy', 0))" 2>/dev/null || echo 0)
+            if [ "$n" = 0 ]; then
+              echo "没有在跑的回答，可以重启"
+              exit 0
+            fi
+            echo "还有 $n 个回答在跑，等 15 秒（第 $i 次）"
+            sleep 15
+          done
+          echo "等了 10 分钟还有回答在跑，照常重启"
+      - name: 部署
+        run: |
+          cd ~/project/LingDraft
+          LINGDRAFT_VERSION=$(git rev-parse --short HEAD) docker compose up -d
           docker image prune -f
       - name: 等容器健康
         run: |
