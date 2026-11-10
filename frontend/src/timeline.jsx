@@ -3,8 +3,9 @@
 // 也能插进这一轮：模型做完手上这一步就看到它，插进去以后排在过程里。过程正在跑时展开，正文一出来就收成一行（重新打开的对话里也收着）
 // “已完成 25 秒 · 搜了 6 次 · 读了 4 页”，点开看每一步。收起的内容还留在页面里，浏览器的查找搜得到（见 Fold）。
 // 每一轮是一个 section（data-turn），回答开头有“灵稿”的标识；三轮起右边（宽屏）或顶栏（窄屏）有轮次目录，见 TurnIndex。
-// 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。这些一直显示，之前各轮的淡一档。
+// 每句话和每条回答下面有时间，都能复制；最后一句在空闲时、问着的时候能改，改完按新的话重新回答。这些一直显示，之前各轮的淡一档。
 // 模型做到一半会停下来问用户（状态 asking）：最后一轮下面出一张问题卡（AskCard），点选项、在输入框里写、或者跳过，这一轮接着跑；问过的问题和回答排在过程里。
+// 问着的时候不想答也有出口：输入框空着时右边是停止（这一轮到此为止），那句话下面能编辑，问题卡下面能重新回答。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { MessageCircleQuestionMark } from "lucide-react";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -549,7 +550,7 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
   return (
     <>
       {t.user && <UserMsg text={live?.edit ?? t.user} images={userImages(t, live, st?.thread_id)} files={t.localFiles || t.files || []} tid={t.localFiles ? null : st?.thread_id}
-        panel={files} at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && idle} onEdit={act.edit} />}
+        panel={files} at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && (idle || !!ask)} onEdit={act.edit} />}
       <div className={styles.ai}>
         {who && <div className={styles.aiHead}><ModelIcon m={{ model: ref, name: who, icon: named?.icon }} size={22} />{who}</div>}
         {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} answering={replied} failed={failed} asking={!!ask} now={now} versions={versions} />}
@@ -565,12 +566,13 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
         {!running && !ask && <AnswerSources nums={nums} sources={st?.sources} />}
         {!running && rec?.ended_at && rec.outcome === "no_reply" && <p className={styles.muted}>这一轮没有给出文字回复。</p>}
         {failed && <Failed st={st} act={act} />}
-        {!running && (replied || rec?.ended_at || (last && idle)) && (
+        {/* 问着的时候也有这一行：只有“重新回答”（这个问题不答了，同一句话重来，2026-11-11 Sean 定） */}
+        {!running && (replied || rec?.ended_at || (last && idle) || ask) && (
           <div className={styles.aiFoot + (last ? "" : " " + styles.quiet)}>
             <Stamp iso={rec?.ended_at} now={now} />
             {rec?.credits != null && <span className={styles.model}>本轮 {creditsText(rec.credits)}</span>}
             {replied && <CopyButton text={() => answerText(items, st?.sources)} />}
-            {last && idle && <button className="ws-btn ghost sm" onClick={act.regenerate}><IconLoop size={13} />重新回答</button>}
+            {last && (idle || ask) && <button className="ws-btn ghost sm" onClick={act.regenerate}><IconLoop size={13} />重新回答</button>}
           </div>
         )}
       </div>

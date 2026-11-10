@@ -4,6 +4,7 @@
 // 回答时又说的话排在服务器上，这一轮答完或停下就接着发成新的一轮：这一轮的事件流结束时线程又在跑了，页面接着读下一次执行的。
 // 这一轮出错时排着的话不发，取回输入框。排着的话也能插进这一轮：放进对话时事件流里来一条 guide，页面把它挪进过程里。
 // 模型也会停下来问用户（状态 asking，问题在 state.ask）：这时没有执行在跑，回答或跳过以后同一轮接着跑（见 act.answer）；排着的话留在服务器上，等这一轮答完再发。
+// 问着的时候点停止走 dismiss：没有事件流，服务器收尾以后取一次状态；重新回答、改那句话和空闲时一样（服务器先把这一轮收尾）。
 import { useEffect, useRef, useState } from "react";
 import { answerResearchThread, createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads,
   pinResearchThread, queueResearch, regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, setResearchAsks, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
@@ -563,6 +564,42 @@ export default function Workspace() {
     }
   }
 
+  // 问着的时候点停止：不回答了，这一轮到此为止（见后端 research_runner._adismiss）。这时没有执行在跑，也没有事件流：
+  // 服务器收尾以后这里取一次状态。排着的话这时接着发成新的一轮（取到的状态是在跑），接上那次执行；
+  // 409 是这个问题刚好在别处答了、或者这一轮已经停了，同样按取到的状态来
+  async function dismiss(id, g) {
+    ctl.current.abort();
+    ctl.current = new AbortController();
+    setBusy(true);
+    setError(null);
+    setLive({ items: [], stopping: true });
+    try {
+      await stopResearchThread(id);
+    } catch (e) {
+      if (g !== gen.current) return;
+      if (e.status !== 409) {
+        setBusy(false);
+        setLive(null);
+        setError(errorText("没停下来", e, "再点一次停止"));
+        return;
+      }
+    }
+    try {
+      const s = await getResearchState(id);
+      if (g !== gen.current) return;
+      if (!ACTIVE.has(s.status)) return finish(g, s, []);
+      lastEvent.current = null; // 新的一次执行：从它的头一个事件收
+      setSt(s);
+      setLive({ items: [], turnsAtStart: s.turns.length, stage: s.status === "queued" ? QUEUED : null });
+      await follow(id, g, []);
+    } catch (e) {
+      if (g !== gen.current) return;
+      setBusy(false);
+      setLive(null);
+      setError(errorText("没能取回这一轮现在的样子", e, "刷新页面看看"));
+    }
+  }
+
   // 这句话带的图（File）和文件（编号）；没带文件不写 files
   const attached = (images, docs) => ({ images: images.map((i) => i.file), ...(docs.length ? { files: docs.map((d) => d.id) } : {}) });
   const act = {
@@ -637,6 +674,7 @@ export default function Workspace() {
     stop: async () => {
       const g = gen.current;
       if (!tidRef.current) return; // 新对话刚发出去，服务器还没给线程 id：这时还没开始跑
+      if (st?.status === ASKING && !busyRef.current) return dismiss(tidRef.current, g);
       setLive((l) => (l ? { ...l, stopping: true } : l));
       try {
         await stopResearchThread(tidRef.current);
