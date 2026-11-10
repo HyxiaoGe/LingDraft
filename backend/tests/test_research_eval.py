@@ -139,6 +139,12 @@ def test_case_answers_the_models_questions_and_checks_whether_it_asked():
     assert [a["answer"] for a in r["turns"][0]["asks"]] == ["分享", ""] and r["turns"][0]["reply"] == "收到回答：分享；你跳过了，我按选型做。"
     assert _failed(r) == [(1, "asked")] and "→ 跳过了" in transcript([r])
     assert turn_checks(CaseTurn(say="x", expect={"asked": False}), {**r["turns"][0], "asks": None})[-1]["passed"]  # 老结果文件没有 asks
+    # 用例写了 mute：第一次被问就点“别再问了”，这段对话后面 Work 的轮也不问
+    r = _run([{"say": "问我 对比两种向量库", "work": True, "mute": True, "expect": {"asked": True}},
+              {"say": "问我 再来一个", "work": True, "expect": {"asked": False}}])
+    assert r["passed"], (_failed(r), r.get("error"))
+    assert r["turns"][0]["asks"] == [{"question": "这份对比是用来选型，还是做分享？", "options": ["选型", "分享"], "answer": "", "muted": True}]
+    assert r["turns"][0]["reply"] == "你跳过了，我按选型做。" and r["turns"][1]["asks"] == []
 
 
 def test_reply_is_the_last_model_message():

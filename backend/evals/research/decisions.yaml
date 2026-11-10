@@ -112,12 +112,6 @@
   source: 是个问题，不是要一份报告：答偏了再问一句就行
   expect: {asked: false}
 
-- id: ask-no-pick
-  say: 我想给个人博客加个搜索，数据量很小，用 Qdrant 还是 pgvector？
-  work: true
-  source: 条件都给了的选择题
-  expect: {asked: false}
-
 - id: ask-no-lookup
   say: Qdrant 最新版本是多少，有什么新功能？
   work: true
@@ -129,13 +123,6 @@
   work: true
   source: 小活：写偏了重写很快
   expect: {asked: false}
-
-- id: ask-no-weather-place
-  say: 明天天气怎么样？
-  work: true
-  source: 查东西缺条件（没说哪儿）：在正文里问一句，不出问题卡（agent.work 最后一条，11-10 我定的，等 Sean 确认）
-  expect: {asked: false, looked_up: false, replied: true}
-  judge: 正文问了用户想查哪个地方的天气，且没有给出任何具体的天气数据。
 
 # 不定对错，只记下来看：任务的用途、条件原话里已经说了。Work 模式下再问点别的（原话里没有、又会改变结果的）可以，直接动手也可以；
 # 不行的是把原话里说过的拿回去再问一遍（Sean 定的：原话里有的不拿回去确认）。问了什么在结果文件的 tool_calls 里，人看
@@ -167,3 +154,16 @@
   say: 周末想带爸妈出去玩，有什么推荐？
   work: true
   source: 要推荐的：系统提示词写了不追着要条件、先给能用的（agent.tool_selection）。Work 模式下算不算“计划”两说，和 ask-yes-trip 挨得近，先看模型怎么认
+
+# 也不定对错（2026-11-11 Sean 定）：缺一个条件的时候，出问题卡还是在正文里反问都行，由模型定——区别只是卡能接着当前这一轮往下做。
+# 11-10 评测时这两句标的是“不该出卡”（我自己定的标准），Flash 关着思考每次都出卡：问城市、问博客的技术栈
+- id: ask-open-pick
+  say: 我想给个人博客加个搜索，数据量很小，用 Qdrant 还是 pgvector？
+  work: true
+  source: 选择题，条件给了一些：直接答可以，问一句博客现在用什么也可以
+
+- id: ask-open-weather-place
+  say: 明天天气怎么样？
+  work: true
+  source: 查东西缺条件（没说哪儿）：出卡问、正文里问都行；不该的是没问就挑一个城市查
+  expect: {looked_up: false}
