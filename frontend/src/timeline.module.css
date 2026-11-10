@@ -102,6 +102,21 @@
 .main[data-fresh] :global(.ws-error) { margin: 12px 0 0; } /* 新对话发出去被拒（图不收、额度用完）：和上面的说明隔开，紧挨着下面的输入框 */
 .welcome { text-align: center; }
 .welcome h2 { font: 600 28px/1.35 var(--serif); letter-spacing: .02em; text-wrap: balance; }
+/* 欢迎语下面的“对话 / 工作”大开关（ModeSwitch）：灰底的槽里一块浮起来的底，选哪段滑到哪段下面；选着工作时字是靛青。
+   深色下浮起来的那块比槽亮（--sel），不用页面的底色 */
+.modes { --thumb: var(--paper); position: relative; display: inline-grid; grid-template-columns: 1fr 1fr; margin-top: 20px; padding: 3px; border-radius: 999px;
+  background: var(--hover); }
+:global(.ws[data-theme="dark"]) .modes { --thumb: var(--sel); }
+.modes::before { content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px); border-radius: 999px; background: var(--thumb);
+  box-shadow: 0 1px 2px rgba(20, 24, 31, .16), 0 0 0 .5px rgba(20, 24, 31, .06); transition: transform .22s var(--ease); }
+.modes[data-on="work"]::before { transform: translateX(100%); }
+.modes button { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 36px; min-width: 108px; padding: 0 20px;
+  border-radius: 999px; font-size: 14px; color: var(--muted); white-space: nowrap; transition: color .15s var(--ease); }
+.modes button svg { flex: none; }
+.modes button[aria-checked="true"] { color: var(--ink); font-weight: 500; }
+.modes[data-on="work"] button[aria-checked="true"] { color: var(--accent); }
+@media (hover: hover) { .modes button:hover:not([aria-checked="true"]) { color: var(--ink2); } }
+@media (prefers-reduced-motion: reduce) { .modes::before { transition: none; } }
 .examples { flex: 1.4 1 0; width: 100%; max-width: 756px; margin: 0 auto; padding: 18px 28px 40px; position: relative; }
 .inspire { min-height: 72px; display: flex; flex-wrap: wrap; justify-content: center; align-content: flex-start; gap: 8px; }
 .ruler { position: absolute; top: 0; left: 0; right: 0; height: 0; overflow: hidden; visibility: hidden; display: flex; } /* 一排放不下的剪掉，不把页面撑宽；量的宽度不受影响 */
@@ -126,6 +141,8 @@
   .inspire .chip, .suggestList .chip { position: relative; min-height: 36px; }
   .inspire .chip::after, .suggestList .chip::after { content: ""; position: absolute; inset: -4px 0; }
   .inspire { min-height: 80px; }
+  .modes button { height: 38px; } /* 加上槽的上下 3px 正好 44 */
+  .modes button::after { content: ""; position: absolute; inset: -3px 0; }
   .askOption { min-height: 44px; }
   .askActions { margin: -8px -10px -12px -10px; } /* 几个钮点按区 44 高，上下往外让，卡片不显得下面空 */
   .askActions :global(.ws-btn) { height: 44px; }

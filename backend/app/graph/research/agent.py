@@ -73,7 +73,7 @@ WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", 
 SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "files", "memory", "language")
 MEMORY_SECTION = "agent.memory"
 AGENT_PROMPT = tuple(f"agent.{k}" for k in SYSTEM_SECTIONS)
-# Work 模式的一轮（用户在输入框旁边选了 Work，见 history.WORK）：多一段 work（任务开始前先问用户），排在记忆前面；问用户的工具也只在这种轮里给
+# Work 的一轮（这段对话是工作任务，见 history.WORK）：多一段 work（任务开始前先问用户），排在记忆前面；问用户的工具也只在这种轮里给
 # （见 ModelSelect._for）。2026-11-10 Sean 定：问不问不靠提示词里列举情形，看用户选没选 Work
 WORK_SECTION = "work"
 WORK_SECTIONS = tuple(k for s in SYSTEM_SECTIONS for k in ((WORK_SECTION, s) if s == "memory" else (s,)))
@@ -217,9 +217,10 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
 
     def _plan(self, state: ResearchState, runtime, simple: bool | None = None):
         """这一轮的模型。Auto 的对话按定下的 auto_model；还没定的这时定：simple 是第一句话判断的难易，没判断的（老对话、同步跑）当复杂。
-        Work 模式的轮 Auto 不看难易，一律用复杂的那个（Pro，游客是备用）；这段对话之前定的是给简单问题的免费模型，也从这一轮起换成它、
-        之后不再换回去（_begin 记进 auto_model）。2026-11-11 Sean 定：Work 本身就是复杂的活；真实模型评测里 Kimi K3 拿着问用户的工具
-        不用（3 次里 0 次出问题卡）。自己选了模型的不受影响。"""
+        Work 的轮 Auto 不看难易，一律用复杂的那个（Pro，游客是备用）。2026-11-11 Sean 定：Work 本身就是复杂的活；真实模型评测里
+        Kimi K3 拿着问用户的工具不用（3 次里 0 次出问题卡）。自己选了模型的不受影响。
+        11-11 以前一段对话里每句话都能换模式：Chat 开头、定了给简单问题的免费模型的，第一次 Work 的轮起换成复杂的那个、不再换回去
+        （_begin 记进 auto_model）；现在模式按对话定，这种情况只剩那时候的对话。"""
         catalog, msgs = self.planner.catalog, state["messages"]
         human = msgs[history.last_human(msgs)]
         thinking = history.thinking_switch(human)

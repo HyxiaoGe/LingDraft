@@ -127,11 +127,12 @@ export async function deleteMemory(id, { keepalive = false } = {}) {
   if (!resp.ok) throw await httpError(resp);
 }
 
-// 新对话页的“今日灵感”（后端从 Fusion 代取）；取不到抛错，页面用固定的例子
+// 新对话页的“今日灵感”（后端从 Fusion 代取）：{questions, tasks}，tasks 是其中的调研题，页面切到“工作”时用；取不到抛错，页面用固定的例子
 export async function listInspirations() {
   const resp = await fetch("/api/inspirations");
   if (!resp.ok) throw await httpError(resp);
-  return (await resp.json()).questions;
+  const { questions, tasks } = await resp.json();
+  return { questions: questions || [], tasks: tasks || [] };
 }
 
 // 新对话能选的模型：[{id, name, description, thinking, model, locked}]，Auto 在第一个。locked 是这个人这一档选不了的（游客看到的要登录的模型）。
@@ -152,8 +153,8 @@ export async function listModels() {
 }
 
 // 开新对话。opts：model 是选的模型（listModels 里的 id，不给是 Auto；没有了返回 400），定下就不换；
-// thinking 是这句话的思考开关（不给按模型的默认）；work 是这句话是不是在 Work 模式下发的（输入框里的 Chat / Work，不给是 Chat）。
-// 下面几个的 opts.thinking、opts.work 一样。opts.images：这句话带的图（见 message）；
+// thinking 是这句话的思考开关（不给按模型的默认）；work 是开的是不是工作任务（新页面上选着“工作”，不给是对话），定下就不变，只有这里带。
+// 下面几个的 opts.thinking 一样。opts.images：这句话带的图（见 message）；
 // opts.files：带的文件的编号（先 uploadFile、解析好了），不能发时 400，detail 是 {code: "files_not_sendable", reason}
 export async function createResearchThread(text, opts, onEvent, signal) {
   return sse("/api/research/threads", message({ text, ...opts }), onEvent, signal);

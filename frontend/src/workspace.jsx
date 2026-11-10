@@ -28,10 +28,14 @@ import { UndoToast, useUndo } from "./undo.jsx";
 import { notSendableText, uploadErrorText } from "./upload.js";
 // 样式：对话页的变量、基础样式和共用的小件在 tailwind.css，各块的在各自的 *.module.css
 
-// 地址：/chat/new 是新对话，/chat/<线程 id> 是某个对话；别的地址（/、/chat）都当新对话，进来时改成 /chat/new。
+// 地址：/chat/new 是新对话，/work/new 是新工作任务（同一个新页面，上面的“对话 / 工作”选着工作），/chat/<线程 id> 是某个对话或工作任务；
+// 别的地址（/、/chat）都当新对话，进来时改成 /chat/new。
 // 线程 id 只有字母、数字、- 和 _（后端校验），地址里不用编码；对不上的 id 后端回 404，页面换成新对话
 const NEW_PATH = "/chat/new";
+const NEW_WORK_PATH = "/work/new";
+const newPath = (work) => (work ? NEW_WORK_PATH : NEW_PATH);
 const chatPath = (id) => (id ? `/chat/${id}` : NEW_PATH);
+const routeWork = () => /^\/work(\/new)?\/?$/.test(location.pathname);
 // 以前的设置页、记忆页地址（/settings、/memory，11-07 改成窗口之前）：打开的话弹出设置窗口的那一页，地址换成对话的
 const oldPage = () => location.pathname.match(/^\/(settings|memory)\/?$/)?.[1] || null;
 // 资料库页（2026-11-10，见 knowledge.jsx）：占对话那一栏，左栏照旧。去资料库时开着的对话不断开（在跑的接着跑），点回来马上接上
@@ -92,10 +96,17 @@ export default function Workspace() {
     thinkSet.current.set(tidRef.current ?? "new", v);
     setThinkingState(v);
   };
-  // Chat / Work（2026-11-10 Sean 定）：每句话发的时候带上是哪种。Work 的话，计划、调研、写报告这类任务模型先用问题卡问清楚再动手；Chat 不出问题卡。
-  // 新对话是 Chat；在一段对话里切了只管这段对话（这次打开的页面里，记在 workPick），没切过的对话按它最后一轮是哪种（见下面的 work）
-  const [workPick, setWorkPick] = useState(() => new Map()); // 对话 id（新对话是 "new"）→ 手动选的
-  const setWork = (v) => setWorkPick((m) => new Map(m).set(tidRef.current ?? "new", v));
+  // 对话 / 工作（2026-11-10 Sean 定分开；11-11 照豆包改：新建时选，定下以后整段不变，工作任务不能变回对话）。
+  // 工作任务里，计划、调研、写报告这类活模型先用问题卡问清楚再动手；对话不出问题卡。
+  // 新页面选着哪个记在这里（左栏两个入口、页面上的大开关都改它，地址跟着是 /chat/new 或 /work/new）；开始以后看对话自己的（见下面的 work）
+  const [newWork, setNewWorkState] = useState(routeWork);
+  const newWorkRef = useRef(newWork);
+  const setNewWork = (v) => {
+    newWorkRef.current = v;
+    setNewWorkState(v);
+  };
+  const startedAs = useRef(null); // 这个页面刚发起的那段对话 {id, work}：状态、列表还没取回来时先按它
+  const pathOf = (id) => (id ? chatPath(id) : newPath(newWorkRef.current)); // 这一页的地址：新页面按选着的是对话还是工作
   // 额度（/api/credits）：打开页面、每轮结束、打开账号菜单时取；没取到是 null（不显示）
   const [credits, setCredits] = useState(null);
   const refreshCredits = () => getCredits().then(setCredits).catch(() => {});
@@ -166,7 +177,7 @@ export default function Workspace() {
 
   useEffect(() => {
     refreshList();
-    navigate(pageRef.current === "library" ? LIBRARY_PATH : chatPath(tid), false);
+    navigate(pageRef.current === "library" ? LIBRARY_PATH : pathOf(tid), false);
     if (tid) restore(tid, gen.current);
     // 浏览器前进后退、手动改了地址：地址栏已经是了，只换页面（去海报页时这个页面会被换掉，不用管）
     const onPop = () => {
@@ -174,10 +185,12 @@ export default function Workspace() {
       const p = oldPage();
       if (p) { // 后退到以前的设置页、记忆页地址：弹出窗口，对话不动
         setSettings(p);
-        return navigate(chatPath(tidRef.current), false);
+        return navigate(pathOf(tidRef.current), false);
       }
       if (atLibrary()) return openLibrary(null);
-      if (pageRef.current || routeId() !== tidRef.current) select(routeId(), "none");
+      const id = routeId();
+      if (pageRef.current || id !== tidRef.current) select(id, "none", routeWork());
+      else if (!id) setNewWork(routeWork()); // 在新页面上前进后退：只是“对话 / 工作”换了
     };
     addEventListener("popstate", onPop);
     return () => { // 切去别的页：断开连接，旧的回调不再改页面
@@ -196,9 +209,9 @@ export default function Workspace() {
   const title = live?.title || st?.title; // 执行中起好的标题跟着事件来，库里一轮跑完才有（之前是用户的原话）
   const done = useDoneAlert(tid, busy || ACTIVE.has(st?.status), st, title); // 用户没在看时答完了（或停下来等回答）：标题前加“（答完了）”，见 alert.jsx
   useEffect(() => {
-    const base = page === "library" ? "资料库 · 灵稿" : title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : "灵稿 · 新对话";
+    const base = page === "library" ? "资料库 · 灵稿" : title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : newWork ? "灵稿 · 新工作任务" : "灵稿 · 新对话";
     document.title = (done ? `（${done}）` : "") + base;
-  }, [title, tid, done, page]);
+  }, [title, tid, done, page, newWork]);
 
   // 深色（批次 G 第 16 条；设置窗口里能选跟随系统、浅色、深色）：深色时浏览器顶栏跟着深；只在对话页加，海报页还是浅色（index.html 里那条白的）
   useEffect(() => {
@@ -243,24 +256,30 @@ export default function Workspace() {
   const current = !tid ? picked : st?.thread_id === tid && st.model ? st.model : live ? picked : null;
   // 这句话带不带思考开关：按输入框旁边显示的那个模型（能开关才带，不带的按模型的默认）
   const thinkOpts = () => (models?.find((m) => m.id === current)?.thinking === "toggle" ? { thinking } : {});
-  // 输入框里 Chat / Work 选着哪个：手动选过的按选的，没选过的按这段对话最后一轮（新对话是 Chat）
-  const work = workPick.get(tid ?? "new") ?? (st?.thread_id === tid && !!st?.turns?.at(-1)?.record?.work);
-  // 每句话都带的：思考开关、是不是 Work。重新回答、改最后一句也带，按输入框里现在选着的来
-  const sendOpts = () => ({ ...thinkOpts(), work });
+  // 这一页是对话还是工作：新页面按选着的；开始了的按对话自己的（状态里的 work），状态还没取回来先按列表里那一行、刚发起的按发的时候选的
+  const work = !tid ? newWork : st?.thread_id === tid ? !!st.work
+    : threads?.find((t) => t.thread_id === tid)?.work ?? (startedAs.current?.id === tid && startedAs.current.work);
+  // 新页面上换“对话 / 工作”：地址跟着换（不进浏览器历史），写着的字、选的模型都不动
+  const pickWork = (v) => {
+    setNewWork(v);
+    if (!pageRef.current && !tidRef.current) navigate(newPath(v), false);
+  };
 
   // ---- 切换线程 ----
 
   // how：push 记进浏览器历史（点左栏的对话、新对话）；replace 换掉当前这条（当前对话删了、打不开）；none 地址栏已经是了。
+  // asWork：开的是新工作任务（id 是 null 时才看；左栏的“新工作任务”、地址是 /work/new），不然是新对话。
   // 在资料库页时：回到对话那一栏（右栏看的资料库文件关上）；点的就是刚才开着的那个对话（包括还没发的新对话），原样放回来
-  const select = (id, how = "push") => {
+  const select = (id, how = "push", asWork = false) => {
+    if (!id) setNewWork(asWork);
+    const path = id ? chatPath(id) : newPath(asWork);
     if (pageRef.current) {
       setPage(null);
       setFile(null);
-      if (id === tidRef.current) return how !== "none" && navigate(chatPath(id), how === "push");
+      if (id === tidRef.current) return how !== "none" && navigate(path, how === "push");
     }
     if (id === tidRef.current && id) return;
     if (!id) thinkSet.current.delete("new"); // 新对话：深度思考回到默认
-    if (!id) setWorkPick((m) => (m.has("new") ? new Map([...m].filter(([k]) => k !== "new")) : m)); // Chat / Work 也回到 Chat
     setThinkingState(thinkSet.current.get(id ?? "new") ?? thinkOnRef.current);
     ctl.current.abort();
     ctl.current = new AbortController();
@@ -277,7 +296,7 @@ export default function Workspace() {
     setBusy(false);
     setFile(null);
     autoOpened.current.clear();
-    if (how !== "none") navigate(chatPath(id), how === "push");
+    if (how !== "none") navigate(path, how === "push");
     if (id) restore(id, gen.current);
   };
 
@@ -413,8 +432,7 @@ export default function Workspace() {
           thinkSet.current.set(data.thread_id, thinkSet.current.get("new"));
           thinkSet.current.delete("new");
         }
-        // 新对话里选过 Work：同样记到这段对话名下
-        setWorkPick((m) => (m.has("new") ? new Map([...m].filter(([k]) => k !== "new")).set(data.thread_id, m.get("new")) : m));
+        startedAs.current = { id: data.thread_id, work: newWorkRef.current };
         if (!pageRef.current) navigate(chatPath(data.thread_id), false); // 新对话有了 id：换掉 /chat/new，后退不回到空白的新对话（去了资料库的不动地址）
       }
       setLive((l) => (l ? { ...l, stage: data.queued ? QUEUED : l.stage } : l));
@@ -603,12 +621,16 @@ export default function Workspace() {
   // 这句话带的图（File）和文件（编号）；没带文件不写 files
   const attached = (images, docs) => ({ images: images.map((i) => i.file), ...(docs.length ? { files: docs.map((d) => d.id) } : {}) });
   const act = {
-    // 新对话带上选的模型（没取到列表就不带，按 Auto）；之后每句话带上深度思考开关（对话定下的模型能开关才带）。
+    // 新对话带上选的模型（没取到列表就不带，按 Auto）、是不是工作任务（新页面上选着“工作”，定下就不变）；
+    // 之后每句话带上深度思考开关（对话定下的模型能开关才带）。
     // images：这句话带的图（[{key, file, url}]，见 Composer）；docs：带的文件（解析好了的，见 composer.jsx 的 picked），发编号。排着的话都不带
-    start: (text, images = [], docs = []) => run((cb, sig) => createResearchThread(text, { model: picked, ...sendOpts(), ...attached(images, docs) }, cb, sig), text, { images, docs }),
+    start: (text, images = [], docs = []) => {
+      const opts = { model: picked, ...thinkOpts(), ...(newWorkRef.current ? { work: true } : {}), ...attached(images, docs) };
+      return run((cb, sig) => createResearchThread(text, opts, cb, sig), text, { images, docs });
+    },
     say: (text, images = [], docs = []) => {
       const id = tidRef.current;
-      const opts = { ...sendOpts(), ...attached(images, docs) };
+      const opts = { ...thinkOpts(), ...attached(images, docs) };
       return run((cb, sig) => sayResearch(id, text, opts, cb, sig), text, { images, docs });
     },
     retry: () => run((cb, sig) => retryResearchThread(tidRef.current, cb, sig), null, { what: "没能重试" }),
@@ -628,13 +650,13 @@ export default function Workspace() {
     // 最后一轮的旧回答先藏起来，新回答在同一轮里接着出现
     regenerate: () => {
       const hidden = new Set((st?.turns?.at(-1)?.items || []).map(itemKey));
-      const opts = sendOpts();
+      const opts = thinkOpts();
       return run((cb, sig) => regenerateResearchThread(tidRef.current, opts, cb, sig), null, { hidden, what: "没能重新回答" });
     },
     // 改最后一句：同样藏起旧回答，改过的话先显示出来
     edit: (text) => {
       const hidden = new Set((st?.turns?.at(-1)?.items || []).map(itemKey));
-      const opts = sendOpts();
+      const opts = thinkOpts();
       return run((cb, sig) => editResearchThread(tidRef.current, text, opts, cb, sig), null, { hidden, edit: text });
     },
     // 正在回答时又说的话：排在服务器上，这一轮答完就发（又说的接在后面，合成一句）。
@@ -643,7 +665,7 @@ export default function Workspace() {
       const id = tidRef.current;
       const g = gen.current;
       try {
-        const q = await queueResearch(id, text, sendOpts());
+        const q = await queueResearch(id, text, thinkOpts());
         if (g !== gen.current) return;
         if (q) setSt((s) => (s ? { ...s, queued_message: q } : s));
         else run((cb, sig) => followResearchThread(id, null, cb, sig), null);
@@ -862,7 +884,7 @@ export default function Workspace() {
   return (
     <NavContext.Provider value={nav}>
       <div className={"ws" + (sideOff ? " side-off" : "") + (mobile && drawer ? " drawer" : "") + (file && !mobile ? " with-file" : "")} data-theme={dark ? "dark" : "light"}>
-        <Sidebar threads={shownThreads} current={tid} st={st} live={live} busy={busy} now={now} href={chatPath} onSelect={fromSide(select)} manage={manage}
+        <Sidebar threads={shownThreads} current={tid} st={st} live={live} busy={busy} work={work} now={now} href={chatPath} newHref={newPath} onSelect={fromSide(select)} manage={manage}
           onSettings={fromSide(() => setSettings("settings"))} onLibrary={auth.login || auth.me ? fromSide(() => openLibrary()) : null} library={page === "library"} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
         {page === "library" ? (
           <LibraryPage auth={auth} onLogin={onLogin} undo={undo} onOpenFile={(f) => openFile({ kb: f })} openFileId={file?.kb?.id} />
@@ -870,14 +892,14 @@ export default function Workspace() {
           who={auth.ready ? (auth.me ? auth.me.name || "" : null) : earlyWho}
           models={models} modelNames={modelNames} credits={credits} manage={manage}
           picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }}
-          work={{ on: work, onChange: setWork }}
+          work={{ on: work, onChange: pickWork }}
           files={{ open: openFile, current: file, toggle: toggleFiles }} />}
         {file && (file.list ? <FileList tid={tid} st={shown} live={live} title={live?.title || shown?.title || listedTitle} onNav={navFile} onClose={closeFile} focus={fileFocus} />
           : file.sent ? <SentPanel tid={tid} f={file.sent} back={file.back} onNav={navFile} onClose={closeFile} focus={fileFocus} />
             : file.kb ? <KnowledgePanel f={file.kb} at={file.at} onClose={closeFile} focus={fileFocus} />
             : <FilePanel tid={tid} st={shown} live={live} target={file} onTarget={setFile} onNav={navFile} onClose={closeFile} focus={fileFocus} />)}
         {search && (
-          <SearchDialog threads={shownThreads && withCurrent(shownThreads, tid, st, live, busy)} now={now} href={chatPath}
+          <SearchDialog threads={shownThreads && withCurrent(shownThreads, tid, st, live, busy, work)} now={now} href={chatPath}
             onOpen={(id) => { setSearch(false); select(id); }} onClose={() => setSearch(false)} />
         )}
         {settings && (

@@ -37,7 +37,7 @@ def test_conversation_over_http(client):
     tid = st["thread_id"]
     assert str(uuid.UUID(tid)) == tid == last(ev, "thread")["thread_id"]  # 新对话的 id 是完整的 UUID，地址栏 /chat/<id> 用它
     assert st["status"] == "idle" and st["title"] == last(ev, "title")["title"] and len(st["sources"]) == 3
-    assert set(st) == {"thread_id", "exists", "scenario", "status", "error", "error_kind", "model", "model_ref", "stopping", "suggesting", "title", "updated_at", "running_since",
+    assert set(st) == {"thread_id", "exists", "scenario", "status", "work", "error", "error_kind", "model", "model_ref", "stopping", "suggesting", "title", "updated_at", "running_since",
                        "turns", "sources", "queued_message", "guided_message", "ask", "asks_off"}
     assert st["model"] == "auto"  # 没选模型的新对话是 Auto
     assert client.get(f"/api/research/threads/{tid}/state").json() == st  # 刷新后看到的和刚才一样
@@ -72,8 +72,8 @@ def test_list_threads_with_status(client):
     assert set(by_id) == {first["thread_id"], done["thread_id"]}
     assert rows[0]["thread_id"] == done["thread_id"]  # 最近有动静的在前
     d = by_id[done["thread_id"]]
-    assert d == {"thread_id": done["thread_id"], "title": done["title"], "status": "idle", "updated_at": d["updated_at"], "running_since": None,
-                 "pinned_at": None}
+    assert d == {"thread_id": done["thread_id"], "title": done["title"], "status": "idle", "work": False, "updated_at": d["updated_at"],
+                 "running_since": None, "pinned_at": None}
     assert d["updated_at"]
 
 

@@ -111,7 +111,7 @@ SENT_AT = "sent_at"  # 用户那句话的发送时间，记在消息的 addition
 def _said(text: str, thinking: bool | None = None, images: Sequence[AttachedImage] = (), files: Sequence[AttachedFile] = (),
           work: bool | None = None, **kw: Any) -> HumanMessage:
     """用户的话。thinking 是发的时候输入框旁边的思考开关（没给按选项的默认，见 model_catalog.Catalog.plan）；images 是这句话带的图，files 是带的文件；
-    work 是发的时候选的是不是 Work 模式（没给算 Chat，见 history.WORK）。"""
+    work 是这句话是不是 Work（按这段对话是不是工作任务写上，没给算 Chat，见 history.WORK）。"""
     extra: dict[str, Any] = {history.THINK: thinking} if thinking is not None else {}
     if work is not None:
         extra[history.WORK] = work
@@ -455,7 +455,7 @@ class ResearchRunner(BaseRunner):
     # ---- 给接口层的同步方法：在别的线程里调，活交给对话的事件循环 ----
 
     # option 是新对话选的模型（models.toml 里选项的 id，没给是 Auto），定下就不换；thinking 是这句话的思考开关（没给按选项的默认）；
-    # work 是这句话是不是在 Work 模式下发的（没给算 Chat），每句话都能换；
+    # work 是新对话是不是工作任务（没给是对话）：新建时定下，整段不变，之后的话都按它（2026-11-11 Sean 定，见 history.work_mode）；
     # images 是这句话带的图（先用 upload_image 一张张传上去；没开始这一轮要自己 discard_images，见 api.main）；
     # files 是带的文件的编号（先用 upload_file 传上来、解析好，发出去时绑到这段对话；不能发的抛 NotSendable，什么都没写）
 
@@ -466,9 +466,9 @@ class ResearchRunner(BaseRunner):
             thread_id, lambda: self._aaccept(thread_id, text, thinking, option, owner, images, files, work=work), "new")))
 
     def say(self, thread_id: str, text: str, thinking: bool | None = None, images: Sequence[AttachedImage] = (),
-            files: Sequence[str] = (), work: bool | None = None) -> AsyncIterator[str]:
+            files: Sequence[str] = ()) -> AsyncIterator[str]:
         return self._stream(aio.run(self._asubmit(
-            thread_id, lambda: self._aaccept(thread_id, text, thinking, images=images, files=files, work=work), "say")))
+            thread_id, lambda: self._aaccept(thread_id, text, thinking, images=images, files=files), "say")))
 
     def upload_file(self, owner: str, tier: str, name: str | None, data: bytes) -> FileRow:
         """用户传的文件：存好原件、排进后台解析，马上返回（状态是解析中）。不收的抛 UploadRejected（太大、类型不对、今天传满了）。"""
@@ -542,17 +542,17 @@ class ResearchRunner(BaseRunner):
     def retry(self, thread_id: str) -> AsyncIterator[str]:
         return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aretry_input(thread_id), "retry")))
 
-    def regenerate(self, thread_id: str, text: str | None = None, thinking: bool | None = None, work: bool | None = None) -> AsyncIterator[str]:
+    def regenerate(self, thread_id: str, text: str | None = None, thinking: bool | None = None) -> AsyncIterator[str]:
         kind = "regenerate" if text is None else "edit"
-        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aregenerate_input(thread_id, text, thinking, work), kind)))
+        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aregenerate_input(thread_id, text, thinking), kind)))
 
     def answer(self, thread_id: str, ask_id: str, text: str = "", skip: bool = False, mute: bool = False) -> AsyncIterator[str]:
         """回答模型问的问题（skip 是跳过，不回答；mute 是“别再问了”：跳过，并且这段对话之后不再问），这一轮从停下的地方接着跑。
         ask_id 是状态里 ask 的 id。等着的不是这个问题（答过了、这一轮已经停了）抛 NothingToAnswer；回答是空的、太长抛 BadAnswer。"""
         return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aanswer_input(thread_id, ask_id, text, skip, mute), "answer")))
 
-    def queue(self, thread_id: str, text: str, thinking: bool | None = None, work: bool | None = None) -> dict | None:
-        return aio.run(self._aqueue(thread_id, text, thinking, work))
+    def queue(self, thread_id: str, text: str, thinking: bool | None = None) -> dict | None:
+        return aio.run(self._aqueue(thread_id, text, thinking))
 
     def guide(self, thread_id: str) -> dict | None:
         return aio.run(self._aguide(thread_id))
@@ -564,8 +564,8 @@ class ResearchRunner(BaseRunner):
     def retry_input(self, thread_id: str) -> None:
         aio.run(self._aretry_input(thread_id))
 
-    def regenerate_input(self, thread_id: str, text: str | None = None, thinking: bool | None = None, work: bool | None = None) -> None:
-        aio.run(self._aregenerate_input(thread_id, text, thinking, work))
+    def regenerate_input(self, thread_id: str, text: str | None = None, thinking: bool | None = None) -> None:
+        aio.run(self._aregenerate_input(thread_id, text, thinking))
 
     def answer_input(self, thread_id: str, ask_id: str, text: str = "", skip: bool = False, mute: bool = False) -> Command:
         """回答问题时交给 run_turn 的输入（命令行、评测和测试用，见 answer）。"""
@@ -916,7 +916,7 @@ class ResearchRunner(BaseRunner):
 
     # ---- 回答时又说的话 ----
 
-    async def _aqueue(self, thread_id: str, text: str, thinking: bool | None = None, work: bool | None = None) -> dict | None:
+    async def _aqueue(self, thread_id: str, text: str, thinking: bool | None = None) -> dict | None:
         """正在回答时又说的话：排着，这一轮答完或停下就接着发（见 _aended）。返回排着的那句。
         没发出去的话最多一句：已经有一句排着或等着插进这一轮的，抛 AlreadyPending（页面上这时发不出去，这里兜底）。
         刚好没在跑（这一轮刚结束）就直接发、返回 None，页面去接这次执行的事件流。上一轮没跑完的抛 NotIdle（先重试）。"""
@@ -926,9 +926,9 @@ class ResearchRunner(BaseRunner):
                 if (await self.run_store.get_pending(thread_id, QUEUE)
                         or await self.run_store.get_pending(thread_id, GUIDE)):
                     raise AlreadyPending("上面那句还没发出去，先撤回改好再发")
-                return await self.run_store.put_pending(thread_id, QUEUE, text.strip(), thinking=thinking, work=work)
+                return await self.run_store.put_pending(thread_id, QUEUE, text.strip(), thinking=thinking)
         try:
-            await self._aaccept(thread_id, text, thinking, work=work)
+            await self._aaccept(thread_id, text, thinking)
             await self._alaunch(thread_id, "say")
         except BaseException:
             self.runs.release(key)
@@ -942,7 +942,7 @@ class ResearchRunner(BaseRunner):
             if self.runs.get(self._run_key(thread_id)) is None:
                 return None
             if p := await self.run_store.take_pending(thread_id, QUEUE):
-                return await self.run_store.put_pending(thread_id, GUIDE, p.text, thinking=p.thinking, work=p.work)
+                return await self.run_store.put_pending(thread_id, GUIDE, p.text, thinking=p.thinking)
             return await self.run_store.get_pending(thread_id, GUIDE)
 
     async def _take_guide(self, thread_id: str) -> HumanMessage | None:
@@ -957,12 +957,12 @@ class ResearchRunner(BaseRunner):
         except Exception:  # noqa: BLE001
             log.warning("插进这一轮的话没取出来：%s", self._run_key(thread_id), exc_info=True)
             return None
-        return _guided(p.text) if p else None  # 插进这一轮的话不开新的一轮，思考开关、Work 模式都不用
+        return _guided(p.text) if p else None  # 插进这一轮的话不开新的一轮，思考开关不用
 
     async def _untake_guide(self, thread_id: str, job: asyncio.Future) -> None:
         try:
             if p := await job:
-                await self.run_store.put_pending(thread_id, GUIDE, p.text, front=True, thinking=p.thinking, work=p.work)
+                await self.run_store.put_pending(thread_id, GUIDE, p.text, front=True, thinking=p.thinking)
         except Exception:  # noqa: BLE001
             log.warning("停下时取出来的插话没放回去：%s", self._run_key(thread_id), exc_info=True)
 
@@ -980,7 +980,7 @@ class ResearchRunner(BaseRunner):
                 return
             try:
                 if left := await self.run_store.take_pending(thread_id, GUIDE):
-                    await self.run_store.put_pending(thread_id, QUEUE, left.text, front=True, thinking=left.thinking, work=left.work)
+                    await self.run_store.put_pending(thread_id, QUEUE, left.text, front=True, thinking=left.thinking)
             except Exception:  # noqa: BLE001
                 log.warning("没插进去的话没退回去排着：%s", key, exc_info=True)
             p = None
@@ -996,7 +996,7 @@ class ResearchRunner(BaseRunner):
                 await self._put_back(thread_id, p)
                 return
         try:
-            await self._aaccept(thread_id, p.text, p.thinking, work=p.work)
+            await self._aaccept(thread_id, p.text, p.thinking)
             await self._alaunch(thread_id, "say")
         except Exception:  # noqa: BLE001
             self.runs.release(key)
@@ -1006,7 +1006,7 @@ class ResearchRunner(BaseRunner):
     async def _put_back(self, thread_id: str, p: Pending) -> None:
         """取出来却没发出去的话放回去，排在这期间又说的话前面；页面看到线程空闲还排着话，会放回输入框。"""
         try:
-            await self.run_store.put_pending(thread_id, QUEUE, p.text, front=True, thinking=p.thinking, work=p.work)
+            await self.run_store.put_pending(thread_id, QUEUE, p.text, front=True, thinking=p.thinking)
         except Exception:  # noqa: BLE001
             log.warning("排着的话没放回去：%s", self._run_key(thread_id), exc_info=True)
 
@@ -1019,6 +1019,8 @@ class ResearchRunner(BaseRunner):
         先落盘再交出执行：排队时服务重启也查得到这句话，算没跑完，可以重试。
         option 是新对话选的模型，和第一句话一起写进去（第一轮开始时定下，见 agent.TurnMiddleware）；已经开始的对话只能给定下的那个。
         owner 是新对话归谁：第一句话写进去之前记下（已经记过的不改）。
+        work 是新对话是不是工作任务，和第一句话一起定下（记进 state）；已经开始的对话不看它，按定下的来，每句话都按它写上
+        （工作任务不能变回对话；对话以后能不能转成工作任务还没定，现在也不行）。
         files 是带的文件的编号：校验都过了才绑到这段对话（绑不上抛 NotSendable，什么都没写）。
         """
         await self._adrop_suggestions(thread_id)
@@ -1042,7 +1044,10 @@ class ResearchRunner(BaseRunner):
         for img in images:  # 带的图登记进文件表（图已经在 image-service 里了）
             await self.files.add_image(img.id, owner=who or "", workspace_id=thread_id, generated=False, turn_id=None,
                                        mime_type=img.mime_type, width=img.width, height=img.height)
-        update["messages"] = [_said(text, thinking, images, attached, work=work)]
+        started = bool((snap.values or {}).get("messages"))
+        mode = history.work_mode(snap.values) if started else bool(work)
+        update[history.WORK] = mode
+        update["messages"] = [_said(text, thinking, images, attached, work=mode or None)]
         if owner is not None:
             await self.run_store.claim(thread_id, owner)
         await self.graph.aupdate_state(cfg, update, as_node=START)
@@ -1076,11 +1081,11 @@ class ResearchRunner(BaseRunner):
         skipped = got.model_copy(update={"mute": False}).model_dump()
         return Command(resume={a["id"]: got.model_dump() if a["id"] == ask_id else skipped for a in waiting})
 
-    async def _aregenerate_input(self, thread_id: str, text: str | None = None, thinking: bool | None = None, work: bool | None = None) -> None:
+    async def _aregenerate_input(self, thread_id: str, text: str | None = None, thinking: bool | None = None) -> None:
         """最后一轮重新回答：去掉用户最后那句话之后的消息和这一轮的记录，从那句话接着跑。
         带 text 是用户改了最后那句话：先换成 text（消息 id 不变，还是同一轮，发送时间记成改的时候），再重新回答。标题不重起。
         thinking 是这次的思考开关：给了就按它（只改开关，发送时间不变），没给按那句话原来的；模型照对话定下的（Auto 的重新选）。
-        work 是这次是不是 Work 模式，同样给了按它、没给按那句话原来的。
+        是不是 Work 按这段对话定下的（见 history.work_mode）：11-11 以前的对话里那句话和对话对不上的，这时改成对话的。
         停在问用户那里的也可以（不回答了，改了那句话重来）：先把这一轮以停止收尾，再照常重新回答。"""
         await self._adrop_suggestions(thread_id)
         cfg = self._cfg(thread_id)
@@ -1097,6 +1102,8 @@ class ResearchRunner(BaseRunner):
         if start < 0:
             raise NothingToRegenerate("还没有回答，不需要重新生成")
         human = msgs[start]
+        mode = history.work_mode(v)
+        work = mode if mode != bool(history.work_switch(human)) else None
         turns = [t for t in v.get("turns", []) if t.id != human.id]
         if text is not None:  # 带的图、文件留着：只改了字
             edited = [_said(text, history.thinking_switch(human) if thinking is None else thinking, history.attached_images(human),
@@ -1106,8 +1113,8 @@ class ResearchRunner(BaseRunner):
             edited = [human.model_copy(update={"additional_kwargs": {**human.additional_kwargs, **switches}})]
         else:
             edited = []
-        await self.graph.aupdate_state(cfg, {"messages": edited + [RemoveMessage(id=m.id) for m in msgs[start + 1:]], "turns": turns},
-                                       as_node=START)
+        await self.graph.aupdate_state(
+            cfg, {"messages": edited + [RemoveMessage(id=m.id) for m in msgs[start + 1:]], "turns": turns, history.WORK: mode}, as_node=START)
         await self.images.delete_images(history.owned_image_ids(msgs[start + 1:]))  # 这一轮原来画的图不要了（用户那句话带的图留着）
         if msgs[start].id:  # 这一轮原来写的文件各版也不要了（按这一轮记的，进程崩掉时写了、对话里没记下的也删）
             await self.files.delete_turn(thread_id, msgs[start].id)
@@ -1273,6 +1280,8 @@ class ResearchRunner(BaseRunner):
             # 没跑完（failed）时的说法和类别（见 _failure）；别的状态都是 None
             "error": failure and failure[1],
             "error_kind": failure and failure[0],
+            # 这段对话是不是工作任务（新建时定下，整段不变，见 history.work_mode）：页面按它显示，发话时不用再带
+            "work": history.work_mode(v),
             # 对话定下的模型（选项的 id）：没定的（还没开始的老对话）、定的那个停了的，下一轮起是 Auto
             "model": self.planner.catalog.plan(v.get("option"), None, self.planner.usable).option,
             # 正在跑的这一轮主 agent 用的模型（"厂商:模型"，见 _models）：页面在这一轮的记录出来之前按它显示。没在跑、还没定下的是 None
@@ -1306,7 +1315,7 @@ class ResearchRunner(BaseRunner):
         return v.get("title") or self._titles.get(thread_id) or fallback_title(history.requests(v["messages"])[0])
 
     async def _asummary_view(self, thread_id: str, pins: dict[str, str] | None = None) -> dict | None:
-        """线程列表里的一行：标题、状态、置顶的时间（没置顶是 None）。不存在返回 None。
+        """线程列表里的一行：标题、状态、是不是工作任务、置顶的时间（没置顶是 None）。不存在返回 None。
         pins 是这个人置顶的那几段（列表一次取齐）；没给就按这段对话归谁去查。"""
         if pins is None:
             owner = await self.run_store.owner_of(thread_id)
@@ -1321,6 +1330,7 @@ class ResearchRunner(BaseRunner):
             "thread_id": thread_id,
             "title": self._title_of(thread_id, v),
             "status": status,
+            "work": history.work_mode(v),
             "updated_at": snap.created_at,
             "running_since": run.get("since") if run else None,
             "pinned_at": pins.get(thread_id),

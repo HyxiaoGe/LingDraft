@@ -1,5 +1,5 @@
 """模型问用户（ask_user，人介入）：这一轮停下来等回答，回答或跳过以后同一轮接着跑；等的时候哪些能做、哪些先拒掉。
-只用假模型（“问我”“边搜边问”“问两个”“一直问”，见 FakeToolModel）。能问的都是 Work 模式下发的话（work=True）；Chat 的见最后一节。"""
+只用假模型（“问我”“边搜边问”“问两个”“一直问”，见 FakeToolModel）。能问的都是工作任务（新建时 work=True）；对话（Chat）的见“对话 / 工作”那一节。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,10 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.graph import START
+
+from app import aio
 
 from app.api import main as api_main
 from app.api import research_runner
@@ -257,8 +260,8 @@ def test_question_survives_restart(tmp_path):
 
 def test_queued_message_waits_through_the_question(client, rr):
     """答着的时候排了一句，模型接着停下来问了：排着的话留着（不放回输入框、也不发），回答完这一轮结束才发。"""
-    tid = new(client, "直接答：先说一句")["thread_id"]
-    with _Running(client, rr, tid, "问我 再做对比", work=True) as run:
+    tid = new(client, "直接答：先说一句", work=True)["thread_id"]
+    with _Running(client, rr, tid, "问我 再做对比") as run:
         assert _queue(client, tid, "直接答：排着的").status_code == 200
     st = last(run.evs, "state")
     assert st["status"] == "asking" and st["queued_message"]["text"] == "直接答：排着的" and len(st["turns"]) == 2
@@ -270,8 +273,8 @@ def test_queued_message_waits_through_the_question(client, rr):
 
 
 def test_stop_while_asking_sends_the_queued_message(client, rr):
-    tid = new(client, "直接答：先说一句")["thread_id"]
-    with _Running(client, rr, tid, "问我 再做对比", work=True) as run:
+    tid = new(client, "直接答：先说一句", work=True)["thread_id"]
+    with _Running(client, rr, tid, "问我 再做对比") as run:
         _queue(client, tid, "直接答：排着的")
     assert last(run.evs, "state")["status"] == "asking"
     assert client.post(f"/api/research/threads/{tid}/stop").status_code == 200
@@ -282,9 +285,9 @@ def test_stop_while_asking_sends_the_queued_message(client, rr):
 
 def test_guided_message_goes_in_after_the_answer(client, rr):
     """插进这一轮的话还没放进去，模型就停下来问了：等着，回答以后下一次调模型之前放进对话。"""
-    tid = new(client, "直接答：先说一句")["thread_id"]
+    tid = new(client, "直接答：先说一句", work=True)["thread_id"]
     gate = _gate(rr.planner)
-    with _Running(client, rr, tid, "问我 再做对比", gate, work=True) as run:
+    with _Running(client, rr, tid, "问我 再做对比", gate) as run:
         assert gate.waiting.wait(10)
         _queue(client, tid, "只要国产的")
         assert _guide(client, tid).json()["guided"]["text"] == "只要国产的"
@@ -394,24 +397,64 @@ def _modes(st: dict) -> list[bool]:
     return [t["record"]["work"] for t in st["turns"]]
 
 
-def test_only_work_messages_get_the_work_prompt_and_the_question_tool(client, rr):
-    """按每句话算，不按对话：Work 下发的话，系统提示词多 Work 那一段、给问用户的工具；Chat 下发的两样都没有，同一句话也不问。"""
+def _rows(http: TestClient) -> dict[str, bool]:
+    return {t["thread_id"]: t["work"] for t in http.get("/api/research/threads").json()["threads"]}
+
+
+def test_mode_is_set_when_the_conversation_starts_and_never_changes(client, rr):
+    """对话 / 工作新建时定，整段不变（2026-11-11 Sean 定）：工作任务里每一轮系统提示词都多 Work 那一段、给问用户的工具；
+    对话里都没有，同一句话也不问。接着说、改写、重新回答的请求里带了 work（11-11 以前的页面会带）也不看。"""
     seen = _watch(rr)
     st = new(client, "问我 再做对比")
-    tid = st["thread_id"]
-    assert st["status"] == "idle" and st["ask"] is None and _asks(st["turns"][0]) == [] and _modes(st) == [False]
+    chat = st["thread_id"]
+    assert st["status"] == "idle" and st["ask"] is None and st["work"] is False and _modes(st) == [False]
+    st = last(events(say(client, chat, "问我 再做对比", work=True)), "state")  # 对话不会变成工作任务
+    assert st["status"] == "idle" and st["work"] is False and _modes(st) == [False, False] and _asks(st["turns"][1]) == []
+    st = last(events(client.post(f"/api/research/threads/{chat}/regenerate", json={"work": True})), "state")
+    assert st["status"] == "idle" and _modes(st) == [False, False]
+    st = last(events(client.post(f"/api/research/threads/{chat}/edit", json={"text": "问我 换个说法", "work": True})), "state")
+    assert st["status"] == "idle" and st["work"] is False and _modes(st) == [False, False]
     assert seen and all("[Work mode]" not in sys and history.ASK_TOOL not in tools for sys, tools in seen)
     seen.clear()
-    st = last(events(say(client, tid, "问我 再做对比", work=True)), "state")
-    assert st["status"] == "asking" and _modes(st) == [False, True]
-    end = last(events(_answer(client, tid, st["ask"]["id"], "选型")), "state")
+    st = new(client, "问我 再做对比", work=True)
+    task = st["thread_id"]
+    assert st["status"] == "asking" and st["work"] is True and _modes(st) == [True]
+    end = last(events(_answer(client, task, st["ask"]["id"], "选型")), "state")
     assert end["status"] == "idle" and len(seen) == 2  # 问之前一次、回答之后一次，都是 Work 的
     assert all("[Work mode]" in sys and history.ASK_TOOL in tools for sys, tools in seen)
     assert seen[0][0].index("[Work mode]") < seen[0][0].index("[Visible response language]")
-    seen.clear()
-    st = last(events(say(client, tid, "问我 又来一遍", work=False)), "state")  # 下一句切回 Chat：之前问过也不给了
-    assert st["status"] == "idle" and _modes(st) == [False, True, False] and _asks(st["turns"][2]) == []
-    assert seen and all("[Work mode]" not in sys and history.ASK_TOOL not in tools for sys, tools in seen)
+    st = last(events(say(client, task, "问我 又来一遍")), "state")  # 没带：照对话的
+    assert st["status"] == "asking" and _modes(st) == [True, True]
+    events(_answer(client, task, st["ask"]["id"], skip=True))
+    st = last(events(say(client, task, "问我 第三遍", work=False)), "state")  # 工作任务不会变回对话
+    assert st["status"] == "asking" and st["work"] is True and _modes(st) == [True, True, True]
+    assert _rows(client) == {chat: False, task: True}  # 左栏按它区分
+
+
+def _old(rr: ResearchRunner, tid: str, text: str, **kw) -> None:
+    """11-11 以前的对话：每句话自己带着模式，state 里没记这段对话是哪种。"""
+    cfg = rr._cfg(tid)
+    rr.graph.update_state(cfg, {"messages": [HumanMessage(text, additional_kwargs=kw)]}, as_node=START)
+    aio.run(rr.run_store.claim(tid, "u1"))  # 归接口测试带的那个人（tests/auth_helpers.USER）
+    aio.run(rr.graph.ainvoke(None, cfg))
+    assert history.WORK not in rr.graph.get_state(cfg).values
+
+
+def test_conversations_from_before_the_mode_was_fixed(client, rr):
+    """11-11 以前每句话都能换模式：有过 Work 的轮的算工作任务，之后每一轮都是；没有过的是对话。接着说一句就记进 state 定下。"""
+    _old(rr, "old-task", "直接答：先说一句", **{history.WORK: True})
+    _old(rr, "old-chat", "直接答：先说一句")
+    assert state(client, "old-task")["work"] is True and state(client, "old-chat")["work"] is False
+    assert _rows(client) == {"old-task": True, "old-chat": False}
+    st = last(events(say(client, "old-task", "问我 再做对比")), "state")
+    assert st["status"] == "asking" and _modes(st) == [True, True]
+    st = last(events(say(client, "old-chat", "问我 再做对比", work=True)), "state")
+    assert st["status"] == "idle" and _modes(st) == [False, False]
+    assert [rr.graph.get_state(rr._cfg(t)).values[history.WORK] for t in ("old-task", "old-chat")] == [True, False]
+    # 没记的时候怎么认：这段对话里有过 Work 的轮，或者发了还没开始的那句是 Work
+    turn = SimpleNamespace(work=True)
+    assert history.work_mode({"turns": [turn]}) and history.work_mode({"messages": [HumanMessage("x", additional_kwargs={history.WORK: True})]})
+    assert not history.work_mode({}) and not history.work_mode({history.WORK: False, "turns": [turn]})  # 记了的按记的
 
 
 def test_question_tool_called_in_a_chat_turn_does_not_pause(client, rr):
@@ -426,22 +469,19 @@ def test_question_tool_called_in_a_chat_turn_does_not_pause(client, rr):
     assert new(client, "硬问 做个对比", work=True)["status"] == "asking"
 
 
-def test_queued_edited_and_regenerated_messages_keep_their_mode(client, rr):
-    """排着的话带着发的时候的模式，轮到它时照那个模式跑；改写、重新生成没带 work 的照原来那句，带了的按带的。"""
-    tid = new(client, "直接答：先说一句")["thread_id"]
+def test_queued_edited_and_regenerated_messages_follow_the_conversation(client, rr):
+    """工作任务里排着的话、改写、重新回答都是 Work 的轮：排着的话不用记模式，请求里带 work: false 也不会变回对话。"""
+    tid = new(client, "直接答：先说一句", work=True)["thread_id"]
     with _Running(client, rr, tid, "直接答：再说一句"):
-        assert client.post(f"/api/research/threads/{tid}/queue", json={"text": "问我 排着的", "work": True}).status_code == 200
-        assert state(client, tid)["queued_message"]["work"] is True
+        assert client.post(f"/api/research/threads/{tid}/queue", json={"text": "问我 排着的", "work": False}).status_code == 200
+        assert "work" not in state(client, tid)["queued_message"]
     assert wait_until(lambda: state(client, tid)["status"] == "asking")
-    assert _modes(state(client, tid)) == [False, False, True]
-    edited = last(events(client.post(f"/api/research/threads/{tid}/edit", json={"text": "问我 换个说法"})), "state")
-    assert edited["status"] == "asking" and _modes(edited) == [False, False, True]  # 改写没带：还是 Work，又问了
-    chat = last(events(client.post(f"/api/research/threads/{tid}/regenerate", json={"work": False})), "state")
-    assert chat["status"] == "idle" and _modes(chat) == [False, False, False] and _asks(chat["turns"][2]) == []
-    kept = last(events(client.post(f"/api/research/threads/{tid}/regenerate")), "state")
-    assert kept["status"] == "idle" and _modes(kept) == [False, False, False]  # 没带：照上一遍的
-    back = last(events(client.post(f"/api/research/threads/{tid}/regenerate", json={"work": True})), "state")
-    assert back["status"] == "asking" and _modes(back) == [False, False, True]
+    assert _modes(state(client, tid)) == [True, True, True]
+    edited = last(events(client.post(f"/api/research/threads/{tid}/edit", json={"text": "问我 换个说法", "work": False})), "state")
+    assert edited["status"] == "asking" and _modes(edited) == [True, True, True]
+    again = last(events(client.post(f"/api/research/threads/{tid}/regenerate", json={"work": False})), "state")
+    assert again["status"] == "asking" and again["work"] is True and _modes(again) == [True, True, True]
+    assert last(events(client.post(f"/api/research/threads/{tid}/regenerate")), "state")["status"] == "asking"
 
 
 # ---- “别再问了”：这个问题跳过，这段对话之后不再出问题卡，能恢复（2026-11-11 Sean 定） ----
@@ -473,21 +513,17 @@ def test_mute_skips_the_question_and_stops_asking_in_this_conversation(client, r
     assert result.content == prompts.render("tools.ask_user.skipped") and _reply(turn) == "你跳过了，我按选型做。"
     assert [(QUIET in sys, "[Work mode]" in sys, history.ASK_TOOL in tools) for sys, tools in seen] == [(True, False, False)]
     assert seen[0][0].index(QUIET) < seen[0][0].index("[Visible response language]")
-    # 之后 Work 下发的话：还是 Work 的轮，但不问了；模型硬调也不停
+    # 之后的话：还是 Work 的轮，但不问了；模型硬调也不停
     seen.clear()
-    st = last(events(say(client, tid, "问我 再来一个", work=True)), "state")
+    st = last(events(say(client, tid, "问我 再来一个")), "state")
     assert st["status"] == "idle" and st["ask"] is None and _asks(st["turns"][1]) == [] and _modes(st) == [True, True]
     assert seen and all(QUIET in sys and history.ASK_TOOL not in tools for sys, tools in seen)
-    st = last(events(say(client, tid, "硬问 做个对比", work=True)), "state")
+    st = last(events(say(client, tid, "硬问 做个对比")), "state")
     assert st["status"] == "idle" and _asks(st["turns"][2]) == [] and _reply(st["turns"][2]) == "照自己的判断做。"
     refused = [m for m in rr.graph.get_state(rr._cfg(tid)).values["messages"] if isinstance(m, ToolMessage) and m.name == history.ASK_TOOL][-1]
     assert refused.content == prompts.render("tools.ask_user.chat")
-    # Chat 的轮和原来一样：两段都没有
-    seen.clear()
-    assert last(events(say(client, tid, "问我 换回 Chat", work=False)), "state")["status"] == "idle"
-    assert seen and all(QUIET not in sys and "[Work mode]" not in sys for sys, _ in seen)
     # 重新回答那一轮也不问；别的对话不受影响
-    assert last(events(client.post(f"/api/research/threads/{tid}/regenerate", json={"work": True})), "state")["status"] == "idle"
+    assert last(events(client.post(f"/api/research/threads/{tid}/regenerate")), "state")["status"] == "idle"
     other = new(client, "问我 另一段对话", work=True)
     assert other["status"] == "asking" and other["asks_off"] is False
 
@@ -505,7 +541,7 @@ def test_asks_can_be_turned_back_on(client, rr):
     r = _set_asks(client, tid, True)
     assert r.status_code == 200 and r.json()["asks_off"] is False and r.json()["status"] == "idle"
     assert _set_asks(client, tid, True).json()["asks_off"] is False  # 已经开着：不变
-    st = last(events(say(client, tid, "问我 又可以问了", work=True)), "state")
+    st = last(events(say(client, tid, "问我 又可以问了")), "state")
     assert st["status"] == "asking" and st["asks_off"] is False
     assert client.put(f"/api/research/threads/{tid}/asks", json={"on": True, "more": 1}).status_code == 422
     assert _set_asks(client, "nope", True).status_code == 404

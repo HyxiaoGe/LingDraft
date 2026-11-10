@@ -59,7 +59,8 @@ export const isSearchKey = (e) => (MAC ? e.metaKey : e.ctrlKey) && !e.shiftKey &
 // ≤1100 时顶栏左内边距 14 + 8 的间隔和正文左右边距 22 对上（2026-11-07 Sean 批的刻度外例外）。title 为 null 是还不知道标题（打开中），显示一条占位。
 // end：右边再放的（对话页三轮起的轮次目录按钮，见 turns.jsx；这个对话的“⋯”菜单，见 timeline.jsx）。
 // edit：在顶栏上改标题时是 {value, onDone}，标题换成输入框
-export function HeadBar({ title, end, edit }) {
+// mark：标题前面的小标记（工作任务的那个图标），没有标题时不放
+export function HeadBar({ title, end, edit, mark }) {
   const nav = useContext(NavContext);
   const side = nav?.mobile ? (
     <button className="ws-icon-btn" data-nav="drawer" aria-label="打开对话列表" aria-controls="ws-side" aria-expanded={nav.drawer} onClick={nav.openDrawer}>
@@ -82,7 +83,7 @@ export function HeadBar({ title, end, edit }) {
       <div className="flex items-center gap-1">{side}</div>
       {edit ? <TitleInput value={edit.value} head onDone={edit.onDone} /> : (
         <div className="min-w-0 truncate text-center text-[16px] font-semibold" title={title || undefined}>
-          {title ?? <span className="mx-auto block h-4 w-2/5 max-w-[240px] rounded-sm bg-hover" aria-label="正在打开对话" role="status" />}
+          {title != null && mark}{title ?? <span className="mx-auto block h-4 w-2/5 max-w-[240px] rounded-sm bg-hover" aria-label="正在打开对话" role="status" />}
         </div>
       )}
       <div className="flex items-center justify-end gap-1">
