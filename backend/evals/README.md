@@ -43,6 +43,7 @@ uv run python -m app.evals.research --record --case lookup-index      # 先录�
 uv run python -m app.evals.decisions --samples 10                      # 每个决策点只重跑那一下，跑 10 次
 uv run python -m app.evals.decisions --samples 10 --model deepseek-flash   # 那一下换成别的模型；不给照录的那遍用的
 uv run python -m app.evals.decisions --compare data/evals/<改之前>.json data/evals/<改之后>.json  # 两份结果差得够不够大
+uv run python -m app.evals.decisions --decision 'ask-*' --samples 5 --model deepseek-flash   # 只跑一组（* 通配）；这一组只写了一句话，不用先录
 ```
 
 - **是什么**（`app/evals/decisions.py`）：从录的那遍里挑一次调模型（`evals/research/decisions.yaml` 里写用例、第几轮、第几次，`call: last` 是写正文的那一下），
@@ -53,6 +54,8 @@ uv run python -m app.evals.decisions --compare data/evals/<改之前>.json data/
 - **用的是现在的代码**：系统提示词、压缩、工具说明（从服务现取）是新的；对话、工具结果、这一轮的日期是录的那时的。
 - **测不出来的**：改动要是会让模型前面搜别的词，这里看不出来，最后还要整段回放（`--replay --repeat 3`）确认；
   工具结果的整理（来源编号、天气整理）在检查点里已经做好了，改这部分代码这里测不出来；换模型时，中间的决策点前面带着原来那个模型的消息，第一次调模型的最干净。
+- **只写一句话的决策点**（写 `say` 不写 `case`）：不从录的取，这句话照页面那样开一段新对话，同样到执行工具之前停，只调第一次模型。
+  用来看模型拿到一句话的第一下：停下来问用户（`asked`，调了 `ask_user`）、去查，还是直接答。日期是跑的那天；`--model` 没给是 Auto（多一次判断用哪个模型的调用）。
 - **怎么算变了**：`--compare` 对同一个决策点的同一项检查算双侧 Fisher 精确检验，p < 0.05 才算变了。每边 10 次时大约要差 6 次（2/10 对 8/10 算，4/10 对 6/10 不算）。
 
 ## 传到 LangSmith
@@ -71,7 +74,9 @@ uv run python -m app.evals.decisions --compare data/evals/<改之前>.json data/
 每轮的检查：
 
 - **自动检查**：每轮都要跑完、有回复（这一轮的结果是 ok，最后一条模型消息有正文）、实时片段的消息 id 和存下来的对得上、
-  正文里引用的来源 id 都存在；`expect` 里写了的才检查：搜没搜、读到几篇、取没取当前时间、查没查（`looked_up`：搜索、读页、天气、子任务任一）。每次调模型的输入和其中命中缓存的记在结果的 `calls` 里。
+  正文里引用的来源 id 都存在；`expect` 里写了的才检查：搜没搜、读到几篇、取没取当前时间、查没查（`looked_up`：搜索、读页、天气、子任务任一）、
+  问没问用户（`asked`）。每次调模型的输入和其中命中缓存的记在结果的 `calls` 里。
+- **模型停下来问用户时**：按这一轮写的 `answers` 依次回答，没写的跳过，同一轮接着跑完；问了什么、怎么答的记在结果的 `asks` 里。
 - **judge 标准**（回答好不好）：裁判模型看这一轮的正文，按用例写的标准判断。
 - **引用核对**（来源对不对）：正文里带角标的说法，裁判模型拿 agent 当时看到的材料（搜索摘要、读到的正文）逐条核对，不能有 unsupported（`--no-sources` 不做）。
 

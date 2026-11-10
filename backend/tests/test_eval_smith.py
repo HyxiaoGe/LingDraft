@@ -161,6 +161,8 @@ def offline_eval(monkeypatch, tmp_path):
     monkeypatch.setenv("LANGSMITH_API_KEY", "fake")
     monkeypatch.setattr(smith, "Client", lambda: client)
     monkeypatch.setattr("app.research_llm.LiveResearchPlanner", lambda scene=None, **kw: FakeResearchPlanner(**kw))
+    # 模型是假的，不看配没配 key：--model 指定选项时评测会先查 key，CI 上没有 key（11-10 #130 第一次 CI 因此不过，本机有 key 看不出来）
+    monkeypatch.setattr("app.research_llm.usable", lambda ref: True)
     monkeypatch.setattr(research, "LiveJudge", FakeJudge)
     monkeypatch.setattr(research, "RESULTS_DIR", tmp_path / "results")
     monkeypatch.setattr(research, "TAPES_DIR", tmp_path / "tapes")
@@ -222,3 +224,16 @@ def test_decisions_cli_uploads_each_sample(offline_eval, tmp_path):
     roots = [x for x in offline_eval.m_runs.values() if not x.get("parent_run_id")]
     assert len(roots) == 2 and all(x["outputs"]["tool_calls"] for x in roots)
     assert {f["key"] for f in offline_eval.m_feedback} == {"passed", "looked_up", "replied"}
+
+
+def test_decisions_cli_runs_first_message_decisions_without_a_recording(offline_eval, tmp_path):
+    """只写一句话的决策点不用先录；--decision 可以用 * 挑一组。"""
+    asks = [d for d in decisions.load_decisions() if d.id.startswith("ask-")]
+    assert asks and all(d.say and d.case is None and d.expect.asked is not None for d in asks)
+    decisions.main(["--decision", "ask-no-*", "--samples", "1", "--model", "deepseek-flash", "--no-sources"])
+    got = _written(tmp_path)
+    assert {r["decision"] for r in got["results"]} == {d.id for d in asks if d.id.startswith("ask-no-")}
+    assert not [r for r in got["results"] if "error" in r] and got["option"] == "deepseek-flash"
+    assert all("asked" in [c["name"] for c in r["checks"]] for r in got["results"])
+    with pytest.raises(SystemExit):
+        decisions.main(["--decision", "nope-*"])

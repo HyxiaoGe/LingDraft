@@ -1,5 +1,6 @@
 # 决策点回放：从用例录的那遍里挑一次调模型，只重跑这一下（工具不执行），看模型这一下做了什么。字段见 app/evals/decisions.py，用法见 ../README.md。
 # 状态取自 research --record 存下的检查点（data/evals/tapes/<用例>.snapshots.json），重录以后决策点前面的对话会跟着变。
+# 写 say 不写 case 的不用录：这句话开一段新对话，看模型拿到它的第一下。
 
 # ---- 查不查：第一次调模型就定了 ----
 
@@ -30,3 +31,93 @@
   case: lookup-price
   call: last
   source: 11-05 噪声：sources_supported 1/2（“部分早期报道把 512GB 写成了 7999 元”判没依据）
+
+# ---- 问不问：拿到第一句话的第一下，停下来问用户（ask_user）还是直接做 ----
+# work 模式第 2 步（2026-11-10 Sean 定先做调研写报告，docs/Work模式调研.md）：动手做大活之前，有只有用户能定的分叉就先问一次；
+# 需求清楚、问答、查询、小活不问。跑这一组：decisions --decision 'ask-*'
+
+# 该问：要的是一份报告，没说做什么用（Sean 举的例子：对比是拿来做选型还是做分享）
+- id: ask-yes-compare
+  say: 帮我写一份向量数据库的对比报告
+  source: 11-10 真实模型（Flash，本机对话 b00ecb3f）：思考里掂量过问不问，以“有合理的默认”为由没问，直接派子任务
+  expect: {asked: true}
+
+- id: ask-yes-two-products
+  say: 帮我写一份 Milvus 和 Qdrant 的对比报告
+  source: 11-10 第 1 步真实模型验证用的那句去掉“开始前先问我”：不提醒它，自己该问
+  expect: {asked: true}
+
+- id: ask-yes-platforms
+  say: 调研一下国内主流的大模型 API 平台，出一份报告
+  source: 同一类换个题目：给谁看、拿来选平台还是了解行情，查的东西不一样
+  expect: {asked: true}
+
+- id: ask-yes-frameworks
+  say: 帮我写一份 AI Agent 开发框架的调研报告
+  source: 同一类换个题目
+  expect: {asked: true}
+
+- id: ask-yes-competitors
+  say: 帮我写一份竞品分析报告，对比 Notion、飞书文档和语雀
+  source: 竞品分析要知道站在哪个产品的角度、给谁看，只有用户知道
+  expect: {asked: true}
+
+# 不该问：用途说清了、让它直接写，就该动手（调工具，不是在正文里反问）
+- id: ask-no-purpose-given
+  say: 我们要给一个千万级向量的检索服务选向量数据库，团队 5 个人、没有专职运维，帮我写一份 Milvus 和 Qdrant 的选型对比报告
+  source: Sean 定的：原话里有的不拿回去确认，需求清楚就直接干
+  expect: {asked: false, replied: false}
+
+- id: ask-no-audience-given
+  say: 下周要给组里的后端同事做一次技术分享，帮我写一份向量数据库入门的介绍文档
+  source: 同上：做什么用、给谁看都说了
+  expect: {asked: false, replied: false}
+
+- id: ask-no-told-to-go
+  say: 帮我写一份向量数据库的对比报告，不用问我，按你的判断直接写
+  source: 用户让它自己定的不问
+  expect: {asked: false, replied: false}
+
+# 11-10 加：第一版提示词在上面两句上问过头了（Flash 10 次里 6 次：用途说清了还问自建还是托管、侧重哪块）。改提示词时拿上面两句当例子对着改，
+# 这两句换了领域、提示词里没提过，看改的是不是只对那两句管用
+- id: ask-no-purpose-support
+  say: 我们公司准备换客服系统，现在 30 个坐席，帮我写一份智齿科技、网易七鱼和 Udesk 的选型对比报告
+  source: 同 ask-no-purpose-given，换个领域
+  expect: {asked: false, replied: false}
+
+- id: ask-no-purpose-talk
+  say: 下个月要在行业论坛上做 20 分钟的演讲，听众是车企的市场负责人，帮我写一份 2026 年中国新能源车出口情况的调研报告当素材
+  source: 同 ask-no-audience-given，换个领域
+  expect: {asked: false, replied: false}
+
+# 不该问：问答、查询、小活。问题卡只在需要人介入时出现，日常对话不该多出卡来
+- id: ask-no-question
+  say: Milvus 和 Qdrant 有什么区别？
+  source: 是个问题，不是要一份报告：答偏了再问一句就行
+  expect: {asked: false}
+
+- id: ask-no-pick
+  say: 我想给个人博客加个搜索，数据量很小，用 Qdrant 还是 pgvector？
+  source: 条件都给了的选择题
+  expect: {asked: false}
+
+- id: ask-no-lookup
+  say: Qdrant 最新版本是多少，有什么新功能？
+  source: 查得到的事自己查
+  expect: {asked: false, looked_up: true}
+
+- id: ask-no-short-writing
+  say: 帮我写一段 100 字左右的 Qdrant 简介
+  source: 小活：写偏了重写很快
+  expect: {asked: false}
+
+- id: ask-no-recommend
+  say: 周末想带爸妈出去玩，有什么推荐？
+  source: 系统提示词本来就写了要推荐的不追着要条件（agent.tool_selection），有了 ask_user 也不该出卡
+  expect: {asked: false}
+
+- id: ask-no-weather-place
+  say: 明天天气怎么样？
+  source: 查东西缺条件（没说哪儿）：在正文里问一句，不出问题卡（agent.asking 最后一条，11-10 我定的，等 Sean 确认）
+  expect: {asked: false, looked_up: false, replied: true}
+  judge: 正文问了用户想查哪个地方的天气，且没有给出任何具体的天气数据。

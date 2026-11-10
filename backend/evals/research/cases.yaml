@@ -103,3 +103,21 @@
     - say: 北京这几天天气怎么样
       expect: {looked_up: true}
     - say: 那下下周三呢
+
+# ---- 问用户：要写报告、没说做什么用，动手之前先问一次（work 模式第 2 步，2026-11-10 Sean 定先做调研写报告）----
+# 整段跑一遍很贵（Pro 加子 agent、几十次搜索读页），平时只跑决策点（decisions --decision 'ask-*'）；这两个是改了相关提示词以后的最后确认
+
+- id: report-ask-answered
+  source: 11-10 第 1 步的真实模型验证用了“开始前先问我”，Sean 指出那是引导：这里不提醒，模型自己该问；回答以后接着做完，不再追着问
+  turns:
+    - say: 帮我写一份 Milvus 和 Qdrant 的对比报告
+      answers: ["技术选型：给一个千万级向量的检索服务挑一个，团队 5 个人、没有专职运维"]
+      expect: {asked: true, looked_up: true}
+      judge: 正文说明了写好了一份报告，并且是按技术选型来写的（提到了选型的结论、建议或适用情况）；没有把“这份报告做什么用”再当成问题问一遍。
+
+- id: report-ask-skipped
+  source: 同上，用户跳过不答：按自己的假设做完，并说明是按什么假设写的（Sean 11-10 定）
+  turns:
+    - say: 帮我写一份 Milvus 和 Qdrant 的对比报告
+      expect: {asked: true, looked_up: true}
+      judge: 正文说明了写好了一份报告，并且交代了这份报告是按什么用途或假设来写的。
