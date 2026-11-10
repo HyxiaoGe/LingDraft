@@ -16,8 +16,8 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from pydantic import Field
 
 from tests.research_helpers import run_async
-from app.model_guard import (BLOCKED_MESSAGE, Breaker, ContentBlocked, GuardedChatModel, Interrupted, ModelUnavailable, is_context_overflow,
-                             unavailable_reason)
+from app.model_guard import (BLOCKED_MESSAGE, Breaker, ContentBlocked, GuardedChatModel, InputTruncated, Interrupted, ModelUnavailable,
+                             is_context_overflow, unavailable_reason)
 
 REQ = httpx2.Request("POST", "https://api.test/chat/completions")
 _STATUS = {400: openai.BadRequestError, 401: openai.AuthenticationError, 429: openai.RateLimitError, 500: openai.InternalServerError}
@@ -30,10 +30,12 @@ def status(code: int, message: str = "x") -> openai.APIStatusError:
 
 class Scripted(BaseChatModel):
     """按 script 依次给结果：异常就抛，字符串是这次的 finish_reason。流式先吐一段正文再给结果；
-    ("before", 异常) 是流式还没吐片段就抛（发请求那一下就失败）。"""
+    ("before", 异常) 是流式还没吐片段就抛（发请求那一下就失败）。text 是生成的正文（空的就是没生成），output 是用量里的输出 token。"""
 
     script: list[Any] = Field(default_factory=list)
     calls: list[int] = Field(default_factory=list)
+    text: str = "好"
+    output: int | None = None
 
     @property
     def _llm_type(self) -> str:
@@ -47,16 +49,19 @@ class Scripted(BaseChatModel):
         act = self._next()
         if isinstance(act, Exception):
             raise act
-        return ChatResult(generations=[ChatGeneration(message=AIMessage("好"), generation_info={"finish_reason": act})])
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(self.text, usage_metadata=self._usage()), generation_info={"finish_reason": act})])
+
+    def _usage(self) -> Any:
+        return None if self.output is None else {"input_tokens": 1048570, "output_tokens": self.output, "total_tokens": 1048570 + self.output}
 
     def _stream(self, messages, stop=None, run_manager=None, **kwargs: Any):
         act = self._next()
         if isinstance(act, tuple):
             raise act[1]
-        yield ChatGenerationChunk(message=AIMessageChunk(content="好"))
+        yield ChatGenerationChunk(message=AIMessageChunk(content=self.text))
         if isinstance(act, Exception):
             raise act
-        yield ChatGenerationChunk(message=AIMessageChunk(content=""), generation_info={"finish_reason": act})
+        yield ChatGenerationChunk(message=AIMessageChunk(content="", usage_metadata=self._usage()), generation_info={"finish_reason": act})
 
     # 异步的照同步的来（真的聊天模型类自己实现异步，不经过同步的；这里点名调 Scripted 的，免得又过一遍熔断）。"hang" 是一直不回
 
@@ -177,6 +182,37 @@ def test_context_overflow_is_recognized_and_passes_through_as_an_answer(clock):
     assert is_context_overflow(e.value)
     with pytest.raises(ModelUnavailable, match="稍后再试"):  # 超长说明服务答复了：不可用的计数重新算，没断开
         m.invoke("hi")
+
+
+def test_length_with_nothing_generated_is_an_overflow(clock):
+    """MiMo 直连超长不报错：输入截到窗口那么长，一个字没生成就以 length 结束（2026-11-10 实测）。当作上下文超长，服务照常算答复了。"""
+    m = Guarded(script=["length"] * 4, text="", output=0)
+    with pytest.raises(InputTruncated) as e:
+        m.invoke("hi")
+    assert is_context_overflow(e.value)
+    with pytest.raises(InputTruncated):
+        list(m.stream("hi"))
+    m.output = None  # 没返回用量：只看有没有生成
+    with pytest.raises(InputTruncated):
+        list(m.stream("hi"))
+
+    async def go():
+        m.output = 0
+        with pytest.raises(InputTruncated):
+            [c async for c in m.astream("hi")]
+        m.script = ["length"]
+        with pytest.raises(InputTruncated):
+            await m.ainvoke("hi")
+
+    run_async(go())
+    # 生成到了 max_tokens：有正文的，或者思考不返回、用量里有输出的（Grok），照常给结果
+    m.script, m.output = ["length"] * 2, 65536
+    assert m.invoke("hi").content == "" and list(m.stream("hi"))
+    m.script, m.text, m.output = ["length"], "好", 0
+    assert m.invoke("hi").content == "好"
+    m.script, m.text = ["stop"], ""
+    assert m.invoke("hi").content == ""  # 正常结束的空回答不归这里管
+
 
 def test_block_inside_the_stream_and_finish_reasons(clock):
     m = Guarded(script=[openai.APIError("x", REQ, body={"message": BLOCKED_MESSAGE}), "content_filter", "insufficient_system_resource"])

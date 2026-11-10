@@ -20,6 +20,7 @@ from app.graph.research import history
 from app.graph.research.agent import system_prompt
 from app.graph.research.compaction import CompactionMiddleware, compact, recall_source, recall_turn, tokens, turn_order
 from app.graph.research.state import Compaction
+from app.model_guard import InputTruncated
 from app.research_llm import FakeResearchPlanner, FakeToolModel
 from tests.test_model_guard import status
 from tests.test_research import Chat
@@ -504,6 +505,22 @@ def test_overflow_compacts_old_turns_and_sends_once_more(changes, caplog):
     assert "模型说上下文超长，压缩后再发一次" in caplog.text
     marks = [x.response_metadata.get(cp.MARK) for x in chat.values()["messages"] if isinstance(x, AIMessage) and x.usage_metadata]
     assert marks[-1] == f"{c.cleared_through}/{c.summarized_through}"
+
+
+def test_input_truncated_without_an_error_compacts_too(changes):
+    """MiMo 直连超长不报错、一个字没生成就以 length 结束（model_guard 换成 InputTruncated）：一样压了再发。
+    它不是服务出错，走免费额度的也不先换直连（同一个模型窗口一样大）。"""
+    p, m = overflowing()
+    chat = Chat(planner=p)
+    ask(chat, 2)
+    ids = turn_ids(chat)
+    m.fail.append(InputTruncated())
+    n = len(m.sent)
+    v = chat.say("第3个问题：查一下局部修改")
+    assert v["status"] == "idle" and not changes
+    assert chat.values()["compaction"].cleared_through == ids[1]
+    truncated, retried = m.sent[n:n + 2]
+    assert REMOVED not in texts(truncated) and REMOVED in texts(retried)
 
 
 def test_overflow_again_after_compacting_fails_the_turn():
