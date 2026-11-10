@@ -91,6 +91,10 @@ export default function Workspace() {
     thinkSet.current.set(tidRef.current ?? "new", v);
     setThinkingState(v);
   };
+  // Chat / Work（2026-11-10 Sean 定）：每句话发的时候带上是哪种。Work 的话，计划、调研、写报告这类任务模型先用问题卡问清楚再动手；Chat 不出问题卡。
+  // 新对话是 Chat；在一段对话里切了只管这段对话（这次打开的页面里，记在 workPick），没切过的对话按它最后一轮是哪种（见下面的 work）
+  const [workPick, setWorkPick] = useState(() => new Map()); // 对话 id（新对话是 "new"）→ 手动选的
+  const setWork = (v) => setWorkPick((m) => new Map(m).set(tidRef.current ?? "new", v));
   // 额度（/api/credits）：打开页面、每轮结束、打开账号菜单时取；没取到是 null（不显示）
   const [credits, setCredits] = useState(null);
   const refreshCredits = () => getCredits().then(setCredits).catch(() => {});
@@ -238,6 +242,10 @@ export default function Workspace() {
   const current = !tid ? picked : st?.thread_id === tid && st.model ? st.model : live ? picked : null;
   // 这句话带不带思考开关：按输入框旁边显示的那个模型（能开关才带，不带的按模型的默认）
   const thinkOpts = () => (models?.find((m) => m.id === current)?.thinking === "toggle" ? { thinking } : {});
+  // 输入框里 Chat / Work 选着哪个：手动选过的按选的，没选过的按这段对话最后一轮（新对话是 Chat）
+  const work = workPick.get(tid ?? "new") ?? (st?.thread_id === tid && !!st?.turns?.at(-1)?.record?.work);
+  // 每句话都带的：思考开关、是不是 Work。重新回答、改最后一句也带，按输入框里现在选着的来
+  const sendOpts = () => ({ ...thinkOpts(), work });
 
   // ---- 切换线程 ----
 
@@ -251,6 +259,7 @@ export default function Workspace() {
     }
     if (id === tidRef.current && id) return;
     if (!id) thinkSet.current.delete("new"); // 新对话：深度思考回到默认
+    if (!id) setWorkPick((m) => (m.has("new") ? new Map([...m].filter(([k]) => k !== "new")) : m)); // Chat / Work 也回到 Chat
     setThinkingState(thinkSet.current.get(id ?? "new") ?? thinkOnRef.current);
     ctl.current.abort();
     ctl.current = new AbortController();
@@ -403,6 +412,8 @@ export default function Workspace() {
           thinkSet.current.set(data.thread_id, thinkSet.current.get("new"));
           thinkSet.current.delete("new");
         }
+        // 新对话里选过 Work：同样记到这段对话名下
+        setWorkPick((m) => (m.has("new") ? new Map([...m].filter(([k]) => k !== "new")).set(data.thread_id, m.get("new")) : m));
         if (!pageRef.current) navigate(chatPath(data.thread_id), false); // 新对话有了 id：换掉 /chat/new，后退不回到空白的新对话（去了资料库的不动地址）
       }
       setLive((l) => (l ? { ...l, stage: data.queued ? QUEUED : l.stage } : l));
@@ -557,10 +568,10 @@ export default function Workspace() {
   const act = {
     // 新对话带上选的模型（没取到列表就不带，按 Auto）；之后每句话带上深度思考开关（对话定下的模型能开关才带）。
     // images：这句话带的图（[{key, file, url}]，见 Composer）；docs：带的文件（解析好了的，见 composer.jsx 的 picked），发编号。排着的话都不带
-    start: (text, images = [], docs = []) => run((cb, sig) => createResearchThread(text, { model: picked, ...thinkOpts(), ...attached(images, docs) }, cb, sig), text, { images, docs }),
+    start: (text, images = [], docs = []) => run((cb, sig) => createResearchThread(text, { model: picked, ...sendOpts(), ...attached(images, docs) }, cb, sig), text, { images, docs }),
     say: (text, images = [], docs = []) => {
       const id = tidRef.current;
-      const opts = { ...thinkOpts(), ...attached(images, docs) };
+      const opts = { ...sendOpts(), ...attached(images, docs) };
       return run((cb, sig) => sayResearch(id, text, opts, cb, sig), text, { images, docs });
     },
     retry: () => run((cb, sig) => retryResearchThread(tidRef.current, cb, sig), null, { what: "没能重试" }),
@@ -577,13 +588,13 @@ export default function Workspace() {
     // 最后一轮的旧回答先藏起来，新回答在同一轮里接着出现
     regenerate: () => {
       const hidden = new Set((st?.turns?.at(-1)?.items || []).map(itemKey));
-      const opts = thinkOpts();
+      const opts = sendOpts();
       return run((cb, sig) => regenerateResearchThread(tidRef.current, opts, cb, sig), null, { hidden, what: "没能重新回答" });
     },
     // 改最后一句：同样藏起旧回答，改过的话先显示出来
     edit: (text) => {
       const hidden = new Set((st?.turns?.at(-1)?.items || []).map(itemKey));
-      const opts = thinkOpts();
+      const opts = sendOpts();
       return run((cb, sig) => editResearchThread(tidRef.current, text, opts, cb, sig), null, { hidden, edit: text });
     },
     // 正在回答时又说的话：排在服务器上，这一轮答完就发（又说的接在后面，合成一句）。
@@ -592,7 +603,7 @@ export default function Workspace() {
       const id = tidRef.current;
       const g = gen.current;
       try {
-        const q = await queueResearch(id, text, thinkOpts());
+        const q = await queueResearch(id, text, sendOpts());
         if (g !== gen.current) return;
         if (q) setSt((s) => (s ? { ...s, queued_message: q } : s));
         else run((cb, sig) => followResearchThread(id, null, cb, sig), null);
@@ -809,6 +820,7 @@ export default function Workspace() {
           who={auth.ready ? (auth.me ? auth.me.name || "" : null) : earlyWho}
           models={models} modelNames={modelNames} credits={credits} manage={manage}
           picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }}
+          work={{ on: work, onChange: setWork }}
           files={{ open: openFile, current: file, toggle: toggleFiles }} />}
         {file && (file.list ? <FileList tid={tid} st={shown} live={live} title={live?.title || shown?.title || listedTitle} onNav={navFile} onClose={closeFile} focus={fileFocus} />
           : file.sent ? <SentPanel tid={tid} f={file.sent} back={file.back} onNav={navFile} onClose={closeFile} focus={fileFocus} />

@@ -152,7 +152,8 @@ export async function listModels() {
 }
 
 // 开新对话。opts：model 是选的模型（listModels 里的 id，不给是 Auto；没有了返回 400），定下就不换；
-// thinking 是这句话的思考开关（不给按模型的默认）。下面几个的 opts.thinking 一样。opts.images：这句话带的图（见 message）；
+// thinking 是这句话的思考开关（不给按模型的默认）；work 是这句话是不是在 Work 模式下发的（输入框里的 Chat / Work，不给是 Chat）。
+// 下面几个的 opts.thinking、opts.work 一样。opts.images：这句话带的图（见 message）；
 // opts.files：带的文件的编号（先 uploadFile、解析好了），不能发时 400，detail 是 {code: "files_not_sendable", reason}
 export async function createResearchThread(text, opts, onEvent, signal) {
   return sse("/api/research/threads", message({ text, ...opts }), onEvent, signal);

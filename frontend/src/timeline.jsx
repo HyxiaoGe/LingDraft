@@ -11,7 +11,7 @@ import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { listInspirations } from "./api.js";
 import shell from "./card.module.css";
 import { FileCards, fileVersions, turnCards } from "./artifact.jsx";
-import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelIcon, ModelTools, Pending, enterSends, focusInput, useAutoHeight, useImageDrop } from "./composer.jsx";
+import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelIcon, ModelTools, Pending, WorkSwitch, enterSends, focusInput, useAutoHeight, useImageDrop } from "./composer.jsx";
 import { failureText } from "./errors.js";
 import { SentFiles, fileIndex, partUnit } from "./files.jsx";
 import { FilesButton, workspaceFiles } from "./workspace-files.jsx";
@@ -50,7 +50,7 @@ const keepReadingOf = (id, at) => { try { sessionStorage.setItem(READING + id, J
 export const forgetReading = (id) => { try { sessionStorage.removeItem(READING + id); } catch { /* 没有就算了 */ } };
 
 // files：模型写的文件在右栏怎么开（见 artifact.jsx）：{open(目标), current（右栏正开着的，没开是 null）}
-export function Conversation({ st, live, busy, suggesting, error, now, act: rawAct, tid, putBack, listedTitle, models, modelNames, credits, picker, manage, who, files }) {
+export function Conversation({ st, live, busy, suggesting, error, now, act: rawAct, tid, putBack, listedTitle, models, modelNames, credits, picker, work, manage, who, files }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
   const lastTop = useRef(0); // 上一次滚动时的位置：往上滚了才算用户离开底部
@@ -280,6 +280,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
         {away && <JumpButton more={more} onClick={toBottom} />}
         <Composer thread={tid || "new"} carry={!!live} mode={mode} queueing={queueing} held={pendingKinds.length > 0} stopping={stopping} putBack={putBack} onSend={onSend} onStop={act.stop}
           above={(running || asking) && <Pending st={st} act={act} asking={asking} />} onTakeBack={pendingKinds.length ? () => act.withdraw(pendingKinds) : null}
+          lead={<WorkSwitch loading={opening} {...work} />}
           tools={<ModelTools models={models} loading={models === null || opening} {...picker} />} />
       </Dock>
       {dropping && <DropHint />}

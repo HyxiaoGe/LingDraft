@@ -56,7 +56,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 
 ## 对话接口
 
-前缀 `/api/research/threads`。除了取图，接口都要带 `Authorization: Bearer <令牌>`（游客令牌或 auth 服务的 access token，见下面的“身份和其他接口”），没带、不对、过期都是 401。线程不存在、不归这个人，一律 404。请求体是 json `{"text", "thinking", "files"}`（`thinking` 是思考开关，不给按模型的默认；`files` 见下面的“图片和文件”），说的话为空返回 400；正在跑、或者上一轮没跑完时，大多数操作返回 409（各接口另有的 409 写在后面）；开始一轮之前额度用完了返回 429（见“存储”里的额度）。
+前缀 `/api/research/threads`。除了取图，接口都要带 `Authorization: Bearer <令牌>`（游客令牌或 auth 服务的 access token，见下面的“身份和其他接口”），没带、不对、过期都是 401。线程不存在、不归这个人，一律 404。请求体是 json `{"text", "thinking", "work", "files"}`（`thinking` 是思考开关，不给按模型的默认；`work` 是这句话是不是在 Work 模式下发的，不给是 Chat，见下面；`files` 见下面的“图片和文件”），说的话为空返回 400；正在跑、或者上一轮没跑完时，大多数操作返回 409（各接口另有的 409 写在后面）；开始一轮之前额度用完了返回 429（见“存储”里的额度）。
 
 - 说话：
   - `GET /api/models`：新对话能选的模型（`models`：`{id, name, description, thinking, model, locked}`，Auto 在第一个；`model` 是主 agent 用的“厂商:模型”，页面按它给每轮找名字；这一档选不了的也列出来，`locked` 为 true）。`names` 是选项以外、回答开头可能出现的模型（Auto 用的免费额度）的名字和图标。
@@ -66,7 +66,9 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - 也可以带文件：先传到 `/api/files`，解析好了把编号放进 `files`（最多 5 个）。还在解析、没读成、过期了返回 400（`detail` 是 `{code: "files_not_sendable", reason, message}`），什么都没开始。
   - 排着的话、插进这一轮的话不能带图、带文件（`/queue` 只收 json，带了 `files` 返回 400）。
   - `/{id}/retry`：失败的线程接着跑；没失败的返回 409。
-  - `/{id}/regenerate`：最后一轮重新回答，可以带 `{"thinking"}`。
+  - `/{id}/regenerate`：最后一轮重新回答，可以带 `{"thinking", "work"}`（没带的照原来那句话的）。
+  - Chat 和 Work 按每句话算（输入框里的两段开关）：Work 的那一轮系统提示词多一段（`prompts.toml` 的 `[agent].work`：计划、调研、写报告这类任务先问用户再动手），
+    并且给模型问用户的工具 `ask_user`；Chat 的轮两样都没有，硬调了工具也不停下来。排着的话带着发的时候的模式；每轮的记录里有 `work`。
   - `/{id}/edit`：改了最后那句话，按新的话重新回答。
 
   这几个 POST 都返回 SSE。

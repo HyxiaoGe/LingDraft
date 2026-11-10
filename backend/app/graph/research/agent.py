@@ -70,10 +70,14 @@ CHINA_TZ = timezone(timedelta(hours=8))
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 # 系统提示词按这个顺序拼（见 prompts.toml 的 [agent]）
 # memory 是长期记忆，没有记忆时不拼（见 memory.py）
-SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "files", "asking", "memory",
-                   "language")
+SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "files", "memory", "language")
 MEMORY_SECTION = "agent.memory"
 AGENT_PROMPT = tuple(f"agent.{k}" for k in SYSTEM_SECTIONS)
+# Work 模式的一轮（用户在输入框旁边选了 Work，见 history.WORK）：多一段 work（任务开始前先问用户），排在记忆前面；问用户的工具也只在这种轮里给
+# （见 ModelSelect._for）。2026-11-10 Sean 定：问不问不靠提示词里列举情形，看用户选没选 Work
+WORK_SECTION = "work"
+WORK_SECTIONS = tuple(k for s in SYSTEM_SECTIONS for k in ((WORK_SECTION, s) if s == "memory" else (s,)))
+WORK_PROMPT = tuple(f"agent.{k}" for k in WORK_SECTIONS)
 
 
 async def _no_guide() -> HumanMessage | None:
@@ -114,6 +118,17 @@ def turn_started(request: ModelRequest) -> datetime:
     return turn_start(request.messages, request.state)
 
 
+def working(state: dict) -> bool:
+    """正在跑的这一轮是不是 Work 模式（这一轮开始时记下的，见 TurnMiddleware._begin）。"""
+    turns = state.get("turns") or []
+    return bool(turns and turns[-1].work)
+
+
+def prompt_keys(state: dict) -> tuple[str, ...]:
+    """这一轮的系统提示词拼哪几段。"""
+    return WORK_PROMPT if working(state) else AGENT_PROMPT
+
+
 def turn_start(msgs: list[BaseMessage], state: dict) -> datetime:
     """同 turn_started，按 state 里的消息和每轮的记录取（工具里没有 ModelRequest，用这个）。"""
     i = history.last_human(msgs)
@@ -132,7 +147,7 @@ def system_prompt(at: datetime, keys: Sequence[str] = AGENT_PROMPT, memory: str 
     """照 Fusion：日期按北京时间，带星期和明天、这周末、下周末的日期，模型不用自己推星期几。keys 是按顺序拼的各段（子 agent 用另一套），
     memory 是长期记忆（MemoryBook.prompt_text，空的就没有这一段），extra 是这些段里另外要填的变量。"""
     dates = date_anchors(at.astimezone(CHINA_TZ).date())
-    return "\n\n".join(prompts.render(k, **dates, memory=memory, **extra) for k in keys if k != MEMORY_SECTION or memory)
+    return "\n\n".join(prompts.render(k, **dates, memory=memory, max_asks=history.MAX_ASKS, **extra) for k in keys if k != MEMORY_SECTION or memory)
 
 
 def date_anchors(today: date) -> dict[str, str]:
@@ -200,7 +215,8 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         # 按 planner 的时钟（评测回放时挪到录像那时，见 app.clock）；结束时间这些模型看不到的照常用系统时钟
         started = self.planner.clock.now().isoformat(timespec="seconds")
         plan = self._plan(state, runtime, simple)
-        turn = Turn(id=human.id, started_at=started, option=plan.option, model=plan.agent, subagent_model=plan.subagent)
+        turn = Turn(id=human.id, started_at=started, option=plan.option, model=plan.agent, subagent_model=plan.subagent,
+                    work=bool(history.work_switch(human)))
         out: dict[str, Any] = {"turns": list(state.get("turns", [])) + [turn]}
         if state.get("option") != plan.option:
             out["option"] = plan.option
@@ -230,7 +246,7 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
             job = _TitleJob(self.planner, history.requests(request.state["messages"])[0], known=known)
         try:
             emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
-            prompt = system_prompt(turn_started(request), memory=await memory_text(self.memory, request.runtime))
+            prompt = system_prompt(turn_started(request), prompt_keys(request.state), memory=await memory_text(self.memory, request.runtime))
             # 之前几轮点停止时只想了没写的半截不发（见 history.is_stopped_thought）
             resp = await handler(request.override(system_message=SystemMessage(prompt), messages=history.without_stopped_thoughts(request.messages)))
             if job is None:
@@ -662,11 +678,14 @@ class ModelSelect(AgentMiddleware):
 
     async def _for(self, request: ModelRequest, turns: list[Turn], use: ModelUse) -> ModelRequest:
         """这次调 use 这个模型的请求：别的模型答的轮次去掉思考；用户发的文件拼进那句话（见 app.tools.files）；
-        用户发的图看得见的直接给、看不见的给说明，看图工具只给看不见的（见 app.tools.vision）。一轮里换了备用，按换上的重新组织。"""
+        用户发的图看得见的直接给、看不见的给说明，看图工具只给看不见的（见 app.tools.vision）。一轮里换了备用，按换上的重新组织。
+        问用户的工具只在 Work 模式的轮里给。"""
         sees = self.planner.catalog.sees(use.ref)
         msgs = await with_files(_others_without_thinking(request.messages, turns, use), getattr(request.runtime.context, "files", None))
         msgs = await with_images(msgs, sees, self.planner.image_uri)
         tools = [t for t in request.tools if not (sees and getattr(t, "name", None) == history.VIEW_TOOL)]
+        if not working(request.state):
+            tools = [t for t in tools if getattr(t, "name", None) != history.ASK_TOOL]
         libs = request.state.get("kb_libraries") or []  # 资料库：第一轮时有文件才给，说明里列着那时的资料库和文件（见 app.tools.knowledge）
         tools = [for_libraries(t, libs) if getattr(t, "name", None) == KB_TOOL else t for t in tools if libs or getattr(t, "name", None) != KB_TOOL]
         return request.override(model=self.planner.chat_model(use), messages=msgs, tools=tools)

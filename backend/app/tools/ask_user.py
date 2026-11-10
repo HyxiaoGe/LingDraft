@@ -7,7 +7,8 @@
 - 一张卡一个问题，选项最多 history.MAX_ASK_OPTIONS 个（也可以不给）；用户可以自己写，也可以跳过：跳过的让模型按自己的判断做，并在回答里说明是按什么做的。
 - 一轮最多问 history.MAX_ASKS 次：再问的不停下来，直接让模型按自己的判断做。
 - 不回答就一直等，不会过一阵自己接着做。只给主 agent：子 agent 不能问人。不收钱（models.toml 的 [tools] 没定价）。
-什么时候该问由模型判断（工具说明、系统提示词），代码不替它判断。
+- 只在 Work 模式的轮里能问（2026-11-10 Sean 定，见 history.WORK）：Chat 的轮不给模型这个工具，硬调了也不停。
+Work 模式里什么时候该问由模型判断（工具说明、系统提示词的 work 一段），代码不替它判断。
 """
 
 from __future__ import annotations
@@ -59,6 +60,9 @@ def make_ask_tool():
         question, choices = ask_args({"question": question, "options": options})
         if not question:
             return ToolMessage(content=prompts.render("tools.ask_user.empty"), name=ASK_TOOL, tool_call_id=call_id, status="error")
+        turns = runtime.state.get("turns") or []
+        if not (turns and turns[-1].work):  # Chat 的轮不给这个工具（见 agent.ModelSelect）；模型照着之前几轮的样子硬调了也不停下来问
+            return ToolMessage(content=prompts.render("tools.ask_user.chat"), name=ASK_TOOL, tool_call_id=call_id)
         messages = runtime.state.get("messages", [])
         if asks_before(messages[last_human(messages) + 1:], call_id) >= MAX_ASKS:
             return ToolMessage(content=prompts.render("tools.ask_user.limit", max_asks=MAX_ASKS), name=ASK_TOOL, tool_call_id=call_id)
