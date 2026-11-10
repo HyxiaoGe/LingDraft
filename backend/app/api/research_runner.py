@@ -3,6 +3,9 @@
 回答进行中用户又说的话不打断这一轮：排着（存进 run_store 的 pending_messages），这一轮答完或停下就接着发成新的一轮（见 queue、_aended）。
 没发出去的话最多一句。排着的话也可以插进正在跑的这一轮（见 guide）：主 agent 下一次调模型之前放进对话；这一轮没再调模型就结束了的，退回去排着。
 执行在对话的事件循环里异步地跑（见 app.aio），点停止马上取消这一轮（见 ResearchRunner.stop）。
+模型做到一半可以停下来问用户（ask_user 工具里的 interrupt，见 app.tools.ask_user）：这次执行结束（ASKED），线程的状态是 asking，一直等；
+用户回答或跳过（见 answer）另起一次执行，同一轮从停下的地方接着跑。等的时候不能往检查点里写东西（写一次，等着的问题就丢了）：
+接着说、改名都先拒掉，点停止、重新回答是把这一轮以停止收尾。
 """
 
 from __future__ import annotations
@@ -26,11 +29,13 @@ from langgraph.graph import START
 from langgraph.store.base import BaseStore
 from langgraph.store.memory import InMemoryStore
 from langgraph.store.postgres.aio import AsyncPostgresStore
+from langgraph.types import Command
 from psycopg_pool import PoolTimeout
+from pydantic import ValidationError
 
 from app import aio, config, costs, free_used_up, quota
 from app.api.drafts import DraftTracker
-from app.api.run_store import ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, Pending, PostgresRunStore, RunStore
+from app.api.run_store import ASKED, ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, Pending, PostgresRunStore, RunStore
 from app.api.runner import BaseRunner, RunConflict, _sse_text, jsonable, log
 from app.files.parse import Part
 from app.files.service import NOT_HERE, FileService, NotSendable
@@ -49,6 +54,7 @@ from app.graph.research.sources import collect_sources, subagent_messages
 from app.graph.research.state import AttachedFile, AttachedImage, Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
 from app.model_guard import ContentBlocked, Interrupted, ModelUnavailable
+from app.tools.ask_user import ASK, MAX_ANSWER, AskAnswer
 from app.tools.gateway import IMAGE_ID, GatewayError
 
 
@@ -57,7 +63,15 @@ class NothingToRetry(Exception):
 
 
 class NotIdle(Exception):
-    """上一轮没跑完：这时不能接着说，也不能重新生成。"""
+    """上一轮没跑完：这时不能接着说，也不能重新生成。停在问用户那里也算（先回答或跳过）。"""
+
+
+class NothingToAnswer(Exception):
+    """没有在等回答的问题，或者要回答的不是现在等着的那个（已经答过、这一轮已经停了）。"""
+
+
+class BadAnswer(Exception):
+    """回答不合格：空的、太长。"""
 
 
 class AlreadyPending(Exception):
@@ -73,6 +87,8 @@ class UnknownModel(Exception):
 
 
 CUT_SHORT = "上次运行没跑完就停了"
+ASKING = "asking"  # 线程的状态：这一轮停下来问用户了，等回答（见 _status）
+ASKING_FIRST = "先回答或跳过上面的问题"
 # 这一轮没跑完的原因分几类给页面（状态里的 error_kind，事件流 error 事件的 kind），页面按类别说下一步能做什么（见 _failure）：
 # model：模型服务不可用；blocked：内容审核没通过；cut_short：半路停了、没有错误记录（进程重启）；tool：工具服务（网关）出错；internal：别的
 FAILURE_MODEL, FAILURE_BLOCKED, FAILURE_CUT, FAILURE_TOOL, FAILURE_INTERNAL = "model", "blocked", "cut_short", "tool", "internal"
@@ -181,7 +197,7 @@ class StreamBuffer:
 
 def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
     """对话按轮：用户的话，然后这一轮里模型的思考、正文、工具步骤按先后排，被内容审核拦下时最后是一条 blocked；
-    用户插进这一轮的话是一条 guide，排在它放进对话的地方。
+    用户插进这一轮的话是一条 guide，排在它放进对话的地方；模型问用户的是一条 ask（问题、选项、回答，见 history.ask_of）。
     每轮带这一轮的记录（推荐问题、用量、结果）。子任务那一步带着它的子 agent 的条目（items），排法一样。"""
     by_id = {t.id: t for t in turns}
     results = {m.tool_call_id: m for m in messages if isinstance(m, ToolMessage)}
@@ -204,7 +220,7 @@ def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
 
 
 def _items_of(m: AIMessage, results: dict[str, ToolMessage]) -> list[dict]:
-    """一条模型消息 → 条目：思考、正文、工具步骤；被内容审核拦下的是一条 blocked。"""
+    """一条模型消息 → 条目：思考、正文、工具步骤、问用户的问题；被内容审核拦下的是一条 blocked。"""
     if reason := history.blocked_reason(m):
         return [{"type": "blocked", "id": m.id, "reason": reason}]
     items: list[dict] = []
@@ -214,7 +230,9 @@ def _items_of(m: AIMessage, results: dict[str, ToolMessage]) -> list[dict]:
         items.append({"type": "text", "id": m.id, "text": text})
     for tc in m.tool_calls:
         result = results.get(tc["id"])
-        if step := history.step_of(tc, result):
+        if ask := history.ask_of(tc, result):
+            items.append(ask)
+        elif step := history.step_of(tc, result):
             item = {"type": "step", **step.model_dump()}
             if step.kind == "task":
                 item["items"] = subagent_items(result)
@@ -276,6 +294,26 @@ def _failure_of(errors: list[str]) -> tuple[str, str]:
 
 def _real_error(errors: list[str]) -> str | None:
     return next((e for e in errors if e.partition("(")[0] != asyncio.CancelledError.__name__), None)
+
+
+def _is_ask(value: Any) -> bool:
+    """中断带的东西是不是在问用户（见 app.tools.ask_user）。别的中断（比如 MCP 的 elicitation）不认。"""
+    return isinstance(value, dict) and value.get("type") == ASK
+
+
+def _asks(snap) -> list[dict]:
+    """检查点上还等着用户回答的问题，按模型发出的先后：{id, call_id, question, options}。id 是中断的 id，回答时带上（见 _aanswer_input）；
+    call_id 是那次工具调用，对得上这一轮条目里的那条 ask。一条消息里问了两个、已经答了一个的：答过的那个有结果了，不算。"""
+    msgs = (snap.values or {}).get("messages", [])
+    answered = {m.tool_call_id for m in msgs if isinstance(m, ToolMessage)}
+    order = [tc.get("id") for m in msgs if isinstance(m, AIMessage) for tc in m.tool_calls]
+    out: dict[str, dict] = {}
+    for it in getattr(snap, "interrupts", None) or ():
+        v = it.value
+        if _is_ask(v) and v.get("call_id") not in answered:
+            out[v.get("call_id") or it.id] = {"id": it.id, "call_id": v.get("call_id") or "", "question": str(v.get("question") or ""),
+                                              "options": [str(o) for o in v.get("options") or []]}
+    return sorted(out.values(), key=lambda a: order.index(a["call_id"]) if a["call_id"] in order else len(order))
 
 
 async def open_storage(url: str) -> tuple[AsyncPostgresSaver, AsyncPostgresStore, PostgresRunStore]:
@@ -501,6 +539,11 @@ class ResearchRunner(BaseRunner):
         kind = "regenerate" if text is None else "edit"
         return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aregenerate_input(thread_id, text, thinking), kind)))
 
+    def answer(self, thread_id: str, ask_id: str, text: str = "", skip: bool = False) -> AsyncIterator[str]:
+        """回答模型问的问题（skip 是跳过，不回答），这一轮从停下的地方接着跑。ask_id 是状态里 ask 的 id。
+        等着的不是这个问题（答过了、这一轮已经停了）抛 NothingToAnswer；回答是空的、太长抛 BadAnswer。"""
+        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aanswer_input(thread_id, ask_id, text, skip), "answer")))
+
     def queue(self, thread_id: str, text: str, thinking: bool | None = None) -> dict | None:
         return aio.run(self._aqueue(thread_id, text, thinking))
 
@@ -515,6 +558,10 @@ class ResearchRunner(BaseRunner):
 
     def regenerate_input(self, thread_id: str, text: str | None = None, thinking: bool | None = None) -> None:
         aio.run(self._aregenerate_input(thread_id, text, thinking))
+
+    def answer_input(self, thread_id: str, ask_id: str, text: str = "", skip: bool = False) -> Command:
+        """回答问题时交给 run_turn 的输入（命令行、评测和测试用，见 answer）。"""
+        return aio.run(self._aanswer_input(thread_id, ask_id, text, skip))
 
     def models(self, tier: str) -> list[dict]:
         """新对话能选的模型（按 models.toml 的顺序，Auto 在第一个）。thinking：toggle 是页面上显示思考开关，always、never 不显示。
@@ -576,7 +623,8 @@ class ResearchRunner(BaseRunner):
 
     def run_turn(self, thread_id: str, inp: Any = None, on_event: Callable[[dict], None] | None = None) -> str | None:
         """直接跑一轮、等它结束，事件交给 on_event（在事件循环里调，别在里面调这里的同步方法）：不占运行位、不记运行记录。
-        命令行、评测和测试用；点停止要自己先占位（见 runs.admit）。返回 STOPPED 或 None。"""
+        命令行、评测和测试用；点停止要自己先占位（见 runs.admit）。inp 一般是 None（用户的话已经写进检查点），回答问题时是 answer_input 给的。
+        返回 STOPPED、ASKED（停下来问用户了，这一轮还没完）或 None。"""
         return aio.run(self._run_turn(thread_id, inp, on_event or (lambda ev: None)))
 
     def suggest(self, thread_id: str) -> list[dict]:
@@ -587,9 +635,14 @@ class ResearchRunner(BaseRunner):
 
     def stop(self, thread_id: str) -> bool:
         """让这个线程正在跑（或排队）的这一轮停下；没有在跑的返回 False。
-        先记下要停，再到事件循环里取消正在跑的那一轮（见 _run_turn）；排队的轮到时看到要停，直接收尾。"""
-        if not self.runs.request_stop(self._run_key(thread_id)):
-            return False
+        先记下要停，再到事件循环里取消正在跑的那一轮（见 _run_turn）；排队的轮到时看到要停，直接收尾。
+        没在跑、停在问用户那里的：不回答了，这一轮以停止收尾（见 _adismiss）。"""
+        key = self._run_key(thread_id)
+        if not self.runs.request_stop(key):
+            if aio.run(self._adismiss(thread_id)):
+                return True
+            if not self.runs.request_stop(key):  # 再看一次：要收尾时刚好有执行起来了（回答刚交上来），停它
+                return False
         aio.loop().call_soon_threadsafe(self._cancel, thread_id)
         return True
 
@@ -613,20 +666,20 @@ class ResearchRunner(BaseRunner):
         async with self._queue_mu:
             return self.runs.admit(key)
 
-    async def _asubmit(self, thread_id: str, make_input: Callable[[], Awaitable[None]], kind: str) -> str:
+    async def _asubmit(self, thread_id: str, make_input: Callable[[], Awaitable[Any]], kind: str) -> str:
         """占位 → 把这一轮的输入写进检查点（校验在这一步，不通过就退位）→ 交出执行，返回事件日志的 id。占着位，别的请求改不了这个线程。
-        kind 是这次执行怎么来的，记进运行记录。"""
+        kind 是这次执行怎么来的，记进运行记录。make_input 返回交给 agent 的输入：一般是 None（从检查点接着跑），回答问题时是带着回答的 Command。"""
         key = self._run_key(thread_id)
         if not await self._aadmit(key):
             raise RunConflict("这一步还在处理，等它完成后再提交")
         try:
-            await make_input()
-            return await self._alaunch(thread_id, kind)
+            inp = await make_input()
+            return await self._alaunch(thread_id, kind, inp)
         except BaseException:
             self.runs.release(key)
             raise
 
-    async def _alaunch(self, thread_id: str, kind: str) -> str:
+    async def _alaunch(self, thread_id: str, kind: str, inp: Any = None) -> str:
         """开一段新的事件日志、记一行运行记录，交出执行。执行结束才退掉占位：浏览器断开、没人读都照常跑完。"""
         key = self._run_key(thread_id)
         turn = await self._aturn_of(thread_id)
@@ -638,7 +691,7 @@ class ResearchRunner(BaseRunner):
         try:
             await self._arecord(lambda s: s.create(run, thread_id, kind, turn, config.VERSION or None))
             self.events.append(run, {"event": "thread", "data": {"thread_id": thread_id, "queued": queued}})  # 排队时也先把 id 给页面
-            self._spawn(self._work(thread_id, run))
+            self._spawn(self._work(thread_id, run, inp))
         except BaseException as e:
             self._inflight -= 1
             self.events.close(run)
@@ -656,7 +709,7 @@ class ResearchRunner(BaseRunner):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _work(self, thread_id: str, run: str) -> None:
+    async def _work(self, thread_id: str, run: str, inp: Any = None) -> None:
         key = self._run_key(thread_id)
 
         def out(ev: dict) -> None:
@@ -669,7 +722,7 @@ class ResearchRunner(BaseRunner):
                 out({"event": "started", "data": {}})
                 status, error = ERROR, None  # 被 Exception 以外的打断（进程要退出）也记成出错
                 try:
-                    status = await self._run_turn(thread_id, None, out) or SUCCESS
+                    status = await self._run_turn(thread_id, inp, out) or SUCCESS
                 except Exception as e:  # noqa: BLE001
                     error = e
                     log.exception("执行出错：%s 运行 %s", key, run)
@@ -712,7 +765,9 @@ class ResearchRunner(BaseRunner):
 
     async def _run_turn(self, thread_id: str, inp: Any, out: Callable[[dict], None]) -> str | None:
         """跑一轮，事件交给 out。用户点了停止：排队时就点的不跑，直接收尾；跑着的马上取消（见 stop），正在等的模型、工具一起断开，
-        已经流出来的正文、做完的工具结果留着（取消时照常存检查点，见 DURABILITY）。停下的返回 STOPPED（记进运行记录）。"""
+        已经流出来的正文、做完的工具结果留着（取消时照常存检查点，见 DURABILITY）。停下的返回 STOPPED（记进运行记录）。
+        模型停下来问用户了（见 app.tools.ask_user）返回 ASKED：这次执行到此结束，这一轮还没完，检查点停在问的地方，
+        用户回答以后另起一次执行接着跑（inp 是带着回答的 Command，见 _aanswer_input）。"""
         # 这一轮调的模型、工具记账时记上对话、轮和归谁（见 app.costs；额度按归谁算，见 app.quota）
         scope = costs.Scope(thread_id=thread_id, turn_id=await self._aturn_of(thread_id), owner=await self.run_store.owner_of(thread_id))
         if self._stop_requested(thread_id):
@@ -728,8 +783,9 @@ class ResearchRunner(BaseRunner):
         # 查过要不要停到登记好这一轮，中间不让出事件循环：停止（_cancel 也在这个循环里）要么上面已经看到，要么取消得到
         turn = asyncio.get_running_loop().create_task(self._stream_graph(thread_id, inp, out, buf, tasks, done), context=ctx)
         self._running[thread_id] = turn
+        asked = False
         try:
-            await turn
+            asked = await turn
         except asyncio.CancelledError:
             me = asyncio.current_task()
             if (me is not None and me.cancelling()) or not turn.cancelled():  # 不是点了停止（比如进程要退出）：照常往外抛
@@ -744,18 +800,23 @@ class ResearchRunner(BaseRunner):
         finally:
             self._running.pop(thread_id, None)
             self._models.pop(thread_id, None)
-        self._titles.pop(thread_id, None)  # 答完了：起好的标题随调模型写进 state 了
+        self._titles.pop(thread_id, None)  # 答完了（或者模型调完、停下来问用户了）：起好的标题随调模型写进 state 了
+        if asked:
+            return ASKED
         await self._want_suggestions(thread_id)
         return None
 
     async def _stream_graph(self, thread_id: str, inp: Any, out: Callable[[dict], None], buf: StreamBuffer, tasks: dict[str, str],
-                            done: dict[str | None, list[ToolMessage]]) -> None:
+                            done: dict[str | None, list[ToolMessage]]) -> bool:
         """agent 的流 → 页面事件。messages 只转发 model 节点的（快模型在别的节点里调用，不算）；
         custom 是中间件写的进度（step，做完的带来源）、标题（title）和阶段（phase：起标题、等模型这些空档在等什么）；updates 里改了 state 的节点做完发 node（页面不靠它）。
         模型生成到一半断了、正在再调一次（restart，见 agent.InterruptedRetryMiddleware）：带上刚才流出来的那条消息的 id，页面去掉它；没流出东西是 None。
         子 agent（task 工具里跑的另一个 agent）的流要开 subgraphs 才有，按命名空间认出是哪个 task 调用派的：
         它的片段、进度、阶段带上 task（调用 id），页面放进那张子任务卡；它的节点做完不发 node。它的片段 langgraph_node 也是 model，只按节点名分不开。
-        做完的 step 带着工具结果（result，不发给页面），记进 done：点停止时它那一步可能还没提交，收尾时补上（见 _write_stop）。"""
+        做完的 step 带着工具结果（result，不发给页面），记进 done：点停止时它那一步可能还没提交，收尾时补上（见 _write_stop）。
+        模型停下来问用户（ask_user 里的 interrupt）时流照常结束，updates 里有一条 __interrupt__：返回 True（见 _run_turn）。
+        别的中断（现在没有，比如 MCP 的 elicitation）不认，和以前一样这一轮算没跑完。"""
+        asked = False
         ctx = ChatContext(take_guide=lambda: self._take_guide(thread_id), title=self._titles.get(thread_id),
                           owner=await self.run_store.owner_of(thread_id), files=self.files, thread_id=thread_id, kb=self.kb)
         async for ns, mode, chunk in self.graph.astream(inp, self._cfg(thread_id), context=ctx, stream_mode=["messages", "updates", "custom"],
@@ -787,13 +848,17 @@ class ResearchRunner(BaseRunner):
             if task:
                 continue
             for node, update in chunk.items():
-                if update:  # 没改 state 的中间件节点不发
+                if node == "__interrupt__":
+                    asked = asked or any(_is_ask(i.value) for i in update)
+                elif update:  # 没改 state 的中间件节点不发
                     out({"event": "node", "data": {"node": node}})
         _put(out, buf.flush())
+        return asked
 
     async def _write_stop(self, thread_id: str, buf: StreamBuffer | None = None, tasks: dict[str, str] | None = None,
-                          done: dict[str | None, list[ToolMessage]] | None = None) -> None:
+                          done: dict[str | None, list[ToolMessage]] | None = None, ended_at: str | None = None) -> None:
         """这一轮以停止收尾，写成这一轮最后一个节点（TURN_END）的更新：线程停在这一轮结束的地方，可以接着说。
+        ended_at 是这一轮算到什么时候为止（没给是现在，见 agent.stop_turn）。
         tasks 是这次运行里派出去的子 agent（命名空间 → task 调用 id）：还没做完的，把它检查点里已经做了的和流出来的半截存进它的子任务卡，
         它没做完的工具调用标成停止了。done 是页面已经收到做完了的工具结果（见 _stream_graph）：取消时它那一步可能还没提交，检查点里没有，这里补上，
         页面上做完的一步停下以后还是做完的，子 agent 交回的来源也算上它。"""
@@ -815,8 +880,27 @@ class ResearchRunner(BaseRunner):
                 msgs.append(p)
             if msgs:
                 subs[call_id] = msgs
-        await self.graph.aupdate_state(cfg, stop_turn(v, partial, subs, title=self._titles.get(thread_id)), as_node=TURN_END)
+        await self.graph.aupdate_state(cfg, stop_turn(v, partial, subs, title=self._titles.get(thread_id), ended_at=ended_at), as_node=TURN_END)
         self._titles.pop(thread_id, None)
+
+    async def _adismiss(self, thread_id: str) -> bool:
+        """停在问用户那里的这一轮，用户点了停止：不回答了，这一轮以停止收尾（没回答的问题留在过程里），之后可以接着说。
+        这时没有执行在跑，占着位直接写；这一轮的用时算到问出来的时候。排着的话和点停止时一样，接着发成新的一轮（见 _aended）。
+        没在等回答的（空闲、没跑完、刚好有执行占着位）返回 False。"""
+        key = self._run_key(thread_id)
+        if not await self._aadmit(key):
+            return False
+        try:
+            snap = await self.graph.aget_state(self._cfg(thread_id))
+            if not snap.values or self._status(snap, None)[0] != ASKING:
+                self.runs.release(key)
+                return False
+            await self._write_stop(thread_id, ended_at=snap.created_at)
+        except BaseException:
+            self.runs.release(key)
+            raise
+        await self._aended(thread_id, STOPPED)
+        return True
 
     # ---- 回答时又说的话 ----
 
@@ -874,9 +958,14 @@ class ResearchRunner(BaseRunner):
         """一次执行结束：退掉占位。答完或停下了、又排着话，就把它发成新的一轮（kind 是 say），占位直接交过去，中间别的请求插不进来；
         这次执行最后的状态里线程已经又在跑了，页面看到就接着读下一次执行的事件。
         出错的不发：排着的话留着，页面把它放回输入框，用户重试完再发。
-        等着插进这一轮、这一轮却没再调模型的话，先退回去排着（排在这期间又说的话前面），和排着的一样处理。"""
+        等着插进这一轮、这一轮却没再调模型的话，先退回去排着（排在这期间又说的话前面），和排着的一样处理。
+        停下来问用户的（ASKED）这一轮还没完：排着的、等着插的话都原样留着，用户回答以后接着跑时照常插进去、答完再发；
+        用户不回答、点了停止的，和停下一样处理（见 _adismiss）。"""
         key = self._run_key(thread_id)
         async with self._queue_mu:
+            if status == ASKED:
+                self.runs.release(key)
+                return
             try:
                 if left := await self.run_store.take_pending(thread_id, GUIDE):
                     await self.run_store.put_pending(thread_id, QUEUE, left.text, front=True, thinking=left.thinking)
@@ -924,7 +1013,7 @@ class ResearchRunner(BaseRunner):
         cfg = self._cfg(thread_id)
         snap = await self.graph.aget_state(cfg)
         if snap.values and snap.next:
-            raise NotIdle("上一轮没跑完，先重试")
+            raise NotIdle(ASKING_FIRST if self._status(snap, None)[0] == ASKING else "上一轮没跑完，先重试")
         update: dict[str, Any] = {}
         if option is not None:
             if option not in {o.id for o in self.planner.catalog.offered(self.planner.usable)}:
@@ -947,21 +1036,41 @@ class ResearchRunner(BaseRunner):
         await self.graph.aupdate_state(cfg, update, as_node=START)
 
     async def _aretry_input(self, thread_id: str) -> None:
-        """只有没跑完的线程能重试：从最后一个检查点接着跑，出错那一步重做，之前做过的搜索、读页都不重来。"""
+        """只有没跑完的线程能重试：从最后一个检查点接着跑，出错那一步重做，之前做过的搜索、读页都不重来。
+        停在问用户那里的不算没跑完：回答（或跳过）就接着跑。"""
         snap = await self.graph.aget_state(self._cfg(thread_id))
-        if not snap.values or not snap.next:
+        if not snap.values or not snap.next or self._status(snap, None)[0] == ASKING:
             raise NothingToRetry("这个线程没有失败，不需要重试")
+
+    async def _aanswer_input(self, thread_id: str, ask_id: str, text: str = "", skip: bool = False) -> Command:
+        """用户回答了（或跳过了）模型问的问题：校验过了返回带着回答的 Command，agent 拿它从停下的地方接着跑（回答按中断的 id 交给那次提问）。
+        什么都不往检查点里写：问着的时候写一次状态，等着的问题就丢了。回答连同问出来、回答的时间一起交过去，算这一轮用时的时候去掉等的这段。
+        一条消息里问了两个的一次答一个：答了前一个，接着跑会马上停在后一个上。"""
+        snap = await self.graph.aget_state(self._cfg(thread_id))
+        asking = bool(snap.values) and self._status(snap, None)[0] == ASKING
+        if not asking or not any(a["id"] == ask_id for a in _asks(snap)):
+            raise NothingToAnswer("这个问题已经不用回答了")
+        try:
+            got = AskAnswer(answer="" if skip else text, skip=skip, asked_at=snap.created_at or "", answered_at=datetime.now(UTC).isoformat())
+        except ValidationError as e:
+            raise BadAnswer(f"回答不能是空的，也不能超过 {MAX_ANSWER} 个字") from e
+        return Command(resume={ask_id: got.model_dump()})
 
     async def _aregenerate_input(self, thread_id: str, text: str | None = None, thinking: bool | None = None) -> None:
         """最后一轮重新回答：去掉用户最后那句话之后的消息和这一轮的记录，从那句话接着跑。
         带 text 是用户改了最后那句话：先换成 text（消息 id 不变，还是同一轮，发送时间记成改的时候），再重新回答。标题不重起。
-        thinking 是这次的思考开关：给了就按它（只改开关，发送时间不变），没给按那句话原来的；模型照对话定下的（Auto 的重新选）。"""
+        thinking 是这次的思考开关：给了就按它（只改开关，发送时间不变），没给按那句话原来的；模型照对话定下的（Auto 的重新选）。
+        停在问用户那里的也可以（不回答了，改了那句话重来）：先把这一轮以停止收尾，再照常重新回答。"""
         await self._adrop_suggestions(thread_id)
         cfg = self._cfg(thread_id)
         snap = await self.graph.aget_state(cfg)
         v = snap.values
         if v and snap.next:
-            raise NotIdle("上一轮没跑完，先重试")
+            if self._status(snap, None)[0] != ASKING:
+                raise NotIdle("上一轮没跑完，先重试")
+            # 这一步里已经做完、还没落进检查点的工具结果（和提问一起发出的搜索）先随收尾写进去，下面才删得到
+            await self._write_stop(thread_id)
+            v = (await self.graph.aget_state(cfg)).values
         msgs = (v or {}).get("messages", [])
         start = history.last_human(msgs)
         if start < 0:
@@ -995,11 +1104,12 @@ class ResearchRunner(BaseRunner):
             self.runs.release(key)
 
     async def _arename(self, thread_id: str, title: str) -> None:
-        """改标题。没跑完的线程不能改：写一次状态，出错的那一步就丢了，重试接不上。"""
+        """改标题。没跑完的线程不能改：写一次状态，出错的那一步就丢了，重试接不上。停在问用户那里的也一样：写一次，等着的问题就丢了。"""
         cfg = self._cfg(thread_id)
         async with self._ahold(thread_id), self._suggest_mu:  # 和写推荐问题错开
-            if (await self.graph.aget_state(cfg)).next:
-                raise NotIdle("上一轮没跑完，先重试")
+            snap = await self.graph.aget_state(cfg)
+            if snap.next:
+                raise NotIdle(ASKING_FIRST if self._status(snap, None)[0] == ASKING else "上一轮没跑完，先重试")
             await self.graph.aupdate_state(cfg, {"title": title}, as_node=TURN_END)
 
     async def _adelete(self, thread_id: str) -> None:
@@ -1144,6 +1254,9 @@ class ResearchRunner(BaseRunner):
             # 排着、这一轮答完就发的话（{text, created_at, updated_at}）；没有为 None
             "queued_message": await self.run_store.get_pending(thread_id, QUEUE),
             "guided_message": await self.run_store.get_pending(thread_id, GUIDE),  # 等着插进这一轮的话，同上
+            # 停下来等用户回答的问题（asking 时才有）：{id, call_id, question, options}，回答时带上 id（见 answer）；
+            # call_id 对得上这一轮条目里那条 pending 的 ask。一次问了两个的先给前一个
+            "ask": _asks(snap)[0] if status == ASKING else None,
         }
 
     def failure_detail(self, thread_id: str) -> str | None:
@@ -1186,13 +1299,18 @@ class ResearchRunner(BaseRunner):
     @staticmethod
     def _status(snap, run: dict | None) -> tuple[str, tuple[str, str] | None]:
         """queued / running：有执行占着位；idle：这一轮跑完了（或停下了），可以接着说；
+        asking：没在跑，这一轮停下来问用户了（见 app.tools.ask_user），回答或跳过以后接着跑，不是失败；
         failed：没在跑、也没跑完——某一步抛了错（错误记在检查点里），或执行半路被掐断（进程重启，没有错误记录）。
+        和提问同一步的别的工具抛了错也算 failed：重试时出错的重做，问题会再问出来。
         failed 时第二项是原因的（类别，说法）（见 _failure_of），别的状态是 None。"""
         if run is not None:
             return ("queued" if run["queued"] else "running"), None
         if not snap.next:
             return "idle", None
-        return "failed", _failure_of([str(t.error) for t in snap.tasks if t.error])
+        errors = [str(t.error) for t in snap.tasks if t.error]
+        if not errors and _asks(snap):
+            return ASKING, None
+        return "failed", _failure_of(errors)
 
 
 async def _settle(mark: object) -> None:

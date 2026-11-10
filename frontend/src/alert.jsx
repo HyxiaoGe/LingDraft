@@ -1,4 +1,4 @@
-// 答完提醒（评审第 46 条）：用户去了别的标签页、别的应用等着时，开着的这个对话答完（或没有答完）了，标签页标题前加“（答完了）”或“（没有答完）”，
+// 答完提醒（评审第 46 条）：用户去了别的标签页、别的应用等着时，开着的这个对话答完（或没有答完、停下来等他回答）了，标签页标题前加“（答完了）”“（没有答完）”或“（等你回答）”，
 // 网站图标右上角加一个靛青点；回到这个页面就恢复。用户在设置窗口里打开了通知并且浏览器允许了，再发一条系统通知，点通知回到这个页面。
 // 只管开着的这个对话：别的对话在后台跑完，左栏里它的状态会变，这里不提醒
 import { useEffect, useRef, useState } from "react";
@@ -54,7 +54,7 @@ function setIcon(url) {
   }
 }
 
-// 返回标题前要加的字（“答完了”“没有答完”），没有就是 null。running：开着的对话这一轮在跑；st：它的状态；title：对话标题（通知里写）
+// 返回标题前要加的字（“答完了”“没有答完”“等你回答”），没有就是 null。running：开着的对话这一轮在跑；st：它的状态；title：对话标题（通知里写）
 export function useDoneAlert(tid, running, st, title) {
   const [done, setDone] = useState(null);
   const was = useRef({ tid, running });
@@ -64,7 +64,7 @@ export function useDoneAlert(tid, running, st, title) {
     if (prev.tid !== tid) return setDone(null); // 换了对话
     if (!prev.running || running || !away()) return;
     const rec = st?.turns?.at(-1)?.record;
-    const word = st?.status === "failed" || rec?.outcome === "stopped" || rec?.outcome === "blocked" ? "没有答完" : "答完了";
+    const word = st?.status === "asking" ? "等你回答" : st?.status === "failed" || rec?.outcome === "stopped" || rec?.outcome === "blocked" ? "没有答完" : "答完了";
     setDone(word);
     if (wants() && permission() === "granted") {
       try {

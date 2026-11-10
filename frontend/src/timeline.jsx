@@ -4,7 +4,9 @@
 // “已完成 25 秒 · 搜了 6 次 · 读了 4 页”，点开看每一步。收起的内容还留在页面里，浏览器的查找搜得到（见 Fold）。
 // 每一轮是一个 section（data-turn），回答开头有“灵稿”的标识；三轮起右边（宽屏）或顶栏（窄屏）有轮次目录，见 TurnIndex。
 // 每句话和每条回答下面有时间，都能复制；最后一句在空闲时能改，改完按新的话重新回答。这些一直显示，之前各轮的淡一档。
+// 模型做到一半会停下来问用户（状态 asking）：最后一轮下面出一张问题卡（AskCard），点选项、在输入框里写、或者跳过，这一轮接着跑；问过的问题和回答排在过程里。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
+import { MessageCircleQuestionMark } from "lucide-react";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
 import shell from "./card.module.css";
@@ -19,9 +21,9 @@ import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
 import { Markdown } from "./markdown.jsx";
 import { ActionMenu } from "./menu.jsx";
-import { HeadBar, NavContext, touch, typeNext } from "./nav.jsx";
+import { HeadBar, NavContext, touch, typeHere, typeNext } from "./nav.jsx";
 import proc from "./process.module.css";
-import { ACTIVE, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
+import { ACTIVE, ASKING, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
 import task from "./task.module.css";
 import styles from "./timeline.module.css";
@@ -155,7 +157,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   // 用户自己做的（发一句话、重新回答、重试、改最后一句、点接着问）：跳到底跟着看这一轮。排着的话自动开跑、打开一个正在跑的对话都不拉人。
   // 光标不搬：按钮点完没了（接着问、重试、重新回答这一轮跑起来就不在了），焦点会掉到页面上，这时才放回输入框，好接着写；原来在哪就还在哪
   const act = { ...rawAct };
-  for (const k of ["start", "say", "retry", "regenerate", "edit"]) {
+  for (const k of ["start", "say", "retry", "regenerate", "edit", "answer"]) {
     act[k] = (...a) => {
       toBottom();
       const r = rawAct[k](...a);
@@ -176,6 +178,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   const onSend = (text, images, docs) => { // images：带的图（[{key, file, url}]），docs：带的文件（解析好了的，见 composer.jsx 的 picked），排着的话都不带
     if (mode === "new") return act.start(text, images, docs);
     if (mode === "idle") return act.say(text, images, docs);
+    if (mode === ASKING) return act.answer({ text, typed: true }); // 问着的时候输入框里写的就是回答
     if (queueing) return act.queue(text);
     return undefined;
   };
@@ -212,7 +215,8 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
         else focusInput();
       } },
   ];
-  const menuNote = running ? "正在回答，答完或停下后才能改名、删除" : status === "failed" ? "这段对话没有完成，重试以后才能改名" : null;
+  const menuNote = running ? "正在回答，答完或停下后才能改名、删除" : status === "failed" ? "这段对话没有完成，重试以后才能改名"
+    : status === ASKING ? "回答或跳过问题以后才能改名" : null;
   const edit = renaming && manageable ? {
     value: title || "",
     onDone: (t, how) => {
@@ -222,7 +226,8 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
     },
   } : null;
   runningRef.current = running;
-  const pendingKinds = running ? [st?.guided_message && "guided", st?.queued_message && "queued"].filter(Boolean) : [];
+  const asking = mode === ASKING; // 停下来问用户了：排着的话还留着（回答以后这一轮答完再发），照样贴在输入框上沿
+  const pendingKinds = running || asking ? [st?.guided_message && "guided", st?.queued_message && "queued"].filter(Boolean) : [];
   const said = useAnnounce(st, running, stopping); // 读屏：只在开始、答完、停下、出错时说一句（见 useAnnounce）
   // 轮次目录：三轮起才有，只列轮次，见 turnEntries。正文右边放得下就放一栏，放不下顶栏右边一个按钮点开
   const entries = !fresh && !opening ? turnEntries(st, live, running) : [];
@@ -274,7 +279,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
         {!error?.quota && <CreditsNote credits={credits} onLogin={picker.onLogin} />}
         {away && <JumpButton more={more} onClick={toBottom} />}
         <Composer thread={tid || "new"} carry={!!live} mode={mode} queueing={queueing} held={pendingKinds.length > 0} stopping={stopping} putBack={putBack} onSend={onSend} onStop={act.stop}
-          above={running && <Pending st={st} act={act} />} onTakeBack={pendingKinds.length ? () => act.withdraw(pendingKinds) : null}
+          above={(running || asking) && <Pending st={st} act={act} asking={asking} />} onTakeBack={pendingKinds.length ? () => act.withdraw(pendingKinds) : null}
           tools={<ModelTools models={models} loading={models === null || opening} {...picker} />} />
       </Dock>
       {dropping && <DropHint />}
@@ -283,7 +288,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   );
 }
 
-// 读屏播报（polite）：这一轮开始、答完（带来源条数）、停下、出错时各说一句。过程里的阶段、正文逐字出现都不播：
+// 读屏播报（polite）：这一轮开始、答完（带来源条数）、停下来问用户（带上问题）、停下、出错时各说一句。过程里的阶段、正文逐字出现都不播：
 // 阶段一变就播会打断，正文要听的人等“答完了”再从这一轮开头读（这一轮在跑时标着 aria-busy，见 Turns）
 function useAnnounce(st, running, stopping) {
   const [said, setSaid] = useState("");
@@ -302,7 +307,8 @@ function useAnnounce(st, running, stopping) {
     const t = st?.turns?.at(-1);
     const rec = t?.record;
     const n = Object.keys(citeNumbers((t?.items || []).filter((i) => i.type === "text").map((i) => i.text), st?.sources)).length; // 这一轮正文引用的
-    setSaid(st?.status === "failed" ? "这一轮中途停下了，可以重试"
+    setSaid(st?.status === ASKING ? `需要你回答：${st.ask?.question || ""}`
+      : st?.status === "failed" ? "这一轮中途停下了，可以重试"
       : rec?.outcome === "stopped" ? "已停止"
         : rec?.outcome === "blocked" ? "内容审核没通过，这一轮停下了"
           : `回答完了${n ? `，用到 ${n} 个来源` : ""}`);
@@ -519,7 +525,10 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models, modelNa
 function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, models, modelNames, title, images, versions, files }) {
   const items = mergeItems(t.items, live);
   const cards = turnCards(items, live?.drafts, versions); // 这一轮写的文件，正文下面一份一张
-  const { process, answer } = splitTurn(items);
+  const { process: steps, answer } = splitTurn(items);
+  // 停下来等用户回答的那个问题（一次问了两个的先给前一个）：在下面的问题卡里，过程里不重复列；答了、跳过了的才排进过程
+  const ask = last && !running && st?.status === ASKING ? st.ask : null;
+  const process = steps.some((i) => i.type === "ask" && i.pending) ? steps.filter((i) => !(i.type === "ask" && i.pending)) : steps;
   const texts = items.filter((i) => i.type === "text").map((i) => i.text);
   const nums = citeNumbers(texts, st?.sources);
   // 过程里还有子任务卡：它们的报告引用的来源接着往下编号。这一轮的文字排前面，正文的编号和底下的来源列表不变
@@ -539,7 +548,7 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
         panel={files} at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && idle} onEdit={act.edit} />}
       <div className={styles.ai}>
         {who && <div className={styles.aiHead}><ModelIcon m={{ model: ref, name: who, icon: named?.icon }} size={22} />{who}</div>}
-        {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} answering={replied} failed={failed} now={now} versions={versions} />}
+        {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} answering={replied} failed={failed} asking={!!ask} now={now} versions={versions} />}
         {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
         {mapsOf(items).map((card) => <MapCard key={card.key} card={card} />)}
         {travelOf(items).map((card) => <TravelCard key={card.key} card={card} />)}
@@ -548,7 +557,8 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
         {files && <FileCards cards={cards} running={running} open={files.open} current={files.current} />}
         {running && <LiveLine live={live} items={items} stopping={stopping} now={now} versions={versions} />}
-        {!running && <AnswerSources nums={nums} sources={st?.sources} />}
+        {ask && <AskCard key={ask.id} ask={ask} onAnswer={act.answer} />}
+        {!running && !ask && <AnswerSources nums={nums} sources={st?.sources} />}
         {!running && rec?.ended_at && rec.outcome === "no_reply" && <p className={styles.muted}>这一轮没有给出文字回复。</p>}
         {failed && <Failed st={st} act={act} />}
         {!running && (replied || rec?.ended_at || (last && idle)) && (
@@ -713,19 +723,20 @@ function CopyButton({ text }) {
   );
 }
 
-// 这一轮的过程：一行“已完成 / 已停止 / 已中断 / 中途停下 + 用时 + 做了什么”，点开看每一步。正在跑时展开，正文一出来就收成这一行
+// 这一轮的过程：一行“已完成 / 已停止 / 已中断 / 中途停下 + 用时 + 做了什么”，点开看每一步（停下来问用户时是“等你回答”，不写用时）。
+// 用时不算等用户回答的那段（rec.waited_ms）。正在跑时展开，正文一出来就收成这一行
 // （2026-11-09 Sean 定，原来跑完不收：过程往往很长，开着把回答推远）。收了这次就不再自动展开：模型有时先写一句“我先查一下”再去搜，
 // 那句字刚出来时算正文、过程收起，搜索来了它归回过程，这时也不再展开（收起是结束动作，Sean 定），在做什么看下面那一行。
 // 按这次运行记（running_since），重新回答是新的一次，又从展开开始
 const settled = new Set();
-function Process({ k, items, st, nums, rec, running, answering, failed, now, versions }) {
+function Process({ k, items, st, nums, rec, running, answering, failed, asking, now, versions }) {
   const run = running ? `${k}@${st?.running_since ?? ""}` : null;
   if (run && answering) settled.add(run);
   const [open, toggle, found] = useFoldOpen(`proc:${k}`, running && !settled.has(run)); // 这次运行正文还没出来过的展开；自己点过的照点的来
   const shown = open && items.length > 0;
   const time = running ? elapsed(st?.running_since || rec?.started_at, now)
-    : rec?.ended_at ? elapsed(rec.started_at, Date.parse(rec.ended_at)) : "";
-  const verb = running ? "处理中" : failed ? "中途停下" : rec?.outcome === "stopped" ? "已停止" : rec?.outcome === "blocked" ? "已中断" : "已完成";
+    : rec?.ended_at ? elapsed(rec.started_at, Date.parse(rec.ended_at), rec.waited_ms || 0) : "";
+  const verb = running ? "处理中" : asking ? "等你回答" : failed ? "中途停下" : rec?.outcome === "stopped" ? "已停止" : rec?.outcome === "blocked" ? "已中断" : "已完成";
   const did = running ? "" : didText(items);
   const label = `${verb}${time ? ` ${time}` : ""}${did ? ` · ${did}` : ""}`;
   return (
@@ -752,7 +763,7 @@ function didText(items) {
   return [kb && `查了 ${kb} 次资料库`, search && `搜了 ${search} 次`, read && `读了 ${read} 页`, tasks && `${tasks} 个子任务`].filter(Boolean).join(" · ");
 }
 
-// 过程里的一条条：思考、中途说的话、工具步骤，子任务是一张卡片。子任务卡里是它的子 agent 的这些，排法一样。
+// 过程里的一条条：思考、中途说的话、工具步骤、问用户的问题和回答，子任务是一张卡片。子任务卡里是它的子 agent 的这些，排法一样。
 // hideUnknown：子 agent 还在跑，它查到的来源要等它做完才进这一轮的来源表，还对不上的引用先不显示（不然先冒一个问号）
 // versions：这段对话写成了的文件（见 artifact.fileVersions），改文件那一步按它写出是哪份
 function ProcItems({ items, st, nums, running, hideUnknown = false, versions }) {
@@ -763,7 +774,8 @@ function ProcItems({ items, st, nums, running, hideUnknown = false, versions }) 
     : it.type === "thinking" ? <Thinking key={`thinking:${it.id}`} it={it} thinking={running && it.live && it.ms == null} />
       : it.type === "blocked" ? <div key={`blocked:${it.id}`} className={proc.tool + " " + proc.bad}><IconWarn size={12} /><span className={proc.main}>内容审核没通过，这个子任务停在这里</span></div>
         : it.type === "guide" ? <GuideNote key={`guide:${it.id}`} it={it} />
-          : <ProcText key={`text:${it.id}`} it={it} cite={cite} />));
+          : it.type === "ask" ? <AskNote key={`ask:${it.id}`} it={it} />
+            : <ProcText key={`text:${it.id}`} it={it} cite={cite} />));
 }
 
 // 用户插进这一轮的话：模型从这里开始看到它
@@ -773,6 +785,25 @@ function GuideNote({ it }) {
       <span className={proc.guideTag}>你插了一句</span>
       <div className={proc.guideText}>{it.text}</div>
     </div>
+  );
+}
+
+// 模型停下来问过的问题：一行问题，下面是用户的回答（和插的话一个样子）；跳过的、没等到回答这一轮就停了的在行尾说一声
+function AskNote({ it }) {
+  return (
+    <>
+      <div className={proc.tool}>
+        <MessageCircleQuestionMark size={12} />
+        <span className={proc.question}>{it.question}</span>
+        {!it.answer && !it.pending && <span className={proc.sub}>{it.skipped ? "你跳过了" : "没有回答"}</span>}
+      </div>
+      {it.answer && (
+        <div className={proc.guide}>
+          <span className={proc.guideTag}>你的回答</span>
+          <div className={proc.guideText}>{it.answer}</div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -1103,6 +1134,25 @@ function Suggestions({ items, onPick }) {
       <div className={styles.suggestLabel} id="ws-suggest-label">接着问</div>
       <div className={styles.suggestList}>
         {items.map((q) => <button key={q} className={styles.chip} onClick={() => onPick(q)}>{q}</button>)}
+      </div>
+    </div>
+  );
+}
+
+// 模型停下来问的问题（见后端 app.tools.ask_user）：一张卡一个问题，下面是它给的选项，点一个就是回答。
+// “自己写”把光标放进输入框——问着的时候输入框里写的就是回答；“跳过”不答，它按自己的判断接着做。不回答就一直等着，没有倒计时
+function AskCard({ ask, onAnswer }) {
+  return (
+    <div className={shell.card + " " + styles.ask} role="group" aria-label="需要你回答的问题">
+      <div className={shell.title}><MessageCircleQuestionMark size={15} /><span>{ask.question}</span></div>
+      {ask.options.length > 0 && (
+        <div className={styles.askOptions}>
+          {ask.options.map((o) => <button key={o} className={styles.askOption} onClick={() => onAnswer({ text: o })}>{o}</button>)}
+        </div>
+      )}
+      <div className={styles.askActions}>
+        <button className="ws-btn ghost sm" onClick={typeHere}><IconEdit size={13} />自己写</button>
+        <button className="ws-btn ghost sm" onClick={() => onAnswer({ skip: true })}>跳过</button>
       </div>
     </div>
   );

@@ -17,6 +17,9 @@ export const touch = () => matchMedia("(pointer: coarse)").matches;
 // force：光标停在别的按钮上、选着字也放过去（用户点开文件、关掉右栏和大图，是要接着打字，2026-11-09 Sean 要的）
 export const focusInput = (force = false) => setTimeout(() => dispatchEvent(new CustomEvent("ws-focus-input", { detail: force })));
 
+// 用户点了“自己写”这类按钮，要在输入框里打字：马上把光标放进去，触屏上也放（就是要弹出键盘；等一拍再放的话 iOS 不弹）
+export const typeHere = () => dispatchEvent(new CustomEvent("ws-type-here"));
+
 // 关掉大图、右栏以后光标去哪：桌面上回输入框；手机上（全屏的盖着输入框，触屏还会弹出键盘）回到点开它的那个按钮
 export function typeNext(back) {
   if (matchMedia(MOBILE).matches) back?.focus?.({ preventScroll: true });

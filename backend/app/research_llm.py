@@ -50,7 +50,7 @@ from app.tools.image_mcp import ImageTool
 from app.tools.maps_mcp import PLACE_TOOL, ROUTE_TOOL, MapsTool
 from app.tools.research_tools import TIME_TOOL, make_research_tools
 from app.tools.vision import ImageUris, view_prompt
-from app.graph.research.history import CREATE_TOOL, EDIT_TOOL, FILE_TOOL, VIEW_TOOL, WRITE_TOOLS
+from app.graph.research.history import ASK_TOOL, CREATE_TOOL, EDIT_TOOL, FILE_TOOL, VIEW_TOOL, WRITE_TOOLS
 from app.tools.weather_mcp import WEATHER_TOOL, WeatherTool
 from app.tools.web_mcp import READ_TOOL, SEARCH_TOOL, WebTool
 
@@ -1051,6 +1051,8 @@ class FakeToolModel(BaseChatModel):
     - “取回”：用 recall 取回这段对话第一次搜索的第一个来源；“取回第N轮”：取回第 N 轮。取到后回复取到的开头。
     - “文件里”：读用户发的文件（read_file，见 _read_file），或者回复收到了哪几个文件。
     - “知识库里”：查知识库，查的是“知识库里”后面那段，引用查到的第一个来源；没有这个工具就说没有。
+    - “问我”：先问用户一个问题（ask_user，带两个选项），拿到回答（或跳过）后回复，回复里说收到了什么；“边搜边问”：同一条消息里搜一次、问一次；
+      “问两个”：同一条消息里问两个；“一直问”：每拿到一个回答就接着问下一个，直到工具说不能再问了。
     用户插进这一轮的话不改这些路径，给出文字回复时开头说一声收到了哪些（测试据此看模型有没有看到）。
     内容审核（模拟服务商）：请求里任何地方有 FAKE_BLOCKED 就整个拒绝；用户的话里有“查完就拦”时，有工具结果就拒绝；
     有“输出拦截”时，吐完思考后输出被截断。
@@ -1096,6 +1098,8 @@ class FakeToolModel(BaseChatModel):
             return call(TIME_TOOL)
         if "直接答" in text:
             return "直接回答：这个问题不用查。", []
+        if any(k in text for k in ("问我", "边搜边问", "问两个", "一直问")) and ASK_TOOL in self.bound:
+            return self._ask(text, turn, n)
         if any(k in text for k in ("写文档", "写网页", "写代码文件", "改文档", "重写文档")) and CREATE_TOOL in self.bound:
             return self._write(text, messages, turn, call)
         if "天气" in text and WEATHER_TOOL in self.bound and WEATHER_TOOL not in names:
@@ -1215,6 +1219,27 @@ class FakeToolModel(BaseChatModel):
         ids = [a.id for m in messages for a in history.attached_images(m)]
         wanted = m.group(1) if (m := re.search(r"看编号(\S+)", text)) else ids[-1] if ids else "none"
         return call(VIEW_TOOL, image_id=wanted, question=text.splitlines()[0][:40])
+
+    @staticmethod
+    def _ask(text: str, turn: list[BaseMessage], n: str) -> tuple[str, list[dict]]:
+        """问用户：还没问过就问（选项里故意带一个重复的、一个空的，工具会整理掉）；有了结果就回复，说收到的回答、跳过了，还是没问成。"""
+        results = [m for m in turn if isinstance(m, ToolMessage) and m.name == ASK_TOOL]
+
+        def ask(k: str = "") -> dict:
+            return {"name": ASK_TOOL, "args": {"question": f"这份对比是用来选型，还是做分享{k}？", "options": ["选型", "分享", "选型", " "]},
+                    "id": f"call_ask_user_{n}{k}"}
+
+        if not results:
+            if "边搜边问" in text:
+                return "", [{"name": "search_web", "args": {"query": text.splitlines()[0][:20], "count": 3}, "id": f"call_search_web_{n}"}, ask()]
+            return "", [ask("a"), ask("b")] if "问两个" in text else [ask()]
+        if "一直问" in text and history.ask_answer(results[-1]) is not None:
+            return "", [ask(str(len(results) + 1))]
+        said = []
+        for m in results:
+            got = history.ask_answer(m)
+            said.append("没问成" if got is None else "你跳过了，我按选型做" if got.get("skip") else f"收到回答：{got.get('answer')}")
+        return "；".join(said) + "。", []
 
     @staticmethod
     def _knowledge(text: str, turn: list[BaseMessage], call, offered: bool) -> tuple[str, list[dict]]:

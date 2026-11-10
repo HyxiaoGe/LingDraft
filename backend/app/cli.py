@@ -115,7 +115,12 @@ def research(args) -> None:
         print(json.dumps({k: v.get(k) for k in ("status", "error", "title")}, ensure_ascii=False, indent=2))
         return
     print(f"thread_id: {tid}")
-    r.run_turn(tid, None, _Printer())
+    r.run_turn(tid, None, printer := _Printer())
+    while (ask := r.state_view(tid)["ask"]) is not None:  # 模型停下来问了：在这里回答（选项的编号，或者自己写；直接回车是跳过），接着跑
+        print(f"\n[问] {ask['question']}" + "".join(f"\n  {i}. {o}" for i, o in enumerate(ask["options"], 1)))
+        said = input("回答：").strip()
+        text = ask["options"][int(said) - 1] if said.isdigit() and 0 < int(said) <= len(ask["options"]) else said
+        r.run_turn(tid, r.answer_input(tid, ask["id"], text, skip=not text), printer)
     print()
     v = r.state_view(tid)
     error = r.failure_detail(tid) or v.get("error")  # 命令行给开发看：异常原文

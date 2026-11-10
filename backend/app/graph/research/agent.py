@@ -41,6 +41,7 @@ from langchain.agents.middleware.types import AgentMiddleware, AgentState, Exten
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage, messages_to_dict
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.config import get_stream_writer
+from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
 from app import costs
@@ -250,7 +251,7 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         reply = history.final_text(turn_msgs)
         blocked = any(history.blocked_reason(m) for m in turn_msgs)
         turns[-1] = turns[-1].model_copy(update={"ended_at": now(), "suggestions": [], "usage": history.usage_of(turn_msgs),
-                                                 "subagent_usage": history.subagent_usage(turn_msgs),
+                                                 "subagent_usage": history.subagent_usage(turn_msgs), "waited_ms": history.waited_ms(turn_msgs),
                                                  "outcome": "blocked" if blocked else "ok" if reply else "no_reply"})
         out["turns"] = turns
         return out
@@ -264,10 +265,11 @@ def _retrying(msgs: list) -> bool:
 
 
 def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list[BaseMessage]] | None = None,
-              title: str | None = None) -> dict[str, Any]:
+              title: str | None = None, ended_at: str | None = None) -> dict[str, Any]:
     """用户点了停止，这一轮到此为止：没跑完的工具调用补上结果，已经流出来的思考和正文（partial）存成这一轮的回复，记下这一轮。
     只想了、正文还没写的也存：页面上停下前后看到的一样；它不发给模型（见 history.is_stopped_thought）。
     返回的更新以 TURN_END 的名义写进检查点。这一轮还没开始（排队时就停了）也要补一条记录。
+    ended_at 是这一轮算到什么时候为止（没给是现在）：停在问用户那里的，算到问出来的时候，等回答的那段不算进用时。
     subagents 是还没跑完的子 agent 已经做了的（task 调用 id → 消息），存进补上的那条结果，页面上的子任务卡留着它做过的事；
     它已经查到了来源的，补上的结果里给主 agent 列出这些来源（来源卡上的内容），下一轮主 agent 用得上（2026-11-02 Sean 定）。
 
@@ -288,8 +290,9 @@ def stop_turn(values: dict, partial: AIMessage | None, subagents: dict[str, list
     turns = list(values.get("turns", []))
     if not turns or turns[-1].id != human.id:
         turns.append(Turn(id=human.id, started_at=now()))
-    turns[-1] = turns[-1].model_copy(update={"ended_at": now(), "suggestions": [], "usage": history.usage_of(new),
-                                             "subagent_usage": history.subagent_usage(new), "outcome": "stopped"})
+    turns[-1] = turns[-1].model_copy(update={"ended_at": ended_at or now(), "suggestions": [], "usage": history.usage_of(new),
+                                             "subagent_usage": history.subagent_usage(new), "waited_ms": history.waited_ms(new),
+                                             "outcome": "stopped"})
     out: dict[str, Any] = {"messages": new, "turns": turns}
     if title and not values.get("title"):  # 停下时标题已经起好、页面已经显示了：存下来，不然停下后跳回原话，下一轮又起一个不一样的
         out["title"] = title
@@ -397,10 +400,23 @@ class ToolProgressMiddleware(AgentMiddleware):
     """工具开始时写一步（pending），做完再写一次带结果的。两次用同一个 id（工具调用 id），页面据此把它们和存下来的记录对上。
     做完的那一步带上它得到的来源（来源卡的内容）：一轮跑完才存检查点（见 research_runner.DURABILITY），
     执行中页面从库里取不到这一轮的来源，正文里的引用要靠这里给的才能显示成编号。
-    还带上工具结果本身（result，runner 不发给页面）：点了停止时这一步可能还没提交，runner 靠它把页面上已经做完的留下。"""
+    还带上工具结果本身（result，runner 不发给页面）：点了停止时这一步可能还没提交，runner 靠它把页面上已经做完的留下。
+    问用户（ask_user）不是一步，是一条 ask：真停下来等回答时写一条 pending 的，用户回答了、接着跑到这里时再写一条带回答的；
+    没问成的（这一轮问的次数到了）不写。"""
 
     async def awrap_tool_call(self, request, handler):
         call = request.tool_call
+        if call["name"] == history.ASK_TOOL:
+            try:
+                result = await handler(request)
+            except GraphInterrupt:  # 停下来等回答了：照常往外抛，这次执行到此结束
+                if (ask := history.ask_of(call, None)) is not None:
+                    emit({"type": "ask", "ask": ask})
+                raise
+            msg = _result_message(result)
+            if msg is not None and (ask := history.ask_of(call, msg)) is not None:
+                emit({"type": "ask", "ask": ask, "result": msg})
+            return result
         step = history.step_of(call, None)
         if step is None:
             return await handler(request)
@@ -747,6 +763,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     # subagent、compaction 用到本模块的东西，放在这里导入（weather_mcp、web_mcp、maps_mcp、flyai_mcp、docs_mcp 用到 prompts，一起放这里）
     from app.graph.research.compaction import CompactionMiddleware, make_recall_tool
     from app.graph.research.subagent import make_task_tool
+    from app.tools.ask_user import make_ask_tool
     from app.tools.docs_mcp import DocsMiddleware
     from app.tools.files import make_read_file_tool
     from app.tools.flyai_mcp import TravelMiddleware, itinerary_tool
@@ -761,8 +778,9 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     # recall 一直都在（工具列表变了前缀缓存整个断），只有压缩换成说明的内容才用得上；页面上不显示这一步。
     # 排行程（present_itinerary）也一直在，查过航班火车才用得上
     # 查资料库（search_knowledge）也一直在，这段对话第一轮时资料库里没有文件的调模型时去掉（见 ModelSelect._for）
+    # 问用户（ask_user）只给主 agent：子 agent 的工具另外列（见 subagent），它不能问人
     tools = [*planner.tools(), make_task_tool(planner), make_recall_tool(), itinerary_tool(), make_view_image_tool(planner), make_read_file_tool(),
-             make_search_knowledge_tool(), *make_write_tools()]
+             make_search_knowledge_tool(), *make_write_tools(), make_ask_tool()]
     return create_agent(
         model=planner.chat_model(planner.catalog.plan(None, None, planner.usable).agent),  # 只是占位：每次调模型由 ModelSelect 换上这一轮的
         tools=tools,

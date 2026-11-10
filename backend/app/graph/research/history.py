@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -50,6 +50,9 @@ VIEW_TOOL = "view_image"  # 看图工具：看不见图的模型问图里有什�
 FILE_TOOL = "read_file"  # 读用户发的文件、模型写的文件：按段读、在文件里找（见 app.tools.files）
 CREATE_TOOL, EDIT_TOOL = "create_file", "edit_file"  # 模型写文件：新建、出新一版（见 app.tools.write_file）
 WRITE_TOOLS = (CREATE_TOOL, EDIT_TOOL)
+ASK_TOOL = "ask_user"  # 模型做到一半停下来问用户，等回答了接着做（见 app.tools.ask_user）
+MAX_ASKS = 2  # 一轮最多问几次（2026-11-10 Sean 定）：再问的不问，让模型按自己的判断做
+MAX_ASK_OPTIONS = 4  # 一个问题最多给几个选项
 PLACE_TOOL, ROUTE_TOOL = "place_search", "route_compare"  # 地图的两个工具（见 app.tools.maps_mcp）
 FLIGHT_TOOL, TRAIN_TOOL = "search_flights", "search_trains"  # flyai 的两个工具（见 app.tools.flyai_mcp）
 ITINERARY_TOOL = "present_itinerary"  # 灵稿自己的排行程（见 app.tools.flyai_mcp）
@@ -718,6 +721,73 @@ def broken_write(call: dict) -> ToolStep | None:
     if call.get("name") not in WRITE_TOOLS or not call.get("id"):
         return None
     return ToolStep(id=call["id"], kind="write", text="", ok=False, message=WRITE_FAILURES["broken"], edit=call["name"] == EDIT_TOOL)
+
+
+# ---- 模型问用户（ask_user，见 app.tools.ask_user）----
+
+
+def ask_args(args: dict) -> tuple[str, list[str]]:
+    """提问的参数整理成（问题，选项）：选项去掉空的、重复的，最多 MAX_ASK_OPTIONS 个。工具和页面都按这个取，问的和显示的一样。"""
+    raw = args.get("options")
+    options = list(dict.fromkeys(o.strip() for o in raw if isinstance(o, str) and o.strip())) if isinstance(raw, list) else []
+    return _text(args.get("question")), options[:MAX_ASK_OPTIONS]
+
+
+def ask_answer(m: BaseMessage) -> dict | None:
+    """一条提问结果里用户的回答（{answer, skip, asked_at, answered_at}）；没问成的、点了停止没回答的是 None。"""
+    art = m.artifact if isinstance(m, ToolMessage) and m.name == ASK_TOOL else None
+    got = art.get("ask") if isinstance(art, dict) else None
+    return got if isinstance(got, dict) else None
+
+
+def ask_of(call: dict, result: ToolMessage | None) -> dict | None:
+    """一次提问 → 页面上的一条：问题、选项、用户的回答。还没回答的是 pending；点了跳过的是 skipped；
+    没等到回答这一轮就停了的，三样都没有。没问成的（参数不对、这一轮问的次数到了，工具没停下来问）不列。"""
+    if call.get("name") != ASK_TOOL or not call.get("id"):
+        return None
+    question, options = ask_args(call.get("args") or {})
+    item = {"type": "ask", "id": call["id"], "question": question, "options": options, "pending": False, "answer": "", "skipped": False}
+    if result is None:
+        return {**item, "pending": True} if question else None
+    if isinstance(result.artifact, dict) and result.artifact.get("stopped"):
+        return item if question else None
+    got = ask_answer(result)
+    if got is None:
+        return None
+    return {**item, "answer": _text(got.get("answer")), "skipped": bool(got.get("skip"))}
+
+
+def asks_before(messages: list[BaseMessage], call_id: str) -> int:
+    """这一轮里排在这次提问前面的提问有几次（按模型发出的先后；没问成的不算）。messages 是这一轮的消息。"""
+    results = {m.tool_call_id: m for m in messages if isinstance(m, ToolMessage)}
+    n = 0
+    for m in messages:
+        for tc in m.tool_calls if isinstance(m, AIMessage) else []:
+            if tc.get("id") == call_id:
+                return n
+            if tc.get("name") == ASK_TOOL and ((r := results.get(tc.get("id"))) is None or ask_answer(r) is not None):
+                n += 1
+    return n
+
+
+def waited_ms(messages: list[BaseMessage]) -> int:
+    """这一轮里等用户回答一共等了多久（毫秒）：每次提问从问出来到回答的那段时间，重叠的（一次问了两个）只算一遍。算这一轮用时的时候去掉。"""
+    spans = []
+    for m in messages:
+        if got := ask_answer(m):
+            try:
+                a, b = datetime.fromisoformat(got["asked_at"]), datetime.fromisoformat(got["answered_at"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if b > a:
+                spans.append((a, b))
+    total, end = 0.0, None
+    for a, b in sorted(spans):
+        if end is None or a > end:
+            total, end = total + (b - a).total_seconds(), b
+        elif b > end:
+            total, end = total + (b - end).total_seconds(), b
+    return round(total * 1000)
 
 
 def owned_image_ids(messages: list[BaseMessage]) -> list[str]:

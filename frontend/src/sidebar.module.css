@@ -55,7 +55,7 @@
 .icon { grid-column: 1; grid-row: 1; display: flex; align-items: center; height: 20px; margin-right: 9px; color: var(--faint); transition: color .12s; }
 @media (hover: hover) { .row:hover .icon.idle { color: var(--muted); } }
 .sel .icon.idle { color: var(--accent); }
-.icon.active { color: var(--accent); }
+.icon.active, .icon.asking { color: var(--accent); }
 .icon.failed { color: var(--danger); }
 
 /* “⋯”：悬停、键盘聚焦、选中、菜单开着时出现；没有悬停的设备（触屏）一直在 */

@@ -103,7 +103,9 @@ const PLACEHOLDER = {
   busy: "可以先写下一句", // 回答时打了字，旁边会出“这一轮答完再发”（2026-11-07 Sean 定，不再在这里讲排队的规矩）
   queued: QUEUED,
   failed: "这一轮没有完成，点上面的“重试”",
+  asking: "写下你的回答…", // 模型停下来问了：这里写的就是回答
 };
+const MAX_ANSWER = 2000; // 回答问题最多这么多字（后端 app.tools.ask_user 的 MAX_ANSWER）
 const HELD = "上面那句发出去以后才能再发，也可以撤回它一起改";
 const WITH_IMAGE = "问问图里的内容，或者说说要怎么改";
 const WITH_FILE = "问问文件里的内容，或者说说要拿它做什么";
@@ -126,11 +128,12 @@ export function CreditsNote({ credits, onLogin }) {
 }
 
 // 还没发出去的话（最多一句，见 Composer 的 held），贴在输入框上沿：排着的（这一轮答完就发，可以改成插进这一轮），或者等着插进这一轮的。
-// 撤回就放回输入框，可以改了再发。按钮按下去不抢光标，输入框里正写着的接着写
-export function Pending({ st, act }) {
+// 撤回就放回输入框，可以改了再发。按钮按下去不抢光标，输入框里正写着的接着写。
+// asking：这一轮停下来问用户了，这时插不进去（没有在跑的），排着的照样等这一轮答完
+export function Pending({ st, act, asking }) {
   const rows = [
     st?.guided_message && { key: "guided", text: st.guided_message.text, note: "做完手上这一步就插进这一轮", onWithdraw: act.unguide },
-    st?.queued_message && { key: "queued", text: st.queued_message.text, note: "这一轮答完就发", onGuide: act.guide, onWithdraw: act.unqueue },
+    st?.queued_message && { key: "queued", text: st.queued_message.text, note: "这一轮答完就发", onGuide: asking ? null : act.guide, onWithdraw: act.unqueue },
   ].filter(Boolean);
   if (!rows.length) return null;
   const keep = (e) => e.preventDefault();
@@ -264,6 +267,7 @@ function dropFile(thread, key) {
 // putBack：放回输入框的话（撤回的、没发出去的，可能带着图）：放在已经写着的字前面、空一行，放回来的那段选中，看得出哪段是放回来的
 //   （被拒的那句还原样留着就换掉它，不叠加）；不是正在看的对话，放进那个对话的草稿
 // onTakeBack：有没发出去的话时，光标在最前面（输入框空着也算）按 ↑ 把它们取回来。光标在最前面时 ↑ 本来什么也不做，不和挪光标抢
+// 模型停下来问用户时（mode 是 asking）：这里写的就是回答，只发字（最多 MAX_ANSWER 个），选着的图和文件留着下一句用
 export function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSend, onStop, above, onTakeBack, tools }) {
   const [text, setText] = useState(() => getDraft(thread));
   const [images, setImages] = useState(() => attachments.get(thread) || []); // 见 attachments
@@ -284,12 +288,14 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
   const selectNext = useRef(null); // 放回来的话要选中的那段：[起, 止]，字放进去以后再选
   const sendNow = mode === "new" || mode === "idle";
   const canStop = mode === "busy" || mode === "queued";
+  const asking = mode === "asking";
   const hasText = !!text.trim();
+  const tooLong = asking && Array.from(text.trim()).length > MAX_ANSWER;
   const canQueue = queueing && !held && !images.length && !docs.length;
   const docsBusy = docs.some((d) => d.status === "uploading" || d.status === "parsing");
   const docFailed = docs.find((d) => d.status === "failed");
   const processing = images.some((i) => i.pending) || docsBusy || !!docFailed || docs.length > MAX_FILES;
-  const enabled = sendNow || (queueing && !held); // 能说话了（光标该回来了）
+  const enabled = sendNow || asking || (queueing && !held); // 能说话了（光标该回来了）
   const stopNow = useRef(null); // 按 Esc 时调的：能停才有
   stopNow.current = canStop && !stopping ? onStop : null;
   useAutoHeight(ref, text);
@@ -407,6 +413,7 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
   }, []);
   useEffect(() => {
     const back = (e) => focus(!!e.detail);
+    const here = () => ref.current?.focus({ preventScroll: true }); // 点了“自己写”（见 nav.jsx 的 typeHere）：触屏上也放
     // 切去别的窗口、标签页再回来（2026-11-07 Sean 要的）：光标没在哪儿，或者只是点了正文停在某一轮上，就放回输入框，回来接着打字。
     // 选着字、开着弹窗、光标在别的输入框或按钮链接上时不动；触屏不放（免得自己弹出键盘，见 focus）。等浏览器先把原来的焦点还回去再看
     const ret = () => setTimeout(() => {
@@ -425,11 +432,13 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
       stopNow.current();
     };
     addEventListener("ws-focus-input", back); // 见 focusInput
+    addEventListener("ws-type-here", here);
     addEventListener("keydown", esc, true);
     addEventListener("focus", ret);
     document.addEventListener("visibilitychange", shown);
     return () => {
       removeEventListener("ws-focus-input", back);
+      removeEventListener("ws-type-here", here);
       removeEventListener("keydown", esc, true);
       removeEventListener("focus", ret);
       document.removeEventListener("visibilitychange", shown);
@@ -506,8 +515,12 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
 
   const send = () => {
     const t = text.trim();
-    if (!t || processing) return;
-    if (sendNow) {
+    if (!t) return;
+    if (asking) {
+      if (tooLong) return;
+      onSend(t, [], []);
+    } else if (processing) return;
+    else if (sendNow) {
       onSend(t, images, docs);
       putImages([]);
       setFiles(shown.current, []); // 发出去了：后端绑到这段对话，不删
@@ -518,9 +531,11 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
     clearTimeout(saveTimer.current);
     setDraft(shown.current, "");
   };
-  // 输入框下面那一句：选图、选文件时说的 > 读不了的文件（去掉才能发）> 文件太多 > 回答时打了字发不出去的原因 > 文件还没解析好
+  // 输入框下面那一句：选图、选文件时说的 > 回答问题时太长、带着图和文件 > 读不了的文件（去掉才能发）> 文件太多 > 回答时打了字发不出去的原因 > 文件还没解析好
   const both = images.length && docs.length;
   const note = attachError ? { text: attachError, warn: true }
+    : tooLong ? { text: `回答最多 ${MAX_ANSWER.toLocaleString("en-US")} 个字，删短一些再发`, warn: true }
+    : asking && hasText && (images.length || docs.length) ? { text: `回答只发文字，${both ? "图和文件" : docs.length ? "文件" : "图"}留到下一句` }
     : docFailed ? { text: `「${docFailed.name}」${fileErrorText(docFailed.reason, docFailed.detail)}，去掉它才能发`, warn: true }
       : docs.length > MAX_FILES ? { text: `一句话最多带 ${MAX_FILES} 个文件，去掉几个再发`, warn: true }
         : queueing && hasText && held ? { text: HELD }
@@ -567,7 +582,7 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
             ? <button className={styles.send + " " + styles.stop} aria-label={stopping ? "正在停止" : "停止回答"} title={stopping ? "正在停止" : "停止回答（Esc）"} disabled={stopping} onClick={onStop}>
               {stopping ? <Spinner size={14} /> : <IconStop size={13} />}
             </button>
-            : <button className={styles.send} aria-label="发送" disabled={!sendNow || !hasText || processing} onClick={send}><IconArrowUp size={15} /></button>}
+            : <button className={styles.send} aria-label={asking ? "发送回答" : "发送"} disabled={asking ? !hasText || tooLong : !sendNow || !hasText || processing} onClick={send}><IconArrowUp size={15} /></button>}
         </div>
       </div>
       <div className={styles.ai}>内容由 AI 生成，请仔细甄别</div>
