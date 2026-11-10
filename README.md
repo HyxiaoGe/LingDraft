@@ -9,6 +9,7 @@
 ## 架构
 
 ```mermaid
+%%{init: {"flowchart": {"wrappingWidth": 400}}}%%
 flowchart TB
     UI["页面（React）"] -- "说话、排队、插话、停止" --> API["FastAPI"]
     API -- "SSE 事件流<br/>断线续看" --> UI
