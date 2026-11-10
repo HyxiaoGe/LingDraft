@@ -27,6 +27,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
 import openai
+from langchain_core.exceptions import ContextOverflowError
 
 FAILURES = 2
 COOLDOWN_S = 180
@@ -40,6 +41,23 @@ BLOCKED_MESSAGE = "Content Exists Risk"  # DeepSeek 内容审核拦下请求时 
 # 火山接进来时把它的加在这里
 FREE_TIER_CODES = {"AllocationQuota.FreeTierOnly", "401007", "401008"}
 FREE_TIER_CODES_403 = {"insufficient_quota"}
+# 请求超过了模型的上下文窗口（见 is_context_overflow）：langchain-openai 认得出几种的换成 ContextOverflowError；别的看这几个状态码、错误里的固定说法。
+# 前几个照 Deep Agents（deepagents 0.7.35 middleware/summarization.py 的 _is_context_overflow），后面是接的几家（2026-11-10 查的，
+# 官方错误码文档没写原文的，用的是 GitHub issue、开源项目测试里贴的真实返回）。混元（官方文档写明）、MiMo（第三方实测）超长不报错、静默截掉开头，认不出来
+OVERFLOW_STATUS = {400, 413, 422}
+OVERFLOW_TEXTS = (
+    "context_length_exceeded", "contextwindowexceedederror", "maximum context length", "exceeds the context window",
+    "exceeds the available context size", "context window exceeded", "context limit exceeded", "input tokens exceed the configured limit",
+    "prompt is too long",
+    # DeepSeek、智谱 1210 用的也是 "maximum context length"
+    "exceeded model token limit", "input token length too long",  # Kimi：实测、官方文档
+    "range of input length should be",  # 百炼（阿里）
+    "prompt exceeds max length", "prompt too long", "prompt 超长",  # 智谱：编码套餐端点、国际站、中文文档
+    "exceed max message tokens",  # 火山方舟（豆包）
+    "context window exceeds limit",  # MiniMax（错误码 2013 是通用的参数错，只能认文字）
+    "maximum prompt length is",  # xAI（Grok）
+)
+OVERFLOW_CODES = {"400003", "1261"}  # 腾讯 TokenHub（CodeInputTooLong，https://intl.cloud.tencent.com/zh/document/product/1300/82348）、智谱
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +104,19 @@ def is_free_tier_used_up(e: BaseException) -> bool:
     body = e.body if isinstance(e.body, dict) else {}
     codes = {str(getattr(e, "code", None)), str(body.get("code"))}  # TokenHub 的 code 有时是数字
     return bool(codes & FREE_TIER_CODES) or e.status_code == 403 and bool(codes & FREE_TIER_CODES_403)
+
+
+def is_context_overflow(e: BaseException) -> bool:
+    """模型服务说请求超过了它的上下文窗口。服务答复了（不算不可用），原样再发也一样，要把发过去的压短（见 graph.research.compaction）。"""
+    if isinstance(e, ContextOverflowError):
+        return True
+    if not isinstance(e, openai.APIStatusError) or e.status_code not in OVERFLOW_STATUS:
+        return False
+    body = e.body if isinstance(e.body, dict) else {}
+    if {str(getattr(e, "code", None)), str(body.get("code"))} & OVERFLOW_CODES:
+        return True
+    text = f"{e.message} {e.body}".lower()
+    return any(t in text for t in OVERFLOW_TEXTS)
 
 
 def has_content(chunk: Any) -> bool:

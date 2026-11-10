@@ -8,6 +8,7 @@ import logging
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import openai
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, messages_to_dict
 from langchain_core.tools import ToolException
@@ -20,6 +21,7 @@ from app.graph.research.agent import system_prompt
 from app.graph.research.compaction import CompactionMiddleware, compact, recall_source, recall_turn, tokens, turn_order
 from app.graph.research.state import Compaction
 from app.research_llm import FakeResearchPlanner, FakeToolModel
+from tests.test_model_guard import status
 from tests.test_research import Chat
 
 REMOVED = "[Removed to save space]"
@@ -452,3 +454,89 @@ def test_cache_check_knows_when_the_boundary_moved(low, changes, caplog):
     marks = [m.response_metadata.get(cp.MARK) for m in chat.values()["messages"] if isinstance(m, AIMessage) and m.usage_metadata]
     c = chat.values()["compaction"]
     assert marks[0] == "" and marks[-1] == f"{c.cleared_through}/{c.summarized_through}" and len(changes) == 1
+
+
+# ---- 模型说上下文超长：压了再发一次 ----
+
+
+class Overflowing(Recording):
+    """fail 里有异常时这次调模型就抛它（按顺序一个一个抛），发出去的也记下。bind_tools 复制后还是同一个 list。"""
+
+    fail: list = Field(default_factory=list)
+
+    def _message(self, messages):
+        if self.fail:
+            self.sent.append(messages_to_dict(messages))
+            raise self.fail.pop(0)
+        return super()._message(messages)
+
+
+def overflowing() -> tuple[FakeResearchPlanner, Overflowing]:
+    p = FakeResearchPlanner(page_repeat=60)
+    p._model = Overflowing()
+    return p, p._model
+
+
+def overflow() -> Exception:
+    return status(400, "This model's maximum context length is 131072 tokens. However, you requested 140000 tokens.")
+
+
+def test_overflow_compacts_old_turns_and_sends_once_more(changes, caplog):
+    """估算远没到触发线，模型说超长了：之前几轮压掉（不管触发线），这一次照压过的再发，只再发一次；边界存进 state，后面几次接着用。
+    假模型默认走的是免费额度：免费的超长先照常换直连（别家的窗口可能大），直连也超长才压。再发时从这一轮定下的模型（免费的）重新来。"""
+    caplog.set_level(logging.WARNING, logger=cp.__name__)
+    p, m = overflowing()
+    chat = Chat(planner=p)
+    ask(chat, 2)
+    ids = turn_ids(chat)
+    use = chat.values()["turns"][-1].model
+    assert "compaction" not in chat.values() and all(REMOVED not in texts(call) for call in m.sent)
+    m.fail += [overflow(), overflow()]
+    n = len(m.sent)
+    v = chat.say("第3个问题：查一下局部修改")
+    assert v["status"] == "idle" and not changes  # 不是过了触发线压的
+    c = chat.values()["compaction"]
+    assert c.cleared_through == ids[1]
+    free, direct, retried = m.sent[n:n + 3]
+    assert REMOVED not in texts(free) + texts(direct) and REMOVED in texts(retried)
+    assert all(REMOVED in texts(call) for call in m.sent[n + 2:])  # 这一轮后面几次照新的边界发
+    assert chat.values()["turns"][-1].model == use  # 再发时免费的成了，换直连的那次不算
+    assert "模型说上下文超长，压缩后再发一次" in caplog.text
+    marks = [x.response_metadata.get(cp.MARK) for x in chat.values()["messages"] if isinstance(x, AIMessage) and x.usage_metadata]
+    assert marks[-1] == f"{c.cleared_through}/{c.summarized_through}"
+
+
+def test_overflow_again_after_compacting_fails_the_turn():
+    p, m = overflowing()
+    chat = Chat(planner=p)
+    ask(chat, 2)
+    m.fail += [overflow() for _ in range(5)]
+    n = len(m.sent)
+    with pytest.raises(openai.BadRequestError):
+        chat.say("第3个问题：查一下局部修改")
+    v = chat.view()
+    assert v["status"] == "failed" and v["error_kind"] == "internal"
+    assert len(m.sent) - n == 4 and len(m.fail) == 1  # 免费、直连各一次，压了以后再各一次，没有第三次
+
+
+def test_overflow_with_nothing_to_compact_fails_as_before(caplog):
+    """第一轮就超长（这一轮不压）：不再发，照常失败。"""
+    caplog.set_level(logging.WARNING, logger=cp.__name__)
+    p, m = overflowing()
+    m.fail += [overflow(), overflow()]
+    chat = Chat(planner=p)
+    with pytest.raises(openai.BadRequestError):
+        chat.say("第1个问题：查一下局部修改")
+    assert chat.view()["status"] == "failed" and len(m.sent) == 2
+    assert "之前几轮没有能再压的" in caplog.text
+
+
+def test_other_bad_requests_are_not_retried():
+    p, m = overflowing()
+    chat = Chat(planner=p)
+    ask(chat, 2)
+    m.fail += [status(400, "Invalid 'messages[3].tool_calls': unknown tool") for _ in range(2)]
+    n = len(m.sent)
+    with pytest.raises(openai.BadRequestError):
+        chat.say("第3个问题：查一下局部修改")
+    assert chat.view()["status"] == "failed" and len(m.sent) - n == 2 and "compaction" not in chat.values()

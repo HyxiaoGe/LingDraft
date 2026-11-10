@@ -8,6 +8,8 @@
 - 第一层压完还超，第二层：再从最早的一轮起，模型那边（思考、正文、工具调用和结果）整个换成快模型写的短版，用户的话照原样留着；
   特别长的用户消息（贴了一大段的）也换成短的。短版一轮一份，写一次存进 state（Compaction.summaries），以后不再改，也不会拿短版再去压。
 - 这一轮（还在跑的）不压。
+- 估算没到触发线、模型服务却说超过了它的上下文窗口（model_guard.is_context_overflow）：不管触发线，把之前几轮压到这次估算的一半，
+  照压过的再发一次，只再发一次（2026-11-10 Sean 定补上，做法照 Deep Agents）。
 
 压到哪一轮记在 state 里（Compaction），只往后挪，不是每次现算：到了边界的轮每次调模型拼出来的都一样（拼的时候不放时间、随机的东西），
 前缀缓存接得上，只在边界往后挪的那一次断一次。所以一次多压一些（压到触发线的一半左右），而不是每次刚过线压一点。
@@ -25,12 +27,13 @@ import json
 import logging
 from typing import Any
 
-from langchain.agents.middleware.types import AgentMiddleware, ModelRequest
+from langchain.agents.middleware.types import AgentMiddleware, ExtendedModelResponse, ModelRequest
 from langchain.tools import ToolRuntime
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import ToolException, tool
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.config import get_config
+from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from app import config
@@ -38,6 +41,7 @@ from app.graph.research import history, prompts
 from app.graph.research.agent import emit, memory_text, system_prompt, turn_start
 from app.graph.research.sources import DOCS_TOOL, SUBAGENT_TOOL, doc_snippets, flatten, hit_text, parse, search_hits
 from app.graph.research.state import Compaction, ResearchState
+from app.model_guard import is_context_overflow
 from app.tools.files import extra_chars
 
 log = logging.getLogger(__name__)
@@ -219,6 +223,19 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
         self.tools_tokens = tokens(json.dumps([convert_to_openai_tool(t) for t in tools], ensure_ascii=False))  # 工具定义每次都发
 
     async def abefore_model(self, state: ResearchState, runtime) -> dict[str, Any] | None:
+        plan = await self._plan(state, runtime, config.COMPACT_TRIGGER_TOKENS, lambda _: config.COMPACT_TARGET_TOKENS)
+        if plan is None:
+            return None
+        new, before, size = plan
+        log.info("上下文压缩：线程 %s 估算 %d → %d token，第一层到第 %s 轮，第二层到第 %s 轮", _thread_id(), before, size,
+                 *_reached(state["messages"], new))
+        if size > config.COMPACT_TRIGGER_TOKENS:
+            log.warning("上下文压缩后还是超过触发线：线程 %s 估算 %d token", _thread_id(), size)
+        return {"compaction": new}
+
+    async def _plan(self, state: ResearchState, runtime, trigger: float, target_of) -> tuple[Compaction, float, float] | None:
+        """估算超过 trigger 时把边界往后挪、写好短版，压到 target_of(估算) 以下（压不到就把之前几轮都压完）。
+        返回（新的边界，压之前估算，压之后估算）；没超、没有能再压的返回 None。"""
         all_msgs = state["messages"]
         msgs = history.without_stopped_thoughts(history.without_blocked_turns(all_msgs))  # 和发给模型的一样估
         order = turn_order(all_msgs)
@@ -227,9 +244,9 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
         base = tokens(system_prompt(turn_start(all_msgs, state), memory=await memory_text(self.memory, runtime))) + self.tools_tokens
         costs = [size_of(_form(t, order, c)) for t in turns]
         size = base + sum(costs)
-        if size <= config.COMPACT_TRIGGER_TOKENS:
+        if size <= trigger:
             return None
-        before, target = size, config.COMPACT_TARGET_TOKENS
+        before, target = size, target_of(size)
         old = [(i, t) for i, t in enumerate(turns[:-1]) if history.is_request(t[0]) and t[0].id in order]  # 这一轮不压
         new = c.model_copy(deep=True)
         # 第一层：从最早的一轮起，搜索、读页的结果换成说明，压到目标以下或者之前几轮都压过
@@ -264,11 +281,7 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
             size = base + sum(size_of(_form(t, order, new)) for t in turns)
         if new == c:
             return None
-        log.info("上下文压缩：线程 %s 估算 %d → %d token，第一层到第 %s 轮，第二层到第 %s 轮", _thread_id(), before, size,
-                 order.get(new.cleared_through, -1) + 1, order.get(new.summarized_through, -1) + 1)
-        if size > config.COMPACT_TRIGGER_TOKENS:
-            log.warning("上下文压缩后还是超过触发线：线程 %s 估算 %d token", _thread_id(), size)
-        return {"compaction": new}
+        return new, before, size
 
     async def _summarize(self, picked: list[tuple[list[BaseMessage], bool, list[HumanMessage]]], old: list[list[BaseMessage]],
                          order: dict[str, int], new: Compaction) -> None:
@@ -319,13 +332,33 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
     async def awrap_model_call(self, request: ModelRequest, handler):
         c = request.state.get("compaction")
         sent = compact(request.messages, c, turn_order(request.state["messages"])) if c else request.messages
-        resp = await handler(request.override(messages=sent) if sent is not request.messages else request)
+        update = None
+        try:
+            resp = await handler(request.override(messages=sent) if sent is not request.messages else request)
+        except Exception as e:
+            if not is_context_overflow(e) or (c := await self._overflowed(request, e)) is None:
+                raise
+            update = {"compaction": c}
+            resp = await handler(request.override(messages=compact(request.messages, c, turn_order(request.state["messages"]))))
         mark = _mark(c)
         _check_cache(request.messages, resp, mark)
         for m in getattr(resp, "result", []):
             if isinstance(m, AIMessage):
                 m.response_metadata[MARK] = mark
-        return resp
+        return resp if update is None else ExtendedModelResponse(model_response=resp, command=Command(update=update))
+
+    async def _overflowed(self, request: ModelRequest, e: Exception) -> Compaction | None:
+        """模型服务说请求超过了它的上下文窗口（我们的估算没到触发线，这个模型的窗口比触发线小，或者估少了）：
+        不管触发线，把之前几轮压到这次估算的一半（最多压到 COMPACT_TARGET_TOKENS），返回新的边界，调用方照它再发一次、只发一次。
+        窗口多大不知道，所以一次多压一些；这一轮本身就太长、之前几轮没有能再压的，返回 None，照常失败。"""
+        plan = await self._plan(request.state, request.runtime, 0, lambda size: min(size / 2, config.COMPACT_TARGET_TOKENS))
+        if plan is None:
+            log.warning("模型说上下文超长，之前几轮没有能再压的：线程 %s：%s: %s", _thread_id(), type(e).__name__, str(e)[:300])
+            return None
+        new, before, size = plan
+        log.warning("模型说上下文超长，压缩后再发一次：线程 %s 估算 %d → %d token，第一层到第 %s 轮，第二层到第 %s 轮：%s: %s", _thread_id(),
+                    before, size, *_reached(request.state["messages"], new), type(e).__name__, str(e)[:300])
+        return new
 
 
 def _thread_id() -> str:
@@ -337,6 +370,12 @@ def _thread_id() -> str:
 
 def _usage(m: BaseMessage) -> dict:
     return (m.usage_metadata or {}) if isinstance(m, AIMessage) else {}  # type: ignore[return-value]
+
+
+def _reached(messages: list[BaseMessage], c: Compaction) -> tuple[int, int]:
+    """边界到第几轮（从 1 数，没压是 0）：第一层、第二层。"""
+    order = turn_order(messages)
+    return order.get(c.cleared_through, -1) + 1, order.get(c.summarized_through, -1) + 1
 
 
 def _mark(c: Compaction | None) -> str:

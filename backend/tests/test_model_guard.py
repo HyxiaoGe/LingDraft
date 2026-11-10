@@ -16,7 +16,8 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from pydantic import Field
 
 from tests.research_helpers import run_async
-from app.model_guard import BLOCKED_MESSAGE, Breaker, ContentBlocked, GuardedChatModel, Interrupted, ModelUnavailable, unavailable_reason
+from app.model_guard import (BLOCKED_MESSAGE, Breaker, ContentBlocked, GuardedChatModel, Interrupted, ModelUnavailable, is_context_overflow,
+                             unavailable_reason)
 
 REQ = httpx2.Request("POST", "https://api.test/chat/completions")
 _STATUS = {400: openai.BadRequestError, 401: openai.AuthenticationError, 429: openai.RateLimitError, 500: openai.InternalServerError}
@@ -145,6 +146,37 @@ def test_moderation_block_is_content_blocked_and_not_a_failure(clock):
         m.invoke("hi")
     assert m.invoke("hi").content == "好"
 
+
+
+def test_context_overflow_is_recognized_and_passes_through_as_an_answer(clock):
+    """超长：langchain-openai 换好的 ContextOverflowError，或者 400/413/422 里带着固定说法；别的请求错误、5xx 不算。
+    GuardedChatModel 原样抛出、不算不可用（服务答复了），交给压缩那层压了再发。"""
+    from langchain_openai.chat_models.base import OpenAIContextOverflowError
+
+    assert is_context_overflow(OpenAIContextOverflowError("x", response=httpx2.Response(400, request=REQ), body=None))
+    assert is_context_overflow(status(400, "This model's maximum context length is 131072 tokens. However, you requested 140000 tokens."))
+    assert is_context_overflow(status(413, "Prompt is too long"))
+    for text in ("Invalid request: Your request exceeded model token limit: 262144 (requested: 1000008)",  # Kimi
+                 "<400> InternalError.Algo.InvalidParameter: Range of input length should be [1, 258048]",  # 百炼
+                 "Total tokens of image and text exceed max message tokens. Request id: x",  # 火山方舟
+                 "invalid params, context window exceeds limit (2013)",  # MiniMax
+                 "This model's maximum prompt length is 256000 but the request contains 276510 tokens."):  # xAI
+        assert is_context_overflow(status(400, text)), text
+    for code in ("400003", "1261", 1261):  # TokenHub、智谱：按错误码认（智谱的有时是数字）
+        assert is_context_overflow(openai.BadRequestError("x", response=httpx2.Response(400, request=REQ), body={"code": code, "message": "x"}))
+    assert not is_context_overflow(status(400, "invalid params, unknown field (2013)"))
+    assert not is_context_overflow(status(400, "bad tool schema"))
+    assert not is_context_overflow(status(400, BLOCKED_MESSAGE))
+    assert not is_context_overflow(status(500, "maximum context length"))
+    assert not is_context_overflow(RuntimeError("maximum context length"))
+    m = Guarded(script=[status(500), status(400, "maximum context length is 131072 tokens"), status(500)])
+    with pytest.raises(ModelUnavailable):
+        m.invoke("hi")
+    with pytest.raises(openai.BadRequestError) as e:
+        m.invoke("hi")
+    assert is_context_overflow(e.value)
+    with pytest.raises(ModelUnavailable, match="稍后再试"):  # 超长说明服务答复了：不可用的计数重新算，没断开
+        m.invoke("hi")
 
 def test_block_inside_the_stream_and_finish_reasons(clock):
     m = Guarded(script=[openai.APIError("x", REQ, body={"message": BLOCKED_MESSAGE}), "content_filter", "insufficient_system_resource"])
