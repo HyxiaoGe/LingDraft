@@ -8,9 +8,12 @@ uv run python -m app.evals.research                      # 全部用例
 uv run python -m app.evals.research --case weather --case fact
 uv run python -m app.evals.research --case cost --repeat 3 --no-sources
 uv run python -m app.evals.research --case fact --model deepseek-flash   # 换一个模型选项（app/models.toml 里的 id），默认 Auto
+uv run python -m app.evals.research --case fact --model deepseek-flash --no-thinking   # 关着深度思考跑
 ```
 
 `--model` 换的是对话选的模型，裁判不跟着换（`models.toml` 的 `roles.judge`），分数才比得了；结果文件开头记着选项和这次实际用的主 agent、子 agent 模型。
+`--no-thinking` 是每句话都关着深度思考发（页面上把开关关掉的样子）；不给按选项的默认，能开关的默认开。页面上很多人关着用，
+看模型自己判断的评测（问不问、查不查）两种都跑，或者写明跑的是哪种。
 每个用例用独立的内存检查点，不碰本机的服务和配置的库；走和页面同一个运行器。
 结果写到 `data/evals/research-<时间>.json`（每轮的对话、步骤、用量、检查结果、引用核对），
 同名的 `.md` 是给人看的对话记录。终端打印每个用例的检查结果和合计用量。
@@ -44,6 +47,7 @@ uv run python -m app.evals.decisions --samples 10                      # 每个�
 uv run python -m app.evals.decisions --samples 10 --model deepseek-flash   # 那一下换成别的模型；不给照录的那遍用的
 uv run python -m app.evals.decisions --compare data/evals/<改之前>.json data/evals/<改之后>.json  # 两份结果差得够不够大
 uv run python -m app.evals.decisions --decision 'ask-*' --samples 5 --model deepseek-flash   # 只跑一组（* 通配）；这一组只写了一句话，不用先录
+uv run python -m app.evals.decisions --decision 'ask-*' --samples 5 --model deepseek-flash --no-thinking   # 同上，关着深度思考（要和 --model 一起给）
 ```
 
 - **是什么**（`app/evals/decisions.py`）：从录的那遍里挑一次调模型（`evals/research/decisions.yaml` 里写用例、第几轮、第几次，`call: last` 是写正文的那一下），
@@ -56,6 +60,8 @@ uv run python -m app.evals.decisions --decision 'ask-*' --samples 5 --model deep
   工具结果的整理（来源编号、天气整理）在检查点里已经做好了，改这部分代码这里测不出来；换模型时，中间的决策点前面带着原来那个模型的消息，第一次调模型的最干净。
 - **只写一句话的决策点**（写 `say` 不写 `case`）：不从录的取，这句话照页面那样开一段新对话，同样到执行工具之前停，只调第一次模型。
   用来看模型拿到一句话的第一下：停下来问用户（`asked`，调了 `ask_user`）、去查，还是直接答。日期是跑的那天；`--model` 没给是 Auto（多一次判断用哪个模型的调用）。
+  `work: true` 是这句话在 Work 模式下发：只有这种轮里模型才有问用户的工具，所以 `ask-*` 这一组都带着。`ask-open-*` 不定对错（没写 `asked`），
+  问了什么在结果的 `tool_calls` 里，人看。每次实际用的模型、思考开没开记在结果的 `model` 里。
 - **怎么算变了**：`--compare` 对同一个决策点的同一项检查算双侧 Fisher 精确检验，p < 0.05 才算变了。每边 10 次时大约要差 6 次（2/10 对 8/10 算，4/10 对 6/10 不算）。
 
 ## 传到 LangSmith
@@ -77,6 +83,7 @@ uv run python -m app.evals.decisions --decision 'ask-*' --samples 5 --model deep
   正文里引用的来源 id 都存在；`expect` 里写了的才检查：搜没搜、读到几篇、取没取当前时间、查没查（`looked_up`：搜索、读页、天气、子任务任一）、
   问没问用户（`asked`）。每次调模型的输入和其中命中缓存的记在结果的 `calls` 里。
 - **模型停下来问用户时**：按这一轮写的 `answers` 依次回答，没写的跳过，同一轮接着跑完；问了什么、怎么答的记在结果的 `asks` 里。
+  只有 Work 模式下发的话（这一轮写了 `work: true`）模型才能问；没写的是 Chat。
 - **judge 标准**（回答好不好）：裁判模型看这一轮的正文，按用例写的标准判断。
 - **引用核对**（来源对不对）：正文里带角标的说法，裁判模型拿 agent 当时看到的材料（搜索摘要、读到的正文）逐条核对，不能有 unsupported（`--no-sources` 不做）。
 

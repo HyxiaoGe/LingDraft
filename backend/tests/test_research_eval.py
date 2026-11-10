@@ -73,6 +73,10 @@ def test_case_can_pick_a_model():
     assert r["passed"], r
     flash = model_catalog.load().free_ref("deepseek:deepseek-flash", lambda ref: True)  # 先走同一个模型的免费额度
     assert [t["model"] for t in r["turns"]] == [{"ref": flash, "thinking": True, "effort": "high"}] * 2
+    # --no-thinking：每句话都关着思考发
+    r = run_case(Case.model_validate({"id": "x", "source": "测试", "turns": [{"say": "直接答：一"}, {"say": "直接答：二"}]}),
+                 planner, FakeJudge(), option="deepseek-flash", thinking=False)
+    assert r["passed"] and [(t["model"]["ref"], t["model"]["thinking"]) for t in r["turns"]] == [(flash, False)] * 2
 
 def test_cases_file_parses():
     cases = load_cases()
@@ -123,7 +127,7 @@ def test_failed_checks_and_unsupported_citations_fail_the_case():
 
 def test_case_answers_the_models_questions_and_checks_whether_it_asked():
     """模型停下来问用户：按用例写的 answers 回答，同一轮接着跑完；没写的跳过。asked 看这一轮真问了没有。"""
-    r = _run([{"say": "问我 对比两种向量库", "answers": ["选型"], "expect": {"asked": True}},
+    r = _run([{"say": "问我 对比两种向量库", "work": True, "answers": ["选型"], "expect": {"asked": True}},
               {"say": "直接答：为什么", "expect": {"asked": False}}])
     assert r["passed"], (_failed(r), r.get("error"))
     first = r["turns"][0]
@@ -131,7 +135,7 @@ def test_case_answers_the_models_questions_and_checks_whether_it_asked():
     assert first["reply"] == "收到回答：选型。" and r["turns"][1]["asks"] == []
     assert "- [问] 这份对比是用来选型，还是做分享？（选型 / 分享）→ 选型" in transcript([r])
     # 问了两个只写了一个回答：后一个跳过
-    r = _run([{"say": "问两个 对比两种向量库", "answers": ["分享"], "expect": {"asked": False}}])
+    r = _run([{"say": "问两个 对比两种向量库", "work": True, "answers": ["分享"], "expect": {"asked": False}}])
     assert [a["answer"] for a in r["turns"][0]["asks"]] == ["分享", ""] and r["turns"][0]["reply"] == "收到回答：分享；你跳过了，我按选型做。"
     assert _failed(r) == [(1, "asked")] and "→ 跳过了" in transcript([r])
     assert turn_checks(CaseTurn(say="x", expect={"asked": False}), {**r["turns"][0], "asks": None})[-1]["passed"]  # 老结果文件没有 asks

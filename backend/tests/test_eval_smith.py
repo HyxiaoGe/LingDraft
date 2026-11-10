@@ -228,8 +228,10 @@ def test_decisions_cli_uploads_each_sample(offline_eval, tmp_path):
 
 def test_decisions_cli_runs_first_message_decisions_without_a_recording(offline_eval, tmp_path):
     """只写一句话的决策点不用先录；--decision 可以用 * 挑一组。"""
-    asks = [d for d in decisions.load_decisions() if d.id.startswith("ask-")]
+    asks = [d for d in decisions.load_decisions() if d.id.startswith(("ask-yes-", "ask-no-"))]
     assert asks and all(d.say and d.case is None and d.expect.asked is not None for d in asks)
+    opens = [d for d in decisions.load_decisions() if d.id.startswith("ask-open-")]  # 不定对错、人看问了什么的
+    assert opens and all(d.say and d.work and d.expect.asked is None for d in opens)
     decisions.main(["--decision", "ask-no-*", "--samples", "1", "--model", "deepseek-flash", "--no-sources"])
     got = _written(tmp_path)
     assert {r["decision"] for r in got["results"]} == {d.id for d in asks if d.id.startswith("ask-no-")}
@@ -237,3 +239,12 @@ def test_decisions_cli_runs_first_message_decisions_without_a_recording(offline_
     assert all("asked" in [c["name"] for c in r["checks"]] for r in got["results"])
     with pytest.raises(SystemExit):
         decisions.main(["--decision", "nope-*"])
+    # 能问的都是 Work 模式下发的话：Chat 的不给问用户的工具，没什么可评的
+    assert all(d.work for d in asks)
+    # --no-thinking：关着思考跑，写进结果文件名和开头；要和 --model 一起给
+    assert got["thinking"] == "default"
+    decisions.main(["--decision", "ask-no-question", "--samples", "1", "--model", "deepseek-flash", "--no-thinking", "--no-sources"])
+    off = [json.loads(p.read_text(encoding="utf-8")) for p in (tmp_path / "results").glob("*-nothink.json")]
+    assert len(off) == 1 and off[0]["thinking"] == "off" and off[0]["results"][0]["model"]["thinking"] is False
+    with pytest.raises(SystemExit):
+        decisions.main(["--decision", "ask-no-question", "--samples", "1", "--no-thinking"])
