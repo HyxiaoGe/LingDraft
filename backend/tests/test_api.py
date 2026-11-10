@@ -81,9 +81,9 @@ def test_unknown_thread_404(client):
 
 
 def test_health(client, monkeypatch):
-    assert client.get("/api/health").json() == {"ok": True, "version": None}
+    assert client.get("/api/health").json() == {"ok": True, "version": None, "busy": 0}
     monkeypatch.setattr(config, "VERSION", "aca72b2")
-    assert client.get("/api/health").json() == {"ok": True, "version": "aca72b2"}
+    assert client.get("/api/health").json() == {"ok": True, "version": "aca72b2", "busy": 0}
 
 
 def test_pages_fall_back_to_index_but_not_for_api_or_assets(tmp_path):
