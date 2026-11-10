@@ -79,11 +79,13 @@ class Expect(BaseModel):
     min_reads: int | None = None
     checked_time: bool | None = None
     looked_up: bool | None = None  # 这一轮查没查：搜索、读页、天气、子任务任一（Fusion 11-04 没调工具就编了天气）
+    asked: bool | None = None  # 这一轮有没有停下来问用户（ask_user 真问出来了的，见 app.tools.ask_user）
 
 
 class CaseTurn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     say: str
+    answers: list[str] = Field(default_factory=list, description="模型这一轮停下来问用户时，按先后这样回答；没写的（问的比写的多）都跳过")
     expect: Expect = Field(default_factory=Expect)
     judge: str | None = Field(default=None, description="写成“正文做到了 X，且没有 Y”")
 
@@ -212,10 +214,19 @@ def _check(name: str, passed: bool, detail: str = "") -> dict:
 
 def play(runner, tid: str, turn: CaseTurn, option: str | None = None) -> dict:
     """说一句话，跑到这一轮结束。返回这一轮的记录；view（页面看到的）、evidence（整段对话的材料）不进结果文件。
-    option 是第一句话时给对话选的模型（models.toml 里选项的 id），没给是 Auto。"""
+    option 是第一句话时给对话选的模型（models.toml 里选项的 id），没给是 Auto。
+    模型停下来问用户的（ask_user）：按用例写的 answers 依次回答，没写的跳过，同一轮接着跑；问了什么、怎么答的记在 asks 里。"""
     runner.accept(tid, turn.say, option=option)
     events: list[dict] = []
     runner.run_turn(tid, None, events.append)
+    asks: list[dict] = []
+    answered: set[str] = set()
+    # 答过的那个问题还在等（接着跑的那次没跑起来）就不再答：不然会一直重跑下去。这一轮停在 asking，finished 不过
+    while (ask := runner.state_view(tid)["ask"]) is not None and ask["id"] not in answered:
+        answered.add(ask["id"])
+        text = turn.answers[len(asks)] if len(asks) < len(turn.answers) else ""
+        asks.append({"question": ask["question"], "options": ask["options"], "answer": text})
+        runner.run_turn(tid, runner.answer_input(tid, ask["id"], text, skip=not text), events.append)
     runner.suggest(tid)  # 这一轮结束之后起推荐问题
     view = runner.state_view(tid)
     msgs = runner.graph.get_state(runner._cfg(tid)).values["messages"]
@@ -235,7 +246,7 @@ def play(runner, tid: str, turn: CaseTurn, option: str | None = None) -> dict:
             "model": rec_turn.get("model"),  # 这一轮实际用的（Auto 按第一句话定）
             "searches": seen["searches"], "failed_searches": seen["failed_searches"], "reads": seen["reads"],
             "time_checks": sum(1 for m in ais for tc in m.tool_calls if tc["name"] == TIME_TOOL), "calls": calls,
-            "lookups": [tc["name"] for m in ais for tc in m.tool_calls if tc["name"] in LOOKUP_TOOLS],
+            "lookups": [tc["name"] for m in ais for tc in m.tool_calls if tc["name"] in LOOKUP_TOOLS], "asks": asks,
             "stream_ids_match": streamed == stored, "sources": {i: s["url"] for i, s in view["sources"].items()},
             "view": view, "evidence": material(msgs)["evidence"]}
 
@@ -261,6 +272,9 @@ def turn_checks(turn: CaseTurn, played: dict) -> list[dict]:
     if e.looked_up is not None:
         looked = played["lookups"]
         out.append(_check("looked_up", bool(looked) == e.looked_up, "、".join(looked) if looked else "没查"))
+    if e.asked is not None:
+        asks = played.get("asks") or []  # 加这一项以前的结果文件里没有
+        out.append(_check("asked", bool(asks) == e.asked, "；".join(a["question"] for a in asks) or "没问"))
     return out
 
 
@@ -460,6 +474,9 @@ def transcript(results: list[dict]) -> str:
                     out.append(f"> 思考（{(item.get('ms') or 0) / 1000:.0f} 秒）：{item['text'][:600]}" + ("……" if len(item["text"]) > 600 else ""))
                 elif item["type"] == "step":
                     out.append(f"- [{item['kind']}] {item['text']} " + ("✓" if item["ok"] else "✗ " + item["message"]) + (f" {item['message']}" if item["ok"] and item["message"] else ""))
+                elif item["type"] == "ask":
+                    said = item["answer"] or ("跳过了" if item["skipped"] else "没有回答")
+                    out.append(f"- [问] {item['question']}（{' / '.join(item['options'])}）→ {said}")
                 elif item["type"] == "text" and item["text"] != t["reply"]:
                     out.append(f"- [话] {item['text']}")
             out.append(f"\n**正文**：\n\n{t['reply']}\n")

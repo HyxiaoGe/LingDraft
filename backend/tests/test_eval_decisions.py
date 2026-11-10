@@ -125,6 +125,56 @@ def test_sample_of_the_last_call_scores_the_reply_against_the_recorded_material(
     assert judge.rubrics[0][0] == "广州天气怎么样" and judge.rubrics[0][3] == r["today"]
 
 
+def test_recording_through_a_question_keeps_the_call_after_the_answer(tmp_path):
+    """录的那遍里模型问了用户（用例的 answers 回答）：回答之后那次调模型之前的状态也存下了，能从那儿重跑“回答以后怎么做”这一下。"""
+    snaps = _record(tmp_path, [{"say": "问我 对比两种向量库", "answers": ["选型"], "expect": {"asked": True}}])
+    assert [(s["turn"], s["call"]) for s in snaps] == [(1, 1), (1, 2)]
+    d = _decision(call=2, expect={"asked": False, "replied": True})
+    r = sample(_runner(), FakeJudge(), d, pick(snaps, d), 1)
+    assert r["reply"] == "收到回答：选型。" and all(c["passed"] for c in r["checks"]), r
+
+
+def test_decision_from_a_first_message_needs_no_recording():
+    """只写一句话的决策点：这句话开一段新对话，只调第一次模型，工具（包括问用户）都不执行。"""
+    counter = CountingTools()
+    runner = _runner(counter)
+    d = Decision.model_validate({"id": "d", "say": "问我 对比两种向量库", "source": "测试", "expect": {"asked": True, "replied": False}})
+    r = sample(runner, FakeJudge(), d, None, 1)
+    assert [(c["name"], c["passed"]) for c in r["checks"]] == [("replied", True), ("asked", True)], r
+    assert r["say"] == "问我 对比两种向量库" and [tc["name"] for tc in r["tool_calls"]] == ["ask_user"]
+    assert r["checks"][1]["detail"] == "这份对比是用来选型，还是做分享？"
+    # 停在执行工具之前：没有真停下来问（线程不在等回答），只有这句话和模型这一下
+    view = runner.state_view("fork-d-1")
+    assert view["ask"] is None and counter.calls == []
+    assert len(runner.graph.get_state(runner._cfg("fork-d-1")).values["messages"]) == 2
+    quick = Decision.model_validate({"id": "q", "say": "直接答：为什么", "source": "测试", "expect": {"asked": False, "replied": True}})
+    r = sample(runner, FakeJudge(), quick, None, 1)
+    assert all(c["passed"] for c in r["checks"]) and r["reply"] == "直接回答：这个问题不用查。"
+    searched = Decision.model_validate({"id": "s", "say": "查一下向量库选型", "source": "测试", "expect": {"asked": True}})
+    r = sample(runner, FakeJudge(), searched, None, 1)
+    assert not r["checks"][0]["passed"] and r["checks"][0]["detail"] == "没问，调了 search_web" and counter.calls == []
+
+
+def test_first_message_decision_uses_the_given_model():
+    from app import model_catalog
+
+    plan = model_catalog.load().plan("doubao-seed-2-1-pro", None, lambda ref: True)  # 思考开关按选项的默认（main 也是这样定的）
+    runner = _runner()
+    runner.planner.model_uses.clear()
+    d = Decision.model_validate({"id": "d", "say": "直接答：为什么", "source": "测试"})
+    assert "error" not in (r := sample(runner, FakeJudge(), d, None, 1, plan=plan)), r
+    assert runner.planner.model_uses == [(plan.agent, False)]  # 对话定成这个选项：不另外判断用哪个模型
+
+
+def test_decision_is_from_a_case_or_a_first_message_not_both():
+    with pytest.raises(ValueError, match="case 和 say 写一个"):
+        Decision.model_validate({"id": "d", "source": "测试"})
+    with pytest.raises(ValueError, match="case 和 say 写一个"):
+        _decision(say="你好")
+    with pytest.raises(ValueError, match="不写 turn、call"):
+        Decision.model_validate({"id": "d", "say": "你好", "call": 2, "source": "测试"})
+
+
 def test_pick_says_what_was_recorded(tmp_path):
     snaps = _record(tmp_path, [{"say": "广州天气怎么样"}])
     assert pick(snaps, _decision(call="last"))["call"] == 4

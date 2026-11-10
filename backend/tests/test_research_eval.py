@@ -121,6 +121,22 @@ def test_failed_checks_and_unsupported_citations_fail_the_case():
     assert r["turns"][0]["citations"] and all(c["source_ids"] for c in r["turns"][0]["citations"])
 
 
+def test_case_answers_the_models_questions_and_checks_whether_it_asked():
+    """模型停下来问用户：按用例写的 answers 回答，同一轮接着跑完；没写的跳过。asked 看这一轮真问了没有。"""
+    r = _run([{"say": "问我 对比两种向量库", "answers": ["选型"], "expect": {"asked": True}},
+              {"say": "直接答：为什么", "expect": {"asked": False}}])
+    assert r["passed"], (_failed(r), r.get("error"))
+    first = r["turns"][0]
+    assert first["asks"] == [{"question": "这份对比是用来选型，还是做分享？", "options": ["选型", "分享"], "answer": "选型"}]
+    assert first["reply"] == "收到回答：选型。" and r["turns"][1]["asks"] == []
+    assert "- [问] 这份对比是用来选型，还是做分享？（选型 / 分享）→ 选型" in transcript([r])
+    # 问了两个只写了一个回答：后一个跳过
+    r = _run([{"say": "问两个 对比两种向量库", "answers": ["分享"], "expect": {"asked": False}}])
+    assert [a["answer"] for a in r["turns"][0]["asks"]] == ["分享", ""] and r["turns"][0]["reply"] == "收到回答：分享；你跳过了，我按选型做。"
+    assert _failed(r) == [(1, "asked")] and "→ 跳过了" in transcript([r])
+    assert turn_checks(CaseTurn(say="x", expect={"asked": False}), {**r["turns"][0], "asks": None})[-1]["passed"]  # 老结果文件没有 asks
+
+
 def test_reply_is_the_last_model_message():
     """有回复看的是最后一条模型消息：中途带着工具调用说的话不算这一轮的回复。"""
     r = _run([{"say": "坏JSON 一直坏"}])
