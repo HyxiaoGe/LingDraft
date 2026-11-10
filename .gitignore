@@ -14,3 +14,7 @@ frontend/dist/
 
 # 文档不进仓库：docs 是指向 ~/Sync/LingDraft/docs 的链接，Syncthing 同步到 Windows（2026-11-03 Sean 定）
 /docs
+
+# 早先的产品调研笔记，留在本机、不进仓库
+/reports/
+/research_notes/
