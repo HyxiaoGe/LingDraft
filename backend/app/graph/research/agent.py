@@ -70,7 +70,8 @@ CHINA_TZ = timezone(timedelta(hours=8))
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 # 系统提示词按这个顺序拼（见 prompts.toml 的 [agent]）
 # memory 是长期记忆，没有记忆时不拼（见 memory.py）
-SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "files", "memory", "language")
+SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "files", "asking", "memory",
+                   "language")
 MEMORY_SECTION = "agent.memory"
 AGENT_PROMPT = tuple(f"agent.{k}" for k in SYSTEM_SECTIONS)
 
