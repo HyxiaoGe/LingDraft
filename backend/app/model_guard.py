@@ -43,7 +43,8 @@ FREE_TIER_CODES = {"AllocationQuota.FreeTierOnly", "401007", "401008"}
 FREE_TIER_CODES_403 = {"insufficient_quota"}
 # 请求超过了模型的上下文窗口（见 is_context_overflow）：langchain-openai 认得出几种的换成 ContextOverflowError；别的看这几个状态码、错误里的固定说法。
 # 前几个照 Deep Agents（deepagents 0.7.35 middleware/summarization.py 的 _is_context_overflow），后面是接的几家（2026-11-10 查的，
-# 官方错误码文档没写原文的，用的是 GitHub issue、开源项目测试里贴的真实返回）。混元（官方文档写明）、MiMo（第三方实测）超长不报错、静默截掉开头，认不出来
+# 官方错误码文档没写原文的，用的是 GitHub issue、开源项目测试里贴的真实返回）。混元 TokenHub 上的 Hy3、Hy4 2026-11-10 实测超长报 400003；
+# MiMo 直连超长不报错，见 InputTruncated
 OVERFLOW_STATUS = {400, 413, 422}
 OVERFLOW_TEXTS = (
     "context_length_exceeded", "contextwindowexceedederror", "maximum context length", "exceeds the context window",
@@ -94,6 +95,16 @@ class ContentBlocked(RuntimeError):
         self.output = output
 
 
+class InputTruncated(ContextOverflowError):
+    """模型服务没报错，把输入截到上下文窗口那么长，一个字没生成就以 length 结束（finish_reason=length、输出 0 token）。
+    2026-11-10 MiMo V2.6 Flash 直连实测：200 万字的请求回 200，用量里输入 1048570 token（窗口 1048576）、输出 0，正文空。
+    没缓存时它读完要两分钟，对话 agent 先撞上首字超时、换备用（备用报超长再压）；前缀有缓存时 10 秒内回来，走这里。
+    当作上下文超长（is_context_overflow 认它），压短了再发（见 graph.research.compaction）。"""
+
+    def __init__(self) -> None:
+        super().__init__("模型服务把输入截到上下文窗口那么长，没有生成就结束了")
+
+
 def is_blocked(e: BaseException) -> bool:
     return isinstance(e, openai.APIError) and isinstance(e.body, dict) and e.body.get("message") == BLOCKED_MESSAGE
 
@@ -123,6 +134,15 @@ def has_content(chunk: Any) -> bool:
     """流式片段里有没有模型生成的东西：正文、思考、工具调用（开头只带角色的空片段、最后的用量片段不算）。"""
     m = chunk.message
     return bool(m.content or m.additional_kwargs.get("reasoning_content") or getattr(m, "tool_call_chunks", None))
+
+
+def _output_tokens(m: Any) -> int:
+    return (getattr(m, "usage_metadata", None) or {}).get("output_tokens", 0)
+
+
+def _empty(m: Any) -> bool:
+    """一次调用（不是流式）一个字没生成：正文、思考、工具调用都没有，用量里的输出也是 0（只返回用量、不返回思考的，比如 Grok，输出不是 0）。"""
+    return not (m.content or m.additional_kwargs.get("reasoning_content") or getattr(m, "tool_calls", None) or _output_tokens(m))
 
 
 def unavailable_reason(e: BaseException) -> str | None:
@@ -245,12 +265,15 @@ class GuardedChatModel:
             self.breaker.success(key)
         return e
 
-    def _settle(self, key: str, finish: str | None, streamed: bool = False) -> None:
+    def _settle(self, key: str, finish: str | None, streamed: bool = False, empty: bool = False) -> None:
+        """empty：这次一个字没生成（正文、思考、工具调用都没有，用量里的输出也是 0）。"""
         if finish == "insufficient_system_resource":  # DeepSeek：推理资源不够，生成被打断
             raise self.breaker.failure(key, "服务端资源不足", interrupted=True, streamed=streamed)
         self.breaker.success(key)
         if finish == "content_filter":
             raise ContentBlocked(output=True)
+        if finish == "length" and empty:  # 还没生成就到了上限：输入占满了窗口。只看到 length 分不出来（输出到了 max_tokens 也是它）
+            raise InputTruncated()
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs: Any):
         key = self._guard_key()
@@ -263,7 +286,8 @@ class GuardedChatModel:
                 if err is e:
                     raise
                 raise err from e
-            self._settle(key, (res.generations[0].generation_info or {}).get("finish_reason") if res.generations else None)
+            gen = res.generations[0] if res.generations else None
+            self._settle(key, (gen.generation_info or {}).get("finish_reason") if gen else None, empty=gen is not None and _empty(gen.message))
             return res
         finally:
             if probe:
@@ -272,19 +296,20 @@ class GuardedChatModel:
     def _stream(self, messages, stop=None, run_manager=None, **kwargs: Any) -> Iterator:
         key = self._guard_key()
         probe = self.breaker.check(key)
-        finish, streamed = None, False
+        finish, streamed, generated, out = None, False, False, 0
         try:
             try:
                 for chunk in super()._stream(messages, stop=stop, run_manager=run_manager, **kwargs):  # type: ignore[misc]
                     finish = (chunk.generation_info or {}).get("finish_reason") or finish
                     streamed = True
+                    generated, out = generated or has_content(chunk), out + _output_tokens(chunk.message)
                     yield chunk
             except Exception as e:
                 err = self._translate(key, e, streamed)
                 if err is e:
                     raise
                 raise err from e
-            self._settle(key, finish, streamed)
+            self._settle(key, finish, streamed, empty=not generated and not out)
         finally:
             if probe:
                 self.breaker.release(key)
@@ -303,7 +328,8 @@ class GuardedChatModel:
                 if err is e:
                     raise
                 raise err from e
-            self._settle(key, (res.generations[0].generation_info or {}).get("finish_reason") if res.generations else None)
+            gen = res.generations[0] if res.generations else None
+            self._settle(key, (gen.generation_info or {}).get("finish_reason") if gen else None, empty=gen is not None and _empty(gen.message))
             return res
         finally:
             if probe:
@@ -312,7 +338,7 @@ class GuardedChatModel:
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs: Any) -> AsyncIterator:
         key = self._guard_key()
         probe = self.breaker.check(key)
-        finish, streamed = None, False
+        finish, streamed, generated, out = None, False, False, 0
         limit = self._first_token_s()
         deadline = None if limit is None else asyncio.get_running_loop().time() + limit  # 收到第一个有内容的片段以后就不管了
         it = super()._astream(messages, stop=stop, run_manager=run_manager, **kwargs)  # type: ignore[misc]
@@ -332,6 +358,7 @@ class GuardedChatModel:
                         deadline = None
                     finish = (chunk.generation_info or {}).get("finish_reason") or finish
                     streamed = True
+                    generated, out = generated or has_content(chunk), out + _output_tokens(chunk.message)
                     yield chunk
             except ModelUnavailable:
                 raise
@@ -340,7 +367,7 @@ class GuardedChatModel:
                 if err is e:
                     raise
                 raise err from e
-            self._settle(key, finish, streamed)
+            self._settle(key, finish, streamed, empty=not generated and not out)
         finally:
             await it.aclose()  # 首字超时、点了停止：断开这次请求
             if probe:
