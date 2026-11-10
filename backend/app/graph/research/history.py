@@ -134,6 +134,11 @@ def work_switch(m: BaseMessage) -> bool | None:
     return v if isinstance(v, bool) else None
 
 
+# 这段对话用户说了“别再问了”（问题卡上点的，2026-11-11 Sean 定）：记在 state 的这一项里。之后 Work 的轮也不给问用户的工具，
+# 系统提示词的 work 一段换成 work_quiet（见 agent.asking、prompt_keys）；页面上能恢复（见 research_runner._aset_asks）。按对话记，不按每句话
+ASKS_OFF = "asks_off"
+
+
 def thinking_of(m: BaseMessage) -> str:
     """消息里的思考，按 LangChain 的标准 content blocks 读：DeepSeek、豆包放在 additional_kwargs 里，Claude 这类放在 content 里，读法一样。
     模型类要把提供方标成没有专门解析的名字（见 ChatArk）：标成 openai 的话，content_blocks 按 OpenAI 的格式读，不看 additional_kwargs。"""
@@ -744,19 +749,20 @@ def ask_args(args: dict) -> tuple[str, list[str]]:
 
 
 def ask_answer(m: BaseMessage) -> dict | None:
-    """一条提问结果里用户的回答（{answer, skip, asked_at, answered_at}）；没问成的、点了停止没回答的是 None。"""
+    """一条提问结果里用户的回答（{answer, skip, mute, asked_at, answered_at}）；没问成的、点了停止没回答的是 None。"""
     art = m.artifact if isinstance(m, ToolMessage) and m.name == ASK_TOOL else None
     got = art.get("ask") if isinstance(art, dict) else None
     return got if isinstance(got, dict) else None
 
 
 def ask_of(call: dict, result: ToolMessage | None) -> dict | None:
-    """一次提问 → 页面上的一条：问题、选项、用户的回答。还没回答的是 pending；点了跳过的是 skipped；
-    没等到回答这一轮就停了的，三样都没有。没问成的（参数不对、这一轮问的次数到了，工具没停下来问）不列。"""
+    """一次提问 → 页面上的一条：问题、选项、用户的回答。还没回答的是 pending；点了跳过的是 skipped，点了“别再问了”的还带 muted；
+    没等到回答这一轮就停了的，这几样都没有。没问成的（参数不对、这一轮问的次数到了，工具没停下来问）不列。"""
     if call.get("name") != ASK_TOOL or not call.get("id"):
         return None
     question, options = ask_args(call.get("args") or {})
-    item = {"type": "ask", "id": call["id"], "question": question, "options": options, "pending": False, "answer": "", "skipped": False}
+    item = {"type": "ask", "id": call["id"], "question": question, "options": options, "pending": False, "answer": "", "skipped": False,
+            "muted": False}
     if result is None:
         return {**item, "pending": True} if question else None
     if isinstance(result.artifact, dict) and result.artifact.get("stopped"):
@@ -764,7 +770,7 @@ def ask_of(call: dict, result: ToolMessage | None) -> dict | None:
     got = ask_answer(result)
     if got is None:
         return None
-    return {**item, "answer": _text(got.get("answer")), "skipped": bool(got.get("skip"))}
+    return {**item, "answer": _text(got.get("answer")), "skipped": bool(got.get("skip")), "muted": bool(got.get("mute"))}
 
 
 def asks_before(messages: list[BaseMessage], call_id: str) -> int:

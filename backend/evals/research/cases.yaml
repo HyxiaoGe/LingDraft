@@ -123,3 +123,16 @@
       work: true
       expect: {asked: true, looked_up: true}
       judge: 正文说明了写好了一份报告，并且交代了这份报告是按什么用途或假设来写的。
+
+- id: work-asks-muted
+  source: 问题卡上的“别再问了”（2026-11-11 Sean 定）：这个问题当跳过，这段对话后面 Work 的轮不再出卡，模型自己定并说明。两句都是 Sean 11-10 在 dev 上试的原话；
+    第一句要稳定出卡才点得到“别再问了”，所以用手机对比这句（11-10 五种配置都是 3/3；惠州那句 Pro 有时先查天气、在正文里问）
+  turns:
+    - say: 帮我对比下2026年新出手机的对比报告
+      work: true
+      mute: true
+      expect: {asked: true}
+    - say: 帮我调研下英伟达最近的新闻进展
+      work: true
+      expect: {asked: false, looked_up: true}
+      judge: 正文给出了英伟达近期新闻的调研结果，并且交代了是按什么范围或侧重来查的（比如时间范围、关注哪几方面）；没有反过来问用户想看哪方面、做什么用。

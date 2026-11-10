@@ -1098,7 +1098,8 @@ class FakeToolModel(BaseChatModel):
             return call(TIME_TOOL)
         if "直接答" in text:
             return "直接回答：这个问题不用查。", []
-        if any(k in text for k in ("问我", "边搜边问", "问两个", "一直问")) and ASK_TOOL in self.bound:
+        # 这一轮问过了的，工具后来不给了（用户点了“别再问了”）也照样把回复说完
+        if any(k in text for k in ("问我", "边搜边问", "问两个", "一直问")) and (ASK_TOOL in self.bound or ASK_TOOL in names):
             return self._ask(text, turn, n)
         if any(k in text for k in ("写文档", "写网页", "写代码文件", "改文档", "重写文档")) and CREATE_TOOL in self.bound:
             return self._write(text, messages, turn, call)

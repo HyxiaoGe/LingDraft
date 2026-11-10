@@ -87,6 +87,7 @@ class CaseTurn(BaseModel):
     say: str
     work: bool = Field(default=False, description="这句话在 Work 模式下发（输入框旁边选了 Work）：这种轮里模型才能停下来问用户")
     answers: list[str] = Field(default_factory=list, description="模型这一轮停下来问用户时，按先后这样回答；没写的（问的比写的多）都跳过")
+    mute: bool = Field(default=False, description="这一轮第一次被问时点“别再问了”（跳过，并且这段对话之后不再问）；这时不写 answers")
     expect: Expect = Field(default_factory=Expect)
     judge: str | None = Field(default=None, description="写成“正文做到了 X，且没有 Y”")
 
@@ -216,7 +217,8 @@ def _check(name: str, passed: bool, detail: str = "") -> dict:
 def play(runner, tid: str, turn: CaseTurn, option: str | None = None, thinking: bool | None = None) -> dict:
     """说一句话，跑到这一轮结束。返回这一轮的记录；view（页面看到的）、evidence（整段对话的材料）不进结果文件。
     option 是第一句话时给对话选的模型（models.toml 里选项的 id），没给是 Auto；thinking 是思考开关（--no-thinking 是 False，没给按选项的默认）。
-    模型停下来问用户的（ask_user）：按用例写的 answers 依次回答，没写的跳过，同一轮接着跑；问了什么、怎么答的记在 asks 里。"""
+    模型停下来问用户的（ask_user）：按用例写的 answers 依次回答，没写的跳过，同一轮接着跑；问了什么、怎么答的记在 asks 里。
+    用例写了 mute 的：第一次被问就点“别再问了”。"""
     runner.accept(tid, turn.say, thinking, option=option, work=turn.work or None)
     events: list[dict] = []
     runner.run_turn(tid, None, events.append)
@@ -226,8 +228,9 @@ def play(runner, tid: str, turn: CaseTurn, option: str | None = None, thinking: 
     while (ask := runner.state_view(tid)["ask"]) is not None and ask["id"] not in answered:
         answered.add(ask["id"])
         text = turn.answers[len(asks)] if len(asks) < len(turn.answers) else ""
-        asks.append({"question": ask["question"], "options": ask["options"], "answer": text})
-        runner.run_turn(tid, runner.answer_input(tid, ask["id"], text, skip=not text), events.append)
+        mute = turn.mute and not asks
+        asks.append({"question": ask["question"], "options": ask["options"], "answer": text, **({"muted": True} if mute else {})})
+        runner.run_turn(tid, runner.answer_input(tid, ask["id"], text, skip=not text, mute=mute), events.append)
     runner.suggest(tid)  # 这一轮结束之后起推荐问题
     view = runner.state_view(tid)
     msgs = runner.graph.get_state(runner._cfg(tid)).values["messages"]

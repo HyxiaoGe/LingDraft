@@ -546,10 +546,10 @@ class ResearchRunner(BaseRunner):
         kind = "regenerate" if text is None else "edit"
         return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aregenerate_input(thread_id, text, thinking, work), kind)))
 
-    def answer(self, thread_id: str, ask_id: str, text: str = "", skip: bool = False) -> AsyncIterator[str]:
-        """回答模型问的问题（skip 是跳过，不回答），这一轮从停下的地方接着跑。ask_id 是状态里 ask 的 id。
-        等着的不是这个问题（答过了、这一轮已经停了）抛 NothingToAnswer；回答是空的、太长抛 BadAnswer。"""
-        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aanswer_input(thread_id, ask_id, text, skip), "answer")))
+    def answer(self, thread_id: str, ask_id: str, text: str = "", skip: bool = False, mute: bool = False) -> AsyncIterator[str]:
+        """回答模型问的问题（skip 是跳过，不回答；mute 是“别再问了”：跳过，并且这段对话之后不再问），这一轮从停下的地方接着跑。
+        ask_id 是状态里 ask 的 id。等着的不是这个问题（答过了、这一轮已经停了）抛 NothingToAnswer；回答是空的、太长抛 BadAnswer。"""
+        return self._stream(aio.run(self._asubmit(thread_id, lambda: self._aanswer_input(thread_id, ask_id, text, skip, mute), "answer")))
 
     def queue(self, thread_id: str, text: str, thinking: bool | None = None, work: bool | None = None) -> dict | None:
         return aio.run(self._aqueue(thread_id, text, thinking, work))
@@ -567,9 +567,9 @@ class ResearchRunner(BaseRunner):
     def regenerate_input(self, thread_id: str, text: str | None = None, thinking: bool | None = None, work: bool | None = None) -> None:
         aio.run(self._aregenerate_input(thread_id, text, thinking, work))
 
-    def answer_input(self, thread_id: str, ask_id: str, text: str = "", skip: bool = False) -> Command:
+    def answer_input(self, thread_id: str, ask_id: str, text: str = "", skip: bool = False, mute: bool = False) -> Command:
         """回答问题时交给 run_turn 的输入（命令行、评测和测试用，见 answer）。"""
-        return aio.run(self._aanswer_input(thread_id, ask_id, text, skip))
+        return aio.run(self._aanswer_input(thread_id, ask_id, text, skip, mute))
 
     def models(self, tier: str) -> list[dict]:
         """新对话能选的模型（按 models.toml 的顺序，Auto 在第一个）。thinking：toggle 是页面上显示思考开关，always、never 不显示。
@@ -586,6 +586,10 @@ class ResearchRunner(BaseRunner):
         """新对话能选的里面有这个选项，但 tier 这一档选不了。不在能选的里面的不算（开对话时照常报没有这个模型）。"""
         o = next((o for o in self.planner.catalog.offered(self.planner.usable) if o.id == option_id), None)
         return o is not None and not o.allows(tier)
+
+    def set_asks(self, thread_id: str, on: bool) -> None:
+        """这段对话 Work 的轮还问不问（页面的“恢复提问”是 on=True）。正在跑抛 RunConflict；没跑完、停在问用户那里抛 NotIdle。"""
+        aio.run(self._aset_asks(thread_id, on))
 
     def rename(self, thread_id: str, title: str) -> None:
         aio.run(self._arename(thread_id, title))
@@ -1050,19 +1054,27 @@ class ResearchRunner(BaseRunner):
         if not snap.values or not snap.next or self._status(snap, None)[0] == ASKING:
             raise NothingToRetry("这个线程没有失败，不需要重试")
 
-    async def _aanswer_input(self, thread_id: str, ask_id: str, text: str = "", skip: bool = False) -> Command:
+    async def _aanswer_input(self, thread_id: str, ask_id: str, text: str = "", skip: bool = False, mute: bool = False) -> Command:
         """用户回答了（或跳过了）模型问的问题：校验过了返回带着回答的 Command，agent 拿它从停下的地方接着跑（回答按中断的 id 交给那次提问）。
         什么都不往检查点里写：问着的时候写一次状态，等着的问题就丢了。回答连同问出来、回答的时间一起交过去，算这一轮用时的时候去掉等的这段。
-        一条消息里问了两个的一次答一个：答了前一个，接着跑会马上停在后一个上。"""
+        一条消息里问了两个的一次答一个：答了前一个，接着跑会马上停在后一个上。
+        mute 是点了“别再问了”：这个问题当跳过，这段对话记成不再问（工具接着跑时写进 state，见 app.tools.ask_user）；
+        同一条消息里还等着的别的问题一起跳过，不再一个个出卡。"""
         snap = await self.graph.aget_state(self._cfg(thread_id))
         asking = bool(snap.values) and self._status(snap, None)[0] == ASKING
-        if not asking or not any(a["id"] == ask_id for a in _asks(snap)):
+        waiting = _asks(snap) if asking else []
+        if not any(a["id"] == ask_id for a in waiting):
             raise NothingToAnswer("这个问题已经不用回答了")
+        skip = skip or mute
         try:
-            got = AskAnswer(answer="" if skip else text, skip=skip, asked_at=snap.created_at or "", answered_at=datetime.now(UTC).isoformat())
+            got = AskAnswer(answer="" if skip else text, skip=skip, mute=mute, asked_at=snap.created_at or "",
+                            answered_at=datetime.now(UTC).isoformat())
         except ValidationError as e:
             raise BadAnswer(f"回答不能是空的，也不能超过 {MAX_ANSWER} 个字") from e
-        return Command(resume={ask_id: got.model_dump()})
+        if not mute:
+            return Command(resume={ask_id: got.model_dump()})
+        skipped = got.model_copy(update={"mute": False}).model_dump()
+        return Command(resume={a["id"]: got.model_dump() if a["id"] == ask_id else skipped for a in waiting})
 
     async def _aregenerate_input(self, thread_id: str, text: str | None = None, thinking: bool | None = None, work: bool | None = None) -> None:
         """最后一轮重新回答：去掉用户最后那句话之后的消息和这一轮的记录，从那句话接着跑。
@@ -1103,11 +1115,11 @@ class ResearchRunner(BaseRunner):
     # ---- 改名、删除 ----
 
     @asynccontextmanager
-    async def _ahold(self, thread_id: str) -> AsyncIterator[None]:
-        """占着这个线程的运行位做一件事（改标题、删除）：做的时候这个线程跑不起来，在跑的也不让做。"""
+    async def _ahold(self, thread_id: str, what: str = "改名、删除") -> AsyncIterator[None]:
+        """占着这个线程的运行位做一件事（改标题、删除、恢复提问）：做的时候这个线程跑不起来，在跑的也不让做。"""
         key = self._run_key(thread_id)
         if not await self._aadmit(key):
-            raise RunConflict("正在回答，答完或停下后才能改名、删除")
+            raise RunConflict(f"正在回答，答完或停下后才能{what}")
         try:
             yield
         finally:
@@ -1121,6 +1133,18 @@ class ResearchRunner(BaseRunner):
             if snap.next:
                 raise NotIdle(ASKING_FIRST if self._status(snap, None)[0] == ASKING else "上一轮没跑完，先重试")
             await self.graph.aupdate_state(cfg, {"title": title}, as_node=TURN_END)
+
+    async def _aset_asks(self, thread_id: str, on: bool) -> None:
+        """这段对话 Work 的轮还问不问（history.ASKS_OFF）。关是用户在问题卡上点“别再问了”（随回答走，见 _aanswer_input），这里主要是恢复。
+        和改标题一样要等空闲：没跑完的、停在问用户那里的写一次状态，出错的那一步、等着的问题就丢了。"""
+        cfg = self._cfg(thread_id)
+        async with self._ahold(thread_id, "改这一项"), self._suggest_mu:  # 和写推荐问题错开
+            snap = await self.graph.aget_state(cfg)
+            if snap.next:
+                raise NotIdle(ASKING_FIRST if self._status(snap, None)[0] == ASKING else "上一轮没跑完，先重试")
+            off = not on
+            if bool((snap.values or {}).get(history.ASKS_OFF)) != off:  # 已经是要的样子就不写
+                await self.graph.aupdate_state(cfg, {history.ASKS_OFF: off}, as_node=TURN_END)
 
     async def _adelete(self, thread_id: str) -> None:
         """删掉整段对话（这个线程的所有检查点、运行记录、画的图、用户发的图和文件、整理记忆的记录），找不回来；记下的记忆不删。
@@ -1267,6 +1291,8 @@ class ResearchRunner(BaseRunner):
             # 停下来等用户回答的问题（asking 时才有）：{id, call_id, question, options}，回答时带上 id（见 answer）；
             # call_id 对得上这一轮条目里那条 pending 的 ask。一次问了两个的先给前一个
             "ask": _asks(snap)[0] if status == ASKING else None,
+            # 用户在问题卡上点过“别再问了”（见 history.ASKS_OFF）：这段对话 Work 的轮也不出问题卡，页面给“恢复提问”
+            "asks_off": bool(v.get(history.ASKS_OFF)),
         }
 
     def failure_detail(self, thread_id: str) -> str | None:

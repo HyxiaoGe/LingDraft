@@ -87,13 +87,14 @@
   transition: border-color .15s, color .15s; }
 @media (hover: hover) { .chip:hover { border-color: var(--accent-line); color: var(--accent); } }
 
-/* ---------- 问题卡（AskCard）：模型停下来问用户。问题一行，选项一行一个、点了就是回答，下面“自己写”“跳过” ---------- */
+/* ---------- 问题卡（AskCard）：模型停下来问用户。问题一行，选项一行一个、点了就是回答，下面“自己写”“跳过”，最右边“别再问了” ---------- */
 .ask { max-width: 560px; gap: 12px; }
 .askOptions { display: flex; flex-direction: column; gap: 6px; }
 .askOption { min-height: 36px; padding: 6px 12px; border: 1px solid var(--line2); border-radius: var(--r); background: var(--paper); font-size: 13.5px; line-height: 1.5;
   text-align: left; overflow-wrap: anywhere; transition: border-color .15s, background .15s, color .15s; }
 @media (hover: hover) { .askOption:hover { border-color: var(--accent-line); background: var(--accent-soft); color: var(--accent); } }
-.askActions { display: flex; gap: 4px; margin: -2px 0 -4px -10px; } /* 两个字按钮往左让出自己的内边距，字和上面的选项对齐 */
+.askActions { display: flex; gap: 4px; margin: -2px -10px -4px -10px; } /* 字按钮往两边让出自己的内边距，字和上面的选项对齐 */
+.askMute { margin-left: auto; }
 
 /* ---------- 新对话：欢迎语、输入框、例子一起放在中间偏上（上面空的和下面空的按 1 : 1.4 分）；“内容由 AI 生成”放到最底下。标题用宋体 ---------- */
 .main[data-fresh] .scroll { display: flex; flex-direction: column; }
@@ -126,7 +127,7 @@
   .inspire .chip::after, .suggestList .chip::after { content: ""; position: absolute; inset: -4px 0; }
   .inspire { min-height: 80px; }
   .askOption { min-height: 44px; }
-  .askActions { margin: -8px 0 -12px -10px; } /* 两个钮点按区 44 高，上下往外让，卡片不显得下面空 */
+  .askActions { margin: -8px -10px -12px -10px; } /* 几个钮点按区 44 高，上下往外让，卡片不显得下面空 */
   .askActions :global(.ws-btn) { height: 44px; }
 }
 

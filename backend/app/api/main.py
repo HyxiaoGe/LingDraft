@@ -296,12 +296,19 @@ class ResearchRegenerateBody(BaseModel):
 
 
 class ResearchAnswerBody(BaseModel):
-    """回答模型问的问题：id 是状态里 ask 的 id；text 是回答（点选项就是那个选项的字）；skip 是跳过、不回答。"""
+    """回答模型问的问题：id 是状态里 ask 的 id；text 是回答（点选项就是那个选项的字）；skip 是跳过、不回答；
+    mute 是“别再问了”：跳过这个问题，并且这段对话之后不再出问题卡（恢复见 research_asks）。"""
 
     model_config = ConfigDict(extra="forbid")
     id: str
     text: str = ""
     skip: bool = False
+    mute: bool = False
+
+
+class ResearchAsksBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    on: bool
 
 
 class ResearchTitleBody(BaseModel):
@@ -756,11 +763,24 @@ def research_answer(thread_id: str, body: ResearchAnswerBody, who: Who):
     _mine(r, thread_id, who)
     _admit(r, who)
     try:
-        return _sse(r.answer(thread_id, body.id, body.text, body.skip))
+        return _sse(r.answer(thread_id, body.id, body.text, body.skip, body.mute))
     except (RunConflict, NothingToAnswer) as e:
         raise HTTPException(409, str(e)) from None
     except BadAnswer as e:
         raise HTTPException(400, str(e)) from None
+
+
+@app.put("/api/research/threads/{thread_id}/asks")
+def research_asks(thread_id: str, body: ResearchAsksBody, who: Who):
+    """这段对话 Work 模式的轮还出不出问题卡（2026-11-11 Sean 定）：用户在卡上点了“别再问了”以后是不出，页面的“恢复提问”发 on=true 改回来。
+    返回对话的状态（asks_off）。运行中、上一轮没跑完、停在问用户那里时返回 409。"""
+    r = research()
+    _mine(r, thread_id, who)
+    try:
+        r.set_asks(thread_id, body.on)
+    except (RunConflict, NotIdle) as e:
+        raise HTTPException(409, str(e)) from None
+    return r.state_view(thread_id)
 
 
 @app.post("/api/research/threads/{thread_id}/stop")

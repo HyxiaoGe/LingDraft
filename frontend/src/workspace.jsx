@@ -6,7 +6,7 @@
 // 模型也会停下来问用户（状态 asking，问题在 state.ask）：这时没有执行在跑，回答或跳过以后同一轮接着跑（见 act.answer）；排着的话留在服务器上，等这一轮答完再发。
 import { useEffect, useRef, useState } from "react";
 import { answerResearchThread, createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads,
-  pinResearchThread, queueResearch, regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
+  pinResearchThread, queueResearch, regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, setResearchAsks, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
 import { localWho } from "./auth.js";
 import { setDraft } from "./drafts.js";
 import { AFTER_RUN_ERROR, errorText, quotaText } from "./errors.js";
@@ -576,14 +576,17 @@ export default function Workspace() {
     },
     retry: () => run((cb, sig) => retryResearchThread(tidRef.current, cb, sig), null, { what: "没能重试" }),
     // 回答模型停下来问的问题（st.ask），或者跳过（skip）：同一轮接着跑。回答先按页面手上的放进过程里，服务器的那条到了换掉它。
+    // mute 是“别再问了”：这个问题跳过，这段对话之后也不再出问题卡（st.asks_off，恢复见 manage.askAgain）。
     // typed：回答是输入框里写的，没交上时放回输入框（点选项的不放）
-    answer: ({ text = "", skip = false, typed = false } = {}) => {
+    answer: ({ text = "", skip = false, mute = false, typed = false } = {}) => {
       const id = tidRef.current;
       const ask = st?.ask;
       if (!id || !ask) return undefined;
-      const mine = { type: "ask", id: ask.call_id, question: ask.question, options: ask.options, pending: false, answer: skip ? "" : text, skipped: skip };
-      return run((cb, sig) => answerResearchThread(id, skip ? { id: ask.id, skip: true } : { id: ask.id, text }, cb, sig), null,
-        { items: [mine], asked: true, what: "回答没交上", answer: typed && !skip ? text : undefined });
+      const skipped = skip || mute;
+      const mine = { type: "ask", id: ask.call_id, question: ask.question, options: ask.options, pending: false, answer: skipped ? "" : text, skipped, muted: mute };
+      const body = mute ? { id: ask.id, mute: true } : skip ? { id: ask.id, skip: true } : { id: ask.id, text };
+      return run((cb, sig) => answerResearchThread(id, body, cb, sig), null,
+        { items: [mine], asked: true, what: "回答没交上", answer: typed && !skipped ? text : undefined });
     },
     // 最后一轮的旧回答先藏起来，新回答在同一轮里接着出现
     regenerate: () => {
@@ -659,6 +662,15 @@ export default function Workspace() {
         if (id === tidRef.current) setSt((s) => (s ? { ...s, title: row.title } : s));
       } catch (e) {
         setError(errorText("标题没改成", e));
+      }
+    },
+    // 恢复提问：这段对话在问题卡上点过“别再问了”（st.asks_off），改回来，之后 Work 下发的话又会先问
+    askAgain: async (id) => {
+      try {
+        const s = await setResearchAsks(id, true);
+        if (id === tidRef.current) setSt((cur) => (cur ? { ...cur, asks_off: s.asks_off } : cur));
+      } catch (e) {
+        setError(errorText("没恢复成", e));
       }
     },
     exportMd: async (id) => {
