@@ -161,6 +161,8 @@ def offline_eval(monkeypatch, tmp_path):
     monkeypatch.setenv("LANGSMITH_API_KEY", "fake")
     monkeypatch.setattr(smith, "Client", lambda: client)
     monkeypatch.setattr("app.research_llm.LiveResearchPlanner", lambda scene=None, **kw: FakeResearchPlanner(**kw))
+    # 模型是假的，不看配没配 key：--model 指定选项时评测会先查 key，CI 上没有 key（11-10 #130 第一次 CI 因此不过，本机有 key 看不出来）
+    monkeypatch.setattr("app.research_llm.usable", lambda ref: True)
     monkeypatch.setattr(research, "LiveJudge", FakeJudge)
     monkeypatch.setattr(research, "RESULTS_DIR", tmp_path / "results")
     monkeypatch.setattr(research, "TAPES_DIR", tmp_path / "tapes")
