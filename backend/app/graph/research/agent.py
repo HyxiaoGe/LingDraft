@@ -173,10 +173,12 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
     async def abefore_agent(self, state: ResearchState, runtime) -> dict[str, Any] | None:
         """开始一轮：记下开始时间和这一轮用的模型。用哪个模型只在这里定（以后查权限、余额也在这里），一轮里不换，出错重试接着用；
         出问题换备用的在 ModelSelect。对话没定选项的（页面没传、2026-11-05 之前的对话）这时定成 Auto；定下的选项停了，改用 Auto，之后都是 Auto。
-        Auto 的对话还没定模型、又是第一轮的：先让模型判断这句话难不难（见 Catalog.pick），判断出错、超时当复杂。"""
+        Auto 的对话还没定模型、又是第一轮的：先让模型判断这句话难不难（见 Catalog.pick），判断出错、超时当复杂。
+        Work 模式下发的不判断，直接当复杂（见 _plan）。"""
         simple = None
-        if not state.get("auto_model") and not state.get("turns") and self._plan(state, runtime).option == AUTO:
-            human = state["messages"][history.last_human(state["messages"])]
+        human = state["messages"][history.last_human(state["messages"])]
+        if (not state.get("auto_model") and not state.get("turns") and not history.work_switch(human)
+                and self._plan(state, runtime).option == AUTO):
             try:
                 simple = await asyncio.wait_for(self.planner.route(history.text_of(human)), ROUTE_WAIT_S)
             except Exception as e:  # 点了停止（CancelledError）照常往外抛
@@ -202,11 +204,18 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
             return []
 
     def _plan(self, state: ResearchState, runtime, simple: bool | None = None):
-        """这一轮的模型。Auto 的对话按定下的 auto_model；还没定的这时定：simple 是第一句话判断的难易，没判断的（老对话、同步跑）当复杂。"""
+        """这一轮的模型。Auto 的对话按定下的 auto_model；还没定的这时定：simple 是第一句话判断的难易，没判断的（老对话、同步跑）当复杂。
+        Work 模式的轮 Auto 不看难易，一律用复杂的那个（Pro，游客是备用）；这段对话之前定的是给简单问题的免费模型，也从这一轮起换成它、
+        之后不再换回去（_begin 记进 auto_model）。2026-11-11 Sean 定：Work 本身就是复杂的活；真实模型评测里 Kimi K3 拿着问用户的工具
+        不用（3 次里 0 次出问题卡）。自己选了模型的不受影响。"""
         catalog, msgs = self.planner.catalog, state["messages"]
-        thinking = history.thinking_switch(msgs[history.last_human(msgs)])
+        human = msgs[history.last_human(msgs)]
+        thinking = history.thinking_switch(human)
         now = self.planner.clock.now()
-        pick = state.get("auto_model") or catalog.pick(bool(simple), _guest(runtime), self.planner.usable, now)
+        if history.work_switch(human):
+            pick = catalog.pick(False, _guest(runtime), self.planner.usable, now)
+        else:
+            pick = state.get("auto_model") or catalog.pick(bool(simple), _guest(runtime), self.planner.usable, now)
         return catalog.plan(state.get("option"), thinking, self.planner.usable, pick=pick, now=now)
 
     def _begin(self, state: ResearchState, runtime, simple: bool | None, kb_libraries: list[dict]) -> dict[str, Any]:

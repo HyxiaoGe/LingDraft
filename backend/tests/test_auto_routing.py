@@ -292,6 +292,35 @@ def test_complex_first_message_goes_to_pro_and_guests_to_flash():
     assert _models(v) == [K3]
 
 
+def _work(c: Chat, text: str, **kw) -> dict:
+    c.r.accept(c.tid, text, owner=c.owner, work=True, **kw)
+    return c.run()
+
+
+def test_work_messages_are_not_routed_and_go_to_pro():
+    """Work 模式下发的第一句话不判断难易，直接用 Pro（游客用 Flash），哪怕这句话会被判成简单；自己选了模型的还是选的那个。"""
+    p = _planner()
+    c = Chat(planner=p)
+    v = _work(c, f"直接答：{FAKE_SIMPLE}，你好")
+    assert _models(v) == [PRO] and not _routes(p) and c.values()["auto_model"] == PRO
+    assert _models(_work(Chat(planner=p, owner=GUEST, tid="t2"), f"直接答：{FAKE_SIMPLE}")) == [FLASH]
+    assert _models(_work(Chat(planner=p, tid="t3"), f"直接答：{FAKE_SIMPLE}", option="doubao-seed-2-1-pro")) == [DOUBAO]
+    assert not _routes(p)
+
+
+def test_switching_to_work_moves_a_simple_conversation_to_pro_for_good():
+    """Chat 下开头、定了免费模型的对话：第一次在 Work 下发就换成 Pro，之后回到 Chat 也不换回去；Chat 的轮在那之前照旧。"""
+    p = _planner()
+    c = Chat(planner=p)
+    c.say(f"直接答：{FAKE_SIMPLE}，你好")
+    v = c.say("直接答：再说一句")
+    assert _models(v) == [K3, K3]
+    v = _work(c, "直接答：帮我做个计划")
+    assert _models(v) == [K3, K3, PRO] and _model_events(c.events) == [PRO] and c.values()["auto_model"] == PRO
+    v = c.say("直接答：谢谢")
+    assert _models(v) == [K3, K3, PRO, PRO] and len(_routes(p)) == 1
+
+
 def test_routing_failure_counts_as_complex():
     p = _planner()
     p.fail_route = True
