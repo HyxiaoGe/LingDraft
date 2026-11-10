@@ -10,17 +10,17 @@
 
 ```mermaid
 flowchart TB
-    UI["页面（React）"] -- "说话 · 排队 · 插话 · 停止" --> API["FastAPI"]
+    UI["页面（React）"] -- "说话、排队、插话、停止" --> API["FastAPI"]
     API -- "SSE 事件流<br/>断线续看" --> UI
-    API --> Runner["运行器<br/>排队 · 取消<br/>事件日志"]
+    API --> Runner["运行器<br/>排队、取消<br/>事件日志"]
     API --> Parse["传文件<br/>子进程解析<br/>资料库建索引"]
     Runner -- "aupdate_state + astream<br/>subgraphs=True" --> Main["主 agent<br/>create_agent<br/>+ 16 个中间件"]
     Main -- "task，并行派出" --> Sub["子 agent<br/>create_agent<br/>按工具限次"]
-    Main --> Tools["搜索 · 读网页 · 查文档<br/>天气 · 地图 · 航班火车<br/>画图 · 看图 · 读写文件<br/>查资料库 · recall"]
+    Main --> Tools["搜索、读网页、查文档<br/>天气、地图、航班火车<br/>画图、看图、读写文件<br/>查资料库、recall"]
     Sub --> Tools
-    Main -- "每次调模型" --> Models["选模型<br/>免费额度 → 直连 → 备用<br/>熔断"]
+    Main -- "每次调模型" --> Models["选模型<br/>先免费额度，再直连<br/>再换备用；熔断"]
     Sub --> Models
-    Runner --- PG[("Postgres + pgvector<br/>检查点 · Store · 运行记录<br/>文件 · 资料库 · 成本账")]
+    Runner --- PG[("Postgres<br/>pgvector<br/>检查点、Store<br/>运行记录、文件、资料库<br/>成本账")]
     Parse --> PG
     Dream["每天整理<br/>长期记忆"] --> PG
 ```
