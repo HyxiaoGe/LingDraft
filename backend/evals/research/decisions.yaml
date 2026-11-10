@@ -78,6 +78,18 @@
   source: 用户让它自己定的不问
   expect: {asked: false, replied: false}
 
+# 11-10 加：第一版提示词在上面两句上问过头了（Flash 10 次里 6 次：用途说清了还问自建还是托管、侧重哪块）。改提示词时拿上面两句当例子对着改，
+# 这两句换了领域、提示词里没提过，看改的是不是只对那两句管用
+- id: ask-no-purpose-support
+  say: 我们公司准备换客服系统，现在 30 个坐席，帮我写一份智齿科技、网易七鱼和 Udesk 的选型对比报告
+  source: 同 ask-no-purpose-given，换个领域
+  expect: {asked: false, replied: false}
+
+- id: ask-no-purpose-talk
+  say: 下个月要在行业论坛上做 20 分钟的演讲，听众是车企的市场负责人，帮我写一份 2026 年中国新能源车出口情况的调研报告当素材
+  source: 同 ask-no-audience-given，换个领域
+  expect: {asked: false, replied: false}
+
 # 不该问：问答、查询、小活。问题卡只在需要人介入时出现，日常对话不该多出卡来
 - id: ask-no-question
   say: Milvus 和 Qdrant 有什么区别？

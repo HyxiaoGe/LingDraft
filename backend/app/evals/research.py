@@ -232,7 +232,8 @@ def play(runner, tid: str, turn: CaseTurn, option: str | None = None) -> dict:
     msgs = runner.graph.get_state(runner._cfg(tid)).values["messages"]
     t = view["turns"][-1]
     rec_turn = t["record"] or {}
-    streamed = {e["data"]["id"] for e in events if e["event"] == "delta"}
+    # 只看主 agent 的片段：子 agent 的片段（带 task）进的是它的子任务卡，不是这一轮的思考、正文
+    streamed = {e["data"]["id"] for e in events if e["event"] == "delta" and not e["data"].get("task")}
     stored = {i["id"] for i in t["items"] if i["type"] in ("thinking", "text")}
     this = msgs[history.last_human(msgs) + 1:]
     ais = [m for m in this if m.type == "ai"]

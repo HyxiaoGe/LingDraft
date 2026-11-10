@@ -199,6 +199,15 @@ def test_subagent_searches_count_as_searched():
     assert r["turns"][0]["lookups"] == ["task"]
 
 
+def test_subagent_stream_pieces_do_not_count_against_the_main_stream():
+    """子 agent 流出来的片段进它的子任务卡：实时片段和存下来的对不对得上只看主 agent 的。
+    11-10 report-ask-answered 是第一个整段跑到派子 agent 的用例（之前 148 轮都没派过、这项都过），就它这项不过；
+    用假模型派子 agent 能复现，原因是把子 agent 的片段也算了进去。"""
+    r = _run([{"say": "分头查 向量库 和 图数据库", "expect": {"looked_up": True}}])
+    assert r["turns"][0]["lookups"] == ["task", "task"] and r["turns"][0]["stream_ids_match"]
+    assert r["passed"], (_failed(r), r.get("error"))
+
+
 def test_citation_outside_brackets_fails_cite_format():
     played = {"status": "idle", "outcome": "ok", "stream_ids_match": True, "searches": [], "reads": [],
               "reply": "定价 2 美元 [s3ae980]。[s3ae980 之外，见 sa63a73] 另有说法 [sa63a73][s1b2c3d]",
