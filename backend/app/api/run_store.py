@@ -34,7 +34,6 @@ class Pending(NamedTuple):
 
     text: str
     thinking: bool | None = None
-    work: bool | None = None  # 发的时候是不是 Work 模式（见 history.WORK）
 
 
 FIELDS = ("id", "thread_id", "kind", "turn_id", "status", "created_at", "started_at", "ended_at", "error_type", "error", "traceback", "version")
@@ -63,8 +62,7 @@ class RunStore(Protocol):
 
     # 排着的话：{"text", "created_at", "updated_at"}
     # 接在排着的那句后面（front：放到前面，是取出来又放回去的，比排着的那句早），没有就新建
-    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None,
-                          work: bool | None = None) -> dict: ...
+    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict: ...
     async def get_pending(self, thread_id: str, mode: str) -> dict | None: ...
     async def take_pending(self, thread_id: str, mode: str) -> Pending | None: ...  # 取出来并删掉；两处同时取，只有一处拿得到
 
@@ -148,18 +146,15 @@ class MemoryRunStore:
     async def pins_of(self, owner: str) -> dict[str, str]:
         return {t: at for t, at in self._pins.items() if self._owners.get(t) == owner}
 
-    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None,
-                          work: bool | None = None) -> dict:
+    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict:
         now = _iso(_now())
         row = self._pending.get((thread_id, mode))
         if row is None:
-            row = self._pending[(thread_id, mode)] = {"text": text, "thinking": thinking, "work": work, "created_at": now, "updated_at": now}
+            row = self._pending[(thread_id, mode)] = {"text": text, "thinking": thinking, "created_at": now, "updated_at": now}
         elif front:
-            row.update(text=text + JOIN + row["text"], thinking=thinking if row["thinking"] is None else row["thinking"],
-                       work=work if row["work"] is None else row["work"], updated_at=now)
+            row.update(text=text + JOIN + row["text"], thinking=thinking if row["thinking"] is None else row["thinking"], updated_at=now)
         else:
-            row.update(text=row["text"] + JOIN + text, thinking=row["thinking"] if thinking is None else thinking,
-                       work=row["work"] if work is None else work, updated_at=now)
+            row.update(text=row["text"] + JOIN + text, thinking=row["thinking"] if thinking is None else thinking, updated_at=now)
         return dict(row)
 
     async def get_pending(self, thread_id: str, mode: str) -> dict | None:
@@ -168,7 +163,7 @@ class MemoryRunStore:
 
     async def take_pending(self, thread_id: str, mode: str) -> Pending | None:
         row = self._pending.pop((thread_id, mode), None)
-        return Pending(row["text"], row["thinking"], row["work"]) if row else None
+        return Pending(row["text"], row["thinking"]) if row else None
 
 
 _POSTGRES_DDL = (
@@ -184,7 +179,7 @@ _POSTGRES_DDL = (
         thread_id text NOT NULL, mode text NOT NULL, text text NOT NULL, created_at timestamptz NOT NULL, updated_at timestamptz NOT NULL,
         thinking boolean, PRIMARY KEY (thread_id, mode))""",
     "ALTER TABLE pending_messages ADD COLUMN IF NOT EXISTS thinking boolean",  # 2026-11-05 加的，之前建好的表补上
-    "ALTER TABLE pending_messages ADD COLUMN IF NOT EXISTS work boolean",  # 2026-11-10 加的：发的时候是不是 Work 模式
+    # 2026-11-10 到 11-11 这张表还有一列 work（排着的那句是不是 Work）：模式改成按对话定以后不用了，建好的表里那一列留着不管
     "CREATE TABLE IF NOT EXISTS thread_owners (thread_id text PRIMARY KEY, owner text NOT NULL, created_at timestamptz NOT NULL)",
     "CREATE INDEX IF NOT EXISTS thread_owners_owner_idx ON thread_owners (owner)",
     "ALTER TABLE thread_owners ADD COLUMN IF NOT EXISTS pinned_at timestamptz",  # 2026-11-07 加的置顶，之前建好的表补上
@@ -267,27 +262,26 @@ class PostgresRunStore:
         rows = await self._rows("SELECT thread_id, pinned_at FROM thread_owners WHERE owner = %s AND pinned_at IS NOT NULL", (owner,))
         return {r["thread_id"]: r["pinned_at"] for r in rows}
 
-    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None,
-                          work: bool | None = None) -> dict:
-        # 思考开关、Work 模式按后发的那句：放到前面的（取出来又放回去的）比排着的早
+    async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict:
+        # 思考开关按后发的那句：放到前面的（取出来又放回去的）比排着的早
         if front:
             merged, late, early = "excluded.text || CAST(%s AS TEXT) || pending_messages.text", "pending_messages", "excluded"
         else:
             merged, late, early = "pending_messages.text || CAST(%s AS TEXT) || excluded.text", "excluded", "pending_messages"
         now = _now()
-        return (await self._rows("INSERT INTO pending_messages (thread_id, mode, text, thinking, work, created_at, updated_at) "
-                                 "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+        return (await self._rows("INSERT INTO pending_messages (thread_id, mode, text, thinking, created_at, updated_at) "
+                                 "VALUES (%s, %s, %s, %s, %s, %s) "
                                  f"ON CONFLICT (thread_id, mode) DO UPDATE SET text = {merged}, "
-                                 f"thinking = COALESCE({late}.thinking, {early}.thinking), work = COALESCE({late}.work, {early}.work), "
-                                 "updated_at = excluded.updated_at RETURNING text, thinking, work, created_at, updated_at",
-                                 (thread_id, mode, text, thinking, work, now, now, JOIN)))[0]
+                                 f"thinking = COALESCE({late}.thinking, {early}.thinking), "
+                                 "updated_at = excluded.updated_at RETURNING text, thinking, created_at, updated_at",
+                                 (thread_id, mode, text, thinking, now, now, JOIN)))[0]
 
     async def get_pending(self, thread_id: str, mode: str) -> dict | None:
-        rows = await self._rows("SELECT text, thinking, work, created_at, updated_at FROM pending_messages WHERE thread_id = %s AND mode = %s",
+        rows = await self._rows("SELECT text, thinking, created_at, updated_at FROM pending_messages WHERE thread_id = %s AND mode = %s",
                                 (thread_id, mode))
         return rows[0] if rows else None
 
     async def take_pending(self, thread_id: str, mode: str) -> Pending | None:
-        rows = await self._exec("DELETE FROM pending_messages WHERE thread_id = %s AND mode = %s RETURNING text, thinking, work",
+        rows = await self._exec("DELETE FROM pending_messages WHERE thread_id = %s AND mode = %s RETURNING text, thinking",
                                 (thread_id, mode))
-        return Pending(rows[0]["text"], rows[0]["thinking"], rows[0]["work"]) if rows else None
+        return Pending(rows[0]["text"], rows[0]["thinking"]) if rows else None

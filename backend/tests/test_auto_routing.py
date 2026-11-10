@@ -297,8 +297,8 @@ def _work(c: Chat, text: str, **kw) -> dict:
     return c.run()
 
 
-def test_work_messages_are_not_routed_and_go_to_pro():
-    """Work 模式下发的第一句话不判断难易，直接用 Pro（游客用 Flash），哪怕这句话会被判成简单；自己选了模型的还是选的那个。"""
+def test_work_tasks_are_not_routed_and_go_to_pro():
+    """工作任务的第一句话不判断难易，直接用 Pro（游客用 Flash），哪怕这句话会被判成简单；自己选了模型的还是选的那个。"""
     p = _planner()
     c = Chat(planner=p)
     v = _work(c, f"直接答：{FAKE_SIMPLE}，你好")
@@ -308,17 +308,17 @@ def test_work_messages_are_not_routed_and_go_to_pro():
     assert not _routes(p)
 
 
-def test_switching_to_work_moves_a_simple_conversation_to_pro_for_good():
-    """Chat 下开头、定了免费模型的对话：第一次在 Work 下发就换成 Pro，之后回到 Chat 也不换回去；Chat 的轮在那之前照旧。"""
+def test_mode_stays_with_the_conversation_and_so_does_the_model():
+    """模式新建时定、整段不变（2026-11-11）：对话里后面的话带了 work 也不看，还是定下的免费模型；工作任务每一轮都是 Pro，都不判断难易。"""
     p = _planner()
     c = Chat(planner=p)
     c.say(f"直接答：{FAKE_SIMPLE}，你好")
-    v = c.say("直接答：再说一句")
-    assert _models(v) == [K3, K3]
     v = _work(c, "直接答：帮我做个计划")
-    assert _models(v) == [K3, K3, PRO] and _model_events(c.events) == [PRO] and c.values()["auto_model"] == PRO
-    v = c.say("直接答：谢谢")
-    assert _models(v) == [K3, K3, PRO, PRO] and len(_routes(p)) == 1
+    assert _models(v) == [K3, K3] and len(_routes(p)) == 1
+    w = Chat(planner=p, tid="t2")
+    _work(w, f"直接答：{FAKE_SIMPLE}，你好")
+    v = w.say(f"直接答：{FAKE_SIMPLE}")
+    assert _models(v) == [PRO, PRO] and w.values()["auto_model"] == PRO and len(_routes(p)) == 1
 
 
 def test_routing_failure_counts_as_complex():

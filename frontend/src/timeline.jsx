@@ -7,12 +7,12 @@
 // 模型做到一半会停下来问用户（状态 asking）：最后一轮下面出一张问题卡（AskCard），点选项、在输入框里写、或者跳过，这一轮接着跑；问过的问题和回答排在过程里。
 // 问着的时候不想答也有出口：输入框空着时右边是停止（这一轮到此为止），那句话下面能编辑，问题卡下面能重新回答。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
-import { MessageCircleQuestionMark } from "lucide-react";
+import { BriefcaseBusiness, MessageCircleQuestionMark, MessageSquare } from "lucide-react";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
 import shell from "./card.module.css";
 import { FileCards, fileVersions, turnCards } from "./artifact.jsx";
-import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelIcon, ModelTools, Pending, WorkSwitch, enterSends, focusInput, useAutoHeight, useImageDrop } from "./composer.jsx";
+import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelIcon, ModelTools, Pending, enterSends, focusInput, useAutoHeight, useImageDrop } from "./composer.jsx";
 import { failureText } from "./errors.js";
 import { SentFiles, fileIndex, partUnit } from "./files.jsx";
 import { FilesButton, workspaceFiles } from "./workspace-files.jsx";
@@ -37,6 +37,12 @@ const EXAMPLES = [
   "最近一周 AI 圈有什么新闻？",
   "珠穆朗玛峰现在的官方高度是多少？",
 ];
+// 切到“工作”时：今日灵感里没有调研题、没取到，就显示这几个
+const TASK_EXAMPLES = [
+  "调研国内主流的向量数据库，写一份选型报告",
+  "帮我做一个三天两晚的成都出行计划",
+  "对比今年新出的折叠屏手机，写一份购买建议",
+];
 
 // 轮次目录放哪（见 turns.jsx）：正文 832 宽居中（两边各留 28），右边空出来的那块放得下 184 宽的目录、离右边 16、离正文 24：滚动区至少这么宽才放右栏；
 // 只放得下一列短横线（离右边 16、最宽 20，离正文 28）就放短横线，鼠标移上去展开，没有鼠标的（平板）不放；再窄放顶栏的按钮
@@ -51,6 +57,7 @@ const keepReadingOf = (id, at) => { try { sessionStorage.setItem(READING + id, J
 export const forgetReading = (id) => { try { sessionStorage.removeItem(READING + id); } catch { /* 没有就算了 */ } };
 
 // files：模型写的文件在右栏怎么开（见 artifact.jsx）：{open(目标), current（右栏正开着的，没开是 null）}
+// work：{on：这一页是工作任务（新页面上选着“工作”，或者开着的是工作任务）, onChange：新页面上换“对话 / 工作”}，开始以后不能换
 export function Conversation({ st, live, busy, suggesting, error, now, act: rawAct, tid, putBack, listedTitle, models, modelNames, credits, picker, work, manage, who, files }) {
   const scrollRef = useRef(null);
   const stick = useRef(true); // 用户往上翻看时不自动滚到底
@@ -167,7 +174,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
     };
   }
   // 新对话的今日灵感：桌面在输入框下面，窄屏输入框贴底、它们在输入框上面。按看到的顺序放，Tab 和读屏的先后和眼睛看的一致
-  const starters = fresh && <Inspirations onPick={act.start} />;
+  const starters = fresh && <Inspirations key={work?.on ? "work" : "chat"} work={!!work?.on} onPick={act.start} />;
 
   const mode = fresh ? "new" : opening ? "opening" : st?.status === "queued" ? "queued" : busy || ACTIVE.has(st?.status) ? "busy" : st?.status || "busy";
   const stopping = !!(live?.stopping || st?.stopping);
@@ -183,7 +190,8 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
     if (queueing) return act.queue(text);
     return undefined;
   };
-  const title = live?.title || st?.title || live?.said || (opening ? listedTitle ?? null : "新对话"); // null：打开中、列表里也还没有，顶栏先放占位
+  const blank = work?.on ? "新工作任务" : "新对话";
+  const title = live?.title || st?.title || live?.said || (opening ? listedTitle ?? null : blank); // null：打开中、列表里也还没有，顶栏先放占位
   const running = busy || ACTIVE.has(st?.status);
   // 顶栏的“⋯”（第 14 条）：这个对话的重命名、导出、打印、删除，和左栏那一行的菜单是同一些事（置顶只在左栏）。改名就在顶栏标题处改
   const [menuAt, setMenuAt] = useState(null); // 菜单开着：打开它的按钮
@@ -246,7 +254,8 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
 
   return (
     <section ref={mainRef} className={styles.main} data-fresh={fresh || undefined} aria-label="对话">
-      <HeadBar title={fresh ? "新对话" : title} edit={edit}
+      <HeadBar title={fresh ? blank : title} edit={edit}
+        mark={!fresh && work?.on && <BriefcaseBusiness size={15} strokeWidth={1.8} className="mr-1.5 inline-block align-[-2px] text-accent" role="img" aria-label="工作任务" />}
         end={<>
           {files && !fresh && !opening && <FilesButton count={workspaceFiles(st, live, title).count} on={!!files.current?.list} onClick={files.toggle} />}
           {index && !rail && <TurnIndexButton entries={entries} scroller={scrollRef} onJump={jumpTo} />}{headMenu}
@@ -270,7 +279,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
         }}>
         <div className={styles.flow}>
           {!fresh && !opening && <h1 className={styles.printTitle}>{title}</h1>/* 只在打印时出现：屏幕上标题在顶栏，打印不印顶栏（第 49 条） */}
-          {fresh ? <Welcome who={who} /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} modelNames={modelNames} title={title} files={files} />}
+          {fresh ? <Welcome who={who} work={work} /> : opening ? <ThreadSkeleton /> : <Turns st={st} live={live} busy={busy} suggesting={suggesting} stopping={stopping} now={now} act={act} models={models} modelNames={modelNames} title={title} files={files} />}
           {error && <div className="ws-error" role="alert"><IconWarn size={15} /><span>{error.text ?? error}</span>
             {error.login && picker.onLogin && <button className="ws-btn ws-error-act" onClick={picker.onLogin}>登录</button>}</div>}
         </div>
@@ -284,7 +293,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
         {away && <JumpButton more={more} onClick={toBottom} />}
         <Composer thread={tid || "new"} carry={!!live} mode={mode} queueing={queueing} held={pendingKinds.length > 0} stopping={stopping} putBack={putBack} onSend={onSend} onStop={act.stop}
           above={(running || asking) && <Pending st={st} act={act} asking={asking} />} onTakeBack={pendingKinds.length ? () => act.withdraw(pendingKinds) : null}
-          lead={<WorkSwitch loading={opening} {...work} />}
+          work={!!work?.on}
           tools={<ModelTools models={models} loading={models === null || opening} {...picker} />} />
       </Dock>
       {dropping && <DropHint />}
@@ -342,7 +351,7 @@ function ThreadSkeleton() {
   );
 }
 
-// 新对话：欢迎语在输入框上面，下面是今日灵感，一起放在中间偏上（窄屏输入框贴底，这些在它上面）。
+// 新对话：欢迎语在输入框上面，欢迎语下面是“对话 / 工作”的大开关，输入框下面是今日灵感，一起放在中间偏上（窄屏输入框贴底，这些在它上面）。
 // 欢迎语（2026-11-07 Sean 定，照 Claude 网页版）：按这台设备上的钟点问候，带登录名字；每次打开新对话随机挑一句，停在页面上不换。
 // 一半是这个钟点的话，一半是不分钟点的（回来啦这类）和周五、周末的。名字没有或太长就不带名字，不拿邮箱前缀凑。
 // 游客（和没有登录功能的部署）不带名字，也不说“回来啦、接着来”这类当他来过的话。一句长了窄屏折成两行，两行差不多长
@@ -367,9 +376,20 @@ const greetAny = (n, day) => [
   ...(day === 5 ? [{ t: `周五了${c(n)}，周末有什么打算？` }] : []),
   ...(day === 0 || day === 6 ? [{ t: `周末愉快${c(n)}，今天想聊点什么？` }, { t: `周末也在忙呀${c(n)}？` }] : []),
 ];
-function greeting(who, at, roll) {
+// 选着“工作”时的欢迎语（2026-11-11，照豆包：换成问有什么活），不分钟点
+const greetWork = (n) => [
+  { t: `今天有什么工作要处理${c(n)}？` },
+  { t: `${p(n)}这次想交给我什么活？` },
+  { t: `要调研点什么、写份什么${c(n)}？` },
+  { t: `有什么想让我帮着做完的${c(n)}？` },
+];
+function greeting(who, at, roll, work) {
   const guest = who === null;
   const name = !guest && who.trim().length <= NAME_MAX ? who.trim() : "";
+  if (work) {
+    const pool = greetWork(name);
+    return pool[Math.floor(roll * pool.length)].t;
+  }
   const h = at.getHours() < 5 ? at.getHours() + 24 : at.getHours();
   const ok = (x) => !(guest && x.back);
   const slot = GREET_SLOTS.find(([from, to]) => h >= from && h < to)[2](name).filter(ok);
@@ -379,16 +399,47 @@ function greeting(who, at, roll) {
 }
 
 // who：登录了是名字（没填是空字符串），游客是 null。一打开就有（先按本机记着的，见 auth.localWho），不用等认人
-function Welcome({ who }) {
+function Welcome({ who, work }) {
   const [at] = useState(() => ({ time: new Date(), roll: Math.random() }));
   return (
     <div className={styles.welcome}>
-      <h2>{greeting(who ?? null, at.time, at.roll)}</h2>
+      <h2>{greeting(who ?? null, at.time, at.roll, !!work?.on)}</h2>
+      {work?.onChange && <ModeSwitch on={!!work.on} onChange={work.onChange} />}
+    </div>
+  );
+}
+
+// 对话 / 工作（2026-11-11 Sean 定，照豆包）：新页面上欢迎语下面的两段大开关，开始以后这段对话就定下了、不能再换，所以只在这里有。
+// 选着“工作”时欢迎语、输入框里的提示、下面的例子都换成工作的；左栏的“新对话”“新工作任务”和它是同一件事。
+// 按下去不抢输入框的光标（写着的字照旧）；键盘移上去以后左右方向键换
+function ModeSwitch({ on, onChange }) {
+  const chat = useRef(null);
+  const workBtn = useRef(null);
+  const seg = (v, ref, icon, label) => (
+    <button ref={ref} role="radio" aria-checked={on === v} tabIndex={on === v ? 0 : -1}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => {
+        if (on !== v) onChange(v);
+        if (e.currentTarget.parentElement.contains(document.activeElement)) e.currentTarget.focus(); // 键盘正停在另一段上：光标跟到点的这段
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+        e.preventDefault();
+        onChange(!on);
+        (on ? chat : workBtn).current?.focus();
+      }}>{icon}{label}</button>
+  );
+  return (
+    <div className={styles.modes} role="radiogroup" aria-label="对话还是工作" data-on={on ? "work" : "chat"}>
+      {seg(false, chat, <MessageSquare size={16} strokeWidth={1.8} />, "对话")}
+      {seg(true, workBtn, <BriefcaseBusiness size={16} strokeWidth={1.8} />, "工作")}
     </div>
   );
 }
 
 // 今日灵感：Fusion 每天出的题（后端代取，只留新闻、调研、常识、天气、生图），大家看到的一样，每次打开新对话打乱顺序。
+// 选着“工作”时（work）只放其中的调研题（后端另外给的 tasks），没有就放固定的几个任务例子；换“对话 / 工作”时整块重来（见 Conversation 里的 key）。
+// 取回来的题在这次打开的页面里记半小时（后端也是半小时取一次），换来换去、再开新对话都不用再等
 // 只有两行题，上面不放小标题、说明和“换一批”，也不放“能做的事”（2026-11-07 Sean 定）。放得下几个放几个；
 // 每 15 秒一个接一个翻过去换下一批（批次 A 停过，2026-11-07 Sean 定恢复、改成 15 秒），鼠标放在上面、键盘停在上面时不翻。
 // 系统设了减少动态效果：直接换，不翻。一行放不下的题折成两行，不截断。点一下直接发。取不到就显示固定的几个例子。取回来之前先放占位，出来时页面不跳
@@ -424,8 +475,16 @@ function fitRows(widths, start, room) {
   return out;
 }
 
-function Inspirations({ onPick }) {
-  const [pool, setPool] = useState(null); // {questions, today}；today 为假：没取到，用的固定例子
+const INSPIRE_FRESH = 30 * 60 * 1000;
+let inspired = null; // {at, questions, tasks}：最近取到的那批
+const inspirePool = (got, work) => {
+  const qs = work ? got?.tasks : got?.questions;
+  return qs?.length ? { questions: shuffled(qs), today: true } : { questions: work ? TASK_EXAMPLES : EXAMPLES, today: false };
+};
+
+function Inspirations({ work, onPick }) {
+  // {questions, today}；today 为假：没取到，用的固定例子
+  const [pool, setPool] = useState(() => (inspired && Date.now() - inspired.at < INSPIRE_FRESH ? inspirePool(inspired, work) : null));
   const [start, setStart] = useState(0);
   const [size, setSize] = useState(null); // {room：能用多宽, widths：每个题多宽}
   const [flipped, setFlipped] = useState(false);
@@ -437,13 +496,19 @@ function Inspirations({ onPick }) {
 
   useEffect(() => {
     let on = true;
-    listInspirations()
-      .then((qs) => on && setPool(qs.length ? { questions: shuffled(qs), today: true } : { questions: EXAMPLES, today: false }))
-      .catch(() => on && setPool({ questions: EXAMPLES, today: false }));
+    if (!pool) {
+      listInspirations()
+        .then((got) => {
+          inspired = { at: Date.now(), ...got };
+          if (on) setPool(inspirePool(got, work));
+        })
+        .catch(() => on && setPool(inspirePool(null, work)));
+    }
     return () => {
       on = false;
       timers.current.forEach(clearTimeout);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useLayoutEffect(() => {
     if (!pool) return undefined;
@@ -477,14 +542,14 @@ function Inspirations({ onPick }) {
   }, [paused, more, start]);
 
   return (
-    <section className={styles.examples} aria-label="新对话的起点">
+    <section className={styles.examples} aria-label={work ? "新工作任务的起点" : "新对话的起点"}>
       {/* 停翻只看两行题：外面这块往下撑满了页面，鼠标放在下面的空白处不算 */}
       <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
         onFocus={() => setFocused(true)} onBlur={(e) => !e.currentTarget.contains(e.relatedTarget) && setFocused(false)}>
       <div className={styles.ruler} ref={ruler} aria-hidden="true">
         {pool?.questions.map((q) => <span key={q} className={styles.chip}>{q}</span>)}
       </div>
-      <div className={styles.inspire + (flipped ? " " + styles.flip : "")} ref={box} aria-label={pool?.today ? "今日灵感" : "可以这样问"} role="group">
+      <div className={styles.inspire + (flipped ? " " + styles.flip : "")} ref={box} aria-label={pool?.today ? "今日灵感" : work ? "可以这样交代" : "可以这样问"} role="group">
         {pool ? shown.map((i, n) => {
           const q = pool.questions[i];
           const d = `${n * FLIP_STAGGER}ms`; // 只有翻的两项错开，悬停变色不等

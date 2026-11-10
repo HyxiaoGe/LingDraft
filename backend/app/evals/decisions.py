@@ -71,7 +71,7 @@ class Decision(BaseModel):
     id: str
     case: str | None = Field(default=None, description="从这个用例录的那遍里取（evals/research/cases.yaml 的 id）")
     say: str | None = Field(default=None, description="不从录的取：这句话开一段新对话，看第一次调模型（和 case 二选一）")
-    work: bool = Field(default=False, description="只写一句话的：这句话在 Work 模式下发（输入框旁边选了 Work）")
+    work: bool = Field(default=False, description="只写一句话的：这句话开的是工作任务（新建时选的“工作”）")
     turn: int = Field(default=1, ge=1)
     call: int | Literal["last"] = Field(default=1, description="这一轮第几次调模型；last 是最后一次（录的那遍写正文的那一下）")
     source: str = Field(description="为什么有这个决策点：要回答什么问题")
@@ -85,7 +85,7 @@ class Decision(BaseModel):
         if self.say is not None and (self.turn, self.call) != (1, 1):
             raise ValueError(f"{self.id}：只写一句话的看的就是第 1 轮第 1 次调模型，不写 turn、call")
         if self.work and self.say is None:
-            raise ValueError(f"{self.id}：从录的取的照录的那一轮的模式，work 只给只写一句话的")
+            raise ValueError(f"{self.id}：从录的取的照录的那段对话的模式，work 只给只写一句话的")
         return self
 
 
@@ -177,7 +177,7 @@ async def afirst(runner, say: str, thread_id: str, plan: Plan | None = None, thi
                  work: bool = False) -> tuple[dict, list[BaseMessage]]:
     """只写一句话的决策点：这句话照页面那样写进一段新对话，跑到执行工具之前。返回同 afork（这里“检查点里的状态”是只有这句话的那个）。
     plan 给了对话就定成它的选项（--model），不然是 Auto。thinking 是这句话的思考开关（--no-thinking 是 False，没给按选项的默认），
-    work 是这句话是不是在 Work 模式下发的。"""
+    work 是这段新对话是不是工作任务。"""
     await runner._aaccept(thread_id, say, thinking, option=plan.option if plan else None, work=work or None)
     cfg = runner._cfg(thread_id)
     before = dict((await runner.graph.aget_state(cfg)).values)
@@ -329,7 +329,7 @@ def transcript(results: list[dict]) -> str:
 
 def decision_inputs(d: Decision) -> dict:
     """数据集里一个样例的输入：哪个用例第几轮第几次调模型、这一下该怎么做。"""
-    # Chat 的（没写 work）不带这一项：加这个字段之前传上去的样例不跟着变
+    # 对话的（没写 work）不带这一项：加这个字段之前传上去的样例不跟着变
     return d.model_dump(mode="json", exclude_none=True, exclude={"id", "source"} | (set() if d.work else {"work"}))
 
 

@@ -40,6 +40,12 @@ def test_pick_keeps_the_five_kinds_and_drops_bad_items():
     assert got == ["币安被盗最新进展", "画一张中秋壁纸", "折叠屏和旗舰怎么选", "喝咖啡影响睡眠吗", "上海明天冷不冷"]
 
 
+def test_tasks_are_the_research_ones():
+    calls: list[str] = []
+    i = Inspirations("https://fusion.test", fusion([ex("news", "币安被盗最新进展"), ex("research", "折叠屏和旗舰怎么选"), ex("research", "存储行业现状")], calls))
+    assert i.tasks == [] and len(run(i.get())) == 3 and i.tasks == ["折叠屏和旗舰怎么选", "存储行业现状"]
+
+
 def test_pick_rejects_wrong_shape():
     for bad in (None, [], {"data": None}, {"data": {"examples": "x"}}):
         try:
@@ -83,10 +89,11 @@ def test_failure_keeps_old_questions_and_waits_before_retrying():
 def test_endpoint_returns_questions_or_502():
     calls: list[str] = []
     try:
-        api_main.set_inspirations(Inspirations("https://fusion.test", fusion([ex("weather", "广州今天下雨吗"), ex("map", "西安一日游怎么走")], calls)))
+        api_main.set_inspirations(Inspirations("https://fusion.test", fusion(
+            [ex("weather", "广州今天下雨吗"), ex("map", "西安一日游怎么走"), ex("research", "存储行业现状")], calls)))
         c = TestClient(api_main.app)
         r = c.get("/api/inspirations")
-        assert r.status_code == 200 and r.json() == {"questions": ["广州今天下雨吗"]}
+        assert r.status_code == 200 and r.json() == {"questions": ["广州今天下雨吗", "存储行业现状"], "tasks": ["存储行业现状"]}
 
         api_main.set_inspirations(Inspirations("https://fusion.test", fusion([], calls, status=503)))
         r = c.get("/api/inspirations")

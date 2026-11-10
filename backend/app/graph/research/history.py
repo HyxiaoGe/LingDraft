@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any
 
@@ -124,7 +125,9 @@ def thinking_switch(m: BaseMessage) -> bool | None:
     return v if isinstance(v, bool) else None
 
 
-# 用户这句话是不是在 Work 模式下发的（输入框旁边的 Chat / Work，2026-11-10 Sean 定），也记在用户消息的 additional_kwargs 里；没有的是 Chat。
+# 对话 / 工作（2026-11-10 Sean 定分开；11-11 定：新建时选，整段对话不变，工作任务不能变回对话）。
+# 这段对话是哪种记在 state 的这一项里（见 work_mode）；每句话是不是 Work 也记在用户消息的 additional_kwargs 里（同一个键），
+# 由运行器按对话的写上（见 research_runner._aaccept），没有的是 Chat。
 # Work 的一轮：系统提示词多一段、多一个问用户的工具（见 agent.TurnMiddleware、ModelSelect）
 WORK = "work"
 
@@ -132,6 +135,16 @@ WORK = "work"
 def work_switch(m: BaseMessage) -> bool | None:
     v = m.additional_kwargs.get(WORK)
     return v if isinstance(v, bool) else None
+
+
+def work_mode(state: Mapping[str, Any]) -> bool:
+    """这段对话是不是工作任务。新建时定下、记在 state 里；11-11 以前的对话每句话都能换、没记这一项：
+    有过 Work 的轮（或者发了还没开始的那句是 Work）就算工作任务，之后不变回去。"""
+    v = state.get(WORK)
+    if isinstance(v, bool):
+        return v
+    return (any(t.work for t in state.get("turns") or [])
+            or any(bool(work_switch(m)) for m in state.get("messages") or [] if isinstance(m, HumanMessage)))
 
 
 # 这段对话用户说了“别再问了”（问题卡上点的，2026-11-11 Sean 定）：记在 state 的这一项里。之后 Work 的轮也不给问用户的工具，

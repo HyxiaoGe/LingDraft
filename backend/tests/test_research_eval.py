@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+import pytest
 from fastmcp import FastMCP
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage, ToolMessage
@@ -128,7 +129,7 @@ def test_failed_checks_and_unsupported_citations_fail_the_case():
 def test_case_answers_the_models_questions_and_checks_whether_it_asked():
     """模型停下来问用户：按用例写的 answers 回答，同一轮接着跑完；没写的跳过。asked 看这一轮真问了没有。"""
     r = _run([{"say": "问我 对比两种向量库", "work": True, "answers": ["选型"], "expect": {"asked": True}},
-              {"say": "直接答：为什么", "expect": {"asked": False}}])
+              {"say": "直接答：为什么", "work": True, "expect": {"asked": False}}])
     assert r["passed"], (_failed(r), r.get("error"))
     first = r["turns"][0]
     assert first["asks"] == [{"question": "这份对比是用来选型，还是做分享？", "options": ["选型", "分享"], "answer": "选型"}]
@@ -145,6 +146,12 @@ def test_case_answers_the_models_questions_and_checks_whether_it_asked():
     assert r["passed"], (_failed(r), r.get("error"))
     assert r["turns"][0]["asks"] == [{"question": "这份对比是用来选型，还是做分享？", "options": ["选型", "分享"], "answer": "", "muted": True}]
     assert r["turns"][0]["reply"] == "你跳过了，我按选型做。" and r["turns"][1]["asks"] == []
+
+
+def test_case_is_one_mode_for_the_whole_conversation():
+    """对话 / 工作新建时定、整段不变（2026-11-11）：用例里每一句的 work 要一样，写成中途换的读不进来。"""
+    with pytest.raises(ValueError, match="work 每一句都要一样"):
+        Case.model_validate({"id": "x", "source": "测试", "turns": [{"say": "一"}, {"say": "二", "work": True}]})
 
 
 def test_reply_is_the_last_model_message():

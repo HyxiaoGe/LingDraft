@@ -1,7 +1,9 @@
-// 左栏：对话列表。最上面品牌、搜对话、收起（手机上是关闭抽屉），下面“新对话”和“资料库”，再下面按时间分组的对话，最下面额度和账号。
-// 手机上是左边滑出的抽屉（遮罩也在这里）。简单的排版写在元素上（Tailwind），悬停、选中、伪元素、动画和手机抽屉在 sidebar.module.css。
-// 照 Fusion 的样子（2026-11-07 Sean 嫌单调）：每行前面一个对话图标（正在回答换成转圈、没跑完换成感叹号、停下来等用户回答换成带问号的），选中的那行是白底浮起来的一块，“新对话”用写字的图标
-import { CircleAlert, LibraryBig, MessageCircleQuestionMark, MessageSquare, MessagesSquare, SquarePen } from "lucide-react";
+// 左栏：对话列表。最上面品牌、搜对话、收起（手机上是关闭抽屉），下面三个入口“新对话”“新工作任务”“资料库”，再下面按时间分组的对话和工作任务，
+// 最下面额度和账号。手机上是左边滑出的抽屉（遮罩也在这里）。简单的排版写在元素上（Tailwind），悬停、选中、伪元素、动画和手机抽屉在 sidebar.module.css。
+// 照 Fusion 的样子（2026-11-07 Sean 嫌单调）：每行前面一个图标（正在回答换成转圈、没跑完换成感叹号、停下来等用户回答换成带问号的），选中的那行是白底浮起来的一块。
+// 2026-11-11 照豆包：“新对话”“新工作任务”是两个入口（对话还是工作新建时定，见 workspace.jsx），和“资料库”排成一样的三行，在哪一页哪一行就是选中的样子；
+// 列表里工作任务前面是公文包、对话前面是气泡。右边的时间在鼠标移上去、选中时让给“⋯”，标题多出一截地方
+import { BriefcaseBusiness, CircleAlert, LibraryBig, MessageCircleQuestionMark, MessageSquare, MessagesSquare, SquarePen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconSearch, IconTrash, Logo, Spinner } from "./icons.jsx";
 import { useLayer } from "./layers.js";
@@ -51,24 +53,26 @@ function rowSub(t, now) {
   return "";
 }
 
-// 列表每隔几秒取一次；当前这个线程以页面手上的状态为准，刚新建、列表里还没有的先补一行（左栏和搜对话的窗口都用）
-export function withCurrent(threads, current, st, live, busy) {
+// 列表每隔几秒取一次；当前这个线程以页面手上的状态为准，刚新建、列表里还没有的先补一行（左栏和搜对话的窗口都用）。
+// work：当前这一页是不是工作任务（补的那一行用）
+export function withCurrent(threads, current, st, live, busy, work) {
   if (!current) return threads;
   const mine = threads.find((t) => t.thread_id === current);
   const title = live?.title || st?.title;
   const patch = { ...(busy ? { status: "running", running_since: st?.running_since || mine?.running_since } : st ? { status: st.status } : {}),
     ...(title ? { title } : {}) };
   return mine ? threads.map((t) => (t.thread_id === current ? { ...t, ...patch } : t))
-    : [{ thread_id: current, title: live?.said || "新对话", status: "running", ...patch }, ...threads];
+    : [{ thread_id: current, title: live?.said || (work ? "新工作任务" : "新对话"), status: "running", work: !!work, ...patch }, ...threads];
 }
 
 // 窄屏时这一栏是抽屉（nav.drawer 开着）：打开时焦点进来，Tab 在里面转，Esc、点外面、右上角的关闭都能关上。
 // 抽屉里的菜单、改名框开着时，Esc 先归它们
 const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
-// href：对话 id → 地址（新对话是 null）；onLibrary：去资料库页（没有登录功能的部署没有资料库，是 null，不放这一行）；
-// library：现在在资料库页（那一行是选中的，对话、新对话都不是）
-export function Sidebar({ threads, current, st, live, busy, now, href, onSelect, manage, onSettings, onLibrary, library, onSearch, auth, onLogin, credits, onCredits, nav }) {
+// href：对话 id → 地址；newHref：新页面的地址（true 是新工作任务）；onSelect(id)：打开对话，onSelect(null, "push", true) 是新工作任务；
+// work：现在这一页是不是工作任务（在新页面上决定“新对话”“新工作任务”哪一行是选中的）；
+// onLibrary：去资料库页（没有登录功能的部署没有资料库，是 null，不放这一行）；library：现在在资料库页（那一行是选中的，别的都不是）
+export function Sidebar({ threads, current, st, live, busy, work, now, href, newHref, onSelect, manage, onSettings, onLibrary, library, onSearch, auth, onLogin, credits, onCredits, nav }) {
   const [menu, setMenu] = useState(null); // 打开菜单的那一行：{id, anchor: 那一行的“⋯”}
   const [renaming, setRenaming] = useState(null); // 正在改名的线程 id
   const box = useRef(null);
@@ -87,7 +91,15 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     }
   };
-  const rows = withCurrent(threads || [], current, st, live, busy);
+  const rows = withCurrent(threads || [], current, st, live, busy, work);
+  const fresh = !current && !library; // 在新页面上：选着对话还是工作，哪一行就是选中的
+  // 最上面的三个入口：一样的一行（图标、字和下面对话那几行对齐），按住 ⌘/Ctrl/Shift 点是浏览器自己开新标签页
+  const entry = (key, to, icon, label, on, go, ref) => (
+    <a key={key} ref={ref} href={to} className={styles.entry} aria-current={on ? "page" : undefined}
+      onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); go(); }}>
+      {icon}{label}
+    </a>
+  );
   // 标题一样、右边的时间也一样的几条（比如更早的两个“广州今日天气”，右边都只写日期）：下面多一行日期和钟点，好分清。
   // 右边的时间已经分得清（今天、昨天的写到钟点）就不再多写一行
   const twinKey = (t) => `${t.title}\n${when(t.updated_at, now, groupOf(t, now))}`;
@@ -132,7 +144,8 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
           onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onSelect(t.thread_id); }}>
           <span className={cx(styles.icon, styles[status])}>
             {status === "active" ? <Spinner size={15} /> : status === "failed" ? <CircleAlert size={15} strokeWidth={1.8} />
-              : status === "asking" ? <MessageCircleQuestionMark size={15} strokeWidth={1.8} /> : <MessageSquare size={15} strokeWidth={1.8} />}
+              : status === "asking" ? <MessageCircleQuestionMark size={15} strokeWidth={1.8} />
+                : t.work ? <BriefcaseBusiness size={15} strokeWidth={1.8} /> : <MessageSquare size={15} strokeWidth={1.8} />}
           </span>
           <span className={styles.body}>
             <span className={styles.title} data-title title={REDUCE.matches ? t.title : undefined}>
@@ -142,7 +155,7 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
           </span>
           <span className={styles.time}>{when(t.updated_at, now, group)}</span>
         </a>
-        <button className={styles.more} aria-label={`“${t.title}”的更多操作`} aria-haspopup={nav.mobile ? "dialog" : "menu"} aria-expanded={open}
+        <button className={styles.more} aria-label={`${t.work ? "工作任务" : "对话"}“${t.title}”的更多操作`} aria-haspopup={nav.mobile ? "dialog" : "menu"} aria-expanded={open}
           onClick={(e) => setMenu(open ? null : { id: t.thread_id, anchor: e.currentTarget })}>
           <IconMore size={15} />
         </button>
@@ -159,7 +172,6 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
         <div className="flex items-center gap-[9px] px-1.5 phone:min-h-11">
           <Logo size={28} className="flex-none" />
           <span className="font-serif text-[17px] leading-none font-semibold tracking-[.04em]">灵稿</span>
-          <span className={cx(styles.tag, "text-[12px] text-muted")}>对话</span>
           <button className="ws-icon-btn -my-1 mr-0 ml-auto phone:my-0" aria-label="搜索对话" title={nav.mobile ? undefined : `搜索对话（${SEARCH_KEY}）`}
             aria-keyshortcuts={SEARCH_ARIA_KEY} aria-haspopup="dialog" onClick={onSearch}><IconSearch size={18} /></button>
           {nav.mobile
@@ -167,21 +179,13 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
             : <button className="ws-icon-btn -my-1 -mr-1 ml-0" data-nav="collapse" aria-label="收起侧栏" title={`收起侧栏（${SIDE_KEY}）`} aria-keyshortcuts={SIDE_ARIA_KEY}
               onClick={nav.toggleSide}><IconPanel size={18} /></button>}
         </div>
-        <div className="flex flex-col gap-1">
-          <button ref={newBtn} className={cx(styles.newChat, "flex h-10 items-center gap-2 rounded-md border border-line2 bg-paper px-3 py-0 text-[13.5px] font-medium phone:h-11")}
-            onClick={() => onSelect(null)} aria-current={!current && !library ? "page" : undefined}>
-            <SquarePen size={15} strokeWidth={1.8} className="text-accent" /> 新对话
-          </button>
-          {/* 资料库（11-10 从设置里搬出来，同一天改成自己一页、叫资料库）：一行字，图标、字和下面对话那几行对齐；在资料库页时和选中的对话一个样子 */}
-          {onLibrary && (
-            <a href="/library" className={cx(styles.place, "flex h-9 items-center gap-[9px] rounded-md px-2.5 text-[13px] text-ink no-underline phone:h-11")}
-              aria-current={library ? "page" : undefined}
-              onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onLibrary(); }}>
-              <LibraryBig size={15} strokeWidth={1.8} className={library ? "text-accent" : "text-muted"} />资料库
-            </a>
-          )}
+        <div className="flex flex-col gap-0.5">
+          {entry("chat", newHref(false), <SquarePen size={15} strokeWidth={1.8} />, "新对话", fresh && !work, () => onSelect(null), newBtn)}
+          {entry("work", newHref(true), <BriefcaseBusiness size={15} strokeWidth={1.8} />, "新工作任务", fresh && !!work, () => onSelect(null, "push", true))}
+          {/* 资料库（11-10 从设置里搬出来，同一天改成自己一页、叫资料库） */}
+          {onLibrary && entry("library", "/library", <LibraryBig size={15} strokeWidth={1.8} />, "资料库", library, onLibrary)}
         </div>
-        <nav ref={list} className="-mx-1 flex flex-1 flex-col gap-[18px] overflow-y-auto px-1" aria-label="对话列表">
+        <nav ref={list} className={cx(styles.list, "-mx-1 flex flex-1 flex-col gap-4 overflow-y-auto px-1")} aria-label="对话列表">
           {threads === null && (
             <div className="flex flex-col gap-4 px-2.5 py-2" role="status" aria-label="正在取对话列表">
               {[78, 62, 70, 54, 66].map((w) => (
@@ -196,9 +200,7 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
           )}
           {groups.map(([key, name, items]) => (
             <div className="flex flex-col gap-px" key={key} role="group" aria-label={name}>
-              <div className="flex gap-1.5 px-2.5 pb-1 text-[12px] font-medium text-muted" aria-hidden="true">
-                {name}<span className="font-normal text-faint tabular-nums">{items.length}</span>
-              </div>
+              <div className={styles.group} aria-hidden="true">{name}</div>
               {items.map((t) => row(t, key))}
             </div>
           ))}

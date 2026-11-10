@@ -35,7 +35,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - 对话第一句话时定下选项，之后不能换（Auto 例外，由系统在里面换）。每一轮开始时定下这一轮主 agent、子 agent 用的模型，记进这一轮的记录（`model_catalog.Catalog.plan`）；之前几轮是别的模型答的，发过去时不带那几轮的思考。
   - `max_output`：主 agent、子 agent 每次最多输出多少 token（思考也算），现在是 65536。不带的话有的厂商默认只有几千，模型写长文件会被截断。
   - 内部用途（`[roles]`）：起标题（`title`）、推荐问题（`suggest`）、单条送审（`probe`）、写短版（`summarize`）、整理记忆（`dream`）、评测的裁判（`judge`）、Auto 判断难易（`route`）、看图工具（`vision`）各用哪个，不跟着选项走。除了单条送审，都先走同一个模型的免费额度。
-  - Auto（`[auto]`，`Catalog.pick`）：对话第一句话由 `route` 判断难易（最多等 10 秒，等不到、出错当复杂），定下以后整段沿用。复杂的用 Auto 选项的模型（`deepseek:deepseek-v4-pro`），游客用备用；简单的按到期日从早到晚挑第一个还能用的免费额度（没有 `same_as` 的那种），都用不了用备用。备用是 `fallback`（选项 `deepseek-flash`）。Work 模式下发的话不判断难易，一律按复杂的走；对话之前定的是给简单问题的免费模型，也从这一轮起换过去，之后不换回来（`TurnMiddleware._plan`）。
+  - Auto（`[auto]`，`Catalog.pick`）：对话第一句话由 `route` 判断难易（最多等 10 秒，等不到、出错当复杂），定下以后整段沿用。复杂的用 Auto 选项的模型（`deepseek:deepseek-v4-pro`），游客用备用；简单的按到期日从早到晚挑第一个还能用的免费额度（没有 `same_as` 的那种），都用不了用备用。备用是 `fallback`（选项 `deepseek-flash`）。工作任务（新建时选的“工作”）不判断难易，一律按复杂的走（`TurnMiddleware._plan`）。
   - 免费额度（`[[free]]`）：各家给的试用额度，现在是百炼（`dashscope`）和 TokenHub（`tokenhub`）的。`until` 那天北京时间 0 点起不再用。写了 `same_as` 的和某个选项是同一个模型：用到那个模型的（选了它、Auto 判为复杂、子 agent、内部用途、备用 Flash）都先走免费额度，用完、到期、出错再走直连，页面上还是那个选项。没有 `same_as` 的只给 Auto 判为简单的用，要写 `name`、`icon`（回答开头显示，见 `/api/models` 的 `names`）。免费模型不能同时是选项或内部用途。厂商报额度用完（`model_guard.FREE_TIER_CODES`，百炼还有 403 `insufficient_quota`）就记进 `free_used_up` 表，重启以后也不再用；续了额度改 `until` 就重新能用。
   - 换备用（`agent.ModelSelect`）：这次调模型不可用（包括首字超时、免费额度用完；走免费额度时认不出来的出错也算），按“免费额度 → 直连的同一个模型 → 备用 Flash 的免费额度 → 直连的 Flash”往下换，试过的不再试，换到头照常失败。换的时候发 `model` 事件，流出了半截的先发 `restart`。Auto 的对话以后几轮都用换上的那个；用户自己选的只这一轮换。子 agent 只做“免费额度 → 直连”这一步，这个子任务剩下的都用直连。
   - 接新的一家：OpenAI 兼容接口的在 `research_llm.COMPAT` 里加一行（怎么开关思考，先实测），别的在 `research_llm.PROVIDERS` 里加一个建模型的函数：思考怎么开关、思考怎么传回去各家不一样。思考统一按 LangChain 的 content blocks 读（`history.thinking_of`），哪家模型都一样。DeepSeek 的思考原样传回（同一轮不传报 400）；豆包 2.x 给的是思考摘要（页面显示它）和加密的思考原文，两样都原样传回（不传加密原文推理效果会下降）。别的几家思考都在 `reasoning_content` 里（MiniMax 要带 `reasoning_split`，不然 M3 的思考夹在正文的 `<think>` 里），也原样传回；GLM-5.3、MiniMax M3.1 Flash、Grok 关不掉思考（选项写 `always`），Grok 的思考多半不返回（所以它的选项先 `hidden`，页面上不出现）。
@@ -56,7 +56,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 
 ## 对话接口
 
-前缀 `/api/research/threads`。除了取图，接口都要带 `Authorization: Bearer <令牌>`（游客令牌或 auth 服务的 access token，见下面的“身份和其他接口”），没带、不对、过期都是 401。线程不存在、不归这个人，一律 404。请求体是 json `{"text", "thinking", "work", "files"}`（`thinking` 是思考开关，不给按模型的默认；`work` 是这句话是不是在 Work 模式下发的，不给是 Chat，见下面；`files` 见下面的“图片和文件”），说的话为空返回 400；正在跑、或者上一轮没跑完时，大多数操作返回 409（各接口另有的 409 写在后面）；开始一轮之前额度用完了返回 429（见“存储”里的额度）。
+前缀 `/api/research/threads`。除了取图，接口都要带 `Authorization: Bearer <令牌>`（游客令牌或 auth 服务的 access token，见下面的“身份和其他接口”），没带、不对、过期都是 401。线程不存在、不归这个人，一律 404。请求体是 json `{"text", "thinking", "work", "files"}`（`thinking` 是思考开关，不给按模型的默认；`work` 只在新建对话时看：true 是工作任务，不给是对话，见下面；`files` 见下面的“图片和文件”），说的话为空返回 400；正在跑、或者上一轮没跑完时，大多数操作返回 409（各接口另有的 409 写在后面）；开始一轮之前额度用完了返回 429（见“存储”里的额度）。
 
 - 说话：
   - `GET /api/models`：新对话能选的模型（`models`：`{id, name, description, thinking, model, locked}`，Auto 在第一个；`model` 是主 agent 用的“厂商:模型”，页面按它给每轮找名字；这一档选不了的也列出来，`locked` 为 true）。`names` 是选项以外、回答开头可能出现的模型（Auto 用的免费额度）的名字和图标。
@@ -66,12 +66,14 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - 也可以带文件：先传到 `/api/files`，解析好了把编号放进 `files`（最多 5 个）。还在解析、没读成、过期了返回 400（`detail` 是 `{code: "files_not_sendable", reason, message}`），什么都没开始。
   - 排着的话、插进这一轮的话不能带图、带文件（`/queue` 只收 json，带了 `files` 返回 400）。
   - `/{id}/retry`：失败的线程接着跑；没失败的返回 409。
-  - `/{id}/regenerate`：最后一轮重新回答，可以带 `{"thinking", "work"}`（没带的照原来那句话的）。
-  - Chat 和 Work 按每句话算（输入框里的两段开关）：Work 的那一轮系统提示词多一段（`prompts.toml` 的 `[agent].work`：计划、调研、写报告这类任务先问用户再动手），
-    并且给模型问用户的工具 `ask_user`；Chat 的轮两样都没有，硬调了工具也不停下来。排着的话带着发的时候的模式；每轮的记录里有 `work`。
+  - `/{id}/regenerate`：最后一轮重新回答，可以带 `{"thinking"}`（没带的照原来那句话的）。
+  - 对话和工作任务新建时定（`POST` 带 `"work": true` 是工作任务），整段不变：工作任务不能变回对话，对话也不能中途变成工作任务。
+    工作任务的每一轮系统提示词多一段（`prompts.toml` 的 `[agent].work`：计划、调研、写报告这类任务先问用户再动手），并且给模型问用户的工具
+    `ask_user`；对话的轮两样都没有，硬调了工具也不停下来。接着说、排队、改写、重新回答的请求里带了 `work` 也不看。对话的状态、线程列表的每一行、
+    每轮的记录里都有 `work`。2026-11-11 以前每句话都能换，那时的对话里有过 Work 的轮的算工作任务（`history.work_mode`）。
   - `/{id}/answer`：回答模型问的问题，`{"id", "text"}`；`{"id", "skip": true}` 是跳过；`{"id", "mute": true}` 是问题卡上的“别再问了”：这个问题当跳过
-    （同一条消息里还等着的别的问题也跳过），并且这段对话记成不再问（状态里的 `asks_off`）。之后 Work 的轮也不给 `ask_user`，`work` 那段换成
-    `[agent].work_quiet`（不先问，自己定并说明；只有用户知道、没法合理假设的条件在正文里问）。按对话记，不按每句话。
+    （同一条消息里还等着的别的问题也跳过），并且这段对话记成不再问（状态里的 `asks_off`）。之后的轮也不给 `ask_user`，`work` 那段换成
+    `[agent].work_quiet`（不先问，自己定并说明；只有用户知道、没法合理假设的条件在正文里问）。
   - `PUT /{id}/asks`：`{"on": true}` 恢复提问，返回对话的状态。正在回答、上一轮没跑完、停在问用户那里时返回 409。
   - `/{id}/edit`：改了最后那句话，按新的话重新回答。
 
@@ -226,7 +228,7 @@ SSE 事件：
   - `GET /api/auth/me`：`{sub, tier, email, guest}`。
   - `POST /api/auth/claim`（json `{guest_token}`）：登录以后把游客期间的对话并进账号，返回 `{moved}`。游客令牌不对 400，自己还是游客 403。
 - `GET /api/credits`：额度，见“存储”里的额度。
-- `GET /api/inspirations`：新对话页的“今日灵感”，一次都没取到返回 502。
+- `GET /api/inspirations`：新对话页的“今日灵感”（`questions`），`tasks` 是其中的调研题、页面切到“工作”时用；一次都没取到返回 502。
 - `GET /api/favicon/{host}`：来源网站的图标，后端代取、按域名缓存，取不到 404。
 - `GET /api/health`：`{ok, version, busy}`，不碰数据库和外部服务；`busy` 是排着队、在跑的回答有几个，部署时等它变成 0。
 

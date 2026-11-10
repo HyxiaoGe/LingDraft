@@ -96,6 +96,8 @@ export function DropHint() {
   return <div className={styles.drop} aria-hidden="true"><IconClip size={22} /><span>松手添加图片或文件</span></div>;
 }
 
+// 工作任务里不一样的那几句（别的和对话一样）
+const PLACEHOLDER_WORK = { new: "要做什么？", idle: "接着说…" };
 const PLACEHOLDER = {
   new: "想问什么？",
   opening: "正在打开对话…",
@@ -268,7 +270,8 @@ function dropFile(thread, key) {
 //   （被拒的那句还原样留着就换掉它，不叠加）；不是正在看的对话，放进那个对话的草稿
 // onTakeBack：有没发出去的话时，光标在最前面（输入框空着也算）按 ↑ 把它们取回来。光标在最前面时 ↑ 本来什么也不做，不和挪光标抢
 // 模型停下来问用户时（mode 是 asking）：这里写的就是回答，只发字（最多 MAX_ANSWER 个），选着的图和文件留着下一句用
-export function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSend, onStop, above, onTakeBack, lead, tools }) {
+// work：这一页是工作任务（新页面上选着“工作”，或者开着的是工作任务）：只换占位的字
+export function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSend, onStop, above, onTakeBack, work, tools }) {
   const [text, setText] = useState(() => getDraft(thread));
   const [images, setImages] = useState(() => attachments.get(thread) || []); // 见 attachments
   const [attachError, setAttachError] = useState(null); // 选图、选文件时说的一句（超过张数、图读不出来）
@@ -554,7 +557,7 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
       <div className={styles.box} onClick={(e) => { if (e.target === e.currentTarget || e.target.hasAttribute("data-blank")) ref.current?.focus(); }}>
         {(images.length > 0 || docs.length > 0) && <Attachments list={images} docs={docs} onRemove={removeImage} onRemoveDoc={removeDoc} />}
         <textarea ref={ref} rows={1} value={text} aria-label="输入"
-          placeholder={queueing && held ? HELD : withWhat && sendNow ? withWhat : PLACEHOLDER[mode] || PLACEHOLDER.busy}
+          placeholder={queueing && held ? HELD : withWhat && sendNow ? withWhat : (work && PLACEHOLDER_WORK[mode]) || PLACEHOLDER[mode] || PLACEHOLDER.busy}
           onChange={(e) => setText(e.target.value)} onPaste={onPaste}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
@@ -575,8 +578,6 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
             onClick={() => fileRef.current?.click()}><IconClip size={16} /></button>
           <input ref={fileRef} type="file" multiple hidden tabIndex={-1}
             onChange={(e) => { attach([...(e.target.files || [])]); e.target.value = ""; }} />
-          {/* 手机上回答时打了字：这一行放不下了（多出“这一轮答完再发”），Chat / Work 先收起，照之前选着的发；清掉字又出来 */}
-          {lead && <span className={canStop && hasText ? "contents phone:hidden" : "contents"}>{lead}</span>}
           {count > COUNT_FROM && <span className="flex-none text-[12px] whitespace-nowrap text-muted tabular-nums">{count.toLocaleString("en-US")} 字</span>}
           <div className="ml-auto flex min-w-0 items-center" data-blank>{tools}</div>
           {canStop && hasText && (
@@ -619,48 +620,6 @@ function Attachments({ list, docs, onRemove, onRemoveDoc }) {
       {pending && <span className="min-w-0 text-[12px] leading-[1.5] text-muted phone:flex-none phone:whitespace-nowrap" role="status">正在处理图片…</span>}
       {viewing && <Viewer img={{ alt: "要发的图" }} src={viewing.url} onClose={() => { typeNext(viewing.back); setViewing(null); }} />}
     </div>
-  );
-}
-
-// Chat / Work（2026-11-10 Sean 定）：附件按钮右边的两段开关，这句话发的时候选着哪个就按哪个（见 workspace.jsx 的 workPick）。
-// Work：计划、调研、写报告这类任务，模型先用问题卡问清楚再动手；Chat 不出问题卡。每句话都能换，按下去不抢光标；键盘移上去以后左右方向键换。
-// 桌面悬停、键盘移上去时在上方说明两种的差别（和思考开关的说明一个样子）；手机没有悬停，不说明。
-// loading：打开的对话状态还没回来（不知道它上一轮是哪种），先放一块占位
-const MODE_CHAT = "Chat：直接回答";
-const MODE_WORK = "Work：做计划、调研、写报告这类任务，先问清楚再动手";
-export function WorkSwitch({ on, onChange, loading }) {
-  const mobile = !!useContext(NavContext)?.mobile;
-  const [tip, setTip] = useState(false);
-  const chat = useRef(null);
-  const workBtn = useRef(null);
-  useLayer(tip, () => setTip(false)); // 说明浮着时 Esc 先收说明，再按才停止回答
-  if (loading) return <span className="inline-block h-7 w-[100px] flex-none rounded-full bg-hover" aria-hidden="true" />;
-  const seg = (v, ref, label) => (
-    <button ref={ref} role="radio" aria-checked={on === v} tabIndex={on === v ? 0 : -1} className={v ? styles.work : undefined}
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={(e) => {
-        if (on !== v) onChange(v);
-        if (e.currentTarget.parentElement.contains(document.activeElement)) e.currentTarget.focus(); // 键盘正停在另一段上：光标跟到点的这段
-      }}
-      onKeyDown={(e) => {
-        if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-        e.preventDefault();
-        onChange(!on);
-        (on ? chat : workBtn).current?.focus();
-      }}
-      onFocus={(e) => { if (!mobile && e.currentTarget.matches(":focus-visible")) setTip(true); }} onBlur={() => setTip(false)}>{label}</button>
-  );
-  return (
-    <span className="relative inline-flex flex-none" onMouseEnter={() => !mobile && setTip(true)} onMouseLeave={() => setTip(false)}>
-      <span className={styles.mode} role="radiogroup" aria-label="模式" aria-describedby="ws-mode-tip">
-        {seg(false, chat, "Chat")}
-        {seg(true, workBtn, "Work")}
-      </span>
-      <span id="ws-mode-tip" role="tooltip" className={styles.tip + " " + styles.tipLeft + (tip ? " " + styles.show : "")}>
-        <span className={on ? undefined : styles.cur}>{MODE_CHAT}</span>
-        <span className={on ? styles.cur : undefined}>{MODE_WORK}</span>
-      </span>
-    </span>
   );
 }
 

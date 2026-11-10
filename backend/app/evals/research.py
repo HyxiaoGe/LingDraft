@@ -29,7 +29,7 @@ from typing import Any, Literal, Protocol
 
 import yaml
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.clock import Clock
 from app import costs
@@ -85,7 +85,7 @@ class Expect(BaseModel):
 class CaseTurn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     say: str
-    work: bool = Field(default=False, description="这句话在 Work 模式下发（输入框旁边选了 Work）：这种轮里模型才能停下来问用户")
+    work: bool = Field(default=False, description="这段对话是工作任务（新建时选的“工作”）：模型才能停下来问用户。整段不变，每一句都要写成一样的")
     answers: list[str] = Field(default_factory=list, description="模型这一轮停下来问用户时，按先后这样回答；没写的（问的比写的多）都跳过")
     mute: bool = Field(default=False, description="这一轮第一次被问时点“别再问了”（跳过，并且这段对话之后不再问）；这时不写 answers")
     expect: Expect = Field(default_factory=Expect)
@@ -97,6 +97,12 @@ class Case(BaseModel):
     id: str
     source: str = Field(description="为什么有这个用例：哪次讨论、事故或改动")
     turns: list[CaseTurn] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _one_mode(self) -> Case:
+        if len({t.work for t in self.turns}) > 1:  # 对话 / 工作新建时定、整段不变（2026-11-11 Sean 定）：后面的话换不了
+            raise ValueError(f"{self.id}：work 每一句都要一样（对话还是工作任务新建时定，中途不能换）")
+        return self
 
 
 def load_cases(path: Path = CASES_FILE) -> list[Case]:
@@ -400,7 +406,7 @@ def rejudge_case(r: dict, case: Case, judge: Judge, run: int, check_sources: boo
 
 def case_inputs(c: Case) -> dict:
     """数据集里一个样例的输入：这个用例的几轮（说什么、查什么、裁判看什么）。"""
-    # Chat 的轮（没写 work）不带这一项：加这个字段之前传上去的样例不跟着变
+    # 对话的（没写 work）不带这一项：加这个字段之前传上去的样例不跟着变
     return {"turns": [t.model_dump(mode="json", exclude_none=True, exclude=set() if t.work else {"work"}) for t in c.turns]}
 
 

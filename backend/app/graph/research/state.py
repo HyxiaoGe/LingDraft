@@ -367,7 +367,8 @@ class Turn(BaseModel):
     option: str = Field(default="", description="这一轮按哪个选项（models.toml 的 id）：一般就是对话定下的，那个选项停了改用 Auto 的是 auto")
     model: ModelUse | None = Field(default=None, description="主 agent 用的模型")
     subagent_model: ModelUse | None = Field(default=None, description="子 agent 用的模型")
-    # 这一轮是不是在 Work 模式下发的（见 history.WORK），开始时定下，出错重试、回答问题接着跑都按它。2026-11-10 之前的轮都是 Chat
+    # 这一轮是不是 Work（见 history.WORK），开始时定下，出错重试、回答问题接着跑都按它。2026-11-10 之前的轮都是 Chat；
+    # 11-11 起一段对话里每一轮都一样（按对话的，见 history.work_mode）
     work: bool = Field(default=False, description="Work 模式：系统提示词多一段，可以停下来问用户")
 
 
@@ -389,6 +390,8 @@ class ResearchState(AgentState):
     # 出问题换了备用、免费额度到期用完了，改成备用，不再换回来（2026-11-08 Sean 定，见 agent.TurnMiddleware、ModelSelect）
     auto_model: NotRequired[str]
     turns: NotRequired[list[Turn]]
+    # 这段对话是不是工作任务：新建时定下，整段不变（2026-11-11 Sean 定，见 history.work_mode）。11-11 以前的对话没有这一项
+    work: NotRequired[bool]
     # 用户在问题卡上点了“别再问了”（见 history.ASKS_OFF）：这段对话 Work 的轮也不再出问题卡；页面上恢复提问时改回 False
     asks_off: NotRequired[bool]
     compaction: NotRequired[Compaction]
