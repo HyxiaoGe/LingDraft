@@ -119,7 +119,7 @@ def test_store_pending_messages(store):
     store.put_pending("t1", "guide", "另一种")
     store.put_pending("t2", QUEUE, "别的对话")
     assert store.get_pending("t1", QUEUE)["text"] == "放前面\n第一句\n第二句"
-    assert store.take_pending("t1", QUEUE) == ("放前面\n第一句\n第二句", None) and store.take_pending("t1", QUEUE) is None
+    assert store.take_pending("t1", QUEUE) == ("放前面\n第一句\n第二句", None, None) and store.take_pending("t1", QUEUE) is None
     assert store.get_pending("t1", "guide")["text"] == "另一种"
     store.delete_thread("t1")
     assert store.get_pending("t1", "guide") is None and store.get_pending("t2", QUEUE)["text"] == "别的对话"
@@ -132,10 +132,22 @@ def test_store_pending_thinking(store):
     assert store.put_pending("t1", QUEUE, "三", thinking=True)["thinking"] is True
     assert store.put_pending("t1", QUEUE, "早先的", front=True, thinking=False)["thinking"] is True
     assert store.get_pending("t1", QUEUE)["thinking"] is True
-    assert store.take_pending("t1", QUEUE) == ("早先的\n一\n二\n三", True)
+    assert store.take_pending("t1", QUEUE) == ("早先的\n一\n二\n三", True, None)
     store.put_pending("t1", QUEUE, "没给")
     assert store.put_pending("t1", QUEUE, "放回来的", front=True, thinking=False)["thinking"] is False  # 排着的没给，用放回来的
     assert store.take_pending("t1", QUEUE).thinking is False
+
+
+def test_store_pending_work(store):
+    """排着的话记着是不是 Work 模式下发的，合成一句时和思考开关一个规矩：按后发的那句，没给的不改，放回前面的不盖过排着的。"""
+    assert store.put_pending("t1", QUEUE, "一", work=True)["work"] is True
+    assert store.put_pending("t1", QUEUE, "二", thinking=False)["work"] is True  # 没给的不改
+    assert store.put_pending("t1", QUEUE, "三", work=False)["work"] is False
+    assert store.put_pending("t1", QUEUE, "早先的", front=True, work=True)["work"] is False
+    assert store.take_pending("t1", QUEUE) == ("早先的\n一\n二\n三", False, False)
+    store.put_pending("t1", QUEUE, "没给")
+    assert store.put_pending("t1", QUEUE, "放回来的", front=True, work=True)["work"] is True  # 排着的没给，用放回来的
+    assert store.take_pending("t1", QUEUE).work is True
 
 
 # ---- 经过运行器和接口 ----

@@ -90,14 +90,14 @@ def _settled(http: TestClient, tid: str, turns: int) -> dict:
 class _Running:
     """在后台说一句话，模型停在闸门上（hold_model），等这一轮跑起来；退出时放开闸门、收完这次执行的事件。"""
 
-    def __init__(self, http: TestClient, rr: ResearchRunner, tid: str, text: str, gate: threading.Event | None = None):
-        self.http, self.tid, self.text = http, tid, text
+    def __init__(self, http: TestClient, rr: ResearchRunner, tid: str, text: str, gate: threading.Event | None = None, **kw):
+        self.http, self.tid, self.text, self.kw = http, tid, text, kw
         self.gate = gate or hold_model(rr.planner)
         self.resp: dict = {}
         self.evs: list = []
 
     def __enter__(self):
-        self.t = threading.Thread(target=lambda: self.resp.setdefault("r", say(self.http, self.tid, self.text)))
+        self.t = threading.Thread(target=lambda: self.resp.setdefault("r", say(self.http, self.tid, self.text, **self.kw)))
         self.t.start()
         assert wait_until(lambda: state(self.http, self.tid)["status"] == "running")
         return self

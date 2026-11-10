@@ -127,7 +127,7 @@ def test_sample_of_the_last_call_scores_the_reply_against_the_recorded_material(
 
 def test_recording_through_a_question_keeps_the_call_after_the_answer(tmp_path):
     """录的那遍里模型问了用户（用例的 answers 回答）：回答之后那次调模型之前的状态也存下了，能从那儿重跑“回答以后怎么做”这一下。"""
-    snaps = _record(tmp_path, [{"say": "问我 对比两种向量库", "answers": ["选型"], "expect": {"asked": True}}])
+    snaps = _record(tmp_path, [{"say": "问我 对比两种向量库", "work": True, "answers": ["选型"], "expect": {"asked": True}}])
     assert [(s["turn"], s["call"]) for s in snaps] == [(1, 1), (1, 2)]
     d = _decision(call=2, expect={"asked": False, "replied": True})
     r = sample(_runner(), FakeJudge(), d, pick(snaps, d), 1)
@@ -138,7 +138,8 @@ def test_decision_from_a_first_message_needs_no_recording():
     """只写一句话的决策点：这句话开一段新对话，只调第一次模型，工具（包括问用户）都不执行。"""
     counter = CountingTools()
     runner = _runner(counter)
-    d = Decision.model_validate({"id": "d", "say": "问我 对比两种向量库", "source": "测试", "expect": {"asked": True, "replied": False}})
+    d = Decision.model_validate({"id": "d", "say": "问我 对比两种向量库", "work": True, "source": "测试",
+                                 "expect": {"asked": True, "replied": False}})
     r = sample(runner, FakeJudge(), d, None, 1)
     assert [(c["name"], c["passed"]) for c in r["checks"]] == [("replied", True), ("asked", True)], r
     assert r["say"] == "问我 对比两种向量库" and [tc["name"] for tc in r["tool_calls"]] == ["ask_user"]
@@ -164,6 +165,12 @@ def test_first_message_decision_uses_the_given_model():
     d = Decision.model_validate({"id": "d", "say": "直接答：为什么", "source": "测试"})
     assert "error" not in (r := sample(runner, FakeJudge(), d, None, 1, plan=plan)), r
     assert runner.planner.model_uses == [(plan.agent, False)]  # 对话定成这个选项：不另外判断用哪个模型
+    # --no-thinking：这句话关着思考发（页面上关掉深度思考的样子）；不给的按选项的默认，Flash 默认开
+    flash = model_catalog.load().plan("deepseek-flash", None, lambda ref: True)
+    for n, (thinking, on) in enumerate([(None, True), (False, False)], 2):
+        runner.planner.model_uses.clear()
+        assert "error" not in (r := sample(runner, FakeJudge(), d, None, n, plan=flash, thinking=thinking)), r
+        assert [u.thinking for u, _ in runner.planner.model_uses] == [on]
 
 
 def test_decision_is_from_a_case_or_a_first_message_not_both():
@@ -173,6 +180,8 @@ def test_decision_is_from_a_case_or_a_first_message_not_both():
         _decision(say="你好")
     with pytest.raises(ValueError, match="不写 turn、call"):
         Decision.model_validate({"id": "d", "say": "你好", "call": 2, "source": "测试"})
+    with pytest.raises(ValueError, match="work 只给只写一句话的"):
+        _decision(work=True)
 
 
 def test_pick_says_what_was_recorded(tmp_path):

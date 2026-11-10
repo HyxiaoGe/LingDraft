@@ -273,11 +273,13 @@ async def export_zip(thread_id: str):
 
 class ResearchMessageBody(BaseModel):
     """thinking 是输入框旁边的思考开关，没给按模型的默认（能开关的默认开）。
+    work 是输入框旁边的 Chat / Work：true 是这句话在 Work 模式下发，没给是 Chat。
     files 是这句话带的文件的编号（先传到 /api/files、解析好了才能发），最多 history.MAX_FILES 个。"""
 
     model_config = ConfigDict(extra="forbid")
     text: str
     thinking: bool | None = None
+    work: bool | None = None
     files: list[str] = Field(default_factory=list, max_length=history.MAX_FILES)
 
 
@@ -290,6 +292,7 @@ class ResearchCreateBody(ResearchMessageBody):
 class ResearchRegenerateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     thinking: bool | None = None
+    work: bool | None = None
 
 
 class ResearchAnswerBody(BaseModel):
@@ -669,7 +672,7 @@ def research_create(who: Who, msg: Annotated[_Incoming, Depends(_incoming(Resear
     text = _text(body)
     images = _upload(r, msg.images)
     try:
-        return _sse(r.start(str(uuid.uuid4()), text, body.model, body.thinking, owner=who.sub, images=images, files=body.files))
+        return _sse(r.start(str(uuid.uuid4()), text, body.model, body.thinking, owner=who.sub, images=images, files=body.files, work=body.work))
     except UnknownModel as e:
         _discard(r, images)
         raise HTTPException(400, str(e)) from None
@@ -689,7 +692,7 @@ def research_say(thread_id: str, who: Who, msg: Annotated[_Incoming, Depends(_in
     text = _text(body)
     images = _upload(r, msg.images)
     try:
-        return _sse(r.say(thread_id, text, body.thinking, images, body.files))
+        return _sse(r.say(thread_id, text, body.thinking, images, body.files, work=body.work))
     except (RunConflict, NotIdle) as e:
         _discard(r, images)
         raise HTTPException(409, str(e)) from None
@@ -715,7 +718,7 @@ def research_queue(thread_id: str, body: ResearchMessageBody, who: Who):
     _admit(r, who)
     text = _text(body)
     try:
-        return {"queued": r.queue(thread_id, text, body.thinking)}
+        return {"queued": r.queue(thread_id, text, body.thinking, body.work)}
     except (NotIdle, AlreadyPending) as e:
         raise HTTPException(409, str(e)) from None
 
@@ -773,12 +776,12 @@ def research_stop(thread_id: str, who: Who):
 
 @app.post("/api/research/threads/{thread_id}/regenerate")
 def research_regenerate(thread_id: str, who: Who, body: ResearchRegenerateBody | None = None):
-    """最后一轮重新回答，可以带上这次的思考开关（不带按原来的）。运行中、上一轮没跑完、还没有回答时返回 409；额度用完了 429。"""
+    """最后一轮重新回答，可以带上这次的思考开关、是不是 Work 模式（不带按原来的）。运行中、上一轮没跑完、还没有回答时返回 409；额度用完了 429。"""
     r = research()
     _mine(r, thread_id, who)
     _admit(r, who)
     try:
-        return _sse(r.regenerate(thread_id, thinking=body.thinking if body else None))
+        return _sse(r.regenerate(thread_id, thinking=body.thinking if body else None, work=body.work if body else None))
     except (RunConflict, NotIdle, NothingToRegenerate) as e:
         raise HTTPException(409, str(e)) from None
 
@@ -791,7 +794,7 @@ def research_edit(thread_id: str, body: ResearchMessageBody, who: Who):
     _admit(r, who)
     text = _text(body)
     try:
-        return _sse(r.regenerate(thread_id, text, body.thinking))
+        return _sse(r.regenerate(thread_id, text, body.thinking, body.work))
     except (RunConflict, NotIdle, NothingToRegenerate) as e:
         raise HTTPException(409, str(e)) from None
 

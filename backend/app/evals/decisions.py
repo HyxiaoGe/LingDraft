@@ -71,6 +71,7 @@ class Decision(BaseModel):
     id: str
     case: str | None = Field(default=None, description="从这个用例录的那遍里取（evals/research/cases.yaml 的 id）")
     say: str | None = Field(default=None, description="不从录的取：这句话开一段新对话，看第一次调模型（和 case 二选一）")
+    work: bool = Field(default=False, description="只写一句话的：这句话在 Work 模式下发（输入框旁边选了 Work）")
     turn: int = Field(default=1, ge=1)
     call: int | Literal["last"] = Field(default=1, description="这一轮第几次调模型；last 是最后一次（录的那遍写正文的那一下）")
     source: str = Field(description="为什么有这个决策点：要回答什么问题")
@@ -83,6 +84,8 @@ class Decision(BaseModel):
             raise ValueError(f"{self.id}：case 和 say 写一个，只写一个")
         if self.say is not None and (self.turn, self.call) != (1, 1):
             raise ValueError(f"{self.id}：只写一句话的看的就是第 1 轮第 1 次调模型，不写 turn、call")
+        if self.work and self.say is None:
+            raise ValueError(f"{self.id}：从录的取的照录的那一轮的模式，work 只给只写一句话的")
         return self
 
 
@@ -170,10 +173,12 @@ async def afork(graph, snap: dict, thread_id: str, plan: Plan | None = None) -> 
     return before, state.values["messages"]
 
 
-async def afirst(runner, say: str, thread_id: str, plan: Plan | None = None) -> tuple[dict, list[BaseMessage]]:
+async def afirst(runner, say: str, thread_id: str, plan: Plan | None = None, thinking: bool | None = None,
+                 work: bool = False) -> tuple[dict, list[BaseMessage]]:
     """只写一句话的决策点：这句话照页面那样写进一段新对话，跑到执行工具之前。返回同 afork（这里“检查点里的状态”是只有这句话的那个）。
-    plan 给了对话就定成它的选项（--model），不然是 Auto。"""
-    await runner._aaccept(thread_id, say, option=plan.option if plan else None)
+    plan 给了对话就定成它的选项（--model），不然是 Auto。thinking 是这句话的思考开关（--no-thinking 是 False，没给按选项的默认），
+    work 是这句话是不是在 Work 模式下发的。"""
+    await runner._aaccept(thread_id, say, thinking, option=plan.option if plan else None, work=work or None)
     cfg = runner._cfg(thread_id)
     before = dict((await runner.graph.aget_state(cfg)).values)
     async for _ in runner.graph.astream(None, cfg, context=ChatContext(title=FORK_TITLE), interrupt_before=["tools"], stream_mode="messages",
@@ -186,7 +191,8 @@ def _check(name: str, passed: bool, detail: str = "") -> dict:
     return {"name": name, "passed": bool(passed), "detail": detail}
 
 
-def sample(runner, judge, d: Decision, snap: dict | None, n: int, check_sources: bool = True, plan: Plan | None = None) -> dict:
+def sample(runner, judge, d: Decision, snap: dict | None, n: int, check_sources: bool = True, plan: Plan | None = None,
+           thinking: bool | None = None) -> dict:
     """跑一次这个决策点，做检查。snap 是录的那遍里这一下之前的检查点；只写一句话的没有（None）。"""
     from app import aio
     from app.evals.research import LOOKUP_TOOLS, cited, cited_sources, judge_citations, material
@@ -195,7 +201,7 @@ def sample(runner, judge, d: Decision, snap: dict | None, n: int, check_sources:
     out: dict[str, Any] = {"decision": d.id, "sample": n}
     try:
         tid = f"fork-{d.id}-{n}"
-        state, msgs = aio.run(afirst(runner, d.say, tid, plan) if snap is None else afork(runner.graph, snap, tid, plan))
+        state, msgs = aio.run(afirst(runner, d.say, tid, plan, thinking, d.work) if snap is None else afork(runner.graph, snap, tid, plan))
         before = state["messages"]
         new = [m for m in msgs[len(before):] if isinstance(m, AIMessage)]
         if not new:
@@ -206,7 +212,11 @@ def sample(runner, judge, d: Decision, snap: dict | None, n: int, check_sources:
         i = history.last_human(before)
         today = turn_start(before, state).astimezone(CHINA_TZ).date().isoformat()  # 这一轮开始的那天（录的时候；只写一句话的是现在）
         u = m.usage_metadata or {}
+        # 这一下实际用的模型、思考开没开（这一轮的记录里的）：结果文件里看得到是不是照 --model、--no-thinking 跑的
+        turns = runner.graph.get_state({"configurable": {"thread_id": tid}}).values.get("turns") or []
         out.update({"say": history.text_of(before[i]), "today": today, "tool_calls": [{"name": tc["name"], "args": tc["args"]} for tc in m.tool_calls],
+                    "model": turns[-1].model.model_dump() if turns and turns[-1].model else None,
+                    "work": bool(turns and turns[-1].work),
                     "reply": reply, "thinking": history.thinking_of(m),
                     "usage": {"input": u.get("input_tokens", 0), "cached": (u.get("input_token_details") or {}).get("cache_read", 0),
                               "output": u.get("output_tokens", 0)}})
@@ -319,7 +329,8 @@ def transcript(results: list[dict]) -> str:
 
 def decision_inputs(d: Decision) -> dict:
     """数据集里一个样例的输入：哪个用例第几轮第几次调模型、这一下该怎么做。"""
-    return d.model_dump(mode="json", exclude_none=True, exclude={"id", "source"})
+    # Chat 的（没写 work）不带这一项：加这个字段之前传上去的样例不跟着变
+    return d.model_dump(mode="json", exclude_none=True, exclude={"id", "source"} | (set() if d.work else {"work"}))
 
 
 def sample_view(r: dict) -> dict:
@@ -335,15 +346,16 @@ def sample_scores(r: dict) -> list[dict]:
 
 
 def run(decisions: list[Decision], make_runner: Callable[[], Any], judge, samples: int, jobs: int, check_sources: bool,
-        snaps_for: Callable[[Decision], list[dict]], exp: smith.Experiment | None = None, plan: Plan | None = None) -> list[dict]:
+        snaps_for: Callable[[Decision], list[dict]], exp: smith.Experiment | None = None, plan: Plan | None = None,
+        thinking: bool | None = None) -> list[dict]:
     """每个决策点跑 samples 次。所有决策点共用一个运行器（每次是检查点存储里一条新的线程）。给了 exp 就每次在一条 trace 里跑、记分数。
-    plan 给了就用它的模型重跑（见 afork）。"""
+    plan 给了就用它的模型重跑（见 afork）；thinking 是只写一句话的那些的思考开关（见 afirst）。"""
     runner = make_runner()
     picked = {d.id: pick(snaps_for(d), d) if d.case else None for d in decisions}
 
     def one(d: Decision, n: int) -> dict:
         def go() -> dict:
-            return sample(runner, judge, d, picked[d.id], n, check_sources, plan)
+            return sample(runner, judge, d, picked[d.id], n, check_sources, plan, thinking)
 
         return exp.run(d.id, decision_inputs(d), go, sample_scores, sample_view) if exp else go()
 
@@ -373,6 +385,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--label", default="", help="写进结果文件名，方便对比")
     ap.add_argument("--no-smith", action="store_true", help="不传 LangSmith（配了 LANGSMITH_API_KEY 时默认传）")
     ap.add_argument("--model", help="这一下换成哪个模型（app/models.toml 里选项的 id）；不给照录的那遍用的")
+    ap.add_argument("--no-thinking", action="store_true", help="关着深度思考跑（要和 --model 一起给）；不给按选项的默认，能开关的默认开")
     ap.add_argument("--compare", nargs=2, metavar=("A", "B"), help="不跑：比较两份结果，每项检查差得够不够大")
     args = ap.parse_args(argv)
 
@@ -380,6 +393,8 @@ def main(argv: list[str] | None = None) -> int:
         a, b = (json.loads(Path(f).read_text(encoding="utf-8"))["results"] for f in args.compare)
         print(compare(a, b))
         return 0
+    if args.no_thinking and not args.model:
+        ap.error("--no-thinking 要和 --model 一起给：不给模型的照录的那遍用的，思考开关也照那遍")
     decisions = [d for d in load_decisions() if not args.decision or any(fnmatchcase(d.id, pat) for pat in args.decision)]
     if nothing := sorted(pat for pat in set(args.decision or []) if not any(fnmatchcase(d.id, pat) for d in decisions)):
         ap.error(f"没有这些决策点：{nothing}")
@@ -390,9 +405,11 @@ def main(argv: list[str] | None = None) -> int:
     def snaps_for(d: Decision) -> list[dict]:
         return json.loads((TAPES_DIR / f"{d.case}.snapshots.json").read_text(encoding="utf-8"))["snapshots"]
 
-    name = "-".join(p for p in (f"decisions-{datetime.now():%Y%m%d-%H%M%S}", args.model, args.label) if p)
-    head: dict[str, Any] = {**(model_head(args.model) if args.model else {"option": "recorded"}), "samples": args.samples}
-    plan = model_catalog.load().plan(args.model, None, usable) if args.model else None
+    thinking = False if args.no_thinking else None
+    name = "-".join(p for p in (f"decisions-{datetime.now():%Y%m%d-%H%M%S}", args.model, "nothink" if args.no_thinking else "", args.label) if p)
+    head: dict[str, Any] = {**(model_head(args.model) if args.model else {"option": "recorded"}), "samples": args.samples,
+                            "thinking": "off" if args.no_thinking else "default"}
+    plan = model_catalog.load().plan(args.model, thinking, usable) if args.model else None
     exp = None
     if not args.no_smith and decisions and args.samples > 0:
         exp = smith.start(smith.DECISIONS_DATASET, "灵稿的决策点：从录好的对话里挑一次调模型（或者一句话的第一次）重跑，正本是仓库里的 backend/evals/research/decisions.yaml",
@@ -402,7 +419,7 @@ def main(argv: list[str] | None = None) -> int:
         head["langsmith"] = exp.url
     # 工具不执行（停在执行工具之前），planner 只用来拿模型和工具说明；调 agent-tools 记在 research_eval 场景
     results = run(decisions, lambda: ResearchRunner(planner=LiveResearchPlanner(scene="research_eval"), checkpointer=memory_checkpointer()),
-                  LiveJudge(), args.samples, args.jobs, not args.no_sources, snaps_for, exp, plan)
+                  LiveJudge(), args.samples, args.jobs, not args.no_sources, snaps_for, exp, plan, thinking)
     if exp:
         exp.close()
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)

@@ -72,8 +72,8 @@ def state(client, tid: str) -> dict:
     return client.get(f"/api/research/threads/{tid}/state").json()
 
 
-def new(client, text: str) -> dict:
-    return last(events(client.post("/api/research/threads", json={"text": text})), "state")
+def new(client, text: str, **kw) -> dict:
+    return last(events(client.post("/api/research/threads", json={"text": text, **kw})), "state")
 
 
 def say(client, tid: str, text: str, **kw):

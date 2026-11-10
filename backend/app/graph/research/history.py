@@ -124,6 +124,16 @@ def thinking_switch(m: BaseMessage) -> bool | None:
     return v if isinstance(v, bool) else None
 
 
+# 用户这句话是不是在 Work 模式下发的（输入框旁边的 Chat / Work，2026-11-10 Sean 定），也记在用户消息的 additional_kwargs 里；没有的是 Chat。
+# Work 的一轮：系统提示词多一段、多一个问用户的工具（见 agent.TurnMiddleware、ModelSelect）
+WORK = "work"
+
+
+def work_switch(m: BaseMessage) -> bool | None:
+    v = m.additional_kwargs.get(WORK)
+    return v if isinstance(v, bool) else None
+
+
 def thinking_of(m: BaseMessage) -> str:
     """消息里的思考，按 LangChain 的标准 content blocks 读：DeepSeek、豆包放在 additional_kwargs 里，Claude 这类放在 content 里，读法一样。
     模型类要把提供方标成没有专门解析的名字（见 ChatArk）：标成 openai 的话，content_blocks 按 OpenAI 的格式读，不看 additional_kwargs。"""

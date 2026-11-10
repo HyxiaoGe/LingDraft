@@ -38,7 +38,7 @@ from pydantic import BaseModel, Field
 
 from app import config
 from app.graph.research import history, prompts
-from app.graph.research.agent import emit, memory_text, system_prompt, turn_start
+from app.graph.research.agent import emit, memory_text, prompt_keys, system_prompt, turn_start
 from app.graph.research.sources import DOCS_TOOL, SUBAGENT_TOOL, doc_snippets, flatten, hit_text, parse, search_hits
 from app.graph.research.state import Compaction, ResearchState
 from app.model_guard import is_context_overflow
@@ -241,7 +241,7 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
         order = turn_order(all_msgs)
         c = state.get("compaction") or Compaction()
         turns = turns_of(msgs)
-        base = tokens(system_prompt(turn_start(all_msgs, state), memory=await memory_text(self.memory, runtime))) + self.tools_tokens
+        base = tokens(system_prompt(turn_start(all_msgs, state), prompt_keys(state), memory=await memory_text(self.memory, runtime))) + self.tools_tokens
         costs = [size_of(_form(t, order, c)) for t in turns]
         size = base + sum(costs)
         if size <= trigger:

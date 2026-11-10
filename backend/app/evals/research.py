@@ -85,6 +85,7 @@ class Expect(BaseModel):
 class CaseTurn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     say: str
+    work: bool = Field(default=False, description="这句话在 Work 模式下发（输入框旁边选了 Work）：这种轮里模型才能停下来问用户")
     answers: list[str] = Field(default_factory=list, description="模型这一轮停下来问用户时，按先后这样回答；没写的（问的比写的多）都跳过")
     expect: Expect = Field(default_factory=Expect)
     judge: str | None = Field(default=None, description="写成“正文做到了 X，且没有 Y”")
@@ -212,11 +213,11 @@ def _check(name: str, passed: bool, detail: str = "") -> dict:
     return {"name": name, "passed": bool(passed), "detail": detail}
 
 
-def play(runner, tid: str, turn: CaseTurn, option: str | None = None) -> dict:
+def play(runner, tid: str, turn: CaseTurn, option: str | None = None, thinking: bool | None = None) -> dict:
     """说一句话，跑到这一轮结束。返回这一轮的记录；view（页面看到的）、evidence（整段对话的材料）不进结果文件。
-    option 是第一句话时给对话选的模型（models.toml 里选项的 id），没给是 Auto。
+    option 是第一句话时给对话选的模型（models.toml 里选项的 id），没给是 Auto；thinking 是思考开关（--no-thinking 是 False，没给按选项的默认）。
     模型停下来问用户的（ask_user）：按用例写的 answers 依次回答，没写的跳过，同一轮接着跑；问了什么、怎么答的记在 asks 里。"""
-    runner.accept(tid, turn.say, option=option)
+    runner.accept(tid, turn.say, thinking, option=option, work=turn.work or None)
     events: list[dict] = []
     runner.run_turn(tid, None, events.append)
     asks: list[dict] = []
@@ -319,8 +320,8 @@ def _diff(after: dict[str, int], before: dict[str, int]) -> dict[str, int]:
 
 
 def run_case(case: Case, make_planner: Callable[..., Any], judge: Judge, run: int = 1, check_sources: bool = True,
-             tape: Tape | None = None, option: str | None = None) -> dict:
-    """make_planner(clock=, wrap_tool=) 造这个用例的 planner，option 是对话选的模型（没给是 Auto）。
+             tape: Tape | None = None, option: str | None = None, thinking: bool | None = None) -> dict:
+    """make_planner(clock=, wrap_tool=) 造这个用例的 planner，option 是对话选的模型（没给是 Auto），thinking 是每句话的思考开关（见 play）。
     tape 给了就录像或回放（见 app.evals.tape），时钟跟着它挪；
     重新录的时候每一步都存检查点，跑完把每次调模型之前的那个存下来，给决策点回放用（见 app.evals.decisions）。"""
     from app.api.research_runner import ResearchRunner
@@ -340,7 +341,7 @@ def run_case(case: Case, make_planner: Callable[..., Any], judge: Judge, run: in
         for i, turn in enumerate(case.turns):
             before = tape.counts() if tape else {}
             today = clock.now(CHINA_TZ).date().isoformat()
-            played = {**play(runner, tid, turn, option if i == 0 else None), "today": today}
+            played = {**play(runner, tid, turn, option if i == 0 else None, thinking), "today": today}
             played["cited_sources"] = cited_sources(played)
             if tape:
                 played["tape"] = _diff(tape.counts(), before)
@@ -396,7 +397,8 @@ def rejudge_case(r: dict, case: Case, judge: Judge, run: int, check_sources: boo
 
 def case_inputs(c: Case) -> dict:
     """数据集里一个样例的输入：这个用例的几轮（说什么、查什么、裁判看什么）。"""
-    return {"turns": [t.model_dump(mode="json", exclude_none=True) for t in c.turns]}
+    # Chat 的轮（没写 work）不带这一项：加这个字段之前传上去的样例不跟着变
+    return {"turns": [t.model_dump(mode="json", exclude_none=True, exclude=set() if t.work else {"work"}) for t in c.turns]}
 
 
 def case_view(r: dict) -> dict:
@@ -523,6 +525,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--label", default="", help="写进结果文件名，方便对比")
     ap.add_argument("--no-smith", action="store_true", help="不传 LangSmith（配了 LANGSMITH_API_KEY 时默认传）")
     ap.add_argument("--model", default=AUTO, help="对话选哪个模型（app/models.toml 里选项的 id），默认 Auto；裁判不跟着换")
+    ap.add_argument("--no-thinking", action="store_true", help="关着深度思考跑；不给按选项的默认，能开关的默认开")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--record", action="store_true", help="真跑，把工具结果录下来（整份换掉这些用例原来的录像）")
     mode.add_argument("--replay", action="store_true", help="用录像回放工具结果，没对上的真调并补录；时钟挪到录的时候")
@@ -558,12 +561,14 @@ def main(argv: list[str] | None = None) -> int:
         def tape(c: Case) -> Tape | None:
             return Tape(TAPES_DIR / f"{c.id}.json", fresh=args.record) if args.record or args.replay else None
 
-        jobs = [(c, partial(run_case, c, make, judge, i + 1, not args.no_sources, tape(c), args.model))
+        jobs = [(c, partial(run_case, c, make, judge, i + 1, not args.no_sources, tape(c), args.model, False if args.no_thinking else None))
                 for c in cases for i in range(args.repeat)]
     how = "record" if args.record else "replay" if args.replay else "rejudge" if args.rejudge else None
-    name = "-".join(p for p in (f"research-{datetime.now():%Y%m%d-%H%M%S}", how, args.model if args.model != AUTO else "", args.label) if p)
+    name = "-".join(p for p in (f"research-{datetime.now():%Y%m%d-%H%M%S}", how, args.model if args.model != AUTO else "",
+                                "nothink" if args.no_thinking else "", args.label) if p)
     # 重新打分不跑 agent，模型看原来那份结果文件
-    head = {**({"rejudged": args.rejudge} if args.rejudge else model_head(args.model)), "mode": how}
+    head = {**({"rejudged": args.rejudge} if args.rejudge else {**model_head(args.model), "thinking": "off" if args.no_thinking else "default"}),
+            "mode": how}
     exp = None
     if not args.no_smith and jobs:
         exp = smith.start(smith.RESEARCH_DATASET, "灵稿对话评测的用例，正本是仓库里的 backend/evals/research/cases.yaml",
