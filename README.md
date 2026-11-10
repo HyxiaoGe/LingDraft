@@ -6,6 +6,13 @@
 
 ![对话页：主 agent 把对比拆给三个子 agent 并行去查，写好的对比文档在右栏打开](assets/screenshot.png)
 
+![资料库：回答里的引用标到资料库文件的第几段，点开在右栏看到原文那一节](assets/library.png)
+
+<p>
+  <img src="assets/travel.png" alt="出行：路线和火车班次画成卡片，可以按出发时间、价格、用时排" width="64%">
+  <img src="assets/mobile.png" alt="手机端：同一段出行对话，天气卡片" width="32%">
+</p>
+
 ## 架构
 
 ```mermaid
