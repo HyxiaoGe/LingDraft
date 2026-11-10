@@ -3,8 +3,9 @@
 // 叠在存下来的对话上实时显示，并提示该重新取一次状态了；所以刷新、换个页面打开、或者中途断线重连，看到的都一样。
 // 回答时又说的话排在服务器上，这一轮答完或停下就接着发成新的一轮：这一轮的事件流结束时线程又在跑了，页面接着读下一次执行的。
 // 这一轮出错时排着的话不发，取回输入框。排着的话也能插进这一轮：放进对话时事件流里来一条 guide，页面把它挪进过程里。
+// 模型也会停下来问用户（状态 asking，问题在 state.ask）：这时没有执行在跑，回答或跳过以后同一轮接着跑（见 act.answer）；排着的话留在服务器上，等这一轮答完再发。
 import { useEffect, useRef, useState } from "react";
-import { createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads,
+import { answerResearchThread, createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads,
   pinResearchThread, queueResearch, regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
 import { localWho } from "./auth.js";
 import { setDraft } from "./drafts.js";
@@ -16,7 +17,7 @@ import { SearchDialog } from "./search.jsx";
 import { SettingsDialog } from "./settings.jsx";
 import { Sidebar, withCurrent } from "./sidebar.jsx";
 import { MOBILE, NavContext, SPLIT, focusInput, isSearchKey, isSideKey, typeNext, useMedia } from "./nav.jsx";
-import { ACTIVE, QUEUED, addLive, itemKey, saveFile, threadMarkdown, useNow } from "./research.js";
+import { ACTIVE, ASKING, QUEUED, addLive, itemKey, saveFile, threadMarkdown, useNow } from "./research.js";
 import { FilePanel } from "./artifact.jsx";
 import { FileList, KnowledgePanel, SentPanel } from "./workspace-files.jsx";
 import { opener } from "./layers.js";
@@ -50,8 +51,8 @@ const sideOffSaved = () => { try { return localStorage.getItem(SIDE_STORE) === "
 const saveSideOff = (off) => { try { if (off) localStorage.setItem(SIDE_STORE, "off"); else localStorage.removeItem(SIDE_STORE); } catch { /* 存不下就只管这一次 */ } };
 const fileName = (title) => (title || "").replace(/[\\/:*?"<>|\s]+/g, " ").trim().slice(0, 60) || "对话";
 
-// 一轮结束时还留在服务器上的话：要放回输入框的那几种
-const leftover = (s) => [s.guided_message && "guided", s.queued_message && "queued"].filter(Boolean);
+// 一轮结束时还留在服务器上的话：要放回输入框的那几种。停下来问用户的不算结束：排着的话等回答以后接着发，不取回来
+const leftover = (s) => (s.status === ASKING ? [] : [s.guided_message && "guided", s.queued_message && "queued"].filter(Boolean));
 
 export default function Workspace() {
   const auth = useAuth(); // 身份：游客还是登录了（见 auth.js）。身份一变整页重载，这里不用跟着改状态
@@ -188,7 +189,7 @@ export default function Workspace() {
     return () => clearInterval(t);
   }, [anyActive]);
   const title = live?.title || st?.title; // 执行中起好的标题跟着事件来，库里一轮跑完才有（之前是用户的原话）
-  const done = useDoneAlert(tid, busy || ACTIVE.has(st?.status), st, title); // 用户没在看时答完了：标题前加“（答完了）”，见 alert.jsx
+  const done = useDoneAlert(tid, busy || ACTIVE.has(st?.status), st, title); // 用户没在看时答完了（或停下来等回答）：标题前加“（答完了）”，见 alert.jsx
   useEffect(() => {
     const base = page === "library" ? "资料库 · 灵稿" : title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : "灵稿 · 新对话";
     document.title = (done ? `（${done}）` : "") + base;
@@ -414,7 +415,7 @@ export default function Workspace() {
     } else if (ev === "title") {
       setLive((l) => (l ? { ...l, title: data.title } : l));
       refreshList();
-    } else if (ev === "delta" || ev === "step" || ev === "restart" || ev === "model") {
+    } else if (ev === "delta" || ev === "step" || ev === "restart" || ev === "model" || ev === "ask") {
       setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
     } else if (ev === "draft") { // 模型正在写文件：攒着（见 addLive），头一次收到这次调用时在右栏打开（见上面 file）
       setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
@@ -532,10 +533,15 @@ export default function Workspace() {
       }
       // 话被拒（400）、正在跑或上一轮没跑完（409）、连接断了（没有状态码）——都回服务器接上当前进度
       const recoverable = tidRef.current && (!e.status || e.status === 400 || e.status === 409);
-      // 被拒的话（说的、改的）服务器没存下来：不再显示在对话里，放回输入框，和排队没排上一样
-      const lost = recoverable && e.status ? said ?? extra.edit : null;
+      // 被拒的话（说的、改的）服务器没存下来：不再显示在对话里，放回输入框，和排队没排上一样。
+      // 回答问题时写的话（extra.answer）没交上也放回去，服务出错（5xx）时一样
+      const lost = e.status ? (recoverable ? said ?? extra.edit ?? extra.answer : extra.answer) || null : null;
       if (lost) setPutBack({ thread: tidRef.current, text: lost, images, docs });
-      if (e.status || !recoverable) setError(errorText(lost ? "这句话没发出去，已经放回输入框" : extra.what || (said ? "这句话没发出去" : "这一步没做成"), e));
+      if (e.status || !recoverable) {
+        const what = lost ? (extra.answer ? "回答没交上，已经放回输入框" : "这句话没发出去，已经放回输入框") : extra.what || (said ? "这句话没发出去" : "这一步没做成");
+        // 回答时的 409：这个问题在别处答过了，或者这一轮已经停了；下面接上服务器，页面跟着变成现在的样子
+        setError(extra.asked && e.status === 409 ? `${what}：这个问题已经不用回答了。` : errorText(what, e));
+      }
       if (recoverable) {
         const rejected = e.status ? { said: null, edit: undefined, sentAt: undefined } : {};
         setLive((l) => ({ items: [], ...l, ...rejected, stage: e.status ? "服务器还在处理，等它完成" : "连接断了，正在重连…" }));
@@ -558,6 +564,16 @@ export default function Workspace() {
       return run((cb, sig) => sayResearch(id, text, opts, cb, sig), text, { images, docs });
     },
     retry: () => run((cb, sig) => retryResearchThread(tidRef.current, cb, sig), null, { what: "没能重试" }),
+    // 回答模型停下来问的问题（st.ask），或者跳过（skip）：同一轮接着跑。回答先按页面手上的放进过程里，服务器的那条到了换掉它。
+    // typed：回答是输入框里写的，没交上时放回输入框（点选项的不放）
+    answer: ({ text = "", skip = false, typed = false } = {}) => {
+      const id = tidRef.current;
+      const ask = st?.ask;
+      if (!id || !ask) return undefined;
+      const mine = { type: "ask", id: ask.call_id, question: ask.question, options: ask.options, pending: false, answer: skip ? "" : text, skipped: skip };
+      return run((cb, sig) => answerResearchThread(id, skip ? { id: ask.id, skip: true } : { id: ask.id, text }, cb, sig), null,
+        { items: [mine], asked: true, what: "回答没交上", answer: typed && !skip ? text : undefined });
+    },
     // 最后一轮的旧回答先藏起来，新回答在同一轮里接着出现
     regenerate: () => {
       const hidden = new Set((st?.turns?.at(-1)?.items || []).map(itemKey));

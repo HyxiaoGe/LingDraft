@@ -22,7 +22,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app import config, costs, tracing
 from app.api.favicon import Favicons
 from app.api.inspiration import InspirationError, Inspirations
-from app.api.research_runner import AlreadyPending, NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner, UnknownModel
+from app.api.research_runner import (AlreadyPending, BadAnswer, NothingToAnswer, NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner,
+                                      UnknownModel)
 from app.api.run_store import STATUSES
 from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 from app.api.runner import busy as runner_busy
@@ -289,6 +290,15 @@ class ResearchCreateBody(ResearchMessageBody):
 class ResearchRegenerateBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
     thinking: bool | None = None
+
+
+class ResearchAnswerBody(BaseModel):
+    """回答模型问的问题：id 是状态里 ask 的 id；text 是回答（点选项就是那个选项的字）；skip 是跳过、不回答。"""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str
+    text: str = ""
+    skip: bool = False
 
 
 class ResearchTitleBody(BaseModel):
@@ -735,9 +745,25 @@ def research_unguide(thread_id: str, who: Who):
     return {"text": r.unguide(thread_id)}
 
 
+@app.post("/api/research/threads/{thread_id}/answer")
+def research_answer(thread_id: str, body: ResearchAnswerBody, who: Who):
+    """回答（或跳过）模型停下来问的问题，这一轮接着跑，和接着说一样返回事件流。
+    没在等回答、等着的不是这个问题（答过了、这一轮停了）、正在跑时返回 409；回答是空的、太长 400；额度用完了 429。"""
+    r = research()
+    _mine(r, thread_id, who)
+    _admit(r, who)
+    try:
+        return _sse(r.answer(thread_id, body.id, body.text, body.skip))
+    except (RunConflict, NothingToAnswer) as e:
+        raise HTTPException(409, str(e)) from None
+    except BadAnswer as e:
+        raise HTTPException(400, str(e)) from None
+
+
 @app.post("/api/research/threads/{thread_id}/stop")
 def research_stop(thread_id: str, who: Who):
-    """让正在跑（或排队）的这一轮停下；停下的结果从事件流里来。没在跑的返回 409。"""
+    """让正在跑（或排队）的这一轮停下；停下的结果从事件流里来。停在问用户那里的：不回答了，这一轮以停止收尾，马上生效
+    （没有事件流，页面重新取状态）。没在跑、也没在等回答的返回 409。"""
     r = research()
     _mine(r, thread_id, who)
     if not r.stop(thread_id):

@@ -5,7 +5,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { IconClose, IconSearch } from "./icons.jsx";
 import { opener, useLayer } from "./layers.js";
 import { touch } from "./nav.jsx";
-import { ACTIVE, stamp } from "./research.js";
+import { ACTIVE, ASKING, stamp } from "./research.js";
 import dialog from "./dialog.module.css";
 import styles from "./search.module.css";
 
@@ -92,14 +92,15 @@ export function SearchDialog({ threads, now, href, onOpen, onClose }) {
               <div ref={list} className="flex flex-col" id={`${id}-list`} role="listbox" aria-labelledby={`${id}-label`}>
                 {rows.map((t, i) => {
                   const s = stamp(t.updated_at, now);
-                  const status = ACTIVE.has(t.status) ? "active" : t.status === "failed" ? "failed" : "";
+                  const status = ACTIVE.has(t.status) ? "active" : t.status === "failed" ? "failed" : t.status === ASKING ? "asking" : "";
+                  const word = { active: "进行中", failed: "没有完成", asking: "等你回答" }[status];
                   return (
                     <a key={t.thread_id} id={optId(t)} className={styles.row} role="option" aria-selected={i === pick} tabIndex={-1} href={href(t.thread_id)}
                       onMouseMove={() => i !== pick && setAt(i)}
                       onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onOpen(t.thread_id); }}>
                       <span className={styles.title} title={t.title}><Hit text={t.title || "新对话"} q={q} /></span>
-                      {status && <span className={styles.dot + " " + styles[status]} title={status === "active" ? "进行中" : "没有完成"} />}
-                      {status && <span className="sr-only">{status === "active" ? "，进行中" : "，没有完成"}</span>}
+                      {status && <span className={styles.dot + " " + styles[status]} title={word} />}
+                      {status && <span className="sr-only">，{word}</span>}
                       <span className={styles.time} title={s?.full}>{s?.text}</span>
                     </a>
                   );

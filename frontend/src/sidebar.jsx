@@ -1,14 +1,14 @@
 // 左栏：对话列表。最上面品牌、搜对话、收起（手机上是关闭抽屉），下面“新对话”和“资料库”，再下面按时间分组的对话，最下面额度和账号。
 // 手机上是左边滑出的抽屉（遮罩也在这里）。简单的排版写在元素上（Tailwind），悬停、选中、伪元素、动画和手机抽屉在 sidebar.module.css。
-// 照 Fusion 的样子（2026-11-07 Sean 嫌单调）：每行前面一个对话图标（正在回答换成转圈、没跑完换成感叹号），选中的那行是白底浮起来的一块，“新对话”用写字的图标
-import { CircleAlert, LibraryBig, MessageSquare, MessagesSquare, SquarePen } from "lucide-react";
+// 照 Fusion 的样子（2026-11-07 Sean 嫌单调）：每行前面一个对话图标（正在回答换成转圈、没跑完换成感叹号、停下来等用户回答换成带问号的），选中的那行是白底浮起来的一块，“新对话”用写字的图标
+import { CircleAlert, LibraryBig, MessageCircleQuestionMark, MessageSquare, MessagesSquare, SquarePen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconSearch, IconTrash, Logo, Spinner } from "./icons.jsx";
 import { useLayer } from "./layers.js";
 import { CreditsFoot, UserFoot } from "./login.jsx";
 import { ActionMenu, TitleInput } from "./menu.jsx";
 import { SEARCH_ARIA_KEY, SEARCH_KEY, SIDE_ARIA_KEY, SIDE_KEY } from "./nav.jsx";
-import { ACTIVE, elapsed, sayWhen, stamp, when } from "./research.js";
+import { ACTIVE, ASKING, elapsed, sayWhen, stamp, when } from "./research.js";
 import styles from "./sidebar.module.css";
 
 const cx = (...names) => names.filter(Boolean).join(" ");
@@ -47,6 +47,7 @@ function rowSub(t, now) {
   if (t.status === "queued") return "排队中";
   if (t.status === "running") return t.running_since ? `进行中，已用 ${elapsed(t.running_since, now)}` : "进行中";
   if (t.status === "failed") return "没有完成，可以重试";
+  if (t.status === ASKING) return "等你回答";
   return "";
 }
 
@@ -122,7 +123,7 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
     }
     const sel = !library && t.thread_id === current;
     const open = menu?.id === t.thread_id;
-    const status = ACTIVE.has(t.status) ? "active" : t.status === "failed" ? "failed" : "idle";
+    const status = ACTIVE.has(t.status) ? "active" : t.status === "failed" ? "failed" : t.status === ASKING ? "asking" : "idle";
     const twin = seen[twinKey(t)] > 1 && stamp(t.updated_at, now);
     const sub = rowSub(t, now) || (twin ? sayWhen(twin) : "");
     return (
@@ -130,7 +131,8 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
         <a href={href(t.thread_id)} data-id={t.thread_id} className={styles.link} aria-current={sel ? "page" : undefined}
           onClick={(e) => { if (e.metaKey || e.ctrlKey || e.shiftKey) return; e.preventDefault(); onSelect(t.thread_id); }}>
           <span className={cx(styles.icon, styles[status])}>
-            {status === "active" ? <Spinner size={15} /> : status === "failed" ? <CircleAlert size={15} strokeWidth={1.8} /> : <MessageSquare size={15} strokeWidth={1.8} />}
+            {status === "active" ? <Spinner size={15} /> : status === "failed" ? <CircleAlert size={15} strokeWidth={1.8} />
+              : status === "asking" ? <MessageCircleQuestionMark size={15} strokeWidth={1.8} /> : <MessageSquare size={15} strokeWidth={1.8} />}
           </span>
           <span className={styles.body}>
             <span className={styles.title} data-title title={REDUCE.matches ? t.title : undefined}>
@@ -223,10 +225,11 @@ export function Sidebar({ threads, current, st, live, busy, now, href, onSelect,
   );
 }
 
-// 一行对话的菜单：置顶、重命名、导出、删除。删除不再先确认，删了 5 秒内能撤销（第 44 条）；正在回答的不能改名、删除，没跑完的不能改名
+// 一行对话的菜单：置顶、重命名、导出、删除。删除不再先确认，删了 5 秒内能撤销（第 44 条）；正在回答的不能改名、删除，没跑完的、停下来等回答的不能改名
 function RowMenu({ t, anchor, mobile, size, onClose, onPin, onRename, onExport, onDelete }) {
   const running = ACTIVE.has(t.status);
-  const note = running ? "正在回答，答完或停下后才能改名、删除" : t.status === "failed" ? "这段对话没有完成，重试以后才能改名" : null;
+  const note = running ? "正在回答，答完或停下后才能改名、删除" : t.status === "failed" ? "这段对话没有完成，重试以后才能改名"
+    : t.status === ASKING ? "回答或跳过问题以后才能改名" : null;
   const items = [
     { key: "pin", icon: <IconPinTop size={size} />, text: t.pinned_at ? "取消置顶" : "置顶", onClick: onPin },
     { key: "rename", icon: <IconEdit size={size} />, text: "重命名", disabled: t.status !== "idle", onClick: onRename },

@@ -21,10 +21,11 @@ from typing import Any, NamedTuple, Protocol
 
 from psycopg_pool import AsyncConnectionPool
 
-QUEUED, RUNNING, SUCCESS, STOPPED, ERROR, LOST = "queued", "running", "success", "stopped", "error", "lost"
+QUEUED, RUNNING, SUCCESS, STOPPED, ERROR, LOST, ASKED = "queued", "running", "success", "stopped", "error", "lost", "asked"
 # success：跑到头了（这一轮的结果另看检查点里的轮记录，比如被内容审核拦下）；stopped：用户点了停止；
-# error：抛了错；lost：进程重启时还在排队或在跑（服务启动时补记，见 sweep）
-STATUSES = (QUEUED, RUNNING, SUCCESS, STOPPED, ERROR, LOST)
+# error：抛了错；lost：进程重启时还在排队或在跑（服务启动时补记，见 sweep）；
+# asked：停下来问用户了（见 app.tools.ask_user），这一轮还没完，用户回答以后另起一次执行（kind 是 answer）接着跑
+STATUSES = (QUEUED, RUNNING, SUCCESS, STOPPED, ERROR, LOST, ASKED)
 QUEUE = "queue"  # 排着的话的方式：这一轮结束后开新的一轮发（见 ResearchRunner.queue）
 GUIDE = "guide"  # 插进正在跑的这一轮：主 agent 下一次调模型之前放进对话（见 ResearchRunner.guide）
 JOIN = "\n"  # 又说的话接在排着的那句后面，中间换行
@@ -39,7 +40,7 @@ FIELDS = ("id", "thread_id", "kind", "turn_id", "status", "created_at", "started
 
 
 class RunStore(Protocol):
-    """一行的字段见 FIELDS：kind 是这次执行怎么来的（new / say / retry / regenerate / edit），turn_id 是这一轮用户那句话的消息 id，
+    """一行的字段见 FIELDS：kind 是这次执行怎么来的（new / say / retry / regenerate / edit / answer），turn_id 是这一轮用户那句话的消息 id，
     version 是跑它的代码版本（部署时的提交号）。列表都是新的在前（按写入的先后，同一毫秒建的也分得清），时间是 ISO 字符串。"""
 
     async def create(self, run_id: str, thread_id: str, kind: str, turn_id: str | None, version: str | None) -> None: ...

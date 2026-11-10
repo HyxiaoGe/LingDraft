@@ -415,6 +415,24 @@ edit_missing = """Nothing was changed: the old_text of edit {{ n }} does not app
 edit_ambiguous = """Nothing was changed: the old_text of edit {{ n }} appears {{ count }} times in "{{ title }}". Include more surrounding text so that it appears exactly once."""
 no_change = """No new version was saved because the content would not change."""
 
+[tools.ask_user]
+# 模型问用户（app.tools.ask_user，人介入，2026-11-10 Sean 定，见 docs/Work模式调研.md）：这一轮停下来，页面出一张问题卡，用户回答或跳过以后接着做。
+# 灵稿自己写的。只在不问就可能做偏时问、原话里有的不拿回去确认、一轮最多问 max_asks 次、跳过了按自己的判断做并说明，都是 Sean 定的
+description = """Pause this turn and ask the user one question, then continue with their answer. The question is shown as a card with the options you give; the user picks one, writes their own answer, or skips. Nothing more happens until they respond, so ask only when it is worth making them wait.
+Ask only when both are true: the request has a fork that only the user can decide, such as what the result is for, who it is for, which of several genuinely different directions to take, or a preference or constraint you cannot look up; and guessing wrong would send a substantial piece of research or writing in the wrong direction. One good question before long work beats redoing the work.
+Do not ask when the user already said it, when you can find it out with your tools, when there is a reasonable default (use it and say so in your answer), when the task is small enough that a wrong guess is cheap to correct, or merely to confirm that you understood or to get permission to proceed. A question that just closes your answer, such as offering to go deeper, belongs in your reply, not here.
+Ask before the work that depends on the answer, one question per call, and at most {{ max_asks }} questions in one turn. If the user skips, continue on your own best assumption and state that assumption in your answer."""
+question = "The question, in the language of the user's request: one short sentence asking one thing, answerable by picking an option."
+options = "Two to four short answers to pick from, in the language of the user's request. Make them mutually exclusive, each a real direction you would act on. Do not add options such as 'other' or 'skip': the card already lets the user write their own answer or skip. Leave empty only when the answer is free text, such as a name or a number."
+# 工具结果：用户回答了、跳过了；这一轮问的次数到了、问题是空的（这两种没停下来问）
+answered = """The user answered:
+{{ answer }}
+
+Follow this answer for the rest of the turn and continue the task. Do not ask the same question again."""
+skipped = """The user skipped this question without answering. Do not ask it again. Continue on your own best assumption, and state that assumption briefly in your answer so the user can correct it."""
+limit = """This question was not shown to the user: at most {{ max_asks }} questions can be asked in one turn. Continue on your own best assumption, and state that assumption briefly in your answer so the user can correct it."""
+empty = "Nothing was asked because the question is empty. Give the question you need answered."
+
 [files]
 # 用户发的文件：放在那句话前面给模型（存着的消息里没有，见 app.tools.files）。
 # 短的整篇；长的、这句话里放不下的、压缩时压过的（之前几轮）只给目录和开头，用 read_file 读

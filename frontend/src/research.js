@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 
 export const ACTIVE = new Set(["queued", "running"]); // 服务器上还有执行没结束
+export const ASKING = "asking"; // 没在跑：模型停下来问用户了（state.ask 是那个问题），回答或跳过以后这一轮接着跑
 export const QUEUED = "排队中，轮到了就开始";
 
 // 时钟：有执行在跑每秒走一次，显示“已用 2 分 05 秒”；没有就每分钟走一次，过了零点，今天的时间换成写日期
@@ -14,9 +15,10 @@ export function useNow(active) {
   return now;
 }
 
-export function elapsed(since, now) {
+// minus：这段时间里不算的毫秒数（一轮里等用户回答问题的那段，见后端记录里的 waited_ms）
+export function elapsed(since, now, minus = 0) {
   if (!since) return "";
-  const s = Math.max(0, Math.round((now - Date.parse(since)) / 1000));
+  const s = Math.max(0, Math.round((now - Date.parse(since) - minus) / 1000));
   return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${String(s % 60).padStart(2, "0")} 秒`;
 }
 
@@ -208,9 +210,10 @@ export function citeNumbers(texts, sources) {
 }
 
 // 一轮的条目分成过程和正文：最后一次搜索或读页之前的都是过程（包括中途说的话），之后的思考也算过程，之后的文字是正文。
-// 正在跑时，正文后面又来了一步，那段文字就挪进过程（它确实是中途说的话）。被内容审核拦下的提示总是放在正文里
+// 正在跑时，正文后面又来了一步，那段文字就挪进过程（它确实是中途说的话）。被内容审核拦下的提示总是放在正文里。
+// 停下来问用户（ask）和一步一样算：问之前说的话是过程，问和回答也排在过程里
 export function splitTurn(items) {
-  const lastStep = items.findLastIndex((i) => i.type === "step");
+  const lastStep = items.findLastIndex((i) => i.type === "step" || i.type === "ask");
   const process = [];
   const answer = [];
   items.forEach((it, k) => {
@@ -233,13 +236,14 @@ export function answerText(items, sources, { links = false } = {}) {
   return used.length ? `${body}\n\n来源：\n${links ? "\n" : ""}${used.join("\n")}` : body;
 }
 
-// 整段对话导出成 Markdown：每轮是用户的话（引用块，带的图和文件写一句，回答过程中插进去的话接在后面）和回答，不含思考和搜索步骤
+// 整段对话导出成 Markdown：每轮是用户的话（引用块，带的图和文件写一句，回答过程中插进去的话、回答模型问的问题接在后面）和回答，不含思考和搜索步骤
 export function threadMarkdown(st) {
   const quote = (text) => text.split("\n").map((l) => `> ${l}`).join("\n");
   const turns = st.turns.map((t) => {
     const with_ = [t.images?.length && `${t.images.length} 张图`, t.files?.length && `文件 ${t.files.map((f) => f.name).join("、")}`].filter(Boolean);
     const said = with_.length ? `${t.user}\n（带了${with_.join("，")}）` : t.user;
-    const asked = [said, ...t.items.filter((i) => i.type === "guide").map((i) => `（回答过程中插话）${i.text}`)].map(quote).join("\n>\n");
+    const mid = t.items.flatMap((i) => (i.type === "guide" ? [`（回答过程中插话）${i.text}`] : i.type === "ask" && i.answer ? [`（它问：${i.question}）${i.answer}`] : []));
+    const asked = [said, ...mid].map(quote).join("\n>\n");
     let reply = answerText(t.items, st.sources, { links: true }) || "（这一轮没有回答）";
     if (t.record?.outcome === "stopped") reply += "\n\n（已停止）";
     if (t.items.some((i) => i.type === "blocked")) reply += "\n\n（内容审核没通过，这一轮停在这里）";
@@ -274,14 +278,14 @@ export const itemKey = (i) => `${i.type}:${i.id}`;
 
 // 这一轮的条目：存下来的（state.turns）为准，叠上还没存下来的实时片段。
 // 思考和正文按（消息 id，种类）对上，工具步骤按调用 id 对上；存下来的步骤还在等结果时，用实时收到的：
-// 结果已经来了用结果，子任务还在跑用它实时的条目（存下来的子任务要做完才有条目）。
+// 结果已经来了用结果，子任务还在跑用它实时的条目（存下来的子任务要做完才有条目）。问用户的问题也一样：存下来的还等着回答，实时收到了回答就用它。
 // 重新回答时，旧回答的条目在新状态取回来之前就不显示了（live.hidden）
 export function mergeItems(saved, live) {
   if (!live) return saved;
   const kept = live.hidden ? saved.filter((i) => !live.hidden.has(itemKey(i))) : saved;
   const have = new Map(kept.map((i) => [itemKey(i), i]));
   const out = kept.map((i) => {
-    const l = i.type === "step" && i.pending ? live.items.find((x) => itemKey(x) === itemKey(i)) : null;
+    const l = (i.type === "step" || i.type === "ask") && i.pending ? live.items.find((x) => itemKey(x) === itemKey(i)) : null;
     return l ? { ...i, ...l } : i;
   });
   for (const i of live.items) if (!have.has(itemKey(i))) out.push(i);
@@ -313,6 +317,13 @@ export function addLive(l, ev, data) {
     stopThinking(items);
   } else if (ev === "guide") {
     if (!items.some((x) => x.type === "guide" && x.id === data.id)) items.push({ type: "guide", ...data }); // 用户插进这一轮的话放进对话了
+    stopThinking(items);
+  } else if (ev === "ask") {
+    // 模型停下来问用户（pending），或者用户答了、这一轮接着跑（带着回答）：按调用 id 放进过程里，后到的换掉先到的
+    const a = { type: "ask", ...data.ask };
+    const i = items.findIndex((x) => x.type === "ask" && x.id === a.id);
+    if (i < 0) items.push(a);
+    else items[i] = a;
     stopThinking(items);
   } else if (ev === "phase") {
     return { ...l, phase: data.phase }; // 空档里在等什么（等模型、重写参数……），页面据此说明

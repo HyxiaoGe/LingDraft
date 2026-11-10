@@ -355,6 +355,7 @@ class Turn(BaseModel):
     id: str = Field(description="这一轮用户那句话的消息 id")
     started_at: str
     ended_at: str = ""
+    waited_ms: int = Field(default=0, description="这一轮里停下来等用户回答问题一共等了多久（见 history.waited_ms）；这一轮的用时要去掉它")
     suggestions: list[str] = Field(default_factory=list)
     usage: Usage = Field(default_factory=Usage, description="主 agent 的")
     subagent_usage: Usage = Field(default_factory=Usage, description="这一轮所有子 agent 加起来的；模型不一样，价钱不一样，和主 agent 分开记")

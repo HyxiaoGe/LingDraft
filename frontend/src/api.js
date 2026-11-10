@@ -371,6 +371,12 @@ export async function retryResearchThread(threadId, onEvent, signal) {
   return sse(`/api/research/threads/${threadId}/retry`, { method: "POST" }, onEvent, signal);
 }
 
+// 回答模型停下来问的问题（状态 asking 时的 state.ask），这一轮接着跑。answer：{id: 问题的 id, text: 回答} 或 {id, skip: true}（跳过）。
+// 这个问题已经不用回答了（答过了、这一轮停了）返回 409；回答是空的、太长返回 400
+export async function answerResearchThread(threadId, answer, onEvent, signal) {
+  return sse(`/api/research/threads/${threadId}/answer`, postJson(answer), onEvent, signal);
+}
+
 // 接上线程当前这次执行：after 是收到的最后一个事件 id（没有就从头补发）；执行早就结束了就只给当前状态
 export async function followResearchThread(threadId, after, onEvent, signal) {
   const q = after ? `?after=${encodeURIComponent(after)}` : "";

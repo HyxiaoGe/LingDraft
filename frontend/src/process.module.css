@@ -32,6 +32,9 @@
 .guideText { max-width: 85%; font-size: 13px; line-height: 1.6; color: var(--ink2); background: var(--side); border: 1px solid var(--line); border-radius: var(--r-lg) var(--r-lg) 4px var(--r-lg);
   padding: 5px 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* 问过用户的问题：一行问题（长了折行），答了的下面接用户的回答（和插的话同一种气泡），跳过的、没回答的写在行尾 */
+.question { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+
 /* 正在跑的这一轮最下面一行：在等什么、等了几秒、Esc 停止、比平常慢 */
 .waiting { display: flex; align-items: center; gap: 8px; min-height: 20px; font-size: 13px; line-height: 20px; color: var(--accent); flex-wrap: wrap; }
 .stage { color: var(--ink2); }
