@@ -1,10 +1,21 @@
 name: CI
 
 # PR：只跑测试（GitHub 的机器）。合进 master：测试过了再部署到 dev（dev 上的 self-hosted runner）
+# 只改了文档、截图、.gitignore 的不跑也不部署（改动里只要有一个别的文件就照常跑）。按文件名写，不用 **.md：以后测试、代码要读的 .md 不会被漏掉
 on:
   pull_request:
+    paths-ignore:
+      - "**/README.md"
+      - "CLAUDE.md"
+      - "assets/**"
+      - ".gitignore"
   push:
     branches: [master]
+    paths-ignore:
+      - "**/README.md"
+      - "CLAUDE.md"
+      - "assets/**"
+      - ".gitignore"
   workflow_dispatch:
 
 permissions:
