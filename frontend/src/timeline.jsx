@@ -203,6 +203,9 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   const closeMenu = () => setMenuAt(null);
   const menuItems = [
     { key: "rename", icon: <IconEdit size={sz} />, text: "重命名", disabled: status !== "idle", onClick: () => { closeMenu(); setRenaming(true); } },
+    // 这段对话在问题卡上点过“别再问了”（st.asks_off）才有这一项：改回来。问题卡答完就没了，恢复放在这里
+    ...(st?.asks_off ? [{ key: "asks", icon: <MessageCircleQuestionMark size={sz} />, text: "恢复提问", disabled: status !== "idle",
+      onClick: () => { closeMenu(); manage.askAgain(tid); } }] : []),
     { key: "export", icon: <IconDownload size={sz} />, text: "导出为 Markdown", onClick: () => { closeMenu(); manage.exportMd(tid); } },
     // 打印：等菜单收起来再开打印（打印的是收起菜单以后的页面）
     { key: "print", icon: <IconPrint size={sz} />, text: "打印", onClick: () => { closeMenu(); setTimeout(() => window.print(), 50); } },
@@ -789,14 +792,14 @@ function GuideNote({ it }) {
   );
 }
 
-// 模型停下来问过的问题：一行问题，下面是用户的回答（和插的话一个样子）；跳过的、没等到回答这一轮就停了的在行尾说一声
+// 模型停下来问过的问题：一行问题，下面是用户的回答（和插的话一个样子）；跳过的、点了“别再问了”的、没等到回答这一轮就停了的在行尾说一声
 function AskNote({ it }) {
   return (
     <>
       <div className={proc.tool}>
         <MessageCircleQuestionMark size={12} />
         <span className={proc.question}>{it.question}</span>
-        {!it.answer && !it.pending && <span className={proc.sub}>{it.skipped ? "你跳过了" : "没有回答"}</span>}
+        {!it.answer && !it.pending && <span className={proc.sub}>{it.muted ? "你选了别再问" : it.skipped ? "你跳过了" : "没有回答"}</span>}
       </div>
       {it.answer && (
         <div className={proc.guide}>
@@ -1141,7 +1144,8 @@ function Suggestions({ items, onPick }) {
 }
 
 // 模型停下来问的问题（见后端 app.tools.ask_user）：一张卡一个问题，下面是它给的选项，点一个就是回答。
-// “自己写”把光标放进输入框——问着的时候输入框里写的就是回答；“跳过”不答，它按自己的判断接着做。不回答就一直等着，没有倒计时
+// “自己写”把光标放进输入框——问着的时候输入框里写的就是回答；“跳过”不答，它按自己的判断接着做。不回答就一直等着，没有倒计时。
+// “别再问了”（2026-11-11 Sean 定）：这个问题跳过，这段对话之后也不再出问题卡；顶栏“⋯”里能恢复提问
 function AskCard({ ask, onAnswer }) {
   return (
     <div className={shell.card + " " + styles.ask} role="group" aria-label="需要你回答的问题">
@@ -1154,6 +1158,7 @@ function AskCard({ ask, onAnswer }) {
       <div className={styles.askActions}>
         <button className="ws-btn ghost sm" onClick={typeHere}><IconEdit size={13} />自己写</button>
         <button className="ws-btn ghost sm" onClick={() => onAnswer({ skip: true })}>跳过</button>
+        <button className={"ws-btn ghost sm " + styles.askMute} onClick={() => onAnswer({ mute: true })}>别再问了</button>
       </div>
     </div>
   );

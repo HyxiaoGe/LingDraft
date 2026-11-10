@@ -79,7 +79,8 @@ def test_ask_pauses_the_turn_and_the_answer_continues_it(client, rr):
     assert ask["question"] == QUESTION and ask["options"] == OPTIONS and ask["id"]
     (turn,) = st["turns"]
     (item,) = _asks(turn)
-    assert item == {"type": "ask", "id": ask["call_id"], "question": QUESTION, "options": OPTIONS, "pending": True, "answer": "", "skipped": False}
+    assert item == {"type": "ask", "id": ask["call_id"], "question": QUESTION, "options": OPTIONS, "pending": True, "answer": "", "skipped": False,
+                    "muted": False}
     assert _reply(turn) == "" and ("phase", {"phase": "suggest"}) not in ev  # 这一轮还没完：没有回答，不起推荐问题
     (live,) = [d["ask"] for e, d in ev if e == "ask"]  # 运行中页面先从事件里拿到这张卡
     assert live == item
@@ -351,7 +352,7 @@ def test_ask_items_and_counting():
     assert history.ask_of(call, refused) is None  # 没问出去的不列
     stopped = ToolMessage(content="停了", name=history.ASK_TOOL, tool_call_id="c1", artifact={"stopped": True})
     assert history.ask_of(call, stopped) == {"type": "ask", "id": "c1", "question": "问什么", "options": [], "pending": False, "answer": "",
-                                             "skipped": False}
+                                             "skipped": False, "muted": False}
     assert history.ask_args({"question": " 问 ", "options": ["a", " a ", "", 3, "b", "c", "d", "e"]}) == ("问", ["a", "b", "c", "d"])
     assert history.ask_args({"question": None, "options": "a"}) == ("", [])
     # 数这次提问之前问出去了几次：问出去的（等着的、答了的、跳过的）算，没问出去的（超了上限、问题是空的）不算
@@ -441,3 +442,85 @@ def test_queued_edited_and_regenerated_messages_keep_their_mode(client, rr):
     assert kept["status"] == "idle" and _modes(kept) == [False, False, False]  # 没带：照上一遍的
     back = last(events(client.post(f"/api/research/threads/{tid}/regenerate", json={"work": True})), "state")
     assert back["status"] == "asking" and _modes(back) == [False, False, True]
+
+
+# ---- “别再问了”：这个问题跳过，这段对话之后不再出问题卡，能恢复（2026-11-11 Sean 定） ----
+
+QUIET = "[Work mode, questions turned off]"
+
+
+def _mute(http: TestClient, tid: str, ask_id: str):
+    return http.post(f"/api/research/threads/{tid}/answer", json={"id": ask_id, "mute": True})
+
+
+def _set_asks(http: TestClient, tid: str, on: bool):
+    return http.put(f"/api/research/threads/{tid}/asks", json={"on": on})
+
+
+def test_mute_skips_the_question_and_stops_asking_in_this_conversation(client, rr):
+    seen = _watch(rr)
+    st = _asking(client, "问我 再做对比")
+    tid = st["thread_id"]
+    assert st["asks_off"] is False
+    seen.clear()
+    end = last(events(_mute(client, tid, st["ask"]["id"])), "state")
+    (turn,) = end["turns"]
+    (item,) = _asks(turn)
+    assert end["status"] == "idle" and end["asks_off"] is True and state(client, tid)["asks_off"] is True
+    assert (item["pending"], item["answer"], item["skipped"], item["muted"]) == (False, "", True, True)
+    # 模型看到的和跳过一样；这一轮剩下的那次调模型就不给工具了，Work 那段换成不问的那段
+    (result,) = [m for m in rr.graph.get_state(rr._cfg(tid)).values["messages"] if isinstance(m, ToolMessage)]
+    assert result.content == prompts.render("tools.ask_user.skipped") and _reply(turn) == "你跳过了，我按选型做。"
+    assert [(QUIET in sys, "[Work mode]" in sys, history.ASK_TOOL in tools) for sys, tools in seen] == [(True, False, False)]
+    assert seen[0][0].index(QUIET) < seen[0][0].index("[Visible response language]")
+    # 之后 Work 下发的话：还是 Work 的轮，但不问了；模型硬调也不停
+    seen.clear()
+    st = last(events(say(client, tid, "问我 再来一个", work=True)), "state")
+    assert st["status"] == "idle" and st["ask"] is None and _asks(st["turns"][1]) == [] and _modes(st) == [True, True]
+    assert seen and all(QUIET in sys and history.ASK_TOOL not in tools for sys, tools in seen)
+    st = last(events(say(client, tid, "硬问 做个对比", work=True)), "state")
+    assert st["status"] == "idle" and _asks(st["turns"][2]) == [] and _reply(st["turns"][2]) == "照自己的判断做。"
+    refused = [m for m in rr.graph.get_state(rr._cfg(tid)).values["messages"] if isinstance(m, ToolMessage) and m.name == history.ASK_TOOL][-1]
+    assert refused.content == prompts.render("tools.ask_user.chat")
+    # Chat 的轮和原来一样：两段都没有
+    seen.clear()
+    assert last(events(say(client, tid, "问我 换回 Chat", work=False)), "state")["status"] == "idle"
+    assert seen and all(QUIET not in sys and "[Work mode]" not in sys for sys, _ in seen)
+    # 重新回答那一轮也不问；别的对话不受影响
+    assert last(events(client.post(f"/api/research/threads/{tid}/regenerate", json={"work": True})), "state")["status"] == "idle"
+    other = new(client, "问我 另一段对话", work=True)
+    assert other["status"] == "asking" and other["asks_off"] is False
+
+
+def test_asks_can_be_turned_back_on(client, rr):
+    st = _asking(client, "问我 再做对比")
+    tid = st["thread_id"]
+    r = _set_asks(client, tid, True)  # 问着的时候不能改：写一次状态，等着的问题就丢了
+    assert r.status_code == 409 and r.json()["detail"] == research_runner.ASKING_FIRST
+    assert state(client, tid)["ask"]["id"] == st["ask"]["id"]
+    assert last(events(_mute(client, tid, st["ask"]["id"])), "state")["asks_off"] is True
+    with _Running(client, rr, tid, "直接答：再说一句"):
+        assert _set_asks(client, tid, True).status_code == 409  # 正在回答
+    assert state(client, tid)["asks_off"] is True
+    r = _set_asks(client, tid, True)
+    assert r.status_code == 200 and r.json()["asks_off"] is False and r.json()["status"] == "idle"
+    assert _set_asks(client, tid, True).json()["asks_off"] is False  # 已经开着：不变
+    st = last(events(say(client, tid, "问我 又可以问了", work=True)), "state")
+    assert st["status"] == "asking" and st["asks_off"] is False
+    assert client.put(f"/api/research/threads/{tid}/asks", json={"on": True, "more": 1}).status_code == 422
+    assert _set_asks(client, "nope", True).status_code == 404
+
+
+def test_mute_also_skips_the_other_question_asked_with_it(client, rr):
+    """一条消息里问了两个，在第一张卡上点了“别再问了”：后一个不再出卡，当跳过。"""
+    st = _asking(client, "问两个")
+    end = last(events(_mute(client, st["thread_id"], st["ask"]["id"])), "state")
+    assert end["status"] == "idle" and end["ask"] is None and end["asks_off"] is True
+    assert [(i["skipped"], i["muted"]) for i in _asks(end["turns"][0])] == [(True, True), (True, False)]
+    assert _reply(end["turns"][0]) == "你跳过了，我按选型做；你跳过了，我按选型做。"
+
+
+def test_mute_is_a_skip():
+    assert AskAnswer(skip=True, mute=True).mute
+    with pytest.raises(ValueError):
+        AskAnswer(answer="选型", mute=True)

@@ -69,6 +69,10 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - `/{id}/regenerate`：最后一轮重新回答，可以带 `{"thinking", "work"}`（没带的照原来那句话的）。
   - Chat 和 Work 按每句话算（输入框里的两段开关）：Work 的那一轮系统提示词多一段（`prompts.toml` 的 `[agent].work`：计划、调研、写报告这类任务先问用户再动手），
     并且给模型问用户的工具 `ask_user`；Chat 的轮两样都没有，硬调了工具也不停下来。排着的话带着发的时候的模式；每轮的记录里有 `work`。
+  - `/{id}/answer`：回答模型问的问题，`{"id", "text"}`；`{"id", "skip": true}` 是跳过；`{"id", "mute": true}` 是问题卡上的“别再问了”：这个问题当跳过
+    （同一条消息里还等着的别的问题也跳过），并且这段对话记成不再问（状态里的 `asks_off`）。之后 Work 的轮也不给 `ask_user`，`work` 那段换成
+    `[agent].work_quiet`（不先问，自己定并说明；只有用户知道、没法合理假设的条件在正文里问）。按对话记，不按每句话。
+  - `PUT /{id}/asks`：`{"on": true}` 恢复提问，返回对话的状态。正在回答、上一轮没跑完、停在问用户那里时返回 409。
   - `/{id}/edit`：改了最后那句话，按新的话重新回答。
 
   这几个 POST 都返回 SSE。

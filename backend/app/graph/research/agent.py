@@ -78,6 +78,10 @@ AGENT_PROMPT = tuple(f"agent.{k}" for k in SYSTEM_SECTIONS)
 WORK_SECTION = "work"
 WORK_SECTIONS = tuple(k for s in SYSTEM_SECTIONS for k in ((WORK_SECTION, s) if s == "memory" else (s,)))
 WORK_PROMPT = tuple(f"agent.{k}" for k in WORK_SECTIONS)
+# Work 的轮、但这段对话用户说了别再问（问题卡上的“别再问了”，见 history.ASKS_OFF，2026-11-11 Sean 定）：work 一段换成 work_quiet
+# （不先问，自己定并说明；只有用户知道的条件在正文里问），问用户的工具也不给
+QUIET_SECTION = "work_quiet"
+QUIET_PROMPT = tuple(f"agent.{QUIET_SECTION if k == WORK_SECTION else k}" for k in WORK_SECTIONS)
 
 
 async def _no_guide() -> HumanMessage | None:
@@ -124,9 +128,17 @@ def working(state: dict) -> bool:
     return bool(turns and turns[-1].work)
 
 
+def asking(state: dict) -> bool:
+    """正在跑的这一轮能不能停下来问用户：Work 模式的轮，而且这段对话用户没说别再问。按现在的 state 看：这一轮里刚点了“别再问了”，
+    这一轮剩下的几次调模型也不给问了。"""
+    return working(state) and not state.get(history.ASKS_OFF)
+
+
 def prompt_keys(state: dict) -> tuple[str, ...]:
     """这一轮的系统提示词拼哪几段。"""
-    return WORK_PROMPT if working(state) else AGENT_PROMPT
+    if not working(state):
+        return AGENT_PROMPT
+    return WORK_PROMPT if asking(state) else QUIET_PROMPT
 
 
 def turn_start(msgs: list[BaseMessage], state: dict) -> datetime:
@@ -688,12 +700,12 @@ class ModelSelect(AgentMiddleware):
     async def _for(self, request: ModelRequest, turns: list[Turn], use: ModelUse) -> ModelRequest:
         """这次调 use 这个模型的请求：别的模型答的轮次去掉思考；用户发的文件拼进那句话（见 app.tools.files）；
         用户发的图看得见的直接给、看不见的给说明，看图工具只给看不见的（见 app.tools.vision）。一轮里换了备用，按换上的重新组织。
-        问用户的工具只在 Work 模式的轮里给。"""
+        问用户的工具只在 Work 模式的轮里给，用户说了别再问的对话也不给（见 asking）。"""
         sees = self.planner.catalog.sees(use.ref)
         msgs = await with_files(_others_without_thinking(request.messages, turns, use), getattr(request.runtime.context, "files", None))
         msgs = await with_images(msgs, sees, self.planner.image_uri)
         tools = [t for t in request.tools if not (sees and getattr(t, "name", None) == history.VIEW_TOOL)]
-        if not working(request.state):
+        if not asking(request.state):
             tools = [t for t in tools if getattr(t, "name", None) != history.ASK_TOOL]
         libs = request.state.get("kb_libraries") or []  # 资料库：第一轮时有文件才给，说明里列着那时的资料库和文件（见 app.tools.knowledge）
         tools = [for_libraries(t, libs) if getattr(t, "name", None) == KB_TOOL else t for t in tools if libs or getattr(t, "name", None) != KB_TOOL]

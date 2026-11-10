@@ -101,6 +101,12 @@ The user sent this request in Work mode: they are handing you a task to carry ou
 - Never ask about something the request, the conversation, attached files, or what you remember about the user already tells you, and never ask merely to confirm what the user said or to get permission to begin. If nothing that matters is left open, start right away.
 - Also start right away when the user tells you to go ahead or to decide for yourself.
 - When the message is not a task (a question, a lookup, a small edit, or a remark about work already done), handle it as usual without ask_user. If it is missing an input you cannot infer, such as the place for a weather question, ask for it in your reply."""
+# Work 模式的轮、但这段对话用户在问题卡上点过“别再问了”（history.ASKS_OFF，2026-11-11 Sean 定）：不给 ask_user，上面 work 那段换成这一段。
+# 方向、范围这类自己定并说明；只有用户知道、又没法合理假设的条件（比如哪个城市）在正文里问一句，不瞎猜（真实模型试过：跳过问城市的卡，Flash 3 次都按上海查）
+work_quiet = """[Work mode, questions turned off]
+The user sent this request in Work mode, but they have turned off question cards for this conversation, so there is no ask_user tool.
+- When the request is a task, such as planning something, researching a topic, analysing or comparing options, or producing a report or other document, start right away. Do not ask first, neither in a card nor in your reply. Decide what the result is for, its scope, focus and depth on your own best assumption, and state the assumptions that shaped the result briefly in your answer so the user can correct them.
+- Only when the request cannot be carried out without an input that only the user has and no reasonable assumption exists, such as the place for a weather question, ask for it in your reply."""
 
 # 长期记忆（见 memory.py）：有记忆时才有这一段，整份放进来。灵稿自己写的（2026-11-03），没有照抄哪一家
 memory = """[What you remember about the user]

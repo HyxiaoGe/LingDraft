@@ -389,6 +389,8 @@ class ResearchState(AgentState):
     # 出问题换了备用、免费额度到期用完了，改成备用，不再换回来（2026-11-08 Sean 定，见 agent.TurnMiddleware、ModelSelect）
     auto_model: NotRequired[str]
     turns: NotRequired[list[Turn]]
+    # 用户在问题卡上点了“别再问了”（见 history.ASKS_OFF）：这段对话 Work 的轮也不再出问题卡；页面上恢复提问时改回 False
+    asks_off: NotRequired[bool]
     compaction: NotRequired[Compaction]
     # 这段对话第一轮时能查的资料库：[{name, description, files}]（见 agent.TurnMiddleware、KnowledgeBase.catalog）：有的才给查资料库的工具，
     # 说明里列出来；之后沿用，不让前缀变。kb_files 是 11-10 以前（一人一个库）取的文件名，那样的对话接着用它（当成“我的资料”）

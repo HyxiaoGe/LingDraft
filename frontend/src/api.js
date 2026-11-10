@@ -372,10 +372,18 @@ export async function retryResearchThread(threadId, onEvent, signal) {
   return sse(`/api/research/threads/${threadId}/retry`, { method: "POST" }, onEvent, signal);
 }
 
-// 回答模型停下来问的问题（状态 asking 时的 state.ask），这一轮接着跑。answer：{id: 问题的 id, text: 回答} 或 {id, skip: true}（跳过）。
+// 回答模型停下来问的问题（状态 asking 时的 state.ask），这一轮接着跑。answer：{id: 问题的 id, text: 回答} 或 {id, skip: true}（跳过），
+// 或 {id, mute: true}（别再问了：跳过，并且这段对话之后不再出问题卡，状态里的 asks_off 变成 true）。
 // 这个问题已经不用回答了（答过了、这一轮停了）返回 409；回答是空的、太长返回 400
 export async function answerResearchThread(threadId, answer, onEvent, signal) {
   return sse(`/api/research/threads/${threadId}/answer`, postJson(answer), onEvent, signal);
+}
+
+// 这段对话 Work 的轮还出不出问题卡：点过“别再问了”的（state.asks_off）发 on=true 恢复。返回对话的状态。正在回答、没跑完、问着的时候返回 409
+export async function setResearchAsks(threadId, on) {
+  const resp = await authFetch(`/api/research/threads/${threadId}/asks`, { ...postJson({ on }), method: "PUT" });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
 }
 
 // 接上线程当前这次执行：after 是收到的最后一个事件 id（没有就从头补发）；执行早就结束了就只给当前状态
