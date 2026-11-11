@@ -59,7 +59,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 前缀 `/api/research/threads`。除了取图，接口都要带 `Authorization: Bearer <令牌>`（游客令牌或 auth 服务的 access token，见下面的“身份和其他接口”），没带、不对、过期都是 401。线程不存在、不归这个人，一律 404。请求体是 json `{"text", "thinking", "work", "files"}`（`thinking` 是思考开关，不给按模型的默认；`work` 只在新建对话时看：true 是工作任务，不给是对话，见下面；`files` 见下面的“图片和文件”），说的话为空返回 400；正在跑、或者上一轮没跑完时，大多数操作返回 409（各接口另有的 409 写在后面）；开始一轮之前额度用完了返回 429（见“存储”里的额度）。
 
 - 说话：
-  - `GET /api/models`：新对话能选的模型（`models`：`{id, name, description, thinking, model, locked}`，Auto 在第一个；`model` 是主 agent 用的“厂商:模型”，页面按它给每轮找名字；这一档选不了的也列出来，`locked` 为 true）。`names` 是选项以外、回答开头可能出现的模型（Auto 用的免费额度）的名字和图标。
+  - `GET /api/models`：新对话能选的模型（`models`：`{id, name, description, thinking, model, locked}`，Auto 在第一个；`model` 是主 agent 用的“厂商:模型”，页面按它给每轮找名字；这一档选不了的也列出来，`locked` 为 true）。`names` 是选项以外、回答开头可能出现的模型（Auto 用的免费额度）的名字和图标。回答开头显示的这个名字也写进这一轮的系统提示词（`prompts/agent.toml` 的 `[agent].model`，`Catalog.shown_name`）：问到是什么模型，模型照实说，和页面对得上；一次调用里换了备用的，发给备用的那份写备用自己。
   - `POST`：开一段新对话，可以带 `model`（选项的 id，不给是 Auto），没有这个、停用了的返回 400，这一档选不了的返回 403。
   - `/{id}/messages`：接着说。
   - 新对话和接着说可以带图：请求改成 `multipart/form-data`，`body` 字段是同样的 json，每张图一个 `image` 字段，一句话最多 4 张（多了 400）。图先传进 image-service 再开始这一轮：每张超过 4 MB 返回 413，不是 PNG / JPEG / WebP 返回 415，传不上去返回 502；有一张传不上去整句不发，这一轮没开始（409、模型不对）就把传上去的删掉。
@@ -320,7 +320,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `main.py`：接口；`favicon.py`：来源网站的图标；`inspiration.py`：今日灵感。
 - `app/graph/research/` 对话场景：
   - `agent.py`：`create_agent` 和它的中间件，从外到里：
-    - TurnMiddleware：起标题、定下这一轮的模型（Auto 第一句话判断难易）、记录每一轮、换系统提示词（带上长期记忆）、取插进来的话；
+    - TurnMiddleware：起标题、定下这一轮的模型（Auto 第一句话判断难易）、记录每一轮、换系统提示词（带上长期记忆、这一轮是哪个模型在答）、取插进来的话；
     - ContentGuard：内容审核；
     - CompactionMiddleware：上下文压缩，模型说超长时压了再发；
     - ToolChargeMiddleware：做成了的工具调用记账；
