@@ -103,7 +103,7 @@ class ChatContext:
     thread_id: str | None = None  # 这段对话的编号：模型写的文件记在这个工作区下
     # 知识库（app.knowledge.service.KnowledgeBase）：查知识库、read_file 读知识库的文件、第一轮取文件列表。命令行、评测没有：这个工具不出现
     kb: Any = None
-    # 这一轮里用户给的位置（app.tools.location.Places，只在内存里）：模型选了当前位置时停下来要、要到了放在这里。命令行、评测没有：不停下来要
+    # 用户给的位置（app.tools.location.Places，只在内存里，按人留一小段时间）：模型选了当前位置、这里没有时停下来要，要到了放在这里。命令行、评测没有：不停下来要
     places: Any = None
 
 

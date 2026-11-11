@@ -375,7 +375,7 @@ export async function retryResearchThread(threadId, onEvent, signal) {
 
 // 回答模型停下来问的问题（状态 asking 时的 state.ask），这一轮接着跑。answer：{id: 问题的 id, text: 回答} 或 {id, skip: true}（跳过），
 // 或 {id, mute: true}（别再问了：跳过，并且这段对话之后不再出问题卡，状态里的 asks_off 变成 true）。
-// 等着的是要位置的（state.ask.kind 是 location）：{id, location: {longitude, latitude, accuracy_m}}（浏览器给的位置，后端只在内存里用这一轮），
+// 等着的是要位置的（state.ask.kind 是 location）：{id, location: {longitude, latitude, accuracy_m}}（浏览器给的位置，后端只放在内存里、留一小段时间），
 // 或 {id, unavailable: true}（取不到）、{id, skip: true}（不给）、{id, text}（没给位置，直接说了个地方）。
 // 这个问题已经不用回答了（答过了、这一轮停了）返回 409；回答是空的、太长返回 400
 export async function answerResearchThread(threadId, answer, onEvent, signal) {

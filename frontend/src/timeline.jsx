@@ -21,7 +21,7 @@ import { IconBook, IconCheck, IconChevron, IconClip, IconCloudSun, IconCopy, Ico
 import { ImageCards, Viewer, drawn, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
-import { locate, locatePermission } from "./locate.js";
+import { locate, locateAgreed, locatePermission } from "./locate.js";
 import { Markdown } from "./markdown.jsx";
 import { ActionMenu } from "./menu.jsx";
 import { HeadBar, NavContext, touch, typeHere, typeNext } from "./nav.jsx";
@@ -1236,8 +1236,10 @@ function AskCard({ ask, onAnswer }) {
 }
 
 // 模型选了“当前位置”（查天气、找附近、算路线），后端停下来要位置（st.ask 的 kind 是 location，见后端 app.tools.location）。
-// 浏览器里已经允许过定位的不出卡，直接取了交回去（2026-11-11 Sean 定）；浏览器里禁了的当用户不给，取不了的（不是 https、不支持）当取不到，
-// 都不出卡，模型会改成问在哪。别的出这张卡：点“用我的位置”，浏览器弹它自己的授权。不点就一直等；
+// 要过一次就不再要（2026-11-11 Sean 定）：给过的位置后端留一小段时间，这段时间里再用到的根本不来要；过了再来要的，
+// 浏览器里已经允许过定位、或者这台设备上同意过（见 locate.js 的 locateAgreed）的不出卡，直接取了交回去。
+// 浏览器里禁了的当用户不给，取不了的（不是 https、不支持）当取不到，也不出卡，模型会改成问在哪。
+// 别的（头一次）出这张卡：点“用我的位置”，浏览器弹它自己的授权。不点就一直等；
 // 这时在输入框里直接写个地方也行（和回答问题一样），输入框空着时右边是停止。
 const LOCATE_FOR = { weather: "查天气", nearby: "找附近的地方", route: "算路线" };
 // 这个页面已经替哪几次要位置交过回答（ask 的 id）。没交上的（网络断了、额度用完）卡会重新出来：这时出卡等用户点，不再自己取了交，不然会一直重试
@@ -1264,7 +1266,7 @@ function LocateCard({ ask, onAnswer }) {
     if (locateTried.has(ask.id)) setPhase("card");
     else locatePermission().then((p) => {
       if (!here.current || sent.current) return;
-      if (p === "granted") take();
+      if (p === "granted" || (p === "prompt" && locateAgreed())) take();
       else if (p === "denied") send({ skip: true, auto: true });
       else if (p === "unsupported") send({ unavailable: true, auto: true });
       else setPhase("card");

@@ -1,5 +1,6 @@
 """用户的当前位置（app.tools.location）：模型选了 current_location 的先停下来要位置，给了的经 MCP 的 _meta 带给服务，
-坐标只在内存里用这一轮；没给的工具不调。只用假模型（“当前位置”，见 FakeToolModel._here）和假的天气、地图服务。"""
+坐标只在内存里、按人留一小段时间（这段时间里再用到的不再要）；没给的工具不调。
+只用假模型（“当前位置”，见 FakeToolModel._here）和假的天气、地图服务。"""
 
 from __future__ import annotations
 
@@ -17,10 +18,10 @@ from app.api.run_store import ASKED
 from app.graph.research import history, prompts
 from app.research_llm import FAKE_HERE, fake_weather_server
 from app.tools import location, mcp
-from app.tools.location import GEO_META_KEY, Device, PlaceAnswer, Places
+from app.tools.location import GEO_META_KEY, KEEP_SECONDS, Device, PlaceAnswer, Places, holder
 from app.tools.maps_mcp import PLACE_TOOL, ROUTE_TOOL
 from app.tools.weather_mcp import WEATHER_TOOL, WeatherTool
-from tests.auth_helpers import USER
+from tests.auth_helpers import ADMIN, USER
 from tests.research_helpers import events, last, new, say, state
 
 # 测试用的坐标：数字特别，方便在检查点里找（不该找到）
@@ -28,9 +29,26 @@ LNG, LAT = 114.057868, 22.543099
 HERE = {"longitude": LNG, "latitude": LAT, "accuracy_m": 35}
 
 
+class Clock:
+    """测试用的钟：往前拨就过了时候。"""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 @pytest.fixture
 def rr(tmp_path):
-    return ResearchRunner(fake=True)
+    runner = ResearchRunner(fake=True)
+    runner.clock = Clock()
+    runner.places = Places(clock=runner.clock)
+    return runner
+
+
+def _who(rr: ResearchRunner, tid: str) -> str:
+    return holder(aio.run(rr.run_store.owner_of(tid)), tid)
 
 
 @pytest.fixture
@@ -85,10 +103,11 @@ def test_current_location_pauses_for_the_position_and_uses_it(client, rr):
     assert step["ok"] and step["text"] == "当前位置" and step["title"] == FAKE_HERE and step["weather"]["location"] == FAKE_HERE
     assert _reply(turn) == "查好了，看卡片。"
     assert turn["record"]["waited_ms"] >= 50  # 等位置的这段不算进这一轮的用时
-    # 坐标没进检查点，也没给模型看；这一轮完了内存里的也丢了
+    # 坐标没进检查点，也没给模型看；内存里记在这个人名下，为哪次调用要的这一轮完了就不记了
     stored = _stored(rr, tid)
     assert "current_location" in stored and str(LNG) not in stored and str(LAT) not in stored
-    assert rr.places.get(tid) is None
+    assert _who(rr, tid).startswith("owner:") and rr.places.get(_who(rr, tid)).longitude == LNG
+    assert not rr.places.asked_for(tid, step["id"])
 
 
 def test_the_position_goes_to_the_service_in_request_meta():
@@ -142,9 +161,35 @@ def test_later_call_in_the_same_turn_reuses_the_position(client, rr):
     assert end["status"] == "idle"  # 第二次用位置不再停下来
     (turn,) = end["turns"]
     assert _steps(turn, "weather")[0]["ok"] and _steps(turn, "place")[0]["ok"]
-    # 下一轮再用：这一轮的位置已经丢了，重新要
+
+
+def test_once_given_the_position_is_not_asked_for_again(client, rr):
+    # 要过一次就不再要（2026-11-11 Sean 定）：下一轮、这个人的另一段对话再用到，都直接用，不停下来
+    st = new(client, "当前位置天气")
+    tid = st["thread_id"]
+    assert last(events(_answer(client, tid, st["ask"]["id"], location=HERE)), "state")["status"] == "idle"
+    again = last(events(say(client, tid, "当前位置附近")), "state")
+    assert again["status"] == "idle" and again["ask"] is None
+    assert _steps(again["turns"][1], "place")[0]["ok"]
+    assert [r["status"] for r in client.get(f"/api/research/threads/{tid}/runs").json()["runs"]].count(ASKED) == 1
+    other = new(client, "当前位置路线")  # 另一段对话
+    assert other["status"] == "idle" and _steps(other["turns"][0], "route")[0]["ok"]
+    assert str(LNG) not in _stored(rr, tid) + _stored(rr, other["thread_id"])
+    # 别人的对话不沾：照样要
+    theirs = last(events(client.post("/api/research/threads", json={"text": "当前位置天气"}, headers=ADMIN)), "state")
+    assert theirs["status"] == "asking" and theirs["ask"]["kind"] == "location"
+
+
+def test_the_position_is_asked_for_again_after_a_while(client, rr):
+    st = new(client, "当前位置天气")
+    tid = st["thread_id"]
+    assert last(events(_answer(client, tid, st["ask"]["id"], location=HERE)), "state")["status"] == "idle"
+    rr.clock.now += KEEP_SECONDS - 1
+    assert last(events(say(client, tid, "当前位置附近")), "state")["status"] == "idle"
+    rr.clock.now += 1  # 留的时候到了：人可能已经走开，重新要
     again = last(events(say(client, tid, "当前位置附近")), "state")
     assert again["status"] == "asking" and again["ask"]["kind"] == "location" and again["ask"]["purpose"] == "nearby"
+    assert rr.places.get(_who(rr, tid)) is None
 
 
 def test_route_from_current_location(client, rr):
@@ -231,12 +276,12 @@ def test_stop_while_waiting_for_the_position(client, rr):
     assert not step["ok"] and step["message"] == "停止了，没有做完"
 
 
-def test_position_is_dropped_when_the_turn_is_started_over(client, rr):
+def test_stopping_the_turn_keeps_the_position_but_not_which_calls_asked(client, rr):
     st = new(client, "当前位置天气 再查")
     tid = st["thread_id"]
-    rr.places.put(tid, Device(**HERE), {"earlier"})  # 这一轮前面已经给过位置，后面又停下来（比如模型接着问了个问题）
+    rr.places.put(_who(rr, tid), Device(**HERE), tid, {"earlier"})  # 这一轮前面已经给过位置，后面又停下来（比如模型接着问了个问题）
     assert client.post(f"/api/research/threads/{tid}/stop").status_code == 200
-    assert rr.places.get(tid) is None
+    assert rr.places.get(_who(rr, tid)) is not None and not rr.places.asked_for(tid, "earlier")
 
 
 # ---- 小件 ----
@@ -266,16 +311,31 @@ def test_device_hides_the_position_and_checks_the_range():
         assert "181" not in str(e.value) and "input_value" not in str(e.value)
 
 
-def test_places_keep_one_position_per_conversation():
-    p = Places()
-    assert p.get("t") is None and not p.asked_for("t", "c1")
-    p.put("t", Device(**HERE), {"c1"})
-    p.put("t", Device(longitude=1, latitude=2), {"c2"})
-    assert p.get("t").longitude == 1 and p.asked_for("t", "c1") and p.asked_for("t", "c2") and not p.asked_for("t", "c3")
-    assert str(LNG) not in repr(p._held)
-    p.clear("t")
-    p.clear("t")
-    assert p.get("t") is None
+def test_places_keep_one_position_per_person_for_a_while():
+    clock = Clock()
+    p = Places(keep=60, clock=clock)
+    assert p.get("a") is None and not p.asked_for("t", "c1")
+    p.put("a", Device(**HERE), "t", {"c1"})
+    p.put("a", Device(longitude=1, latitude=2), "t", {"c2"})  # 又给了一次：换成新的，重新算时候
+    assert p.get("a").longitude == 1 and p.get("b") is None
+    assert p.asked_for("t", "c1") and p.asked_for("t", "c2") and not p.asked_for("t", "c3") and not p.asked_for("u", "c1")
+    assert str(LNG) not in repr(p._held) and "longitude" not in repr(p._held)
+    p.end_turn("t")
+    p.end_turn("t")
+    assert not p.asked_for("t", "c1") and p.get("a") is not None  # 这一轮完了：位置还留着
+    clock.now += 59
+    assert p.get("a") is not None
+    clock.now += 1
+    assert p.get("a") is None and "a" not in p._held
+    # 过了时候的，别人再给位置时顺手丢掉，不等那个人再来
+    p.put("a", Device(**HERE), "t", set())
+    clock.now += 61
+    p.put("b", Device(**HERE), "u", set())
+    assert set(p._held) == {"b"}
+
+
+def test_holder():
+    assert holder("u1", "t1") == "owner:u1" and holder(None, "t1") == "thread:t1" and holder("", "t1") == "thread:t1"
 
 
 def test_not_given_before_looks_at_this_turn_only():
@@ -312,7 +372,7 @@ def test_position_lost_before_the_tool_runs_counts_as_unavailable(client, rr):
     st = last(events(client.post("/api/research/threads", json={"text": "当前位置天气"})), "state")
     tid = st["thread_id"]
     resume = rr.answer_input(tid, st["ask"]["id"], location=Device(**HERE))
-    rr.places.clear(tid)
+    rr.places = Places()  # 重启以后：位置和为哪次调用要的都没了
     assert aio.run(rr._run_turn(tid, resume, lambda ev: None, locate=True)) is None
     view = rr.state_view(tid)
     assert view["status"] == "idle" and view["ask"] is None
