@@ -62,11 +62,12 @@ export function SentFiles({ files, tid, panel }) {
 // 手机上 PDF 不在页面里看（iOS 只显示第一页、安卓多半直接下载，2026-11-09 Sean 定先不处理）：点了下载原件
 export const previewable = (f, mobile) => !(mobile && f.type === "pdf");
 
-// 一个发过的文件：点了在右栏看（back：从文件列表点开的，右栏左上角回列表；列表里的铺满那一栏）；看不了的、没有右栏的下载原件
-export function SentFile({ f, tid, panel, back = false }) {
+// 一个发过的文件：点了在右栏看（back：从文件列表点开的，右栏左上角回列表；列表里的铺满那一栏）；看不了的、没有右栏的下载原件。
+// 跑命令产出的文件也用它（commands.jsx，f 多一项 preview）：没抽出文字的（preview 是 false）只能下载；wide：和模型写的文件卡片一样大
+export function SentFile({ f, tid, panel, back = false, wide = back }) {
   const mobile = !!useContext(NavContext)?.mobile;
   const [state, setState] = useState(null); // busy：下载中；gone：文件不在了（删掉的）；failed：没下载成
-  const view = !!panel && previewable(f, mobile);
+  const view = !!panel && f.preview !== false && previewable(f, mobile);
   const download = async () => {
     if (state === "busy") return;
     setState("busy");
@@ -79,7 +80,7 @@ export function SentFile({ f, tid, panel, back = false }) {
   };
   const open = !tid ? undefined : view ? () => panel.open({ sent: f, back }) : download;
   const sub = state === "busy" ? "正在下载…" : state === "gone" ? "文件已经不在了" : state === "failed" ? "没下载成，再点一次" : fileFacts(f);
-  return <FileCard name={f.name} sub={sub} bad={state === "gone" || state === "failed"} busy={state === "busy"} onOpen={open} wide={back}
+  return <FileCard name={f.name} sub={sub} bad={state === "gone" || state === "failed"} busy={state === "busy"} onOpen={open} wide={wide}
     on={view ? panel.current?.sent?.id === f.id : undefined} openLabel={view ? `打开 ${f.name}` : `下载 ${f.name}`} />;
 }
 

@@ -1,0 +1,58 @@
+# 沙箱：在隔离的环境里跑命令（app.tools.run_command，2026-11-11 Sean 定，方案见 docs/沙箱方案.md）。灵稿自己写的。
+# description 是工具说明，和参数同名的键是参数说明，其余是工具结果里给模型看的话。
+
+[tools.run_command]
+# 只在工作任务里给，游客没有。环境、文件放哪、限制都写在工具说明里（没这个工具的对话系统提示词不用变）。
+# 第一个场景是分析用户发的表格、出图表；装了什么包和 agent-tools 的 services/sandbox/runtime/requirements.in 对着写，那边改了这里跟着改。
+# “不联网、装不了包”写明：不写的话模型会先 pip install，白跑一次。
+# “每条命令是新的进程”写明：模型习惯了 notebook，会以为上一条命令里的变量还在。
+# 产出在页面上的位置不让它说：2026-11-12 真实模型第一次跑，只写了“随回答一起显示”，回答里说“图已生成在右侧”，是它猜的；
+# 改成写明“图在回答上面、文件卡片在回答下面”以后三次里还是说反一次（“上方卡片”）。页面怎么排以后也会变，所以只让它按文件名提。
+# “空的、对不上的值”写明：同一次跑，表里 16 行销售额是空的，pandas 求和直接跳过，回答里没提这件事。
+# 字体写出名字：只写“已经配好、别改”时，第二次真跑（关思考）它照习惯把 font.sans-serif 设成 Noto Sans CJK SC / SimHei 这些没装的，
+# 第一批图全是方框，又多跑两条命令才改对。在沙箱里核过：默认是 WenQuanYi Micro Hei；seaborn 的 set_theme() 会把它换成 Arial，中文也成方框。
+description = """Run a shell command in a private Linux sandbox that belongs to this conversation, and get back what it printed. Use it when the task needs real computation or file processing: analysing data files the user attached (spreadsheets, CSV), calculating statistics, drawing charts, or converting and generating files. Do not use it for what you can answer directly, and never present numbers as computed unless a command actually produced them.
+
+The sandbox:
+- The command runs with bash in /workspace. Python 3.12 is available with numpy, pandas, matplotlib, seaborn, scipy, openpyxl, xlrd, and tabulate. There is no network access and nothing can be installed, so work with what is there.
+- Files the user attached in this conversation are in uploads/ under their original file names, read-only. The text of an attached file shown in the conversation may be shortened or cut off; the copy in uploads/ is the complete original, so compute from it.
+- Save what the user should receive (charts, result tables, converted files) in outputs/. Files created or changed there are shown to the user automatically next to your reply: images as pictures captioned with their file names, other files as cards they can open or download. Give them names the user will understand. Keep scripts, drafts, and intermediate files outside outputs/.
+- Files in /workspace stay between commands in this conversation, but every command starts a new process: variables and imports are gone. For more than a one-liner, write a script to a file (for example with a heredoc) and run it; to fix a mistake, edit the script and run it again.
+- A command is stopped after {{ default_timeout }} seconds unless you set timeout_seconds (at most {{ max_timeout }}). Output beyond {{ output_chars }} characters is cut in the middle, so print summaries, not whole tables.
+- For charts, use matplotlib or seaborn and save with savefig. matplotlib is preconfigured with WenQuanYi Micro Hei, the only installed font that covers Chinese, so Chinese text renders correctly as long as you leave the font settings alone. SimHei, Noto Sans CJK, Microsoft YaHei, and other CJK fonts are not installed; naming them turns Chinese into empty boxes. seaborn's set_theme() and set_style() replace the font list, so after calling them set plt.rcParams["font.sans-serif"] back to ["WenQuanYi Micro Hei", "DejaVu Sans"]. Label charts in the language of the user's request.
+
+Look at the data before analysing it (columns, types, a few rows, missing or inconsistent values), and check the output before relying on it. When something in the data affects the numbers, such as blank cells that were skipped, tell the user how you handled it. If a command fails, read the error, fix the cause, and run again. In your reply, say what you found and what each chart or file shows, referring to outputs by file name. Do not repeat file contents, do not say where on the page the outputs are, and do not write paths or links to them: the user already sees them."""
+command = "The bash command to run. It may span several lines."
+timeout_seconds = "Seconds to allow before the command is stopped, at most {{ max_timeout }}. Leave empty for the default."
+
+# 工具结果：跑了的（命令自己失败、被杀掉的也是跑了）。输出原样给，产出登记了哪些、哪些没给用户、uploads/ 里和原名对不上的都说明
+result = """{% if run.killed == "timeout" %}The command was stopped because it ran longer than {{ timeout }} seconds.{% if timeout < max_timeout %} If it really needs more time, set timeout_seconds (at most {{ max_timeout }}); otherwise make it do less work.{% else %} That is the longest a command may run; split the work into smaller steps.{% endif %}
+{% elif run.killed == "memory" %}The command was killed because it used more memory than the sandbox has (1 GB). Process the data in smaller pieces.
+{% elif run.killed == "disk_quota" %}The command was stopped because it filled the workspace. Delete files you no longer need before writing more.
+{% elif run.killed %}The command was stopped before it finished.
+{% endif %}Exit code: {{ run.exit_code if run.exit_code is not none else "unknown" }} ({{ seconds }} s)
+{% if run.stdout %}stdout:
+{{ run.stdout }}
+{% endif %}{% if run.stderr %}stderr:
+{{ run.stderr }}
+{% endif %}{% if not run.stdout and not run.stderr %}(the command printed nothing)
+{% endif %}{% if run.files %}
+Now shown to the user from outputs/:
+{% for f in run.files %}- {{ f.path }}{% if f.kind == "image" %} (image, {{ f.width }}x{{ f.height }}){% endif %}
+{% endfor %}{% endif %}{% if skipped %}
+Not shown to the user:
+{% for s in skipped %}- {{ s.path }}: {% if s.reason == "too_many" %}only the first {{ max_outputs }} output files of one command are shown{% elif s.reason == "empty" %}the file is empty{% elif s.reason == "too_large" %}larger than {{ max_mb }} MB{% else %}it could not be saved; write it again to retry{% endif %}
+{% endfor %}{% endif %}{% if renamed %}
+Attached files stored under a different name in uploads/:
+{% for old, new in renamed.items() %}- {{ old }} -> uploads/{{ new }}
+{% endfor %}{% endif %}{% if too_big %}
+Attached files not available in uploads/ because they are larger than {{ upload_mb }} MB: {{ too_big | join(", ") }}. Tell the user if the task needs them.
+{% endif %}{% if workspace_full %}
+The workspace is over its storage limit. Delete files you no longer need, or the next command will not run.
+{% endif %}"""
+# 没跑成的（status=error）
+empty = """The command was empty, so nothing was run."""
+busy = """The sandbox is busy and could not run the command right now. Try the same command once more; if it is still busy, tell the user that it could not be run at the moment and do not make up its results."""
+unavailable = """Running commands is not available right now, so the command was not run. Do not retry. Tell the user plainly that you could not run it, and do not present any result as if it had been computed."""
+limit = """Today's limit for running commands has been reached, so the command was not run. Do not retry. Tell the user plainly, and do not present any result as if it had been computed."""
+reset = """The command was not run: the sandbox workspace was full or damaged and has been reset. Files created by earlier commands in this conversation are gone; the user's attached files will be put back in uploads/ automatically. Run what you need again."""

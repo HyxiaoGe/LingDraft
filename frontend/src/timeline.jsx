@@ -13,12 +13,13 @@ import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { listInspirations } from "./api.js";
 import shell from "./card.module.css";
 import { FileCards, fileVersions, turnCards } from "./artifact.jsx";
+import { CommandRow, OutputFiles, outputsOf } from "./commands.jsx";
 import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelIcon, ModelTools, Pending, enterSends, focusInput, useAutoHeight, useImageDrop } from "./composer.jsx";
 import { failureText } from "./errors.js";
 import { SentFiles, fileIndex, partUnit } from "./files.jsx";
 import { FilesButton, workspaceFiles } from "./workspace-files.jsx";
 import { IconBook, IconCheck, IconChevron, IconClip, IconCloudSun, IconCopy, IconDownload, IconEdit, IconEye, IconFolder, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, IconWrite, Spinner } from "./icons.jsx";
-import { ImageCards, Viewer, drawn, imageUrl, imagesOf } from "./images.jsx";
+import { ChartCards, ImageCards, Viewer, drawn, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
 import { locate, locateAgreed, locatePermission } from "./locate.js";
@@ -597,6 +598,7 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models, modelNa
 function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, models, modelNames, title, images, versions, files }) {
   const items = mergeItems(t.items, live);
   const cards = turnCards(items, live?.drafts, versions); // 这一轮写的文件，正文下面一份一张
+  const outputs = outputsOf(items); // 这一轮跑命令产出的：图在正文上面，别的文件在正文下面
   const { process: steps, answer } = splitTurn(items);
   // 停下来等用户回答的那个问题（一次问了两个的先给前一个）：在下面的问题卡里，过程里不重复列；答了、跳过了的才排进过程
   const ask = last && !running && st?.status === ASKING ? st.ask : null;
@@ -626,8 +628,10 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
         {travelOf(items).map((card) => <TravelCard key={card.key} card={card} />)}
         {itinerariesOf(items).map((card) => <ItineraryCard key={card.key} card={card} />)}
         <ImageCards steps={imagesOf(items)} tid={st?.thread_id} running={running} onRegenerate={last && idle ? act.say : null} title={title} base={images} />
+        <ChartCards charts={outputs.charts} tid={st?.thread_id} />
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
         {files && <FileCards cards={cards} running={running} open={files.open} current={files.current} />}
+        <OutputFiles files={outputs.files} tid={st?.thread_id} panel={files} after={!!files && cards.length > 0} />
         {running && <LiveLine live={live} items={items} stopping={stopping} now={now} versions={versions} />}
         {ask && (ask.kind === LOCATION ? <LocateCard key={ask.id} ask={ask} onAnswer={act.answer} /> : <AskCard key={ask.id} ask={ask} onAnswer={act.answer} />)}
         {!running && !ask && <AnswerSources nums={nums} sources={st?.sources} />}
@@ -824,16 +828,17 @@ function Process({ k, items, st, nums, rec, running, answering, failed, asking, 
 
 // 收起来那一行带上做了什么：搜了几次、读了几页（子任务里的也算），开了几个子任务；做成了的才算
 function didText(items) {
-  let search = 0, read = 0, tasks = 0, kb = 0;
+  let search = 0, read = 0, tasks = 0, kb = 0, ran = 0;
   const count = (xs) => xs.forEach((i) => {
     if (i.type !== "step" || i.pending) return;
     if (i.kind === "task") { tasks++; count(i.items || []); }
     else if (i.kind === "search" && i.ok) search++;
     else if (i.kind === "knowledge" && i.ok) kb++;
+    else if (i.kind === "command" && i.run) ran++; // 跑了的都算（命令自己出错的也是跑了）
     else if (i.kind === "read" && i.body) read++; // 和 ToolRow 一样：读到原文的才算
   });
   count(items);
-  return [kb && `查了 ${kb} 次资料库`, search && `搜了 ${search} 次`, read && `读了 ${read} 页`, tasks && `${tasks} 个子任务`].filter(Boolean).join(" · ");
+  return [kb && `查了 ${kb} 次资料库`, search && `搜了 ${search} 次`, read && `读了 ${read} 页`, ran && `运行了 ${ran} 条命令`, tasks && `${tasks} 个子任务`].filter(Boolean).join(" · ");
 }
 
 // 过程里的一条条：思考、中途说的话、工具步骤、问用户的问题和回答，子任务是一张卡片。子任务卡里是它的子 agent 的这些，排法一样。
@@ -1063,6 +1068,7 @@ function Thinking({ it, thinking }) {
 // 还没有结果的一步（pending）：这一轮在跑就是还在做；没在跑了（这一轮出错停在这一步）就是没有完成，和子任务卡一样说。
 // files：这段对话里用户发过的文件（见 fileIndex），读文件那一步用
 function ToolRow({ s, running, files, versions }) {
+  if (s.kind === "command") return <CommandRow s={s} running={running} />; // 跑命令：能点开看命令和输出，见 commands.jsx
   const Icon = { read: IconPage, weather: IconCloudSun, place: IconPin, route: IconRoute, flight: IconPlane, train: IconTrain, itinerary: IconTicket,
     image: IconImage, docs: IconBook, view: IconEye, file: IconClip, write: IconWrite, knowledge: IconFolder }[s.kind] || IconSearch;
   const busy = running && s.pending;
@@ -1148,6 +1154,7 @@ const WAITING = [
   ["file", () => "正在读文件"],
   ["knowledge", () => "正在查资料库"],
   ["write", () => "正在保存文件"],
+  ["command", () => "正在运行命令"],
   ["read", (n) => (n > 1 ? `正在读 ${n} 个网页` : "正在读网页")],
   ["search", (n) => (n > 1 ? `正在搜 ${n} 组关键词` : "正在搜索")],
   ["docs", () => "正在查文档"],

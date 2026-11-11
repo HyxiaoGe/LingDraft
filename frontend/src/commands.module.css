@@ -1,0 +1,28 @@
+/* 跑命令（commands.jsx）：过程里的一步、回答下面产出的文件 */
+
+/* 一步：整行能点，点开是整条命令和输出。行本身的样子是 process.module.css 的 .tool */
+.cmd { display: flex; flex-direction: column; min-width: 0; }
+.head { position: relative; width: 100%; text-align: left; border-radius: var(--r-sm); }
+.head > svg:last-child { align-self: center; transform: none; }
+@media (hover: hover) { .head:hover { color: var(--ink); } }
+.line { font-family: var(--mono); font-size: 12px; }
+
+.detail { margin: 2px 0 6px 20px; padding: 8px 12px; background: var(--side); border-radius: var(--r-sm); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.label { font-size: 11.5px; color: var(--faint); }
+.label:not(:first-child) { margin-top: 4px; }
+.out { margin: 0; font-family: var(--mono); font-size: 12px; line-height: 1.6; color: var(--ink2);
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow-y: auto; }
+.err { color: var(--warn); }
+.none { font-size: 12px; color: var(--muted); }
+
+/* 回答下面产出的文件：和模型写的文件卡片（artifact.module.css 的 .cards）一样排 */
+.outputs { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin: 16px 0 4px; }
+.outputs.after { margin-top: 4px; }
+.outputs > * { max-width: 420px; }
+
+@media (max-width: 720px) {
+  .head::after { content: ""; position: absolute; inset: -10px 0; } /* 看得见 24，透明点按区补到 44 */
+}
+@media print {
+  .head > svg:last-child { display: none; }
+}

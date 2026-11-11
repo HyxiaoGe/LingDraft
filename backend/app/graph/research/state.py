@@ -289,16 +289,49 @@ class WrittenFile(BaseModel):
     note: str = Field(default="", description="这一版改了什么（模型写的，第 1 版没有）")
 
 
+class ProducedFile(BaseModel):
+    """跑命令产出的一个文件（沙箱 outputs/ 里新增、改过的，见 app.tools.run_command）。图片（PNG / JPEG / WebP）传进 image-service、
+    和画的图放在一起，页面画成图；别的原件存在数据卷上，页面画成文件卡片（认得出类型的右栏能看，别的只能下载）。都登记在文件表里。"""
+
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(description="图片是 image-service 的编号，别的是文件表的编号")
+    path: str = Field(description="沙箱里的路径（outputs/ 开头）。同一轮里后来又写了同一个路径的，前面那个作废、已经删了（见 FileService.discard_outputs），页面只画最后那个")
+    name: str = Field(description="文件名（路径最后一段）")
+    kind: Literal["image", "file"]
+    type: str = Field(description="图片是 png / jpg / webp；文件是抽文字时认的类型（xlsx、csv、markdown…），认不出的是 other")
+    size: int = Field(description="字节数")
+    mime_type: str = ""
+    width: int = 0
+    height: int = 0
+    preview: bool = Field(default=False, description="文件：抽出了文字，右栏能看；没有的只能下载")
+
+
+class CommandRun(BaseModel):
+    """跑完的一条命令（run_command）：退出码、用时、给模型看的那份输出、产出的文件。记在工具结果的 artifact 里。"""
+
+    model_config = ConfigDict(extra="forbid")
+    exit_code: int | None = Field(default=None, description="命令的退出码；被杀掉的是 137，没拿到是 None")
+    killed: str = Field(default="", description="不是自己结束的原因：timeout / memory / disk_quota / cancelled；正常结束是空的")
+    duration_ms: int = 0
+    stdout: str = ""
+    stderr: str = ""
+    files: list[ProducedFile] = Field(default_factory=list, description="这次登记的产出")
+
+    @property
+    def ok(self) -> bool:
+        return self.exit_code == 0 and not self.killed
+
+
 class ToolStep(BaseModel):
     """一次工具调用，给页面的过程记录用。"""
 
     model_config = ConfigDict(extra="forbid")
     id: str = Field(description="工具调用 id；页面据此把实时进度和存下来的记录对上")
     kind: Literal["search", "read", "weather", "place", "route", "flight", "train", "itinerary", "image", "view", "file", "write", "task", "library",
-                  "docs", "knowledge"]
+                  "docs", "knowledge", "command"]
     text: str = Field(description="搜索词 / 网址 / 地名 / 查地点的关键词 / 路线、航班、火车的起终点 / 行程方案的标题 / 画图的描述 / 子任务的标题"
                                   " / 找的库名 / 查文档的问题 / 读的文件名（还没读完、没读成的是文件编号）/ 写的文件标题（改文件没给新标题、还没结果的是空的）"
-                                  " / 查知识库的词")
+                                  " / 查知识库的词 / 跑的命令")
     limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制；查地点在哪查；比路线比哪几种方式；航班、火车的日期和条件；查的是哪个库；只查一个资料库时是哪个")
     ok: bool = True
     hits: int = 0  # 搜索返回的条数；找到的候选库、查到的文档段数；在文件里找到的段数；查知识库查到的块数
@@ -319,6 +352,7 @@ class ToolStep(BaseModel):
     parts: str = Field(default="", description="读文件：读的哪几段（参数原样，比如 3、5-8、2,7）；PDF 的段就是页，PPT 是张。在文件里找的不填，找的词在 limits")
     file: WrittenFile | None = Field(default=None, description="写好的一版，页面画成文件卡片")
     target: str = Field(default="", description="改文件：改的是哪份（文件编号，第一版的）")
+    run: CommandRun | None = Field(default=None, description="跑完的命令：退出码、用时、输出、产出的文件；没跑成的没有，原因在 message")
 
     @field_validator("title")
     @classmethod
@@ -369,7 +403,7 @@ class Turn(BaseModel):
     subagent_model: ModelUse | None = Field(default=None, description="子 agent 用的模型")
     # 这一轮是不是 Work（见 history.WORK），开始时定下，出错重试、回答问题接着跑都按它。2026-11-10 之前的轮都是 Chat；
     # 11-11 起一段对话里每一轮都一样（按对话的，见 history.work_mode）
-    work: bool = Field(default=False, description="Work 模式：系统提示词多一段，可以停下来问用户")
+    work: bool = Field(default=False, description="Work 模式：系统提示词多一段，可以停下来问用户、在沙箱里跑命令")
 
 
 class Compaction(BaseModel):

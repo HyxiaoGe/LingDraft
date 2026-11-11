@@ -1,5 +1,6 @@
 """上传的文件：传上来、后台解析、发消息时绑到对话、删对话一起删（2026-11-08 Sean 定，见 docs/图片和文件理解方案.md 的“二、文件”）。
 模型写的文件（Artifact）也在这里存：一版一行、不用解析（见 write、app.tools.write_file）。
+跑命令产出的文件（沙箱 outputs/ 里的，见 add_output、app.tools.run_command）也存这里：原件存数据卷，认得出类型的抽文字。
 图片（用户发的、画的）在 image-service 里，这里只登记（add_image）：这段对话有哪些图以表为准，取图时认是不是这段对话的（image_in）。
 
 - 上传是单独的接口，不经过对话的运行器：存好原件、记一行就回编号，解析排进后台（一次一个，在单独的子进程里，有超时），页面问状态。
@@ -43,6 +44,8 @@ PREVIEW_CHARS = 200_000  # 右栏预览用户发的文件最多给这么多字�
 TOO_COMPLEX = "文件太复杂，读不了"
 NOT_READ = "文件没读成，请重新上传"
 NAME_MAX = 120
+OTHER = "other"  # 跑命令产出的、认不出类型的文件：不抽文字，只能下载
+PATH = "path"  # meta 里：跑命令产出的文件在沙箱里的路径
 
 
 # 传不上来、发不出去的原因（页面按它说人话，见 frontend/src/upload.js 的 fileErrorText；message 只给接口和日志看）
@@ -221,8 +224,9 @@ class FileService:
                 self.follow_up.enqueue(fid)
             return
         path = self.root / row.storage
+        kept = {PATH: row.meta[PATH]} if PATH in row.meta else {}  # 跑命令产出的：沙箱里的路径留着（见 add_output）
         if not path.exists():
-            await self.store.finish(fid, FAILED, {"code": "missing"}, NOT_READ, [])
+            await self.store.finish(fid, FAILED, {"code": "missing", **kept}, NOT_READ, [])
             return
         t0 = time.monotonic()
         out = await asyncio.to_thread(isolated_parse if self.isolated else direct_parse, path, row.name, self.timeout)
@@ -230,17 +234,17 @@ class FileService:
         if out[0] == "ok":
             parsed = out[1]
             follow = self.follow_up is not None and self.follow_up.wants(row)
-            await self.store.finish(fid, PARSING if follow else READY, {**parsed.meta, "stage": INDEXING} if follow else parsed.meta, "",
+            await self.store.finish(fid, PARSING if follow else READY, {**parsed.meta, **kept, **({"stage": INDEXING} if follow else {})}, "",
                                     parsed.parts)
             if follow:
                 assert self.follow_up is not None
                 self.follow_up.enqueue(fid)
             log.info("解析好了 %s（%s，%d 字节）：%d 段 %d 字，%.1f 秒", fid, row.type, row.size, len(parsed.parts), parsed.chars, took)
         elif out[0] == "unreadable":
-            await self.store.finish(fid, FAILED, {"code": out[1]}, out[2], [])
+            await self.store.finish(fid, FAILED, {"code": out[1], **kept}, out[2], [])
             log.info("读不了 %s（%s）：%s，%.1f 秒", fid, row.type, out[1], took)
         else:
-            await self.store.finish(fid, FAILED, {"code": out[0]}, TOO_COMPLEX if out[0] in ("timeout", "killed") else NOT_READ, [])
+            await self.store.finish(fid, FAILED, {"code": out[0], **kept}, TOO_COMPLEX if out[0] in ("timeout", "killed") else NOT_READ, [])
             log.warning("解析失败 %s（%s，%d 字节）：%s，%.1f 秒", fid, row.type, row.size, out, took)
 
     # ---- 页面 ----
@@ -284,15 +288,17 @@ class FileService:
     # ---- 图片：只登记，图在 image-service 里 ----
 
     async def add_image(self, image_id: str, *, owner: str, workspace_id: str, generated: bool, turn_id: str | None,
-                        mime_type: str, width: int, height: int) -> bool:
-        """一张图登记进文件表：用户发的（发出去时）、画好的（画好时，turn_id 是哪一轮）。行的编号就是图的编号，页面、模型认的都是它。
-        已经登记过的不再记（补登记可以重跑），返回这次记了没有。"""
+                        mime_type: str, width: int, height: int, name: str | None = None, size: int = 0, path: str = "") -> bool:
+        """一张图登记进文件表：用户发的（发出去时）、画好的、跑命令产出的（turn_id 是哪一轮；产出的带着文件名、大小、沙箱里的路径）。
+        行的编号就是图的编号，页面、模型认的都是它。已经登记过的不再记（补登记可以重跑），返回这次记了没有。"""
         if await self.store.get(image_id) is not None:
             return False
         ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}.get(mime_type, "png")
         await self.store.add(FileRow(id=image_id, owner=owner, workspace_id=workspace_id, origin=GENERATED if generated else UPLOAD, kind=IMAGE,
-                                     name=f"{'生成的图' if generated else '发的图'}.{ext}", type=ext, size=0, storage=image_id, status=READY,
-                                     meta={"mime_type": mime_type, "width": width, "height": height}, turn_id=turn_id if generated else None))
+                                     name=clean_name(name) if name else f"{'生成的图' if generated else '发的图'}.{ext}", type=ext, size=size,
+                                     storage=image_id, status=READY,
+                                     meta={"mime_type": mime_type, "width": width, "height": height, **({PATH: path} if path else {})},
+                                     turn_id=turn_id if generated else None))
         return True
 
     async def image_in(self, image_id: str, workspace_id: str) -> bool:
@@ -374,8 +380,43 @@ class FileService:
         if (row := await self.store.get(fid)) is not None and row.origin == GENERATED and row.kind == DOCUMENT:
             await self.drop([row])
 
+    # ---- 跑命令产出的文件（见 app.tools.run_command）----
+
+    async def add_output(self, *, owner: str, workspace_id: str, turn_id: str, path: str, name: str, data: bytes) -> FileRow:
+        """沙箱里跑命令产出的一个文件（不是图）登记进文件表，原件存数据卷；沙箱里的路径记在 meta 里（见 discard_outputs）。
+        认得出类型的抽文字，等抽完才返回（页面马上能在右栏看）：
+        返回的那一行 READY 而且类型不是 OTHER 的就是能看的。认不出类型的记成 OTHER、没抽成的是 FAILED，都只能下载。"""
+        name = clean_name(name)
+        try:
+            kind = await asyncio.to_thread(parse.sniff, data, name)
+        except Unreadable:
+            kind = OTHER
+        fid = f"file-{uuid.uuid4().hex[:16]}"
+        rel = f"{fid[5:7]}/{fid}"
+        await asyncio.to_thread(self._write, rel, data)
+        try:
+            await self.store.add(FileRow(id=fid, owner=owner, workspace_id=workspace_id, origin=GENERATED, name=name, type=kind, size=len(data),
+                                         storage=rel, status=READY if kind == OTHER else PARSING, meta={PATH: path}, turn_id=turn_id))
+        except BaseException:
+            await asyncio.to_thread(self._unlink, rel)
+            raise
+        if kind != OTHER:
+            await self._parse(fid)
+        row = await self.store.get(fid)
+        assert row is not None
+        return row
+
+    async def discard_outputs(self, workspace_id: str, turn_id: str, paths: set[str], keep: set[str]) -> list[str]:
+        """同一轮里命令又写了同一个路径：前面登记的那个作废，行（连同文字、原件）删掉，keep 里的（刚登记的）留着。
+        按文件表里记的路径认，不看对话里记了什么：一条消息里并行调的两条命令互相看不到对方的结果，进程崩掉时登记了、对话里没记下的也算。
+        返回其中是图的编号，图本身由调用的地方从 image-service 删。"""
+        rows = [r for r in await self.store.of_workspace(workspace_id)
+                if r.origin == GENERATED and r.turn_id == turn_id and r.meta.get(PATH) in paths and r.id not in keep]
+        await self.drop(rows)
+        return [r.id for r in rows if r.kind == IMAGE]
+
     async def delete_turn(self, workspace_id: str, turn_id: str) -> int:
-        """重新回答、改了那句话：那一轮写的各版、画的图（登记的行；图本身由调用的地方从 image-service 删）都删掉
+        """重新回答、改了那句话：那一轮写的各版、跑命令产出的文件、画的图（登记的行；图本身由调用的地方从 image-service 删）都删掉
         （连同进程崩掉时写了、对话里没记下的），返回删了几行。用户那句话带的图、文件留着。"""
         rows = [r for r in await self.store.of_workspace(workspace_id) if r.origin == GENERATED and r.turn_id == turn_id]
         await self.drop(rows)
