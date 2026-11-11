@@ -56,7 +56,8 @@ def test_connect_takes_the_service_tool_and_adds_lingdraft_note():
     assert tool.name == WEATHER_TOOL
     # 说明是服务给的，后面接上灵稿自己的一段
     assert tool.description.startswith("Get the weather forecast") and tool.description.endswith(prompts.render("tools.get_weather.lingdraft"))
-    assert set(tool.args_schema["properties"]) == {"location", "requested_date"} and tool.args_schema["required"] == ["location"]
+    assert set(tool.args_schema["properties"]) == {"location", "requested_date", "location_source"} and tool.args_schema["required"] == ["location"]
+    assert "from the user's browser" in prompts.render("tools.get_weather.lingdraft")  # 当前位置从浏览器来（见 app.tools.location）
 
     from fastmcp import FastMCP
     with pytest.raises(RuntimeError, match="没有 get_weather"):

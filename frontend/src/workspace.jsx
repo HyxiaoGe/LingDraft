@@ -18,7 +18,7 @@ import { SearchDialog } from "./search.jsx";
 import { SettingsDialog } from "./settings.jsx";
 import { Sidebar, withCurrent } from "./sidebar.jsx";
 import { MOBILE, NavContext, SPLIT, focusInput, isSearchKey, isSideKey, typeNext, useMedia } from "./nav.jsx";
-import { ACTIVE, ASKING, QUEUED, addLive, itemKey, saveFile, threadMarkdown, useNow } from "./research.js";
+import { ACTIVE, ASKING, LOCATION, QUEUED, addLive, itemKey, saveFile, threadMarkdown, useNow } from "./research.js";
 import { FilePanel } from "./artifact.jsx";
 import { FileList, KnowledgePanel, SentPanel } from "./workspace-files.jsx";
 import { opener } from "./layers.js";
@@ -570,7 +570,7 @@ export default function Workspace() {
       if (e.status || !recoverable) {
         const what = lost ? (extra.answer ? "回答没交上，已经放回输入框" : "这句话没发出去，已经放回输入框") : extra.what || (said ? "这句话没发出去" : "这一步没做成");
         // 回答时的 409：这个问题在别处答过了，或者这一轮已经停了；下面接上服务器，页面跟着变成现在的样子
-        setError(extra.asked && e.status === 409 ? `${what}：这个问题已经不用回答了。` : errorText(what, e));
+        if (!(extra.quiet && e.status === 409)) setError(extra.asked && e.status === 409 ? `${what}：这个问题已经不用回答了。` : errorText(what, e));
       }
       if (recoverable) {
         const rejected = e.status ? { said: null, edit: undefined, sentAt: undefined } : {};
@@ -637,10 +637,19 @@ export default function Workspace() {
     // 回答模型停下来问的问题（st.ask），或者跳过（skip）：同一轮接着跑。回答先按页面手上的放进过程里，服务器的那条到了换掉它。
     // mute 是“别再问了”：这个问题跳过，这段对话之后也不再出问题卡（st.asks_off，恢复见 manage.askAgain）。
     // typed：回答是输入框里写的，没交上时放回输入框（点选项的不放）
-    answer: ({ text = "", skip = false, mute = false, typed = false } = {}) => {
+    // 等着的是要位置的（ask.kind 是 location，见 timeline.jsx 的 LocateCard）：location 是浏览器给的位置，unavailable 是取不到，skip 是不给，
+    // text 是没给位置、直接说了个地方（这一条先放进过程里）。auto：不是用户点的（页面自己取了交的）——别处已经交过了（409）就不提示
+    answer: ({ text = "", skip = false, mute = false, typed = false, location = null, unavailable = false, auto = false } = {}) => {
       const id = tidRef.current;
       const ask = st?.ask;
       if (!id || !ask) return undefined;
+      if (ask.kind === LOCATION) {
+        const said = !location && text ? text : "";
+        const body = location ? { id: ask.id, location } : said ? { id: ask.id, text: said } : unavailable ? { id: ask.id, unavailable: true } : { id: ask.id, skip: true };
+        const mine = said ? [{ type: "ask", kind: LOCATION, id: `${ask.call_id}:where`, question: "", options: [], pending: false, answer: said, skipped: false, muted: false }] : [];
+        return run((cb, sig) => answerResearchThread(id, body, cb, sig), null,
+          { items: mine, asked: true, quiet: auto, what: said ? "回答没交上" : "位置没交上", answer: typed && said ? said : undefined });
+      }
       const skipped = skip || mute;
       const mine = { type: "ask", id: ask.call_id, question: ask.question, options: ask.options, pending: false, answer: skipped ? "" : text, skipped, muted: mute };
       const body = mute ? { id: ask.id, mute: true } : skip ? { id: ask.id, skip: true } : { id: ask.id, text };

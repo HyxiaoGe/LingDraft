@@ -54,9 +54,10 @@ def test_connect_takes_the_service_tools_and_adds_lingdraft_note():
         aio.run(t.connect())
         assert t.current() is t.tool
         assert t.tool.description.startswith(words) and t.tool.description.endswith(prompts.render(f"tools.{name}.lingdraft"))
-    # 灵稿拿不到用户的位置：说明里让模型不用 current_location、问用户在哪
-    assert "never use current_location" in prompts.render("tools.place_search.lingdraft")
-    assert "never use current_location" in prompts.render("tools.route_compare.lingdraft")
+    # 当前位置从用户的浏览器来、可能不给（见 app.tools.location）：说明里说清，没给的这一轮别再选
+    for name in (PLACE_TOOL, ROUTE_TOOL):
+        note = prompts.render(f"tools.{name}.lingdraft")
+        assert "from the user's browser" in note and "do not use current_location again in this turn" in note
 
 
 def test_planner_has_map_tools_before_and_after_connecting():

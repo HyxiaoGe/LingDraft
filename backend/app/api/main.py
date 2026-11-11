@@ -36,6 +36,7 @@ from app.quota import Exhausted, Limits
 from app.graph.research import history
 from app.graph.research.state import AttachedImage
 from app.tools.gateway import MAX_UPLOAD_BYTES, GatewayError, ImageRejected
+from app.tools.location import Device
 
 logger = logging.getLogger(__name__)
 
@@ -298,13 +299,17 @@ class ResearchRegenerateBody(BaseModel):
 
 class ResearchAnswerBody(BaseModel):
     """回答模型问的问题：id 是状态里 ask 的 id；text 是回答（点选项就是那个选项的字）；skip 是跳过、不回答；
-    mute 是“别再问了”：跳过这个问题，并且这段对话之后不再出问题卡（恢复见 research_asks）。"""
+    mute 是“别再问了”：跳过这个问题，并且这段对话之后不再出问题卡（恢复见 research_asks）。
+    等着的是要位置的（ask 的 kind 是 location，见 app.tools.location）：location 是浏览器给的位置（只在内存里用这一轮，不存）；
+    unavailable 是浏览器取不到；skip 是用户不给；text 是用户没给位置、直接说了个地方。"""
 
     model_config = ConfigDict(extra="forbid")
     id: str
     text: str = ""
     skip: bool = False
     mute: bool = False
+    location: Device | None = None
+    unavailable: bool = False
 
 
 class ResearchAsksBody(BaseModel):
@@ -764,7 +769,7 @@ def research_answer(thread_id: str, body: ResearchAnswerBody, who: Who):
     _mine(r, thread_id, who)
     _admit(r, who)
     try:
-        return _sse(r.answer(thread_id, body.id, body.text, body.skip, body.mute))
+        return _sse(r.answer(thread_id, body.id, body.text, body.skip, body.mute, location=body.location, unavailable=body.unavailable))
     except (RunConflict, NothingToAnswer) as e:
         raise HTTPException(409, str(e)) from None
     except BadAnswer as e:
