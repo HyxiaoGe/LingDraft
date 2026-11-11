@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage
 
 from app import aio
 from app.api.research_runner import ResearchRunner
-from app.evals.decisions import Decision, afork, compare, fisher_p, load_decisions, pick, sample, snapshot_path, summary
+from app.evals.decisions import Decision, afork, compare, decision_inputs, fisher_p, load_decisions, pick, sample, snapshot_path, summary, transcript
 from app.evals.research import Case, run_case
 from app.evals.tape import Tape
 from app.graph.research.graph import memory_checkpointer
@@ -182,6 +182,69 @@ def test_decision_is_from_a_case_or_a_first_message_not_both():
         Decision.model_validate({"id": "d", "say": "你好", "call": 2, "source": "测试"})
     with pytest.raises(ValueError, match="work 只给只写一句话的"):
         _decision(work=True)
+    for kind in ("brief", "title"):
+        with pytest.raises(ValueError, match="brief、title 只给只写一句话的"):
+            _decision(**{kind: True})
+    for extra in ({"work": True}, {"brief": True}, {"judge": "给了结论"}, {"expect": {"replied": True}}):
+        with pytest.raises(ValueError, match="不调主 agent"):
+            Decision.model_validate({"id": "d", "say": "你好", "title": True, "source": "测试", **extra})
+
+
+def test_brief_is_judged_only_when_a_subagent_is_dispatched():
+    """brief: true：这一下派了子 agent 的，写给它们的交代一起交给裁判；没派的（直接答、自己先搜）不检查。子 agent 一个都不跑。"""
+    counter = CountingTools()
+    runner, judge = _runner(counter), FakeJudge()
+    d = Decision.model_validate({"id": "b", "say": "分头查 向量库选型", "brief": True, "source": "测试"})
+    r = sample(runner, judge, d, None, 1)
+    assert [(c["name"], c["passed"]) for c in r["checks"]] == [("brief", True)], r
+    said, briefs, today = judge.briefs[0]
+    assert said == "分头查 向量库选型" and today == r["today"]
+    assert briefs == [{"title": tc["args"]["title"], "prompt": tc["args"]["prompt"]} for tc in r["tool_calls"]] and len(briefs) == 2
+    assert counter.calls == [] and "brief" in decision_inputs(d)
+    for n, say in enumerate(("直接答：为什么", "查一下向量库选型"), 2):
+        quick = Decision.model_validate({"id": "b", "say": say, "brief": True, "source": "测试"})
+        assert "brief" not in [c["name"] for c in sample(runner, judge, quick, None, n)["checks"]]
+    assert len(judge.briefs) == 1
+    # 没写 brief 的照旧不看交代（加这一项之前的决策点不多花一次裁判）；传到 LangSmith 的样例也不多出字段
+    plain = Decision.model_validate({"id": "p", "say": "分头查 向量库选型", "source": "测试"})
+    assert sample(runner, judge, plain, None, 1)["checks"] == [] and len(judge.briefs) == 1
+    assert decision_inputs(plain) == {"say": "分头查 向量库选型", "turn": 1, "call": 1, "expect": {}}
+
+
+def test_title_decision_looks_at_the_title_not_the_reply():
+    """title: true：只调起标题那一下（planner.title，页面上 _TitleJob 调的那个），不调主 agent、不开对话。
+    像不像标题按页面的规矩（usable_title），照抄原话的单记一项，是不是在起标题交给裁判；空的不问裁判。"""
+    runner, judge = _runner(), FakeJudge()
+    say = "明天天气怎么样"
+    d = Decision.model_validate({"id": "t", "say": say, "title": True, "source": "测试"})
+    runner.planner.calls.clear()
+    runner.planner.model_uses.clear()
+    r = sample(runner, judge, d, None, 1)
+    assert r["title"] == f"标题：{say}" and r["say"] == say and not r["reply"] and not r["tool_calls"]
+    assert [(c["name"], c["passed"]) for c in r["checks"]] == [("title_usable", True), ("title_not_copied", True), ("title_judge", True)]
+    assert runner.planner.calls == [("title", say)] and runner.planner.model_uses == [] and judge.titles == [(say, f"标题：{say}")]
+    assert runner.graph.get_state(runner._cfg("fork-t-1")).values == {}
+    assert decision_inputs(d)["title"] is True and "**标题**：标题：明天天气怎么样" in transcript([r])
+
+    refusal = "抱歉，我无法提供明天的天气信息，建议你查看天气预报应用或者当地气象部门的网站。"
+    for n, (raw, expected) in enumerate([
+        (refusal, [("title_usable", False), ("title_not_copied", True), ("title_judge", True)]),  # 太长：页面上会拿原话顶；是不是在回答由真裁判判
+        (f" {say}\n", [("title_usable", True), ("title_not_copied", False), ("title_judge", True)]),
+        ("", [("title_usable", False)]),
+    ], 2):
+        async def title(text, raw=raw):
+            return raw
+
+        runner.planner.title = title
+        r = sample(runner, judge, d, None, n)
+        assert [(c["name"], c["passed"]) for c in r["checks"]] == expected, raw
+    assert len(judge.titles) == 3  # 空的那次没问裁判
+
+    async def broken(text):
+        raise RuntimeError("起标题超时")
+
+    runner.planner.title = broken
+    assert sample(runner, judge, d, None, 9)["error"] == "RuntimeError: 起标题超时"
 
 
 def test_pick_says_what_was_recorded(tmp_path):

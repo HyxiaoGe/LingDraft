@@ -48,6 +48,9 @@ uv run python -m app.evals.decisions --samples 10 --model deepseek-flash   # 那
 uv run python -m app.evals.decisions --compare data/evals/<改之前>.json data/evals/<改之后>.json  # 两份结果差得够不够大
 uv run python -m app.evals.decisions --decision 'ask-*' --samples 5 --model deepseek-flash   # 只跑一组（* 通配）；这一组只写了一句话，不用先录
 uv run python -m app.evals.decisions --decision 'ask-*' --samples 5 --model deepseek-flash --no-thinking   # 同上，关着深度思考（要和 --model 一起给）
+uv run python -m app.evals.decisions --decision 'direct-*' --samples 5 --no-sources   # 不该查的直接答没有；不给 --model 是 Auto
+uv run python -m app.evals.decisions --decision 'brief-*' --samples 5 --no-sources --model deepseek-v4-pro   # 派子 agent 时交代里有没有没查过的事实
+uv run python -m app.evals.decisions --decision 'title-*' --samples 5   # 起标题那一下起的是不是标题
 ```
 
 - **是什么**（`app/evals/decisions.py`）：从录的那遍里挑一次调模型（`evals/research/decisions.yaml` 里写用例、第几轮、第几次，`call: last` 是写正文的那一下），
@@ -62,6 +65,16 @@ uv run python -m app.evals.decisions --decision 'ask-*' --samples 5 --model deep
   用来看模型拿到一句话的第一下：停下来问用户（`asked`，调了 `ask_user`）、去查，还是直接答。日期是跑的那天；`--model` 没给是 Auto（多一次判断用哪个模型的调用）。
   `work: true` 是这句话开的是工作任务（新建时选的“工作”）：只有工作任务里模型才有问用户的工具，所以 `ask-*` 这一组都带着。`ask-open-*` 不定对错（没写 `asked`），
   问了什么在结果的 `tool_calls` 里，人看。每次实际用的模型、思考开没开记在结果的 `model` 里。
+  - **`direct-*`**：稳定的常识、手头就能做的活（翻译、写代码、写作），该直接答、不去查（`looked_up: false`、`replied: true`）。
+    “什么时候搜”那几段提示词要动之前、之后各跑一遍，和 `lookup-*` 的整段用例（该查的那一边）一起看。
+  - **`brief: true`**（`brief-*`）：这一下派了子 agent 的，裁判再看写给子 agent 的交代里有没有把没查过的当前事实（版本号、现行政策、现在有哪些产品）当成已知写进去
+    （检查项 `brief`，标准在 `app/evals/prompts.toml` 的 `[brief]`）。第一次调模型时主 agent 什么都还没查，所以只给只写一句话的用。
+    没派的（先自己搜一下、直接答）不算错也不检查，汇总里 `brief 3/4` 的 4 是派了的次数；先搜后派的那种，交代写得怎么样这里看不到。
+    裁判认得准的是两头：版本号、产品、政策数字直接写死的判不通过，标了“大概、例如、以查到的为准”的判通过（11-11 和人读的对过）。
+    凭记忆把“这个项目后来拆成了哪几个”当背景写的那一类判不稳（同一份两遍不一样），这种看结果里的原话，别只看数。
+  - **`title: true`**（`title-*`）：不调主 agent，只调页面上起标题的那一下（`planner.title`，模型是 `models.toml` 里 `roles.title` 的，`--model`、`--no-thinking` 管不到它）。
+    三项检查：`title_usable` 像不像标题（`agent.usable_title`，不像的页面上会拿原话顶，所以出了事页面上看不出来）；`title_not_copied` 不是把原话整句抄回来；
+    `title_judge` 裁判看它是在起标题，还是去回答、拒答、反问了（标准在 `[title]`；空的不问裁判）。
 - **怎么算变了**：`--compare` 对同一个决策点的同一项检查算双侧 Fisher 精确检验，p < 0.05 才算变了。每边 10 次时大约要差 6 次（2/10 对 8/10 算，4/10 对 6/10 不算）。
 
 ## 传到 LangSmith

@@ -39,6 +39,16 @@ class FakeJudge:
         self.uncited = uncited  # 再列一句没带角标的（真裁判有时会这样）
         self.sources: list[dict] = []
         self.rubrics: list[tuple] = []
+        self.titles: list[tuple] = []
+        self.briefs: list[tuple] = []
+
+    def title(self, said, title):
+        self.titles.append((said, title))
+        return RubricJudgement(passed=True, reason="假裁判")
+
+    def brief(self, said, briefs, today):
+        self.briefs.append((said, briefs, today))
+        return RubricJudgement(passed=True, reason="假裁判")
 
     def citations(self, question, reply, sources, today):
         self.sources = sources

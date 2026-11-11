@@ -14,6 +14,8 @@
   工具结果的整理（来源编号、天气整理）在检查点里已经整理好了，改这部分代码这里也测不出来。
 - 只写一句话的（say）：没有录的那遍，这句话照页面那样写进一段新对话，同样跑到执行工具之前停，只调这一次模型。
   日期是跑的那天；模型是 --model 给的，没给是 Auto（照页面，多一次判断用哪个模型的调用）。
+  - brief: true：这一下派了子 agent 的，裁判再看写给子 agent 的交代里有没有把没查过的当前事实当成已知（这时主 agent 什么都还没查）；没派的不检查。
+  - title: true：不调主 agent，看给这句话起的对话标题（页面上起标题的那一下，模型是 roles.title 的，--model 管不到）：像不像标题、是不是在起标题。
 - 每个决策点跑几次（--samples），每项检查算过了几次；两份结果比（--compare），差得够大才算变了（双侧 Fisher 精确检验，p < 0.05）。
 - 配了 LANGSMITH_API_KEY 的话同时传到 LangSmith 成一个实验，每重跑一次是一行（app.evals.smith），--no-smith 不传。
 """
@@ -40,9 +42,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app import costs
 from app.evals import smith
 from app.graph.research import history
-from app.graph.research.agent import CHINA_TZ, LOOP_ENTRY, ChatContext, turn_start
+from app.graph.research.agent import CHINA_TZ, LOOP_ENTRY, ChatContext, turn_start, usable_title
 from app.graph.research.graph import memory_checkpointer
-from app.graph.research.sources import collect_sources
+from app.graph.research.sources import SUBAGENT_TOOL, collect_sources
 from app.model_catalog import Plan
 from app.tools.research_tools import TIME_TOOL
 
@@ -77,6 +79,8 @@ class Decision(BaseModel):
     source: str = Field(description="为什么有这个决策点：要回答什么问题")
     expect: DecisionExpect = Field(default_factory=DecisionExpect)
     judge: str | None = Field(default=None, description="这一下写了正文时，裁判按这个标准看（同用例的 judge）")
+    brief: bool = Field(default=False, description="只写一句话的：这一下派了子 agent（调了 task）时，裁判看交代里有没有把没查过的当前事实当成已知写进去；没派的不检查")
+    title: bool = Field(default=False, description="只写一句话的：不调主 agent，看给这句话起的对话标题（页面上起标题的那一下，见 agent._TitleJob）")
 
     @model_validator(mode="after")
     def _one_origin(self) -> Decision:
@@ -86,6 +90,10 @@ class Decision(BaseModel):
             raise ValueError(f"{self.id}：只写一句话的看的就是第 1 轮第 1 次调模型，不写 turn、call")
         if self.work and self.say is None:
             raise ValueError(f"{self.id}：从录的取的照录的那段对话的模式，work 只给只写一句话的")
+        if (self.brief or self.title) and self.say is None:
+            raise ValueError(f"{self.id}：brief、title 只给只写一句话的（第一次调模型时主 agent 什么都还没查；标题按第一句话起）")
+        if self.title and (self.work or self.brief or self.judge or self.expect.model_fields_set):
+            raise ValueError(f"{self.id}：title 看的是起标题那一下，不调主 agent，不写 work、expect、judge、brief")
         return self
 
 
@@ -191,12 +199,37 @@ def _check(name: str, passed: bool, detail: str = "") -> dict:
     return {"name": name, "passed": bool(passed), "detail": detail}
 
 
+def title_sample(runner, judge, d: Decision, n: int) -> dict:
+    """起标题的决策点跑一次：照页面那样让起标题的模型给这句话起一个（planner.title，agent._TitleJob 调的就是它），不调主 agent。
+    - title_usable：像不像标题（agent.usable_title：不空、一行、不超长、有字），不像的页面上会拿原话顶；
+    - title_not_copied：不是把原话整句抄回来（抄回来等于没起）；
+    - title_judge：裁判看它是不是在起标题，而不是去回答、拒答、反问（空的不问裁判）。"""
+    from app import aio
+
+    started = time.time()
+    out: dict[str, Any] = {"decision": d.id, "sample": n, "say": d.say, "today": datetime.now(CHINA_TZ).date().isoformat()}
+    try:
+        raw = aio.run(runner.planner.title(d.say)).strip()
+        checks = [_check("title_usable", usable_title(raw), raw or "空的")]
+        if raw:
+            checks.append(_check("title_not_copied", "".join(raw.split()) != "".join(d.say.split()), raw))
+            v = judge.title(d.say, raw)
+            checks.append(_check("title_judge", v.passed, v.reason))
+        out.update({"title": raw, "tool_calls": [], "reply": "", "thinking": "", "checks": checks, "citations": []})
+    except Exception as e:  # noqa: BLE001 —— 一次出错不影响其他的，记为 error（页面上这时拿原话顶）
+        out["error"] = f"{type(e).__name__}: {e}"
+    out["duration_s"] = round(time.time() - started, 1)
+    return out
+
+
 def sample(runner, judge, d: Decision, snap: dict | None, n: int, check_sources: bool = True, plan: Plan | None = None,
            thinking: bool | None = None) -> dict:
     """跑一次这个决策点，做检查。snap 是录的那遍里这一下之前的检查点；只写一句话的没有（None）。"""
     from app import aio
     from app.evals.research import LOOKUP_TOOLS, cited, cited_sources, judge_citations, material
 
+    if d.title:
+        return title_sample(runner, judge, d, n)
     started = time.time()
     out: dict[str, Any] = {"decision": d.id, "sample": n}
     try:
@@ -233,6 +266,10 @@ def sample(runner, judge, d: Decision, snap: dict | None, n: int, check_sources:
         if e.asked is not None:
             asks = [tc["args"].get("question", "") for tc in m.tool_calls if tc["name"] == history.ASK_TOOL]
             checks.append(_check("asked", bool(asks) == e.asked, "；".join(asks) if asks else "没问" + ("，调了 " + "、".join(names) if names else "")))
+        if d.brief and (briefs := [{"title": tc["args"].get("title", ""), "prompt": tc["args"].get("prompt", "")}
+                                   for tc in m.tool_calls if tc["name"] == SUBAGENT_TOOL]):
+            v = judge.brief(out["say"], briefs, today)
+            checks.append(_check("brief", v.passed, v.reason))
         citations: list[dict] = []
         if reply:
             sources = {s.id: s.url for s in collect_sources(msgs)}
@@ -311,6 +348,8 @@ def transcript(results: list[dict]) -> str:
         if "error" in r:
             out.append(f"出错：{r['error']}\n")
             continue
+        if "title" in r:
+            out.append(f"**标题**：{r['title'] or '（空的）'}\n")
         if r["thinking"]:
             out.append(f"> 思考：{r['thinking'][:800]}" + ("……" if len(r["thinking"]) > 800 else "") + "\n")
         if r["tool_calls"]:
@@ -329,15 +368,15 @@ def transcript(results: list[dict]) -> str:
 
 def decision_inputs(d: Decision) -> dict:
     """数据集里一个样例的输入：哪个用例第几轮第几次调模型、这一下该怎么做。"""
-    # 对话的（没写 work）不带这一项：加这个字段之前传上去的样例不跟着变
-    return d.model_dump(mode="json", exclude_none=True, exclude={"id", "source"} | (set() if d.work else {"work"}))
+    # 没写 work、brief、title 的不带这几项：加这些字段之前传上去的样例不跟着变
+    return d.model_dump(mode="json", exclude_none=True, exclude={"id", "source"} | {k for k in ("work", "brief", "title") if not getattr(d, k)})
 
 
 def sample_view(r: dict) -> dict:
     """实验里这一行的输出：这一下调了什么、写了什么。"""
     if "error" in r:
         return {"error": r["error"]}
-    return {"tool_calls": r["tool_calls"], "reply": r["reply"]}
+    return {"tool_calls": r["tool_calls"], "reply": r["reply"], **({"title": r["title"]} if "title" in r else {})}
 
 
 def sample_scores(r: dict) -> list[dict]:
@@ -384,7 +423,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-sources", action="store_true", help="不核对正文里的引用")
     ap.add_argument("--label", default="", help="写进结果文件名，方便对比")
     ap.add_argument("--no-smith", action="store_true", help="不传 LangSmith（配了 LANGSMITH_API_KEY 时默认传）")
-    ap.add_argument("--model", help="这一下换成哪个模型（app/models.toml 里选项的 id）；不给照录的那遍用的")
+    ap.add_argument("--model", help="这一下换成哪个模型（app/models.toml 里选项的 id）；不给照录的那遍用的。起标题的（title）不归它管")
     ap.add_argument("--no-thinking", action="store_true", help="关着深度思考跑（要和 --model 一起给）；不给按选项的默认，能开关的默认开")
     ap.add_argument("--compare", nargs=2, metavar=("A", "B"), help="不跑：比较两份结果，每项检查差得够不够大")
     args = ap.parse_args(argv)
