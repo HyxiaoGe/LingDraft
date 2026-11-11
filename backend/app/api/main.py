@@ -300,7 +300,7 @@ class ResearchRegenerateBody(BaseModel):
 class ResearchAnswerBody(BaseModel):
     """回答模型问的问题：id 是状态里 ask 的 id；text 是回答（点选项就是那个选项的字）；skip 是跳过、不回答；
     mute 是“别再问了”：跳过这个问题，并且这段对话之后不再出问题卡（恢复见 research_asks）。
-    等着的是要位置的（ask 的 kind 是 location，见 app.tools.location）：location 是浏览器给的位置（只在内存里用这一轮，不存）；
+    等着的是要位置的（ask 的 kind 是 location，见 app.tools.location）：location 是浏览器给的位置（只放在内存里、留一小段时间，不存）；
     unavailable 是浏览器取不到；skip 是用户不给；text 是用户没给位置、直接说了个地方。"""
 
     model_config = ConfigDict(extra="forbid")

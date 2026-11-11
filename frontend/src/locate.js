@@ -1,5 +1,5 @@
 // 取用户现在的位置（浏览器的 navigator.geolocation）。模型选了“当前位置”时后端停下来要（见后端 app.tools.location），页面取了交回去。
-// 位置只交给后端用这一轮，页面不存。浏览器只在 https 和 localhost 上给位置：别的地址当取不到。
+// 位置交给后端（它在内存里留一小段时间，这段时间里再用到的不再来要），页面不存。浏览器只在 https 和 localhost 上给位置：别的地址当取不到。
 //
 // 两段取法照 Fusion（frontend/src/hooks/useLocationContextHandshake.ts）：先要粗的（快，一分钟内取过的直接用），
 // 超时或取不到再要准的（手机上是 GPS，慢一些）。用户或浏览器不让的不再试第二段。
@@ -8,6 +8,13 @@ const STAGES = [
   { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 },
 ];
 const PERMISSION_DENIED = 1; // GeolocationPositionError.code
+
+// 这台设备上用户同意过用位置、也取到了：之后不再出位置卡，直接取（要过一次就不再要，2026-11-11 Sean 定）。
+// 浏览器自己记着允许的本来就不出卡；这一项管的是不记的（Safari、选了“仅这次允许”的）：再弹不弹它自己的授权由浏览器定。
+// 浏览器说不让的把这一项去掉，下次还是先出卡。只存这一个开关，不存位置
+const AGREED_KEY = "lingdraft.locate";
+export const locateAgreed = () => { try { return localStorage.getItem(AGREED_KEY) === "on"; } catch { return false; } };
+const setAgreed = (on) => { try { if (on) localStorage.setItem(AGREED_KEY, "on"); else localStorage.removeItem(AGREED_KEY); } catch { /* 存不下：下次还是出卡 */ } };
 
 const usable = () => typeof navigator !== "undefined" && !!navigator.geolocation && window.isSecureContext !== false;
 
@@ -33,9 +40,13 @@ export async function locate() {
     try {
       const { coords } = await once(options);
       const accuracy = Number.isFinite(coords.accuracy) && coords.accuracy >= 0 ? { accuracy_m: coords.accuracy } : {};
+      setAgreed(true);
       return { location: { longitude: coords.longitude, latitude: coords.latitude, ...accuracy } };
     } catch (e) {
-      if (e?.code === PERMISSION_DENIED) return { denied: true };
+      if (e?.code === PERMISSION_DENIED) {
+        setAgreed(false);
+        return { denied: true };
+      }
     }
   }
   return { unavailable: true };

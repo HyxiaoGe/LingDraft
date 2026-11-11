@@ -348,7 +348,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `files.py`：用户发的文件怎么给模型，`read_file`。`write_file.py`：`create_file`、`edit_file`。`vision.py`：用户发的图怎么给模型，`view_image`。`knowledge.py`：`search_knowledge`。
   - `research_tools.py`：agent 自己的工具（`get_current_time`），描述在 `prompts.toml` 的 `[tools.*]`。
   - `mcp.py`：MCP 工具共用的部分：经网关连、取工具、认出网关的 401/403（让这一轮失败）和 429（今天的上限到了）；`request_meta` 让一次调用带上 MCP 请求的 `_meta`（不经过模型的东西，比如用户的位置）。
-  - `location.py`：用户的当前位置。模型查天气、查地点、比路线时选了 `current_location` 的，中间件先停下来跟页面要位置（和问用户同一套 `interrupt`，页面出位置卡，浏览器里已经允许过定位的直接取）；坐标放在这次 MCP 调用的 `_meta` 里交给服务，只在内存里留这一轮，不进模型的参数、检查点和日志。没给的不调工具，告诉模型改用用户说的或记忆里的地方，或者问用户。
+  - `location.py`：用户的当前位置。模型查天气、查地点、比路线时选了 `current_location` 的，中间件先停下来跟页面要位置（和问用户同一套 `interrupt`，页面出位置卡，浏览器里已经允许过定位的直接取）；坐标放在这次 MCP 调用的 `_meta` 里交给服务，只在内存里按人留 10 分钟（这段时间里再用到的不再要），不进模型的参数、检查点和日志。没给的不调工具，告诉模型改用用户说的或记忆里的地方，或者问用户。
   - `web_mcp.py`：搜索、读网页。`search_web`、`read_page` 是 agent-tools 的 MCP 工具（怎么搜、怎么读、结果的样子、失败时给模型的话都在 search-service、reader-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明（什么时候搜、搜够没有、来源 id），中间件给结果带上来源 id、把失败整理成页面上的中文，没连上时用同名的占位工具。
   - `image_mcp.py`：画图、改图。`generate_image` 是 agent-tools 的 MCP 工具（出图、存图、改图找原图、比例、给模型的说明都在 image-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明，中间件管每轮最多画 3 张、改图只认这段对话里画的和用户发的图、给带图的话接上说明，把结果整理成图片卡片要的东西，没连上时用同名的占位工具。
   - `weather_mcp.py`：查天气。`get_weather` 是 agent-tools 的 MCP 工具（挑城市、整理预报、缓存、给模型的说明都在 weather-service 里，和 Fusion 共用），用 LangChain 的 MCP 适配器接进来；这里接上灵稿自己的一段说明，中间件把结果整理成模型看的文字，网关出问题算没查到、密钥不对让这一轮失败。
