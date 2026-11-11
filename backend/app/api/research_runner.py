@@ -57,6 +57,7 @@ from app.model_guard import ContentBlocked, Interrupted, ModelUnavailable
 from app.tools.ask_user import ASK, MAX_ANSWER, AskAnswer
 from app.tools.location import DECLINED, PROVIDED, SAID, UNAVAILABLE, Device, PlaceAnswer, Places, holder
 from app.tools.gateway import IMAGE_ID, GatewayError
+from app.tools.run_command import Sandbox
 
 
 class NothingToRetry(Exception):
@@ -391,6 +392,8 @@ class ResearchRunner(BaseRunner):
         if isinstance(self.run_store, PostgresRunStore):  # 免费额度用完的记在库里，重启后照样不用（见 app.free_used_up）
             aio.run(free_used_up.attach(self.planner.catalog, self.run_store._exec))
         self.images = self.planner.gateway  # 画好的图存在 image-service 里，按编号取、删（见 app.tools.gateway）
+        # 沙箱：工作任务里跑命令（见 app.tools.run_command），经同一个网关；配置里关了就没有，模型拿不到这个工具
+        self.sandbox = Sandbox(self.planner.gateway) if config.SANDBOX_ENABLED else None
         # 用户发的文件：原件在数据卷上，文字和文件表在运行记录的库里；在这里起后台的解析、清理（见 app.files.service）
         self.files = files or FileService(open_files(self.run_store), config.FILES_DIR, isolated=config.FILE_PARSE_ISOLATED,
                                           timeout=config.FILE_PARSE_TIMEOUT_S)
@@ -846,7 +849,8 @@ class ResearchRunner(BaseRunner):
         别的中断（现在没有，比如 MCP 的 elicitation）不认，和以前一样这一轮算没跑完。"""
         asked = False
         ctx = ChatContext(take_guide=lambda: self._take_guide(thread_id), title=self._titles.get(thread_id),
-                          owner=await self.run_store.owner_of(thread_id), files=self.files, thread_id=thread_id, kb=self.kb, places=self.places if locate else None)
+                          owner=await self.run_store.owner_of(thread_id), files=self.files, thread_id=thread_id, kb=self.kb, places=self.places if locate else None,
+                          sandbox=self.sandbox)
         async for ns, mode, chunk in self.graph.astream(inp, self._cfg(thread_id), context=ctx, stream_mode=["messages", "updates", "custom"],
                                                         subgraphs=True, durability=self.durability):
             task = tasks.get(ns[0]) if ns else None
@@ -1191,12 +1195,15 @@ class ResearchRunner(BaseRunner):
                 await self.graph.aupdate_state(cfg, {history.ASKS_OFF: off}, as_node=TURN_END)
 
     async def _adelete(self, thread_id: str) -> None:
-        """删掉整段对话（这个线程的所有检查点、运行记录、画的图、用户发的图和文件、整理记忆的记录），找不回来；记下的记忆不删。
+        """删掉整段对话（这个线程的所有检查点、运行记录、画的图、用户发的图和文件、沙箱里的工作区、整理记忆的记录），找不回来；记下的记忆不删。
         运行记录先删：删不掉就整个报错，对话还在，可以再删一次；反过来对话先没了，剩下的记录就再也删不到了。
         图在对话删掉以后再删（编号先记下）：删图没成功只记日志，留下的图没人指着，只占服务的磁盘。"""
         async with self._ahold(thread_id):
             snap = await self.graph.aget_state(self._cfg(thread_id))
-            images = history.owned_image_ids((snap.values or {}).get("messages", []))
+            msgs = (snap.values or {}).get("messages", [])
+            images = history.owned_image_ids(msgs)
+            # 调过跑命令的才有沙箱里的工作区（看调用不看结果：跑到一半停下的也有）
+            ran = any(tc["name"] == history.RUN_TOOL for m in msgs if isinstance(m, AIMessage) for tc in m.tool_calls)
             await self._adrop_suggestions(thread_id)
             self._titles.pop(thread_id, None)
             self.places.end_turn(thread_id)
@@ -1205,6 +1212,8 @@ class ResearchRunner(BaseRunner):
             await self.graph.checkpointer.adelete_thread(thread_id)
             await self.images.delete_images(images)
             await self.files.delete_workspace(thread_id)  # 文件按工作区（现在就是这段对话）删，原件没删掉只记日志
+            if ran and self.sandbox is not None:
+                await self.sandbox.forget(thread_id)  # 没删掉只记日志：服务 7 天没用自己清
 
     # ---- 推荐问题：这一轮结束之后再起 ----
 

@@ -51,7 +51,7 @@ from app.tools.location import GEO_META_KEY
 from app.tools.maps_mcp import PLACE_TOOL, ROUTE_TOOL, MapsTool
 from app.tools.research_tools import TIME_TOOL, make_research_tools
 from app.tools.vision import ImageUris, view_prompt
-from app.graph.research.history import ASK_TOOL, CREATE_TOOL, EDIT_TOOL, FILE_TOOL, VIEW_TOOL, WRITE_TOOLS
+from app.graph.research.history import ASK_TOOL, CREATE_TOOL, EDIT_TOOL, FILE_TOOL, RUN_TOOL, VIEW_TOOL, WRITE_TOOLS
 from app.tools.weather_mcp import WEATHER_TOOL, WeatherTool
 from app.tools.web_mcp import READ_TOOL, SEARCH_TOOL, WebTool
 
@@ -1035,8 +1035,124 @@ class FakeImageService:
         return httpx.Response(201, json={"id": iid, "mime_type": mime, "width": width, "height": height, "bytes": len(data),
                                          "model": "upload", "edited_from": None, "created_at": "2026-11-06T00:00:00+00:00"})
 
-    def gateway_client(self) -> GatewayClient:
-        return GatewayClient("http://fake-gw", "fake-key", scene="research", transport=httpx.MockTransport(self.handle))
+    def gateway_client(self, sandbox: FakeSandbox | None = None) -> GatewayClient:
+        async def handle(req: httpx.Request) -> httpx.Response:
+            if sandbox is not None and req.url.path.startswith(FakeSandbox.PREFIX):
+                return await sandbox.handle(req)
+            return await self.handle(req)
+        return GatewayClient("http://fake-gw", "fake-key", scene="research", transport=httpx.MockTransport(handle))
+
+
+FAKE_RUN_SLOW_S = 3.0
+
+
+class FakeSandbox:
+    """进程内的假沙箱（照 agent-tools 的 sandbox-service 经网关的接口：/sandbox/v1/workspaces/{工作区}…）。离线模式、测试用。
+    不真的跑命令，按行认几个假指令，别的行当没输出的普通命令：
+    - echo X：标准输出一行 X；ls：列出工作区里的文件（一行一个）；cat 路径：输出那个文件的文字；
+    - chart 路径：在那里写一张 PNG（每次内容不一样）；write 路径 文字：写一个文本文件；big 路径 N：写 N 字节；rm 路径：删掉；
+    - fail N：报错一行、退出码 N，后面的不跑；slow：等几秒（block 设了就等它，试停止）；
+    - timeout / memory：算超时、内存不够被杀掉（退出码 137）。
+    测试可以设 fail（(HTTP 状态, 错误码)：下一次起每个请求都这样回）、block（slow 等它）；runs、cancelled、deleted 记下调用。"""
+
+    PREFIX = "/sandbox/v1/workspaces/"
+
+    def __init__(self) -> None:
+        self.workspaces: dict[str, dict[str, bytes]] = {}
+        self.runs: list[tuple[str, str, int]] = []
+        self.puts: list[tuple[str, str]] = []
+        self.cancelled: list[str] = []
+        self.deleted: list[str] = []
+        self.fail: tuple[int, str] | None = None
+        self.block: threading.Event | None = None
+        self.running = 0  # 正在跑的命令数（测试看是不是一条一条跑的）
+        self.most = 0
+        self._n = 0
+
+    @staticmethod
+    def _error(status: int, code: str) -> httpx.Response:
+        return httpx.Response(status, json={"error": {"code": code, "message": code}})
+
+    async def handle(self, req: httpx.Request) -> httpx.Response:
+        ws, _, op = req.url.path.removeprefix(self.PREFIX).partition("/")
+        if self.fail is not None:
+            return self._error(*self.fail)
+        path = req.url.params.get("path", "")
+        files = self.workspaces.get(ws)
+        if op == "" and req.method == "DELETE":
+            self.deleted.append(ws)
+            return httpx.Response(200, json={"deleted": self.workspaces.pop(ws, None) is not None})
+        if op == "files" and req.method == "GET":
+            if files is None:
+                return self._error(404, "workspace_not_found")
+            return httpx.Response(200, json={"files": [{"path": p, "size": len(d)} for p, d in sorted(files.items())]})
+        if op == "file" and req.method == "PUT":
+            self.workspaces.setdefault(ws, {})[path] = req.content
+            self.puts.append((ws, path))
+            return httpx.Response(200, json={"path": path, "size": len(req.content)})
+        if op == "file" and req.method == "GET":
+            return httpx.Response(200, content=files[path]) if files and path in files else self._error(404, "not_found")
+        if op == "file" and req.method == "DELETE":
+            return httpx.Response(200, json={"deleted": bool(files) and files.pop(path, None) is not None})
+        if op == "cancel" and req.method == "POST":
+            self.cancelled.append(ws)
+            return httpx.Response(200, json={"cancelled": True})
+        if op == "run" and req.method == "POST":
+            body = json.loads(req.content)
+            return httpx.Response(200, json=await self._run(ws, str(body["command"]), int(body["timeout_seconds"])))
+        return self._error(404, "not_found")
+
+    async def _run(self, ws: str, command: str, timeout: int) -> dict:
+        self.runs.append((ws, command, timeout))
+        files = self.workspaces.setdefault(ws, {})
+        before = set(files)
+        wrote: set[str] = set()  # 照服务：写过的就算改了（按修改时间认），内容一样也算
+        out: list[str] = []
+        err, code, killed = "", 0, None
+        self.running += 1
+        self.most = max(self.most, self.running)
+        try:
+            for line in command.splitlines():
+                word, _, rest = line.strip().partition(" ")
+                if word == "echo":
+                    out.append(rest)
+                elif word == "ls":
+                    out += sorted(files)
+                elif word == "cat":
+                    out.append(files.get(rest.strip(), b"").decode("utf-8", "replace"))
+                elif word == "chart":
+                    self._n += 1
+                    files[rest.strip()] = _fake_png(f"{rest}{self._n}", "4:3", False)
+                    wrote.add(rest.strip())
+                elif word == "write":
+                    path, _, text = rest.partition(" ")
+                    files[path] = text.encode()
+                    wrote.add(path)
+                elif word == "big":
+                    path, _, size = rest.partition(" ")
+                    files[path] = b"x" * int(size)
+                    wrote.add(path)
+                elif word == "rm":
+                    files.pop(rest.strip(), None)
+                elif word == "slow":
+                    if self.block is not None:
+                        await asyncio.to_thread(self.block.wait, 10)
+                    else:
+                        await asyncio.sleep(FAKE_RUN_SLOW_S)
+                elif word in ("timeout", "memory"):
+                    code, killed = 137, word
+                    break
+                elif word == "fail":
+                    err, code = "Traceback (most recent call last):\nValueError: boom\n", int(rest or 1)
+                    break
+        finally:
+            self.running -= 1
+        changed = [{"path": p, "size": len(d), "sha256": hashlib.sha256(d).hexdigest()} for p, d in sorted(files.items())
+                   if p in wrote and not p.startswith("uploads/")]
+        changed.sort(key=lambda c: not c["path"].startswith("outputs/"))
+        return {"exit_code": code, "killed": killed, "duration_ms": 1200, "stdout": "".join(f"{o}\n" for o in out), "stdout_truncated": False,
+                "stderr": err, "stderr_truncated": False, "changed": changed, "deleted": sorted(p for p in before if p not in files),
+                "changed_truncated": False, "workspace": {"disk_bytes": sum(map(len, files.values())), "entries": len(files), "over_quota": False}}
 
 
 _FAKE_IMAGE_ID = re.compile(r"Image id: ([0-9a-f-]{36})")  # 生图结果里给模型的编号（image-service 的结果里写的）
@@ -1075,6 +1191,8 @@ class FakeToolModel(BaseChatModel):
     - “一直搜”：每次并行搜两个，不管预算，直到请求末尾的预算提醒说搜索用完了（子 agent 才有这条提醒）。
     - “取回”：用 recall 取回这段对话第一次搜索的第一个来源；“取回第N轮”：取回第 N 轮。取到后回复取到的开头。
     - “文件里”：读用户发的文件（read_file，见 _read_file），或者回复收到了哪几个文件。
+    - “跑命令：X”：在沙箱里跑 X（run_command，“；”换成换行；假沙箱认的指令见 FakeSandbox），跑完照结果回复；“跑两次：X”：跑完再跑一遍；
+      “一起跑：X”：同一条消息里跑两遍。没有这个工具就说没有。
     - “知识库里”：查知识库，查的是“知识库里”后面那段，引用查到的第一个来源；没有这个工具就说没有。
     - “问我”：先问用户一个问题（ask_user，带两个选项），拿到回答（或跳过）后回复，回复里说收到了什么；“边搜边问”：同一条消息里搜一次、问一次；
       “问两个”：同一条消息里问两个；“一直问”：每拿到一个回答就接着问下一个，直到工具说不能再问了。
@@ -1142,6 +1260,8 @@ class FakeToolModel(BaseChatModel):
             return self._look(text, messages, turn, call)
         if "知识库里" in text or "资料库" in text:
             return self._knowledge(text, turn, call, KB_TOOL in self.bound)
+        if m := re.search(r"(跑命令|跑两次|一起跑)[：:](.+)", text, re.S):
+            return self._run(m.group(1), m.group(2).replace("；", "\n"), turn, n, RUN_TOOL in self.bound)
         if "文件里" in text:
             return self._read_file(text, messages, turn, call)
         if any(k in text for k in ("画", "改图", "再生成")) and "generate_image" in self.bound:
@@ -1302,6 +1422,18 @@ class FakeToolModel(BaseChatModel):
         m = re.search(r"(?:知识库|资料库(?:「(.+?)」)?)里(.*)", text, re.S)
         lib, q = (m.group(1), m.group(2).strip()) if m else (None, "")
         return call(KB_TOOL, query=q or text, **({"library": lib} if lib else {}))
+
+    @staticmethod
+    def _run(how: str, command: str, turn: list[BaseMessage], n: str, usable: bool) -> tuple[str, list[dict]]:
+        """跑命令：跑完回复退出码和这次给了用户哪些文件；没跑成、没有这个工具的照说。"""
+        if not usable:
+            return "没有跑命令的工具。", []
+        done = [m for m in turn if isinstance(m, ToolMessage) and m.name == RUN_TOOL]
+        if not done or (how == "跑两次" and len(done) < 2):
+            return "", [{"name": RUN_TOOL, "args": {"command": command}, "id": f"call_{RUN_TOOL}_{n}{k}"} for k in ("ab" if how == "一起跑" else "a")]
+        if (run := history.run_of(done[-1])) is None:
+            return "没跑成。", []
+        return f"跑完了，退出码 {run.exit_code}，给了 {len(run.files)} 个文件：" + "、".join(f.name for f in run.files) + "。", []
 
     @staticmethod
     def _read_file(text: str, messages: list[BaseMessage], turn: list[BaseMessage], call) -> tuple[str, list[dict]]:
@@ -1499,7 +1631,8 @@ class FakeResearchPlanner:
         self.fail_title = False
         self.dream_replies: list[str] = []  # 整理记忆时按顺序给这些回答；用完了照 dream 的说明
         self.images = FakeImageService()
-        self.gateway = gateway or self.images.gateway_client()
+        self.sandbox = FakeSandbox()
+        self.gateway = gateway or self.images.gateway_client(self.sandbox)
         self._image_uris = ImageUris(self.gateway)
         self.fail_view = False
         self._tools = make_research_tools(self.clock)

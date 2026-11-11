@@ -122,5 +122,8 @@ MAX_CHECK_RETRIES = 2
 AGENT_TOOLS_URL = os.environ.get("AGENT_TOOLS_URL", "http://agent-tools-gateway:8100")
 AGENT_TOOLS_API_KEY = os.environ.get("AGENT_TOOLS_API_KEY", "")
 
+# 沙箱（跑命令，agent-tools 的 sandbox-service，经同一个网关，见 app.tools.run_command）：关掉就不给这个工具
+SANDBOX_ENABLED = _flag("LINGDRAFT_SANDBOX", True)
+
 # 新对话页的“今日灵感”从 Fusion 的公开接口取（不用登录），见 app/api/inspiration.py
 FUSION_URL = os.environ.get("FUSION_URL", "https://fusion.seanfield.org")

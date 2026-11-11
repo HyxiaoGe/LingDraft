@@ -113,6 +113,22 @@ export function ImageCards({ steps, tid, running, onRegenerate, title, base = 0 
   );
 }
 
+// 跑命令产出的图（图表，见 commands.jsx 的 outputsOf：{id, name, width, height…}）：和画的图一样的卡片，下面写文件名、能下载，点图看大图。
+// 图表上的字小，一张的时候铺满正文栏；两张以上并排两列（一次常常出四五张，竖着排要翻好几屏才看到回答），看细节点开看大图
+export function ChartCards({ charts, tid }) {
+  const [viewing, setViewing] = useState(null);
+  if (!charts.length) return null;
+  return (
+    <div className={styles.charts} data-many={charts.length > 1 || undefined}>
+      {charts.map((f) => <ImageCard key={f.id} img={f} src={imageUrl(tid, f)} name={f.name} chart onOpen={(back) => setViewing({ img: f, back })} />)}
+      {viewing && (
+        <Viewer img={{ alt: `图表：${viewing.img.name}` }} src={imageUrl(tid, viewing.img)} download={viewing.img.name}
+          onClose={() => { typeNext(viewing.back); setViewing(null); }} />
+      )}
+    </div>
+  );
+}
+
 // 还在画的占位，或者没画成的说明。还没有结果、这一轮却不在跑了（出错停在这一步）：没画完，不再数秒
 function PendingCard({ s, running: turnRunning }) {
   const running = turnRunning && !!s.pending;
@@ -132,13 +148,15 @@ function PendingCard({ s, running: turnRunning }) {
   );
 }
 
-function ImageCard({ img, src, name, onOpen, onRegenerate }) {
+// chart：跑命令产出的图，下面只有文件名和下载（不是画出来的：没有哪个模型、描述、改这张、再画一张）
+function ImageCard({ img, src, name, onOpen, onRegenerate, chart = false }) {
   const [state, setState] = useState("loading"); // loading → loaded / failed
   const [instant, setInstant] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [promptOpen, setPromptOpen] = useState(false);
   const imgRef = useRef(null);
-  const f = frame(img.width, img.height);
+  // 图表跟着栏宽走（不放大过原图），画的图按比例定宽
+  const f = chart ? { aspectRatio: img.width && img.height ? `${img.width} / ${img.height}` : "16 / 9" } : frame(img.width, img.height);
   const model = MODEL_NAMES[img.model] || img.model;
   // 已经在浏览器缓存里的图（切回这段对话）直接显示，不再淡入
   useLayoutEffect(() => {
@@ -147,7 +165,7 @@ function ImageCard({ img, src, name, onOpen, onRegenerate }) {
     setState("loaded");
   }, []);
   return (
-    <figure className={styles.image} style={{ width: f.width }}>
+    <figure className={styles.image} style={chart ? { width: "100%", maxWidth: img.width || undefined } : { width: f.width }}>
       <div className={styles.frame + (state === "loading" ? " " + styles.busy : "")} style={f}>
         {state === "failed" ? (
           <div className={styles.failed}>
@@ -156,16 +174,16 @@ function ImageCard({ img, src, name, onOpen, onRegenerate }) {
           </div>
         ) : (
           <button className={styles.open} aria-label="看大图" onClick={(e) => onOpen(e.currentTarget)}>
-            <img ref={imgRef} key={attempt} src={attempt ? `${src}?retry=${attempt}` : src} alt={imageAlt(img.prompt)} data-loaded={state === "loaded"}
+            <img ref={imgRef} key={attempt} src={attempt ? `${src}?retry=${attempt}` : src} alt={chart ? `图表：${name}` : imageAlt(img.prompt)} data-loaded={state === "loaded"}
               data-instant={instant || undefined} onLoad={() => setState("loaded")} onError={() => setState("failed")} />
           </button>
         )}
       </div>
       <figcaption className={styles.cap}>
         <div className={styles.row}>
-          <span className={styles.by}>{model ? `本次生图由 ${model} 提供` : ""}</span>
-          <button className={styles.act + " " + styles.text} onClick={() => editThis(src, name)}><IconEdit size={14} />改这张</button>
-          <button className={styles.act + " " + styles.text} aria-expanded={promptOpen} onClick={() => setPromptOpen(!promptOpen)}>{promptOpen ? "收起描述" : "查看描述"}</button>
+          <span className={styles.by}>{chart ? name : model ? `本次生图由 ${model} 提供` : ""}</span>
+          {!chart && <button className={styles.act + " " + styles.text} onClick={() => editThis(src, name)}><IconEdit size={14} />改这张</button>}
+          {!chart && <button className={styles.act + " " + styles.text} aria-expanded={promptOpen} onClick={() => setPromptOpen(!promptOpen)}>{promptOpen ? "收起描述" : "查看描述"}</button>}
           <a className={styles.act} href={src} download={name} aria-label="下载" title="下载">
             <IconDownload size={14} />
           </a>
@@ -173,7 +191,7 @@ function ImageCard({ img, src, name, onOpen, onRegenerate }) {
             <button className={styles.act} aria-label="重新生成" title="重新生成" onClick={() => onRegenerate(REGENERATE_REQUEST)}><IconLoop size={14} /></button>
           )}
         </div>
-        {promptOpen && <p className={styles.prompt}>{img.prompt}</p>}
+        {promptOpen && !chart && <p className={styles.prompt}>{img.prompt}</p>}
       </figcaption>
     </figure>
   );

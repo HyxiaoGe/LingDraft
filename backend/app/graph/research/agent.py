@@ -107,6 +107,8 @@ class ChatContext:
     kb: Any = None
     # 用户给的位置（app.tools.location.Places，只在内存里，按人留一小段时间）：模型选了当前位置、这里没有时停下来要，要到了放在这里。命令行、评测没有：不停下来要
     places: Any = None
+    # 沙箱（app.tools.run_command.Sandbox）：跑命令。命令行、评测没有，配置里关了也没有：这个工具不出现
+    sandbox: Any = None
 
 
 def now() -> str:
@@ -136,6 +138,14 @@ def asking(state: dict) -> bool:
     """正在跑的这一轮能不能停下来问用户：Work 模式的轮，而且这段对话用户没说别再问。按现在的 state 看：这一轮里刚点了“别再问了”，
     这一轮剩下的几次调模型也不给问了。"""
     return working(state) and not state.get(history.ASKS_OFF)
+
+
+def can_run(state: dict, runtime) -> bool:
+    """正在跑的这一轮能不能跑命令（run_command）：工作任务里才给，要有沙箱，登录了的人才有（游客、没归谁的老对话没有）。
+    一段对话是不是工作任务、归谁都不变，所以整段对话里工具列表不变。"""
+    ctx = getattr(runtime, "context", None)
+    owner = getattr(ctx, "owner", None)
+    return working(state) and getattr(ctx, "sandbox", None) is not None and bool(owner) and not is_guest_sub(owner)
 
 
 def prompt_keys(state: dict) -> tuple[str, ...]:
@@ -724,7 +734,7 @@ class ModelSelect(AgentMiddleware):
     async def _for(self, request: ModelRequest, turns: list[Turn], use: ModelUse) -> ModelRequest:
         """这次调 use 这个模型的请求：别的模型答的轮次去掉思考；用户发的文件拼进那句话（见 app.tools.files）；
         用户发的图看得见的直接给、看不见的给说明，看图工具只给看不见的（见 app.tools.vision）。一轮里换了备用，按换上的重新组织。
-        问用户的工具只在 Work 模式的轮里给，用户说了别再问的对话也不给（见 asking）。
+        问用户的工具只在 Work 模式的轮里给，用户说了别再问的对话也不给（见 asking）。跑命令的工具只在工作任务里给，游客没有（见 can_run）。
         系统提示词里写着这一轮是哪个模型在答：这次调用里换了备用的，换成备用的名字（见 _renamed）。"""
         catalog = self.planner.catalog
         system = _renamed(request.system_message, model_shown(request.state, catalog), catalog.shown_name(use.ref))
@@ -734,6 +744,8 @@ class ModelSelect(AgentMiddleware):
         tools = [t for t in request.tools if not (sees and getattr(t, "name", None) == history.VIEW_TOOL)]
         if not asking(request.state):
             tools = [t for t in tools if getattr(t, "name", None) != history.ASK_TOOL]
+        if not can_run(request.state, request.runtime):
+            tools = [t for t in tools if getattr(t, "name", None) != history.RUN_TOOL]
         libs = request.state.get("kb_libraries") or []  # 资料库：第一轮时有文件才给，说明里列着那时的资料库和文件（见 app.tools.knowledge）
         tools = [for_libraries(t, libs) if getattr(t, "name", None) == KB_TOOL else t for t in tools if libs or getattr(t, "name", None) != KB_TOOL]
         return request.override(model=self.planner.chat_model(use), messages=msgs, tools=tools, system_message=system)
@@ -839,6 +851,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     from app.tools.knowledge import make_search_knowledge_tool
     from app.tools.location import LocationMiddleware
     from app.tools.maps_mcp import MapsMiddleware
+    from app.tools.run_command import make_run_command_tool
     from app.tools.vision import make_view_image_tool
     from app.tools.weather_mcp import WeatherMiddleware
     from app.tools.web_mcp import WebToolsMiddleware
@@ -848,8 +861,9 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     # 排行程（present_itinerary）也一直在，查过航班火车才用得上
     # 查资料库（search_knowledge）也一直在，这段对话第一轮时资料库里没有文件的调模型时去掉（见 ModelSelect._for）
     # 问用户（ask_user）只给主 agent：子 agent 的工具另外列（见 subagent），它不能问人
+    # 跑命令（run_command）也一直在、只给主 agent，不是工作任务、游客的调模型时去掉（见 can_run）
     tools = [*planner.tools(), make_task_tool(planner), make_recall_tool(), itinerary_tool(), make_view_image_tool(planner), make_read_file_tool(),
-             make_search_knowledge_tool(), *make_write_tools(), make_ask_tool()]
+             make_search_knowledge_tool(), *make_write_tools(), make_ask_tool(), make_run_command_tool()]
     return create_agent(
         model=planner.chat_model(planner.catalog.plan(None, None, planner.usable).agent),  # 只是占位：每次调模型由 ModelSelect 换上这一轮的
         tools=tools,

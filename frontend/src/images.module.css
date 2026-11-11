@@ -3,6 +3,9 @@
 /* 图片卡片（照 Fusion 的图片卡片）：按图的比例定宽，生成中是灰底上一道斜光扫过（busy），出图后淡入；下面一行是哪个模型画的和几个按钮 */
 .images { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; margin: 2px 0 4px; }
 .image { max-width: 100%; display: flex; flex-direction: column; gap: 6px; animation: rise .25s var(--ease); }
+/* 跑命令产出的图表：一张铺满正文栏，两张以上并排两列 */
+.charts { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; gap: 12px; margin: 2px 0 4px; }
+.charts[data-many] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .frame { position: relative; max-width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: var(--r); background: var(--side); }
 .frame.busy { background: var(--hover); }
 .frame.busy::before { content: ""; position: absolute; inset: 0; pointer-events: none; transform: translateX(-100%);

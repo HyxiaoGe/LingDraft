@@ -19,6 +19,7 @@ from app.graph.research.sources import (DOCS_TOOL, KB_TOOL, LIBRARY_TOOL, SUBAGE
 from app.graph.research.state import (
     AttachedFile,
     AttachedImage,
+    CommandRun,
     Forecast,
     GeneratedImage,
     Itinerary,
@@ -51,6 +52,7 @@ VIEW_TOOL = "view_image"  # 看图工具：看不见图的模型问图里有什�
 FILE_TOOL = "read_file"  # 读用户发的文件、模型写的文件：按段读、在文件里找（见 app.tools.files）
 CREATE_TOOL, EDIT_TOOL = "create_file", "edit_file"  # 模型写文件：新建、出新一版（见 app.tools.write_file）
 WRITE_TOOLS = (CREATE_TOOL, EDIT_TOOL)
+RUN_TOOL = "run_command"  # 在沙箱里跑命令（工作任务里才给，见 app.tools.run_command）
 ASK_TOOL = "ask_user"  # 模型做到一半停下来问用户，等回答了接着做（见 app.tools.ask_user）
 MAX_ASKS = 2  # 一轮最多问几次（2026-11-10 Sean 定）：再问的不问，让模型按自己的判断做
 MAX_ASK_OPTIONS = 4  # 一个问题最多给几个选项
@@ -60,7 +62,7 @@ ITINERARY_TOOL = "present_itinerary"  # 灵稿自己的排行程（见 app.tools
 TRAVEL_KINDS = {FLIGHT_TOOL: "flight", TRAIN_TOOL: "train"}
 STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", PLACE_TOOL: "place", ROUTE_TOOL: "route",
               **TRAVEL_KINDS, ITINERARY_TOOL: "itinerary", IMAGE_TOOL: "image", VIEW_TOOL: "view", FILE_TOOL: "file", CREATE_TOOL: "write", EDIT_TOOL: "write", SUBAGENT_TOOL: "task",
-              LIBRARY_TOOL: "library", DOCS_TOOL: "docs", KB_TOOL: "knowledge"}
+              LIBRARY_TOOL: "library", DOCS_TOOL: "docs", KB_TOOL: "knowledge", RUN_TOOL: "command"}
 BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
 # 没画成的原因在页面上的说法（照 Fusion 的图片卡片），没列的都说“图片生成失败”
 IMAGE_FAILURES = {
@@ -94,6 +96,15 @@ WRITE_FAILURES = {
     "unavailable": "文件暂时存不了",
 }
 WRITE_FAILED = "没写成"
+# 命令没跑成的原因在页面上的说法（run_command 结果 artifact 的 failure，见 app.tools.run_command）。跑了、命令自己失败的不在这里（见 state.CommandRun）
+RUN_FAILURES = {
+    "empty": "命令是空的，没跑",
+    "busy": "运行环境正忙，没跑成",
+    "unavailable": "运行环境暂时用不了",
+    "limit": "今天运行命令的次数用完了",
+    "reset": "工作目录满了，已经清空，没跑成",
+}
+RUN_FAILED = "没跑成"
 
 
 def text_of(m: BaseMessage) -> str:
@@ -283,6 +294,8 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         text = _text(art.get("name")) or _text(args.get("file_id"))
         q = _text(args.get("query"))
         extra = {"limits": [q] if q else [], "parts": "" if q else _text(args.get("parts"))}
+    elif kind == "command":
+        text, extra = _text(args.get("command")), {}
     elif kind == "read":
         text, extra = str(args.get("url", "")), {}
     else:  # 天气：选了当前位置的，地名那一项是 current_location
@@ -319,6 +332,11 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         ok = result.status != "error"
         art = result.artifact if isinstance(result.artifact, dict) else {}
         return ToolStep(id=cid, kind=kind, text=text, ok=ok, hits=int(art.get("found") or 0), message="" if ok else "没读成", **extra)
+    if kind == "command":  # 跑了的带着结果（命令自己失败、被杀掉的也是跑了，页面按退出码和原因说）；没跑成的说原因
+        if run := run_of(result):
+            return ToolStep(id=cid, kind=kind, text=text, ok=run.ok, run=run)
+        code = result.artifact.get("failure") if isinstance(result.artifact, dict) else None
+        return ToolStep(id=cid, kind=kind, text=text, ok=False, message=RUN_FAILURES.get(code, RUN_FAILED))
     data = parse(result)
     if kind == "weather":
         return _weather_step(cid, text, data, result)
@@ -748,6 +766,17 @@ def written_files(messages: list[BaseMessage]) -> dict[str, WrittenFile]:
     return out
 
 
+def run_of(m: BaseMessage | None) -> CommandRun | None:
+    """一条跑命令的结果里跑完的那次（退出码、输出、产出的文件）；没跑成是 None。"""
+    art = m.artifact if isinstance(m, ToolMessage) and m.name == RUN_TOOL else None
+    if not isinstance(art, dict) or not art.get("run"):
+        return None
+    try:
+        return CommandRun.model_validate(art["run"])
+    except ValidationError:
+        return None
+
+
 def broken_write(call: dict) -> ToolStep | None:
     """参数解析不了的写文件调用（多半是整篇内容太长、JSON 没闭合）：工具没执行，过程里照实写没写成，不让流出来的半截悄悄没了。
     别的工具参数坏了不列（模型多半改好再调一次）。"""
@@ -851,13 +880,16 @@ def waited_ms(messages: list[BaseMessage]) -> int:
 
 
 def owned_image_ids(messages: list[BaseMessage]) -> list[str]:
-    """这些消息里存在 image-service 里的图的编号：用户发的、画好的，按先后。删对话、重新回答时删掉它们；改图只认它们。"""
+    """这些消息里存在 image-service 里的图的编号：用户发的、画好的、跑命令产出的（图表），按先后。
+    删对话、重新回答时删掉它们；改图、看图只认它们。"""
     ids = []
     for m in messages:
         if att := attached_images(m):
             ids += [a.id for a in att]
         elif (img := image_of(m)) and img.stored:
             ids.append(img.id)
+        elif run := run_of(m):
+            ids += [f.id for f in run.files if f.kind == "image"]
     return ids
 
 

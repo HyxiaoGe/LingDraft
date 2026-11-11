@@ -7,6 +7,7 @@
 - tools_files.toml：用户发的文件怎么给模型看、读文件、查资料库、写文件和改文件。
 - tools_images.toml：看图、画图，用户发的图怎么告诉模型。
 - tools_ask.toml：问用户（Work 模式）。
+- tools_sandbox.toml：在沙箱里跑命令（工作任务里才有）。
 - compaction.toml：上下文压缩，和取回原文的 recall 工具。
 - background.toml：不在回答里出现的几件事：整理记忆、起标题、Auto 判断难易、推荐问题。
 

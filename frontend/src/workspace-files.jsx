@@ -10,6 +10,7 @@ import { useContext, useEffect, useRef, useState } from "react";
 import { downloadKnowledgeFile, downloadThreadFile, getKnowledgeFile, knowledgeFileBlob, knowledgeFileParts, threadFileBlob, threadFileParts } from "./api.js";
 import { CopyAll, FileCards, PanelShell, QuoteButton, fileVersions, turnCards, useSelected } from "./artifact.jsx";
 import { CodeBlock } from "./code-block.jsx";
+import { outputsOf } from "./commands.jsx";
 import { Badge as FileBadge, SentFile, fileFacts, partUnit } from "./files.jsx";
 import { IconDownload, IconFolder, Spinner } from "./icons.jsx";
 import { Viewer, drawn, imageAlt, imageFileName, imageUrl, imagesOf } from "./images.jsx";
@@ -21,8 +22,10 @@ import styles from "./workspace-files.module.css";
 
 const EXTENSIONS = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
 
-// 这段对话里的文件：written 是生成的文件（artifact.jsx 的卡片，每份最新一版；这一轮正在新建、还没写成的也在），sent 是上传的文件，
-// images 是图片（{img, name, alt}，name 是下载用的文件名：画的和对话里图片卡片上下载的一样，发的叫“发的图-N”）。count 是一共几个（顶栏上写的）。
+// 这段对话里的文件：written 是生成的文件（artifact.jsx 的卡片，每份最新一版；这一轮正在新建、还没写成的也在），made 是跑命令产出的文件
+// （不是图的，见 commands.jsx），sent 是上传的文件，
+// images 是图片（{img, name, alt}，name 是下载用的文件名：画的和对话里图片卡片上下载的一样，发的叫“发的图-N”，跑命令产出的图表用它自己的文件名）。
+// count 是一共几个（顶栏上写的）。
 // title：对话标题（画的图下载的文件名用）
 export function workspaceFiles(st, live, title) {
   const turns = st?.turns || [];
@@ -36,9 +39,10 @@ export function workspaceFiles(st, live, title) {
   });
   if (live) written.push(...turnCards(rows.at(-1)?.items || [], live.drafts, versions).filter((c) => c.busy && !c.file && !c.edit));
   const sent = [];
+  const made = [];
   const images = [];
   const seen = new Set();
-  let made = 0;
+  let drew = 0;
   let got = 0;
   for (const { t, items } of rows) {
     for (const f of t.files || []) {
@@ -55,11 +59,22 @@ export function workspaceFiles(st, live, title) {
     for (const s of imagesOf(items)) {
       if (!drawn(s) || seen.has(s.image.id)) continue;
       seen.add(s.image.id);
-      made += 1;
-      images.push({ img: s.image, name: imageFileName(title, made, s.image.mime_type), alt: imageAlt(s.image.prompt) });
+      drew += 1;
+      images.push({ img: s.image, name: imageFileName(title, drew, s.image.mime_type), alt: imageAlt(s.image.prompt) });
+    }
+    const out = outputsOf(items);
+    for (const f of out.files) {
+      if (seen.has(f.id)) continue;
+      seen.add(f.id);
+      made.push(f);
+    }
+    for (const f of out.charts) {
+      if (seen.has(f.id)) continue;
+      seen.add(f.id);
+      images.push({ img: f, name: f.name, alt: `图表：${f.name}` });
     }
   }
-  return { written, sent, images, count: written.length + sent.length + images.length };
+  return { written, made, sent, images, count: written.length + made.length + sent.length + images.length };
 }
 
 // 顶栏上的“文件 N”：这段对话还没有文件时不出现。on：右栏开着文件列表（再点一下收起）
@@ -77,7 +92,7 @@ export function FilesButton({ count, on, onClick }) {
 export function FileList({ tid, st, live, title, onNav, onClose, focus }) {
   const ws = workspaceFiles(st, live, title);
   const [viewing, setViewing] = useState(null); // 看大图：{it, back}（back 是点开它的那张缩略图，收起后光标回去）
-  const docs = ws.written.length + ws.sent.length;
+  const docs = ws.written.length + ws.made.length + ws.sent.length;
   const facts = [docs && `${docs} 个文件`, ws.images.length && `${ws.images.length} 张图`].filter(Boolean).join(" · ");
   const panel = { open: onNav, current: null };
   return (
@@ -85,9 +100,12 @@ export function FileList({ tid, st, live, title, onNav, onClose, focus }) {
       facts={facts && <span>{facts}</span>} onClose={onClose} focus={focus}>
       <div className={pstyles.body + " " + pstyles.padded}>
         {!ws.count && <p className={pstyles.note}>这段对话还没有文件。</p>}
-        {ws.written.length > 0 && (
+        {ws.written.length + ws.made.length > 0 && (
           <Section title="生成的文件">
-            <FileCards wide cards={ws.written} running={!!live} open={(t) => onNav({ ...t, back: true })} current={null} />
+            <div className={styles.stack}>
+              <FileCards wide cards={ws.written} running={!!live} open={(t) => onNav({ ...t, back: true })} current={null} />
+              {ws.made.map((f) => <SentFile key={f.id} f={f} tid={tid} panel={panel} back />)}
+            </div>
           </Section>
         )}
         {ws.sent.length > 0 && (

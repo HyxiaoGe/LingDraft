@@ -48,7 +48,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - `LINGDRAFT_FILES_DIR`：用户传的文件原件放哪，默认数据目录下的 `files/`；`FILE_PARSE_TIMEOUT_S`：解析一个文件最多多少秒，默认 60。
   - `LANGSMITH_TRACING=true` 加上 `LANGSMITH_API_KEY`：对话的过程传到 LangSmith（`app/tracing.py`），`LANGSMITH_PROJECT` 是传到哪个项目。每轮对话一条 trace，带着 thread_id；中间件那几层只留名字和用时。本机的 `.env` 只放 key、不开 tracing，给评测传实验用（见 `evals/README.md`）。
 - 外部服务：
-  - `AGENT_TOOLS_URL`、`AGENT_TOOLS_API_KEY`：agent-tools 网关，管搜索、读网页、查文档、天气、地图、航班火车、生图。都走网关的 MCP（`/search/mcp`、`/reader/mcp`、`/context7/mcp`、`/weather/mcp`、`/maps/mcp`、`/flyai/mcp`、`/image/v2/mcp`），起服务时连上取工具；没连上的先这样起来（搜索、读网页、画图、地图、航班火车是同名的占位工具，调了说服务暂时连不上；天气、查文档先不带），后台每分钟再试，连上一个换一个。画的图存在 image-service 里，按编号经网关取、删（`/image/v1/images/{id}`）。
+  - `AGENT_TOOLS_URL`、`AGENT_TOOLS_API_KEY`：agent-tools 网关，管搜索、读网页、查文档、天气、地图、航班火车、生图。都走网关的 MCP（`/search/mcp`、`/reader/mcp`、`/context7/mcp`、`/weather/mcp`、`/maps/mcp`、`/flyai/mcp`、`/image/v2/mcp`），起服务时连上取工具；没连上的先这样起来（搜索、读网页、画图、地图、航班火车是同名的占位工具，调了说服务暂时连不上；天气、查文档先不带），后台每分钟再试，连上一个换一个。画的图存在 image-service 里，按编号经网关取、删（`/image/v1/images/{id}`）。跑命令走网关的 `/sandbox/v1`（不是 MCP），`LINGDRAFT_SANDBOX=0` 关掉。
   - `FUSION_URL`：新对话页的“今日灵感”从 Fusion 取。
   - 资料库的向量、重排都调百炼，用 `DASHSCOPE_API_KEY`；重排的地址可以用 `KB_RERANK_URL` 换。
 
@@ -198,6 +198,15 @@ SSE 事件：
 - 输出被截断（`finish_reason=length`）的那次不存。用户发的文件只读。
 - 不收钱，只给主 agent。写的过程边流边推给页面（SSE 的 `draft`），写成了的在 `turns` 的工具步骤里。
 
+跑命令（沙箱，`app/tools/run_command.py`）：
+
+- `run_command` 在 agent-tools 的 sandbox-service 里跑一条 bash 命令（经网关 `/sandbox/v1/workspaces/{对话编号}`）：一段对话一个工作区，每条命令一个新的 gVisor 容器，不联网、装不了包，留得下来的只有工作目录里的文件。默认 60 秒、最长 120 秒。
+- 只在工作任务里给，游客没有（`agent.can_run`）；`LINGDRAFT_SANDBOX=0` 整个关掉。只给主 agent，不收钱，网关每天 500 次。
+- 文件表还是唯一的真相：每次跑之前把这段对话里用户发的文件的原件放进 `uploads/`（只读，超过 10 MB 的放不进去），跑完把 `outputs/` 里新增、改过的登记进文件表（一条命令最多 10 个）：PNG / JPEG / WebP（不超过 4 MB）传进 image-service，别的原件存数据卷、认得出类型的抽文字。工作目录里别的文件只是草稿，不登记。
+- 一轮里同一个路径只留最后一版（图画得不对重画的，前面那张删掉）；重新回答删掉那一轮的产出；删对话连工作区一起删。
+- 用户点了停止：这次执行取消，顺手让服务把正在跑的命令停掉。同一段对话的命令一条一条跑。
+- 给模型看的标准输出、报错各留 1 万字（开头结尾各一半）。结果在 `turns` 的工具步骤里（`kind` 是 `command`，`run` 里是退出码、用时、输出、产出的文件）。
+
 图片也登记在文件表里（`kind` 是 `image`，画的图记着哪一轮），页面取图按表认是不是这段对话的。表里没登记的老对话的图要补一次：`uv run python -m app.files.backfill_images` 只数，加 `--write` 才写；可以重跑，登记过的跳过；只看每段对话最后存下的状态。
 
 ## 资料库
@@ -328,7 +337,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
     - WeatherMiddleware、TravelMiddleware、MapsMiddleware、WebToolsMiddleware、DocsMiddleware、ImageMiddleware：各个工具的结果整理（见下面的 `app/tools/`）；
     - InvalidToolCallRetryMiddleware：无效工具调用让模型重发；
     - ModelCallCapMiddleware：一轮最多调 20 次模型，最后一次不许调工具；
-    - ModelSelect：每次调模型换上这一轮的模型，拼进用户发的文件和图，去掉用不上的工具（`view_image`、`search_knowledge`），出问题换备用；
+    - ModelSelect：每次调模型换上这一轮的模型，拼进用户发的文件和图，去掉用不上的工具（`view_image`、`search_knowledge`、`ask_user`、`run_command`），出问题换备用；
     - InterruptedRetryMiddleware：生成到一半断了再调一次。
   - `subagent.py`：`task` 工具和子 agent。每轮最多派 5 个，同一个对话同时最多跑 3 个；每个最多调 12 次模型。
   - `compaction.py`：上下文压缩和 `recall` 工具。
@@ -344,7 +353,8 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 - `app/files/`：文件表（`store.py`）、上传和解析（`service.py`、`parse.py`、子进程 `child.py`）、模型写的文件用到的切段和按片段改（`artifacts.py`）、补登记图片（`backfill_images.py`）。
 - `app/knowledge/`：资料库（`libraries.py`）、切块和分词（`text.py`）、块和查询（`store.py`）、向量和重排（`remote.py`）、建索引和查（`service.py`）。
 - `app/tools/`：
-  - `gateway.py`：agent-tools 网关客户端（传图、按编号取图、删图），和网关出错时的几种异常。
+  - `gateway.py`：agent-tools 网关客户端（传图、按编号取图、删图，沙箱的放文件、取文件、跑命令），和网关出错时的几种异常。
+  - `run_command.py`：在沙箱里跑命令，`run_command`。
   - `files.py`：用户发的文件怎么给模型，`read_file`。`write_file.py`：`create_file`、`edit_file`。`vision.py`：用户发的图怎么给模型，`view_image`。`knowledge.py`：`search_knowledge`。
   - `research_tools.py`：agent 自己的工具（`get_current_time`），描述在 `prompts/tools_web.toml`。
   - `mcp.py`：MCP 工具共用的部分：经网关连、取工具、认出网关的 401/403（让这一轮失败）和 429（今天的上限到了）；`request_meta` 让一次调用带上 MCP 请求的 `_meta`（不经过模型的东西，比如用户的位置）。
@@ -369,7 +379,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
     - `test_research_subagent.py`：子 agent。
     - `test_compaction.py`（含超长压了再发）、`test_memory.py`。
     - 工具：`test_images.py`（画图）、`test_weather.py`、`test_web_tools.py`（搜索、读页）、`test_maps.py`、`test_travel.py`（航班火车、行程）、`test_docs.py`（查文档）、`test_gateway_tools.py`（网关客户端）。
-    - `test_vision.py`：用户发的图怎么给模型、`view_image`。`test_files.py`：用户发的文件、`read_file`。`test_artifacts.py`：模型写的文件。`test_knowledge.py`：资料库。
+    - `test_vision.py`：用户发的图怎么给模型、`view_image`。`test_files.py`：用户发的文件、`read_file`。`test_artifacts.py`：模型写的文件。`test_run_command.py`：跑命令。`test_knowledge.py`：资料库。
     - `test_model_options.py`：选模型、思考开关。`test_auto_routing.py`：Auto、免费额度、换备用。
     - `test_costs.py`：成本记账。`test_quota.py`：额度。`test_identity.py`：身份、对话和记忆按人分、游客并进账号。
     - `test_run_records.py`：运行记录、没配库启动报错。
