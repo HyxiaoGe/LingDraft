@@ -49,6 +49,7 @@ uv run python -m app.evals.decisions --compare data/evals/<改之前>.json data/
 uv run python -m app.evals.decisions --decision 'ask-*' --samples 5 --model deepseek-flash   # 只跑一组（* 通配）；这一组只写了一句话，不用先录
 uv run python -m app.evals.decisions --decision 'ask-*' --samples 5 --model deepseek-flash --no-thinking   # 同上，关着深度思考（要和 --model 一起给）
 uv run python -m app.evals.decisions --decision 'direct-*' --samples 5 --no-sources   # 不该查的直接答没有；不给 --model 是 Auto
+uv run python -m app.evals.decisions --decision 'fresh-*' --samples 5 --no-sources --model deepseek-flash --no-thinking   # 该查的第一下去查没有
 uv run python -m app.evals.decisions --decision 'brief-*' --samples 5 --no-sources --model deepseek-v4-pro   # 派子 agent 时交代里有没有没查过的事实
 uv run python -m app.evals.decisions --decision 'title-*' --samples 5   # 起标题那一下起的是不是标题
 ```
@@ -66,7 +67,9 @@ uv run python -m app.evals.decisions --decision 'title-*' --samples 5   # 起标
   `work: true` 是这句话开的是工作任务（新建时选的“工作”）：只有工作任务里模型才有问用户的工具，所以 `ask-*` 这一组都带着。`ask-open-*` 不定对错（没写 `asked`），
   问了什么在结果的 `tool_calls` 里，人看。每次实际用的模型、思考开没开记在结果的 `model` 里。
   - **`direct-*`**：稳定的常识、手头就能做的活（翻译、写代码、写作），该直接答、不去查（`looked_up: false`、`replied: true`）。
-    “什么时候搜”那几段提示词要动之前、之后各跑一遍，和 `lookup-*` 的整段用例（该查的那一边）一起看。
+  - **`fresh-*`**：和 `direct-*` 是一对，靠现在的事实才答得了的（新闻、价格、比分、限行、天气），第一下就该去查（`looked_up: true`）；
+    两句天气多看 `searched: false`，有天气工具不该拿网页搜索顶。整段用例 `lookup-*` 也看该查的这一边，但要真搜真读；搜不搜第一下就定了，这里只花一次调模型。
+    动“什么时候搜”的提示词（系统提示词的 `[Choosing tools]`）之前、之后，`direct-*`、`fresh-*` 各跑一遍再 `--compare`。
   - **`brief: true`**（`brief-*`）：这一下派了子 agent 的，裁判再看写给子 agent 的交代里有没有把没查过的当前事实（版本号、现行政策、现在有哪些产品）当成已知写进去
     （检查项 `brief`，标准在 `app/evals/prompts.toml` 的 `[brief]`）。第一次调模型时主 agent 什么都还没查，所以只给只写一句话的用。
     没派的（先自己搜一下、直接答）不算错也不检查，汇总里 `brief 3/4` 的 4 是派了的次数；先搜后派的那种，交代写得怎么样这里看不到。

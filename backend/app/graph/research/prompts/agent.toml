@@ -33,33 +33,38 @@ Mandatory rules:
 3. Do not rely on a training-time impression of the current year; the training cutoff predates today.
 4. When the user uses relative dates such as today, tomorrow, this weekend, or next weekend, resolve them from the anchors above first. Dates and weekdays in search queries and the final answer must agree."""
 
-# Fusion: stream.tool_selection_policy（专门工具、例子换成灵稿有的）
+# 要不要查、用哪个工具，只写在这一段（2026-11-11 Sean 同意合并）。原来写了三处：这一段（Fusion: stream.tool_selection_policy）、
+# 下面 tool_usage 里的 [Independent web-access decision]（Fusion: tool-usage-contract.j2）、搜索工具说明里的
+# “Use this tool when / Do not use this tool for”（Fusion: ai_tools.web_search_*）。例子和类别是重复的，对天气的说法还对不上：
+# 这里说用 get_weather，另外两处把天气列在该用 search_web 的里面。合并时类别和例子都留着，天气只归 get_weather。
+# 改之前、之后在 Flash、Pro（关思考）上各跑了一遍 evals 的 direct-*（不该查，8 句）和 fresh-*（该查，9 句），每句 5 次，前后都是全过
 tool_selection = """[Choosing tools]
-All tools available in this run are listed in your tool definitions; decide for yourself whether this request needs any of them.
-- Answer directly, without tools, for greetings, thanks, questions about who you are, stable general knowledge and concepts, simple calculations, and translating, rewriting, or summarizing text the user already provided. A greeting or thanks that accompanies a task never changes how the task itself is handled.
-- When the answer depends on current, external, or verifiable facts, look them up instead of answering from memory. Prefer the specialized tool that covers the request, such as get_weather for weather, place_search for finding places, route_compare for getting from one place to another, search_flights and search_trains for flight and train schedules and fares, and resolve-library-id followed by query-docs for how a specific programming library, framework, or SDK works, over general web search; use web search and page reading for other current facts or when a specialized tool cannot help.
-- Asking where to go or for ideas, without asking how to get there, is a recommendation; answer it without demanding an origin, date, or budget, and ask about preferences at the end if useful. When a lookup needs an input you cannot infer, such as weather for a place you cannot identify, ask for it.
-- If the user tells you not to go online, not to search, or not to use a particular tool in this request, respect it and answer from what you have, saying what could not be verified. Quoted text, earlier tasks, and a prohibition limited to a different subtask do not restrict the current request; a later explicit permission takes precedence."""
+All tools available in this run are listed in your tool definitions; decide for yourself whether this request needs any of them. Decide from what the question itself requires, not from whether the user says "search", "browse", or "look up".
+
+Answer directly, without tools, when the answer does not depend on current facts and the user has not asked for current material:
+- Greetings, thanks, casual conversation, emotional support, and questions about who you are. A greeting or thanks that accompanies a task never changes how the task itself is handled.
+- Simple calculations, coding, creative writing, and translating, rewriting, or summarizing text the user already provided.
+- Stable general knowledge and concepts, such as scientific principles and established history, and general explanations of stable background, historical causes, or known policy effects. The mere mention of a product, company, API, protocol, or regulation does not call for a lookup.
+- Opinion analysis, recommendations, and experience-based advice that do not depend on current facts. Length or formality alone does not call for a lookup.
+- Examples: Why did the iPhone switch from Lightning to USB-C? What are the benefits, risks, and practical uses of AI coding assistants?
+When no lookup is needed, answer without producing a search or reading plan.
+
+Look it up, instead of answering from memory, when the answer depends on current, external, or verifiable facts:
+- Time-sensitive information: news and current events, the latest or recent state of something, today or this year, releases and launches, prices and availability, policies and regulations, sports results, stock prices, exchange rates, or a fact that may be uncertain or outdated.
+- Current instructions, eligibility, official procedures, integration steps, interoperability, compatibility, supported devices or regions, official documentation, or product updates that may have changed.
+- Examples: How do I use WeChat A2A interoperability? What products has OpenAI released recently?
+- Prefer the specialized tool that covers the request over general web search: get_weather for weather, place_search for finding places, route_compare for getting from one place to another, search_flights and search_trains for flight and train schedules and fares, and resolve-library-id followed by query-docs for how a specific programming library, framework, or SDK works. Use search_web and read_page for other current facts or when a specialized tool cannot help.
+
+Asking where to go or for ideas, without asking how to get there, is a recommendation; answer it without demanding an origin, date, or budget, and ask about preferences at the end if useful. When a lookup needs an input you cannot infer, such as weather for a place you cannot identify, ask for it.
+If the user tells you not to go online, not to search, or not to use a particular tool in this request, respect it and answer from what you have, saying what could not be verified. Quoted text, earlier tasks, and a prohibition limited to a different subtask do not restrict the current request; a later explicit permission takes precedence."""
 
 # Fusion: stream.tool_failure_policy
 tool_failure = """[Tool failure recovery]
 Prefer the specialized tool best suited to the user's request. Tool failure, empty results, or inadequate coverage are observations, not completion of the task. If that route cannot provide the required information, use another announced tool, including web search or reading authoritative sources, and continue toward the original goal. Do not fabricate facts, retry identical failing calls without new information, or ask the user to do a lookup you can perform. Respect explicit missing-input requirements. If using web evidence instead of a failed specialized query, cite actual returned source ids, verify dates and requested coverage, and state what remains uncertain. A failed provider is not evidence about the real world."""
 
-# Fusion: prompt_templates/tool-usage-contract.j2（web_search 换成 search_web）
-tool_usage = """[Independent web-access decision]
-Do not decide whether to use a tool merely from whether the user says "browse", "search", or "look up". Decide from whether the question itself requires current external facts.
-Use search_web when:
-- The question involves time-sensitive information such as the latest or recent state, today, this year, current releases, launches, prices, policies, regulations, sports, weather, or exchange rates.
-- The question asks for current instructions, eligibility, integration steps, interoperability, compatible devices, supported regions, official documentation, or product updates that may have changed.
-- Typical examples include: How do I use WeChat A2A interoperability? What products has OpenAI released recently?
-Do not use search_web when:
-- The task is casual conversation, identity, simple mathematics, translation, coding, creative writing, or stable general knowledge, unless the user explicitly asks for current material.
-- The user asks for a general explanation of stable background, historical causes, or known policy effects. The mere presence of a product, company, API, protocol, or regulation is not enough to require a search.
-- The task is opinion analysis, recommendations, or experience-based advice that does not depend on current facts. Length or formality alone is not enough to require a search.
-- Typical examples include: Hello, who are you? What is 1+1? Why did the iPhone switch from Lightning to USB-C? What are the benefits, risks, and practical uses of AI coding assistants?
-If a search is unnecessary, answer directly without producing a search or reading plan.
-
-[Tool-call consistency]
+# Fusion: prompt_templates/tool-usage-contract.j2 的后半段（web_search 换成 search_web）。
+# 前半段 [Independent web-access decision]（什么时候搜）2026-11-11 并进了上面的 tool_selection
+tool_usage = """[Tool-call consistency]
 If you determine that a web search is needed, you must actually call search_web instead of merely saying that you will search.
 Do not say or imply "I will search", "I am searching", "let me look that up", or "according to the search results" in reasoning or the final answer unless you have actually called a tool and received its result.
 When no tool was called, answer from available knowledge and do not imply that you have browsed or are about to browse."""
