@@ -1,7 +1,7 @@
 """查地点、比路线：agent-tools 的 MCP 工具 place_search、route_compare（经网关 /maps/mcp）。
 
 地名怎么定、重名怎么问、高德不行转腾讯、结果的样子、失败时给模型的说明都在 maps-service 里，Fusion 和灵稿共用
-（见 agent-tools 的 services/maps/README.md）。说明后面接上灵稿自己的一段（prompts.toml 的 tools.place_search.lingdraft 等）。
+（见 agent-tools 的 services/maps/README.md）。说明后面接上灵稿自己的一段（prompts/tools_travel.toml 的 tools.place_search.lingdraft 等）。
 这里只做灵稿自己的事：
 - MapsMiddleware：给模型的是服务的那段文字（已经去掉图片、链接、服务商），没查成的 status=error；
   整份结果留在 artifact 的 structured_content 里，history 把它换成地点卡、路线卡，再记一下查的时间。

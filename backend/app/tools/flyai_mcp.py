@@ -1,7 +1,7 @@
 """查航班、火车，排行程：agent-tools flyai 的 MCP 工具 search_flights、search_trains（经网关 /flyai/mcp），和灵稿自己的 present_itinerary。
 
 日期定不了先问、参数怎么规整、飞猪认不出的地名、只要高铁、结果的样子、失败时给模型的说明都在 flyai 服务里，Fusion 和灵稿共用
-（见 agent-tools 的 services/flyai/README.md）。说明后面接上灵稿自己的一段（prompts.toml 的 tools.search_flights.lingdraft 等）。
+（见 agent-tools 的 services/flyai/README.md）。说明后面接上灵稿自己的一段（prompts/tools_travel.toml 的 tools.search_flights.lingdraft 等）。
 这里只做灵稿自己的事（TravelMiddleware）：
 - 查航班、火车：给模型的是服务的那段文字（已经去掉预订链接），没查成的 status=error；整份结果留在 artifact 的
   structured_content 里，history 把它换成航班卡、火车卡。每轮最多查 MAX_TRAVEL_PER_TURN 次（照 Fusion fb07f632），

@@ -173,7 +173,7 @@ export function ItineraryCard({ card }) {
   );
 }
 
-// 几个方案时模型把推荐的排在第一个（见 prompts.toml 的 tools.present_itinerary），标题里常带着“推荐”，卡片上不再加标签
+// 几个方案时模型把推荐的排在第一个（见后端 prompts/tools_travel.toml 的 tools.present_itinerary），标题里常带着“推荐”，卡片上不再加标签
 function Plan({ p }) {
   const priced = p.legs.every((l) => l.price_yuan != null);
   const total = p.legs.reduce((sum, l) => sum + (l.price_yuan || 0), 0);

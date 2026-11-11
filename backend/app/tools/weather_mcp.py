@@ -2,7 +2,7 @@
 
 挑城市、按当地日期整理预报、逐小时摘要、缓存、给模型的说明都在 weather-service 里，Fusion 和灵稿共用
 （见 agent-tools 的 services/weather/README.md）。连接、取工具这些和搜索、读页共用（见 app.tools.mcp）。这里只做灵稿自己的事：
-- 工具说明后面接上灵稿的一段（天气卡片、查不到时用哪个工具，见 prompts.toml 的 [tools.get_weather]）。
+- 工具说明后面接上灵稿的一段（天气卡片、查不到时用哪个工具，见 prompts/tools_travel.toml 的 [tools.get_weather]）。
   连不上时先不带天气，运行器在后台接着试，连上了换上带天气的 agent（见 research_runner）。
 - WeatherMiddleware：结果变成一段文字给模型，没查成的 status=error；网关、服务出问题算“没查到”，
   密钥不对或网关没放行让这次运行失败，把配置问题亮出来（和搜索、生图一样）。

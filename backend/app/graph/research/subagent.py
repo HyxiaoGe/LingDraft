@@ -69,7 +69,7 @@ MAX_PER_TURN = 5  # 每轮最多派几个（2026-11-01 Sean 定 3～5 个）
 MAX_RUNNING = 3  # 同一个对话同时最多跑几个，多的排队
 MAX_MODEL_CALLS = 12  # 一个子 agent 最多调几次模型
 TOOL_BUDGET = {"search_web": config.SUBAGENT_SEARCH_BUDGET, "read_page": config.SUBAGENT_READ_BUDGET}  # 一个子 agent 每种工具最多调几次
-# 系统提示词按这个顺序拼（见 prompts.toml 的 [subagent]）；日期、工具失败、来源不可信这几段和主 agent 的一样
+# 系统提示词按这个顺序拼（见 prompts/subagent.toml 的 [subagent]）；日期、工具失败、来源不可信这几段和主 agent 的一样
 SYSTEM_PROMPT = ("subagent.identity", "agent.current_date", "subagent.process", "subagent.source_quality", "agent.tool_failure",
                  "agent.sources", "subagent.citations", "subagent.report", "subagent.language")
 

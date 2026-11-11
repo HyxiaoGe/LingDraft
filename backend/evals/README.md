@@ -18,7 +18,7 @@ uv run python -m app.evals.research --case fact --model deepseek-flash --no-thin
 结果写到 `data/evals/research-<时间>.json`（每轮的对话、步骤、用量、检查结果、引用核对），
 同名的 `.md` 是给人看的对话记录。终端打印每个用例的检查结果和合计用量。
 
-改了 `app/graph/research/prompts.toml` 或对话链路的代码，先挑相关的用例跑一遍再合并；
+改了 `app/graph/research/prompts/` 里的提示词或对话链路的代码，先挑相关的用例跑一遍再合并；
 Pro 贵，每次跑之前想清楚这次要回答什么问题，答到就停，不追求全过。只跑一遍时结果有波动，拿不准的用例加 `--repeat`。
 
 ## 录像回放、重新打分、汇总

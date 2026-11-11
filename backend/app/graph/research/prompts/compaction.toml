@@ -1,0 +1,56 @@
+# 上下文压缩：对话太长时换成的说明和短版、让快模型写短版的提示词，和模型取回原文用的 recall 工具。
+
+# ---- 上下文压缩（见 compaction）：对话太长时，发给主 agent 的那份里之前几轮换成说明或短版。灵稿自己的，Fusion 没有 ----
+# 换成说明、短版的那几轮，每次调模型拼出来的都一样，前缀缓存接得上；所以这里不能有时间、随机的东西。
+# 短版的写法参考了 LangChain SummarizationMiddleware 的 DEFAULT_SUMMARY_PROMPT（不重复已经做过的事、记下决定和没做完的），
+# 改成一轮一份、只写模型那边（用户的话照原样留着，2026-11-03 Sean 定）。
+
+[compact]
+# 第一层：之前几轮的搜索、读页、取回的结果换成这几句
+search_cleared = """[Removed to save space] This search result was removed from your context. It returned the sources below; to see one again, call recall with its source_id.
+{{ sources }}"""
+docs_cleared = """[Removed to save space] This documentation result was removed from your context. Its excerpts came from the sources below; to see one again, call recall with its source_id.
+{{ sources }}"""
+read_cleared = """[Removed to save space] The page text of source {{ id }} ({{ title }}, {{ url }}) was removed from your context. To read it again, call recall with source_id {{ id }}."""
+recall_cleared = """[Removed to save space] This recalled content was removed from your context again. If you need it, call recall again with the same arguments."""
+file_cleared = """[Removed to save space] This text from a file the user attached was removed from your context. If you need it, call read_file again."""
+# 之前几轮写文件的参数（整篇内容、改的片段）换成这句；结果里有 file_id，留着
+write_cleared = """[Omitted to save space. The result of this call gives the file_id; read the file with read_file if you need its content.]"""
+# 第二层：一轮里模型那边整个换成短版（作为这一轮的模型消息），特别长的用户消息换成短的
+summary = """[Short version of my side of turn {{ turn }}: the full turn was removed from context to save space. To see my full answer, call recall with turn {{ turn }}.]
+{{ summary }}"""
+user_shortened = """[This user message was shortened to save space. To see the full text, call recall with turn {{ turn }}.]
+{{ text }}"""
+# 让快模型写短版
+turn = """Below is one earlier turn of a conversation between a user and you, the AI assistant in LingDraft: the user's messages, your replies, your tool calls, and their results (long results are cut). The conversation has grown too long, so your side of this turn will be replaced in your context by the short version you write now. The user's messages stay as they are, so do not repeat them.
+
+Write the short version as a note to yourself:
+- Start with one sentence on what you did in this turn, such as what you searched for or which pages you read.
+- Keep every conclusion, recommendation, and key fact of your final answer: names, numbers, dates, prices, versions, and anything the user may refer back to. After each fact taken from a source, keep its source id in square brackets exactly as written, such as [s3fa9c1].
+- Keep what could not be found or verified, what you asked the user, and anything you promised or left open.
+- Leave out your reasoning, the raw search results, and page text that the final answer did not use.
+Write in the language of your final answer, in plain sentences or a short list, without headings. Keep it under 300 words, or under 600 characters if you write in Chinese, Japanese, or Korean. Return only the short version.
+
+<turn>
+{{ turn }}
+</turn>"""
+user_message = """The user message inside the <message> tags is very long, and the conversation has grown too long, so it will be replaced in the assistant's context by the shortened version you write now. Keep the user's request itself word for word. Shorten the rest, such as pasted text or data, to what the request depends on: names, numbers, dates, constraints, and the main points. Write in the language of the message. Return only the shortened message.
+
+<message>
+{{ message }}
+</message>"""
+
+# 灵稿自己的（Fusion 没有上下文压缩）：对话太长时，之前几轮的搜索结果、正文被换成一行说明，模型要原文时用它取回（见 compaction）。
+# 页面上不显示这一步（2026-11-03 Sean 定）
+[tools.recall]
+description = """Get back material that was removed from your context to save space. When a conversation grows long, the results of earlier searches, page reads, and documentation lookups are replaced with short notes, and earlier turns may be replaced with a short version; each note says what was removed and how to get it back. Call this only when you need the exact content behind such a note, for example to quote a page or check a detail the note does not keep. Do not call it for anything still in your context.
+Give exactly one of:
+- source_id: that source as first retrieved: the page text if the page was read, otherwise its documentation excerpts if it came from query-docs, otherwise its search snippet.
+- turn: the user's original message and your full final answer in that turn."""
+source_id = "Source id given in a note, such as s3fa9c1."
+turn = "Turn number given in a note."
+# 工具结果：参数不对、找不到时模型看的
+bad_arguments = "Give exactly one of source_id or turn."
+no_source = "No search result, page, or documentation excerpt with source id {{ source_id }} exists in this conversation. Use only ids given in tool results or notes."
+no_turn = "This conversation has no turn {{ turn }}; it has {{ count }} turns so far."
+blocked_turn = "Turn {{ turn }} was stopped by the model service's content review and is not available."

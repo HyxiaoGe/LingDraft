@@ -2,7 +2,7 @@
 
 agent-tools 的 context7 服务是 Context7 官方 MCP 的代理：注入密钥、只放这两个工具、被限流时标 rate_limited
 （见 agent-tools 的 services/context7/README.md）。工具的说明、参数都是 Context7 的，后面接上灵稿自己的一段
-（prompts.toml 的 tools.resolve-library-id.lingdraft 等）。连接、取工具这些和天气、搜索共用（见 app.tools.mcp）。
+（prompts/tools_web.toml 的 tools.resolve-library-id.lingdraft 等）。连接、取工具这些和天气、搜索共用（见 app.tools.mcp）。
 额度：Context7 免费版每月 1000 次（每月初重置，见 Context7 文档 docs/howto/usage 的 Free Plan 那句；和 Fusion 共用一个密钥，
 只算这两个工具的调用），
 网关给灵稿设了每天 30 次（gateway/.env 的 PRODUCTS）。这里只做灵稿自己的事：

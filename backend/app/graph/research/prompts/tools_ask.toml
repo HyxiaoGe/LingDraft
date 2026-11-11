@@ -1,0 +1,21 @@
+# 问用户（人介入）：只在 Work 模式的轮里给模型。什么时候问写在 agent.toml 的 [agent].work，两处一个口径，改的时候一起改。
+
+[tools.ask_user]
+# 模型问用户（app.tools.ask_user，人介入，2026-11-10 Sean 定，见 docs/Work模式调研.md）：这一轮停下来，页面出一张问题卡，用户回答或跳过以后接着做。
+# 灵稿自己写的。只在 Work 模式的轮里给模型（什么时候问写在 agent.toml 的 [agent].work，这里和它一个口径）；原话里有的不拿回去确认、一轮最多问 max_asks 次、
+# 跳过了按自己的判断做并说明，都是 Sean 定的
+description = """Pause this turn and ask the user one question, then continue with their answer. The question is shown as a card with the options you give; the user picks one, writes their own answer, or skips. Nothing more happens until they respond.
+Use it at the start of a task, before the research or writing that depends on the answer, to settle what only the user can decide and what would change the result: what it is for, who it is for, or a preference or constraint that shapes it.
+Do not ask what the user already said or what you can find out with your tools, and do not ask merely to confirm that you understood or to get permission to proceed. A question that just closes your answer, such as offering to go deeper, belongs in your reply, not here.
+One question per call, and at most {{ max_asks }} questions in one turn. If the user skips, continue on your own best assumption and state that assumption in your answer."""
+question = "The question, in the language of the user's request: one short sentence asking one thing, answerable by picking an option."
+options = "Two to four short answers to pick from, in the language of the user's request. Make them mutually exclusive, each a real direction you would act on. Do not add options such as 'other' or 'skip': the card already lets the user write their own answer or skip. Leave empty only when the answer is free text, such as a name or a number."
+# 工具结果：用户回答了、跳过了；这一轮问的次数到了、问题是空的、这一轮不是 Work 模式（这三种没停下来问）
+chat = """Asking with a card is not available for this request, so the user was not asked. If you need this from the user, ask in your reply; otherwise continue on your own best judgment."""
+answered = """The user answered:
+{{ answer }}
+
+Follow this answer for the rest of the turn and continue the task. Do not ask the same question again."""
+skipped = """The user skipped this question without answering. Do not ask it again. Continue on your own best assumption, and state that assumption briefly in your answer so the user can correct it."""
+limit = """This question was not shown to the user: at most {{ max_asks }} questions can be asked in one turn. Continue on your own best assumption, and state that assumption briefly in your answer so the user can correct it."""
+empty = "Nothing was asked because the question is empty. Give the question you need answered."

@@ -68,7 +68,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - `/{id}/retry`：失败的线程接着跑；没失败的返回 409。
   - `/{id}/regenerate`：最后一轮重新回答，可以带 `{"thinking"}`（没带的照原来那句话的）。
   - 对话和工作任务新建时定（`POST` 带 `"work": true` 是工作任务），整段不变：工作任务不能变回对话，对话也不能中途变成工作任务。
-    工作任务的每一轮系统提示词多一段（`prompts.toml` 的 `[agent].work`：计划、调研、写报告这类任务先问用户再动手），并且给模型问用户的工具
+    工作任务的每一轮系统提示词多一段（`prompts/agent.toml` 的 `[agent].work`：计划、调研、写报告这类任务先问用户再动手），并且给模型问用户的工具
     `ask_user`；对话的轮两样都没有，硬调了工具也不停下来。接着说、排队、改写、重新回答的请求里带了 `work` 也不看。对话的状态、线程列表的每一行、
     每轮的记录里都有 `work`。2026-11-11 以前每句话都能换，那时的对话里有过 Work 的轮的算工作任务（`history.work_mode`）。
   - `/{id}/answer`：回答模型问的问题，`{"id", "text"}`；`{"id", "skip": true}` 是跳过；`{"id", "mute": true}` 是问题卡上的“别再问了”：这个问题当跳过
@@ -259,7 +259,7 @@ uv run python -m app.cli --scenario research state <thread_id>
 uv run python -m app.cli --scenario research dream          # 马上整理一次长期记忆
 ```
 
-对话给模型看的文字（系统提示词、工具描述、系统注入的说明）都在 `app/graph/research/prompts.toml`，改文字不用动代码，改完重启后端。改了提示词或对话链路，先跑一遍回放评测（`uv run python -m app.evals.research`，用真实模型，要花钱，见 `evals/README.md`）。
+对话给模型看的文字（系统提示词、工具描述、系统注入的说明）都在 `app/graph/research/prompts/` 的几份 toml 里（按主 agent、子 agent、各类工具、压缩、后台分开，哪份放什么见那个目录的 `__init__.py`），改文字不用动代码，改完重启后端。改了提示词或对话链路，先跑一遍回放评测（`uv run python -m app.evals.research`，用真实模型，要花钱，见 `evals/README.md`）。
 
 ## 存储
 
@@ -337,7 +337,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `sources.py`：从搜索、读页、查文档、查资料库的结果里收集来源，同一网页只给一个 id。
   - `state.py`。
   - `graph.py`：存储（共用的连接池、线程列表）。
-  - `prompts.toml`：给模型看的文字；`prompts.py` 只负责渲染（读 toml 的在 `app/prompting.py`）。
+  - `prompts/`：给模型看的文字，按块分成几份 toml（`agent`、`subagent`、`tools_*`、`compaction`、`background`）；`__init__.py` 只负责渲染（读 toml、几份合成一份的在 `app/prompting.py`）。
 - `app/research_llm.py` `ResearchPlanner` 协议：`LiveResearchPlanner`（各家模型按 `models.toml` 建，内部用途走 `RoleModel`，先走免费额度；真实网关）/ `FakeResearchPlanner`（脚本化的假工具模型 + 进程内的假搜索、读页、天气、地图、航班火车、生图服务，假生图服务也管按编号取图、删图）
 - `app/model_catalog.py` + `app/models.toml`：模型选项、内部用途、Auto、免费额度、价格。`app/free_used_up.py`：用完的免费额度记进库。
 - `app/identity.py` 身份；`app/quota.py` 额度；`app/costs.py` 成本记账；`app/tracing.py` LangSmith；`app/clock.py` 模型看得到的当前时间（评测回放时挪到录像的那时）。
@@ -346,7 +346,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 - `app/tools/`：
   - `gateway.py`：agent-tools 网关客户端（传图、按编号取图、删图），和网关出错时的几种异常。
   - `files.py`：用户发的文件怎么给模型，`read_file`。`write_file.py`：`create_file`、`edit_file`。`vision.py`：用户发的图怎么给模型，`view_image`。`knowledge.py`：`search_knowledge`。
-  - `research_tools.py`：agent 自己的工具（`get_current_time`），描述在 `prompts.toml` 的 `[tools.*]`。
+  - `research_tools.py`：agent 自己的工具（`get_current_time`），描述在 `prompts/tools_web.toml`。
   - `mcp.py`：MCP 工具共用的部分：经网关连、取工具、认出网关的 401/403（让这一轮失败）和 429（今天的上限到了）；`request_meta` 让一次调用带上 MCP 请求的 `_meta`（不经过模型的东西，比如用户的位置）。
   - `location.py`：用户的当前位置。模型查天气、查地点、比路线时选了 `current_location` 的，中间件先停下来跟页面要位置（和问用户同一套 `interrupt`，页面出位置卡，浏览器里已经允许过定位的直接取）；坐标放在这次 MCP 调用的 `_meta` 里交给服务，只在内存里按人留 10 分钟（这段时间里再用到的不再要），不进模型的参数、检查点和日志。没给的不调工具，告诉模型改用用户说的或记忆里的地方，或者问用户。
   - `web_mcp.py`：搜索、读网页。`search_web`、`read_page` 是 agent-tools 的 MCP 工具（怎么搜、怎么读、结果的样子、失败时给模型的话都在 search-service、reader-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明（什么时候搜、搜够没有、来源 id），中间件给结果带上来源 id、把失败整理成页面上的中文，没连上时用同名的占位工具。

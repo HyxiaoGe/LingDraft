@@ -1,7 +1,7 @@
 """搜索、读网页：agent-tools 的 MCP 工具 search_web（经网关 /search/mcp）和 read_page（/reader/mcp）。
 
 怎么搜、怎么读、结果的样子、失败时给模型的说明都在服务里，Fusion 和灵稿共用（见 agent-tools 的 services/search、
-services/reader 的 README）。说明后面接上灵稿自己的一段（prompts.toml 的 tools.search_web.lingdraft 等）。这里只做灵稿自己的事：
+services/reader 的 README）。说明后面接上灵稿自己的一段（prompts/tools_web.toml 的 tools.search_web.lingdraft 等）。这里只做灵稿自己的事：
 - WebToolsMiddleware：每条搜索结果、读到的那一页带上来源 id（见 graph.research.sources），模型在正文里用它引用；
   服务给的 meta（哪家搜到、读到的）不给模型，记在结果的 artifact 里。
 - 没做成的：给模型的是服务的那句英文，status=error，错误码在 artifact 里（页面上换成中文，见 history.SEARCH_FAILURES）。
