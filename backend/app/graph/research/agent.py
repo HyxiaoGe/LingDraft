@@ -69,8 +69,10 @@ LOOP_ENTRY = "TurnMiddleware.before_model"  # 每次调模型从这个节点开�
 CHINA_TZ = timezone(timedelta(hours=8))
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 # 系统提示词按这个顺序拼（见 prompts/agent.toml 的 [agent]）
+# model 是这一轮哪个模型在答（照实告诉它，2026-11-11 Sean 定；见 model_shown），没给名字时不拼；
 # memory 是长期记忆，没有记忆时不拼（见 memory.py）
-SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "files", "memory", "language")
+SYSTEM_SECTIONS = ("identity", "model", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "files", "memory", "language")
+MODEL_SECTION = "agent.model"
 MEMORY_SECTION = "agent.memory"
 AGENT_PROMPT = tuple(f"agent.{k}" for k in SYSTEM_SECTIONS)
 # Work 的一轮（这段对话是工作任务，见 history.WORK）：多一段 work（任务开始前先问用户），排在记忆前面；问用户的工具也只在这种轮里给
@@ -157,11 +159,29 @@ def _day(d: date) -> str:
     return f"{d.isoformat()} ({WEEKDAYS[d.weekday()]})"
 
 
-def system_prompt(at: datetime, keys: Sequence[str] = AGENT_PROMPT, memory: str = "", **extra: Any) -> str:
+def system_prompt(at: datetime, keys: Sequence[str] = AGENT_PROMPT, memory: str = "", model_name: str = "", **extra: Any) -> str:
     """照 Fusion：日期按北京时间，带星期和明天、这周末、下周末的日期，模型不用自己推星期几。keys 是按顺序拼的各段（子 agent 用另一套），
-    memory 是长期记忆（MemoryBook.prompt_text，空的就没有这一段），extra 是这些段里另外要填的变量。"""
+    memory 是长期记忆（MemoryBook.prompt_text，空的就没有这一段），model_name 是这一轮哪个模型在答（见 model_shown，空的就没有这一段），
+    extra 是这些段里另外要填的变量。"""
     dates = date_anchors(at.astimezone(CHINA_TZ).date())
-    return "\n\n".join(prompts.render(k, **dates, memory=memory, max_asks=history.MAX_ASKS, **extra) for k in keys if k != MEMORY_SECTION or memory)
+    skip = {k for k, given in ((MEMORY_SECTION, memory), (MODEL_SECTION, model_name)) if not given}
+    return "\n\n".join(prompts.render(k, **dates, memory=memory, model_name=model_name, max_asks=history.MAX_ASKS, **extra)
+                         for k in keys if k not in skip)
+
+
+def model_shown(state: dict, catalog) -> str:
+    """这一轮是哪个模型在答：页面上这一轮回答开头显示的那个名字（Catalog.shown_name）。写进系统提示词，问到是什么模型时照实说。"""
+    turns = state.get("turns") or []
+    return catalog.shown_name(((turns[-1].model if turns else None) or LEGACY_USE).ref)
+
+
+def _renamed(system: SystemMessage | None, was: str, now: str) -> SystemMessage | None:
+    """系统提示词里“这一轮是哪个模型在答”那一段换成 now：拼的时候按这一轮记下的模型写的（TurnMiddleware），
+    这一次调用里换了备用（ModelSelect），发给备用的那份要写备用自己。名字一样的（免费额度换直连）不用动。"""
+    if was == now or system is None or not isinstance(system.content, str):
+        return system
+    old = prompts.render(MODEL_SECTION, model_name=was)
+    return SystemMessage(system.content.replace(old, prompts.render(MODEL_SECTION, model_name=now), 1))
 
 
 def date_anchors(today: date) -> dict[str, str]:
@@ -270,7 +290,8 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
             job = _TitleJob(self.planner, history.requests(request.state["messages"])[0], known=known)
         try:
             emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
-            prompt = system_prompt(turn_started(request), prompt_keys(request.state), memory=await memory_text(self.memory, request.runtime))
+            prompt = system_prompt(turn_started(request), prompt_keys(request.state), memory=await memory_text(self.memory, request.runtime),
+                                   model_name=model_shown(request.state, self.planner.catalog))
             # 之前几轮点停止时只想了没写的半截不发（见 history.is_stopped_thought）
             resp = await handler(request.override(system_message=SystemMessage(prompt), messages=history.without_stopped_thoughts(request.messages)))
             if job is None:
@@ -703,8 +724,11 @@ class ModelSelect(AgentMiddleware):
     async def _for(self, request: ModelRequest, turns: list[Turn], use: ModelUse) -> ModelRequest:
         """这次调 use 这个模型的请求：别的模型答的轮次去掉思考；用户发的文件拼进那句话（见 app.tools.files）；
         用户发的图看得见的直接给、看不见的给说明，看图工具只给看不见的（见 app.tools.vision）。一轮里换了备用，按换上的重新组织。
-        问用户的工具只在 Work 模式的轮里给，用户说了别再问的对话也不给（见 asking）。"""
-        sees = self.planner.catalog.sees(use.ref)
+        问用户的工具只在 Work 模式的轮里给，用户说了别再问的对话也不给（见 asking）。
+        系统提示词里写着这一轮是哪个模型在答：这次调用里换了备用的，换成备用的名字（见 _renamed）。"""
+        catalog = self.planner.catalog
+        system = _renamed(request.system_message, model_shown(request.state, catalog), catalog.shown_name(use.ref))
+        sees = catalog.sees(use.ref)
         msgs = await with_files(_others_without_thinking(request.messages, turns, use), getattr(request.runtime.context, "files", None))
         msgs = await with_images(msgs, sees, self.planner.image_uri)
         tools = [t for t in request.tools if not (sees and getattr(t, "name", None) == history.VIEW_TOOL)]
@@ -712,7 +736,7 @@ class ModelSelect(AgentMiddleware):
             tools = [t for t in tools if getattr(t, "name", None) != history.ASK_TOOL]
         libs = request.state.get("kb_libraries") or []  # 资料库：第一轮时有文件才给，说明里列着那时的资料库和文件（见 app.tools.knowledge）
         tools = [for_libraries(t, libs) if getattr(t, "name", None) == KB_TOOL else t for t in tools if libs or getattr(t, "name", None) != KB_TOOL]
-        return request.override(model=self.planner.chat_model(use), messages=msgs, tools=tools)
+        return request.override(model=self.planner.chat_model(use), messages=msgs, tools=tools, system_message=system)
 
     async def _sub_call(self, request: ModelRequest, handler):
         """子 agent：走的是免费额度、这次没成的，换直连的同一个模型，这个子任务剩下的都用直连（写进它的 state）；别的照常失败

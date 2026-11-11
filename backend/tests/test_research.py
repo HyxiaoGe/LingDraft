@@ -321,6 +321,18 @@ def test_system_prompt_dates_are_beijing_with_weekday_anchors():
     assert "[Current date] 2026-11-01 (Sunday)" in sun and "This Saturday is 2026-10-31 (Saturday)" in sun
 
 
+def test_system_prompt_says_which_model_answers_this_turn():
+    """这一轮是哪个模型在答照实写进系统提示词（2026-11-11 Sean 定），排在身份后面；没给名字就没有这一段。
+    原来“不要自称 Claude、ChatGPT、Gemini、DeepSeek”那句不再有：页面上每轮都写着模型，问到不让说对不上。"""
+    at = datetime(2026, 11, 11, 3, 0, tzinfo=UTC)
+    named = system_prompt(at, model_name="DeepSeek V4 Pro")
+    assert "The model answering this turn is DeepSeek V4 Pro; the page shows this name above your reply." in named
+    assert named.index("[LingDraft identity]") < named.index("[Model for this turn]") < named.index("[Current date]")
+    bare = system_prompt(at)
+    assert "[LingDraft identity]" in bare and "[Model for this turn]" not in bare
+    assert "Do not claim that you are" not in named and "identity consistency" not in named
+
+
 def test_dates_follow_when_this_turn_started():
     """取的是最新这句话那一轮的开始时间，不是上一轮的，也不是现在。"""
     from types import SimpleNamespace

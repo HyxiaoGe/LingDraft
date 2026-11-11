@@ -334,10 +334,17 @@ class Catalog(BaseModel):
         self._on_used_up = on_used_up
         return marked
 
+    def shown_name(self, ref: str) -> str:
+        """这个模型在页面上每轮回答开头显示的名字：选项的名字；免费额度的是它自己写的，没写的用 same_as 那个选项的。
+        系统提示词里告诉模型这一轮是谁在答，用的也是它（见 agent.model_shown），两边对得上。
+        哪个都不是的（选项从 models.toml 删了以后重试的老对话）给模型的 id，照实说。"""
+        if f := next((f for f in self.free if f.model == ref), None):
+            return f.name or self.shown_name(f.same_as)
+        return next((o.name for o in self.options if o.model == ref and o.id != AUTO), ref.partition(":")[2] or ref)
+
     def names(self) -> dict[str, dict[str, str]]:
         """选项以外、页面上可能出现的模型（免费额度的）：名字和图标（厂商前缀）。"""
-        by_model = {o.model: o for o in self.options if o.id != AUTO}
-        return {f.model: {"name": f.name or by_model[f.same_as].name, "icon": f.icon or (f.same_as or f.model).partition(":")[0]} for f in self.free}
+        return {f.model: {"name": self.shown_name(f.model), "icon": f.icon or (f.same_as or f.model).partition(":")[0]} for f in self.free}
 
     def rate(self, ref: str, at: datetime, input_tokens: int) -> tuple[str, Rate] | None:
         """这个模型在 at 这一刻、输入这么多 token 的一次调用按哪组单价：返回（哪一种, 单价），没填价格的是 None。

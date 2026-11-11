@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from datetime import datetime, timedelta
 
 import httpx2
 import openai
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGenerationChunk
 from pydantic import ValidationError
 
@@ -470,6 +471,65 @@ def test_models_endpoint_names_the_free_models():
     http, _ = _client(_planner())
     names = http.get("/api/models").json()["names"]
     assert names[K3] == {"name": "Kimi K3", "icon": "moonshot"} and names[V41]["icon"] == "deepseek"
+
+
+# ---- 这一轮是哪个模型在答，照实告诉模型（2026-11-11 Sean 定） ----
+
+
+def _told(model) -> list[str]:
+    """每次调模型，系统提示词里写的这一轮是哪个模型在答（model 是 test_model_options.Seeing）。"""
+    systems = [next(m.content for m in msgs if isinstance(m, SystemMessage)) for msgs in model.seen]
+    return [re.search(r"The model answering this turn is (.+?); the page shows", s).group(1) for s in systems]
+
+
+def test_shown_name_is_what_the_page_shows():
+    """选项的名字；免费额度的是它自己写的，没写的用 same_as 那个选项的（和 /api/models 给页面的一样）；哪个都不是的给模型的 id。"""
+    c = _catalog()
+    assert [c.shown_name(r) for r in (PRO, FLASH, DOUBAO, K3, K31)] == ["DeepSeek V4 Pro", "DeepSeek Flash", "豆包 Seed 2.1 Pro", "Kimi K3", "Kimi K3.1 Pro"]
+    assert all(c.shown_name(ref) == v["name"] for ref, v in c.names().items())
+    assert c.shown_name("gone:some-model-0101") == "some-model-0101"
+    assert "自动" not in {c.shown_name(o.model) for o in c.options}  # Auto 不是模型：按它这一轮选到的那个说
+
+
+def test_the_model_is_told_which_model_answers_this_turn():
+    """系统提示词里写的和页面上这一轮回答开头显示的是同一个：Auto 选到谁写谁；选了有免费额度的，走的是别家托管的同一个模型，
+    名字还是选的那个选项的。"""
+    from tests.test_model_options import Seeing
+
+    p = _planner()
+    p._model = Seeing()
+    c = Chat(planner=p)
+    v = c.say(f"直接答：{FAKE_SIMPLE}")
+    v = c.say("直接答：接着说")
+    assert _models(v) == [K3, K3] and _told(p._model) == ["Kimi K3", "Kimi K3"]
+    p = _planner()
+    p._model = Seeing()
+    c = Chat(planner=p)
+    c.r.accept(c.tid, "直接答：你好", owner=c.owner, option=KIMI)
+    assert _models(c.run()) == [K31] and _told(p._model) == ["Kimi K3.1 Pro"]
+
+
+def test_a_backup_model_is_told_its_own_name():
+    """这一次调用里换了备用：发给备用的那份写的是备用自己，不提出问题的那个；这一轮后面、之后几轮也是备用。
+    免费额度换直连是同一个模型，名字不变。"""
+    from tests.test_model_options import Seeing
+
+    p = _planner()
+    p._model = Seeing()
+    p.broken[K3] = FailingModel(error=ModelUnavailable("模型服务暂时不可用（服务端出错），稍后再试"))
+    c = Chat(planner=p)
+    v = c.say(f"直接答：{FAKE_SIMPLE}")
+    assert _models(v) == [FLASH] and _told(p._model) == ["DeepSeek Flash"]
+    assert not [m for m in p._model.seen[0] if isinstance(m, SystemMessage) and "Kimi K3" in m.content]
+    p.broken.clear()
+    c.say("直接答：接着说")
+    assert _told(p._model) == ["DeepSeek Flash", "DeepSeek Flash"]
+    p = _planner()
+    p._model = Seeing()
+    p.broken[K31] = FailingModel(error=ModelUnavailable("模型服务暂时不可用（服务端出错），稍后再试"))
+    c = Chat(planner=p)
+    c.r.accept(c.tid, "直接答：你好", owner=c.owner, option=KIMI)
+    assert _models(c.run()) == [KIMI_DIRECT] and _told(p._model) == ["Kimi K3.1 Pro"]
 
 
 # ---- 用户选的模型先走同一个模型的免费额度（[[free]] 的 same_as） ----
