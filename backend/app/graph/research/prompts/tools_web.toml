@@ -2,22 +2,14 @@
 # description 是工具说明，lingdraft 是接在 agent-tools 给的说明后面的灵稿自己的话，和参数同名的键是参数说明，其余是工具结果里给模型看的话。
 
 # 搜索、读页的说明在 agent-tools 的 search-service、reader-service 里（Fusion 和灵稿共用：结果的样子、怎么准确使用结果、
-# 失败了怎么办、参数），连上时取来；lingdraft 是接在后面的灵稿自己的话（见 app.tools.web_mcp）：什么时候用、怎么搜、搜够没有、
-# 来源 id。brief 是没连上时占位工具的说明；unavailable、quota_exhausted 是服务没给结果（连不上、网关今天的上限到了）时给模型的话。
-# Fusion: ai_tools.web_search_*（url_read 换成 read_page；年份不写死：工具描述在启动时就定了）
+# 失败了怎么办、参数），连上时取来；lingdraft 是接在后面的灵稿自己的话（见 app.tools.web_mcp）。搜索的：怎么搜、搜够没有、
+# 来源 id；读页的：什么时候读、读哪些、来源 id。brief 是没连上时占位工具的说明；unavailable、quota_exhausted 是服务没给结果
+# （连不上、网关今天的上限到了）时给模型的话。
+# 什么时候搜、什么时候直接答不写在搜索的说明里：只写在系统提示词的 [Choosing tools]（agent.toml 的 tool_selection，2026-11-11 合并；
+# 原来这里有照 Fusion ai_tools.web_search_* 写的 “Use this tool when / Do not use this tool for”，和系统提示词重复）。
+# 子 agent 的系统提示词没有 [Choosing tools]：它是被派去查的，不用判断要不要查
 [tools.search_web]
-lingdraft = """Use this tool when:
-- The user asks about the latest news, current events, or real-time data such as weather, stock prices, or sports scores.
-- The request contains freshness-sensitive wording such as 'latest', 'today', 'currently', or the current year.
-- The user asks about a fact that may be uncertain or outdated.
-- The user asks for current product status such as price, availability, release plans, support scope, compatibility, or official procedures.
-
-Natural-request decision rules:
-- Prefer search when the request depends on potentially changing information such as current usage, access, integration, interoperability, eligibility, support scope, compatibility, official documentation, or product updates, even if the user does not explicitly say 'search' or 'look up'.
-- Do not search merely because a product, company, API, protocol, or regulation is mentioned when the request asks only for stable background, historical reasons, or a general explanation.
-- Examples: How do I use WeChat A2A interoperability? What product updates has OpenAI released recently?
-
-Search strategy:
+lingdraft = """Search strategy:
 - You choose the query angles, batches, result count, and languages. A simple factual question usually needs one or two queries; a broader one, such as a news roundup, a comparison, or analysis of a current event, needs a few complementary queries. Issue independent queries in parallel as multiple search_web calls in the same response.
 - Search in the language of the likely original sources; a translated query helps when it reaches different reporting. Answer in the user's language.
 - Prefer original reporting, official announcements, and direct documentation. Spend a later batch only on a gap that matters to the answer, with a new angle rather than a paraphrase of an earlier query.
@@ -28,14 +20,6 @@ Deciding you have enough:
 - For lists and roundups, such as which cities a service covers, which products were released, or this week's news, answer from what the results cover and say the list may be incomplete; do not search item by item.
 - Stop when new results repeat what you already have. If a specific fact is still missing after two or three rephrased attempts, it is probably not published where search can reach; say so and answer with what you found.
 - Check carefully where the answer depends on it: exact numbers, dates, prices, rules, and conditions the user asked about. For those, prefer the primary source, use read_page when snippets are incomplete or disagree, and report conflicts between sources.
-
-Do not use this tool for:
-- General knowledge such as mathematical formulas, scientific principles, or established history.
-- General explanations of stable background, historical causes, or known policy effects, such as why the iPhone moved from Lightning to USB-C.
-- Opinion analysis, solution advice, or experience summaries that do not depend on current facts, such as the value, risks, and adoption advice for AI coding assistants.
-- Coding, translation, or creative writing.
-- Requests that explicitly ask for an answer from existing model knowledge.
-- Casual conversation or emotional support, such as greetings, identity questions, or simple arithmetic.
 
 In LingDraft each result also has an id: the source id you cite in the answer."""
 brief = "Search the web for current information and get candidate sources."

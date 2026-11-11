@@ -170,6 +170,7 @@
 
 # ---- 稳定的常识、手头就能做的活：直接答，不去查 ----
 # 2026-11-11 提示词梳理补的：“什么时候搜”在提示词里写了三处（agent.tool_selection、agent.tool_usage、搜索工具的说明），要合并之前先有个底。
+# 同一天合并成系统提示词里的一段（agent.tool_selection），改后 Flash、Pro 关思考各 40/40，和改前一样。
 # 该查的那一边有 lookup-* 的整段用例；不该查的这一边之前一句都没有。
 # 跑这一组：decisions --decision 'direct-*' --samples 5 --no-sources，Auto（不给 --model）和 --model deepseek-v4-pro --no-thinking 各一遍。
 # 句子从哪来分三种，source 里写明：Sean 在 dev 上问的原话只有一句（他平时问的大多是要查的）；
@@ -287,3 +288,55 @@
   say: 帮我做个下周去成都的出行计划，开始前先用问题卡问我
   source: Sean 11-10 在 dev 上问的原话：话里带着指示（先问我），起标题的不该照着做
   title: true
+
+# ---- 要查的：靠现在的事实才答得了，第一下就该去查 ----
+# 和 direct-* 是一对：合并“什么时候搜”那三处（2026-11-11）时两边一起看，改之前、之后各跑一遍。
+# 整段用例 lookup-* 也看这件事，但要真去搜、真读网页；搜不搜第一次调模型就定了，这里只看这一下，不执行工具。
+# 天气的两句多看一项 searched: false：有天气工具，不该拿网页搜索顶（合并前三处里有两处把天气列在该搜的里面）。
+# 跑这一组：decisions --decision 'fresh-*' --samples 5 --model <选项> --no-thinking。前三句是 Sean 在 dev 上问的原话，后六句取自 cases.yaml 现有的用例。
+# 11-11 合并前后各跑一遍（Flash、Pro 关思考）：四遍都是 45/45，天气 40 次用的都是 get_weather
+
+- id: fresh-openai-funding
+  say: OpenAI融资和估值缩水是怎么回事
+  source: Sean 11-08 在 dev 上问的原话（当时搜了 2 次）：最近的消息
+  expect: {looked_up: true}
+
+- id: fresh-gpu-build
+  say: 显卡价格连续下跌，现在DIY装机和买整机哪个划算
+  source: Sean 11-08 在 dev 上问的原话（当时搜了 5 次、读了 2 页）：要建议，但建议靠现在的价格
+  expect: {looked_up: true}
+
+- id: fresh-weather-today
+  say: 杭州今天天气怎么样
+  source: Sean 11-07 在 dev 上问的原话（当时用的天气工具）
+  expect: {looked_up: true, searched: false}
+
+- id: fresh-weather-week
+  say: 深圳这周会不会降温
+  source: cases.yaml 的 weather（先只做 chat，2026-10-30）
+  expect: {looked_up: true, searched: false}
+
+- id: fresh-news
+  say: 最近一周AI圈发生了什么
+  source: cases.yaml 的 ai-week（先只做 chat，2026-10-30）：最新消息
+  expect: {looked_up: true}
+
+- id: fresh-gold
+  say: 今天金价多少钱一克
+  source: cases.yaml 的 lookup-gold（Fusion 11-04 那批）：每天变的价格
+  expect: {looked_up: true}
+
+- id: fresh-game
+  say: 昨晚湖人赢了吗，比分多少
+  source: cases.yaml 的 lookup-score：昨晚的比赛结果
+  expect: {looked_up: true}
+
+- id: fresh-iphone-price
+  say: iPhone 17 Pro 现在官网卖多少钱
+  source: cases.yaml 的 lookup-price：会变的官方售价
+  expect: {looked_up: true}
+
+- id: fresh-restriction
+  say: 北京明天限行尾号是多少
+  source: cases.yaml 的 lookup-restriction：按日期变的规定
+  expect: {looked_up: true}
