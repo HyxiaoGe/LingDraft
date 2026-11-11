@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 export const ACTIVE = new Set(["queued", "running"]); // 服务器上还有执行没结束
 export const ASKING = "asking"; // 没在跑：模型停下来问用户了（state.ask 是那个问题），回答或跳过以后这一轮接着跑
+export const LOCATION = "location"; // state.ask 的 kind：停下来要的是用户的位置（模型选了“当前位置”），页面出位置卡；过程里用户说的地方也是这个 kind
 export const QUEUED = "排队中，轮到了就开始";
 
 // 时钟：有执行在跑每秒走一次，显示“已用 2 分 05 秒”；没有就每分钟走一次，过了零点，今天的时间换成写日期

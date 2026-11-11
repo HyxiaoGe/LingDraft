@@ -22,7 +22,7 @@ from typing import Any, Literal, NamedTuple, Protocol
 from uuid import UUID, uuid4
 
 import httpx
-from fastmcp import FastMCP
+from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.tools import ToolResult
 from langchain_core.callbacks import BaseCallbackHandler
@@ -47,6 +47,7 @@ from app.tools.docs_mcp import LIBRARY_TOOL, docs_tools
 from app.tools.flyai_mcp import FLIGHT_TOOL, ITINERARY_TOOL, TRAIN_TOOL, TravelTool
 from app.tools.gateway import IMAGE_MIME_TYPES, MAX_UPLOAD_BYTES, GatewayClient
 from app.tools.image_mcp import ImageTool
+from app.tools.location import GEO_META_KEY
 from app.tools.maps_mcp import PLACE_TOOL, ROUTE_TOOL, MapsTool
 from app.tools.research_tools import TIME_TOOL, make_research_tools
 from app.tools.vision import ImageUris, view_prompt
@@ -583,16 +584,30 @@ class LiveResearchPlanner:
 
 FAKE_PLACES = {"广州": "广东省·广州", "北京市·北京·朝阳": "北京市·北京·朝阳", "辽宁省·朝阳": "辽宁省·朝阳"}
 FAKE_SKY = ["晴", "多云", "小雨", "阴"]
+FAKE_HERE = "广东省·深圳·福田"  # 假服务按用户的当前位置查出来的地方（给了位置就是这里，不看坐标）
 FAKE_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
 
-def _fake_forecast(location: str, requested_date: str | None) -> dict:
+def _fake_device(ctx: Context | None) -> dict | None:
+    """这次调用带来的用户位置（MCP 请求 _meta 里的 agent-tools/geolocation，见 app.tools.location）；没带是 None。"""
+    request = ctx.request_context if ctx is not None else None
+    meta = getattr(request, "meta", None)
+    if meta is not None and not isinstance(meta, dict):
+        meta = meta.model_dump() if hasattr(meta, "model_dump") else vars(meta)
+    raw = (meta or {}).get(GEO_META_KEY)
+    return raw if isinstance(raw, dict) and "longitude" in raw and "latitude" in raw else None
+
+
+def _fake_forecast(location: str, requested_date: str | None, here: dict | None | bool = False) -> dict:
     """假的 weather-service（结果的样子照真的，见 agent-tools 的 services/weather/README.md）：地方只有广州和两个朝阳；
-    逐日从北京时间今天起 15 天（没问哪天给 4 天），逐小时从这个小时起 7 天（没问哪天给 24 个）、每天 14～16 点有雨。"""
+    逐日从北京时间今天起 15 天（没问哪天给 4 天），逐小时从这个小时起 7 天（没问哪天给 24 个）、每天 14～16 点有雨。
+    here 不是 False：按用户的当前位置查（给了位置是 FAKE_HERE，没给报 location_unavailable）。"""
+    if here is None:
+        return {"ok": False, "error": {"code": "location_unavailable", "message": "The device location was not provided.", "retryable": False}}
     if location.strip() == "朝阳":
         return {"ok": False, "error": {"code": "ambiguous_location", "message": "The place name matches several areas.",
                                        "retryable": False, "candidates": ["北京市·北京·朝阳", "辽宁省·朝阳"]}}
-    place = next((label for name, label in FAKE_PLACES.items() if name in location), None)
+    place = FAKE_HERE if here else next((label for name, label in FAKE_PLACES.items() if name in location), None)
     if place is None:
         return {"ok": False, "error": {"code": "location_not_found", "message": "The weather service could not find this place.",
                                        "retryable": False}}
@@ -646,8 +661,9 @@ def fake_weather_server() -> FastMCP:
 
     @server.tool(name=WEATHER_TOOL, description="Get the weather forecast for a named place (offline fake of the QWeather service).",
                  output_schema=None)
-    async def get_weather(location: str, requested_date: str | None = None) -> ToolResult:
-        res = _fake_forecast(location, requested_date)
+    async def get_weather(location: str, requested_date: str | None = None,
+                          location_source: Literal["named", "current_location"] = "named", ctx: Context | None = None) -> ToolResult:
+        res = _fake_forecast(location, requested_date, _fake_device(ctx) if location_source == "current_location" else False)
         if not res["ok"]:
             text = f"No forecast was fetched: {res['error']['code']}. Do not fabricate weather facts."
         else:
@@ -686,21 +702,25 @@ def fake_maps_server() -> FastMCP:
 
     @server.tool(name=PLACE_TOOL, description="Search for places in mainland China (offline fake of the map service).", output_schema=None)
     async def place_search(query: str, anchor_source: Literal["named", "current_location", "none"], city: str | None = None,
-                           near: str | None = None, near_candidate: int | None = None, radius_m: int = 3000, limit: int = 5) -> ToolResult:
-        if anchor_source == "current_location":
+                           near: str | None = None, near_candidate: int | None = None, radius_m: int = 3000, limit: int = 5,
+                           ctx: Context | None = None) -> ToolResult:
+        here = anchor_source == "current_location"
+        if here and _fake_device(ctx) is None:
             return _fake_maps_failure("location_unavailable", "current_location", "")
         if anchor_source == "named" and (near or "").strip() == FAKE_AMBIGUOUS_PLACE and near_candidate is None:
             return _fake_maps_failure("ambiguous_location", FAKE_AMBIGUOUS_PLACE, "near_candidate")
         places = [{"place_id": f"amap_FAKE{k}", "name": f"{query.split('|')[0]}{k}号店", "address": f"中山东一路{k}号", "district": "黄浦区",
                    "city": "上海市", "category": "餐饮服务;咖啡厅;咖啡厅", "rating": 4.5 - k / 10, "reference_cost_yuan": 30 + k * 5,
                    "map_url": f"https://uri.amap.com/marker?poiid=FAKE{k}&src=lingdraft", "provider": "amap",
-                   **({"distance_m": 100 * k} if anchor_source == "named" else {})} for k in (1, 2)][:limit]
+                   **({"distance_m": 100 * k} if anchor_source == "named" or here else {})} for k in (1, 2)][:limit]
         res: dict[str, Any] = {"ok": True, "status": "success", "query": query, "result_count": len(places), "places": places,
                                "limitations": [], "providers": ["amap"]}
         if city:
             res["city"] = city
         if anchor_source == "named" and near:
             res |= {"near": near, "anchor": {"source": "named", "label": near.strip(), "city": "上海市"}}
+        if here:  # 照真的：当前位置没有名字，只有哪个城市
+            res["anchor"] = {"source": "current_location", "city": "上海市"}
         return ToolResult(content=json.dumps(_fake_for_model(res), ensure_ascii=False), structured_content=res)
 
     @server.tool(name=ROUTE_TOOL, description="Compare transport modes between two places (offline fake of the map service).", output_schema=None)
@@ -708,8 +728,8 @@ def fake_maps_server() -> FastMCP:
                             destination_source: Literal["named", "current_location"], modes: list[str], origin_city: str | None = None,
                             destination_city: str | None = None, origin_candidate: int | None = None, destination_candidate: int | None = None,
                             origin_place_id: str | None = None, destination_place_id: str | None = None,
-                            requested_departure_time: str | None = None) -> ToolResult:
-        if "current_location" in (origin_source, destination_source):
+                            requested_departure_time: str | None = None, ctx: Context | None = None) -> ToolResult:
+        if "current_location" in (origin_source, destination_source) and _fake_device(ctx) is None:
             return _fake_maps_failure("location_unavailable", "current_location", "")
         if origin.strip() == FAKE_AMBIGUOUS_PLACE and origin_candidate is None:
             return _fake_maps_failure("ambiguous_location", FAKE_AMBIGUOUS_PLACE, "origin_candidate")
@@ -725,8 +745,10 @@ def fake_maps_server() -> FastMCP:
         }
         routes = [made[m] for m in modes if m in made]
         res: dict[str, Any] = {"ok": True, "status": "success" if len(routes) == len(modes) else "degraded",
-                               "origin": {"source": "named", "label": origin.strip(), "city": "上海市"},
-                               "destination": {"source": "named", "label": destination.strip(), "city": "上海市"},
+                               "origin": ({"source": "current_location", "city": "上海市"} if origin_source == "current_location"
+                                          else {"source": "named", "label": origin.strip(), "city": "上海市"}),
+                               "destination": ({"source": "current_location", "city": "上海市"} if destination_source == "current_location"
+                                               else {"source": "named", "label": destination.strip(), "city": "上海市"}),
                                "routes": routes, "unavailable_modes": [m for m in modes if m not in made],
                                "limitations": ["departure_time_not_applied"] if requested_departure_time else [], "providers": ["amap"]}
         if requested_departure_time:
@@ -1042,6 +1064,9 @@ class FakeToolModel(BaseChatModel):
     - “天气”：先查天气，地名是“天气”前面那段（没有就是广州），再照常搜、读。
     - “附近”：查地点，在“附近”前面那个地名附近查（没有就是外滩），查完直接回复，不搜；
       “路线”：比虹桥火车站到外滩的驾车和公交，起点改成“从……到”里的地名，算完直接回复，不搜。
+    - “当前位置”：按用户的当前位置查（见 _here）：带“天气”查天气，带“路线”比当前位置到外滩的路线，别的查附近的咖啡；
+      “两处”：同一条消息里查天气、查附近；“再查”：查完接着再查一次附近。没拿到位置的：用户说了个地方就按它查天气，否则回复问在哪；
+      “硬要”：没拿到也再选一次当前位置。都不搜。
     - “航班”：查北京到上海明天的航班；“高铁”：查北京到上海明天的高铁；“行程”：去程查航班、回程查高铁，查完用 present_itinerary
       排成一个方案；“接站”：查完高铁，从查到的第一趟的到达站比路线到外滩。地名在“从……到……”里给就用那两个。都不搜。
     - “画”：画一张图（描述就是用户的话，“横”的是 16:9），画完直接回复，不搜；“改图”：改这段对话里最近画的（或用户发的）那张；
@@ -1103,6 +1128,8 @@ class FakeToolModel(BaseChatModel):
             return self._ask(text, turn, n)
         if any(k in text for k in ("写文档", "写网页", "写代码文件", "改文档", "重写文档")) and CREATE_TOOL in self.bound:
             return self._write(text, messages, turn, call)
+        if "当前位置" in text and WEATHER_TOOL in self.bound and PLACE_TOOL in self.bound:
+            return self._here(text, turn, n)
         if "天气" in text and WEATHER_TOOL in self.bound and WEATHER_TOOL not in names:
             return call(WEATHER_TOOL, location=text.split("天气")[0].strip()[:8] or "广州")
         if "文档" in text and LIBRARY_TOOL in self.bound:
@@ -1151,6 +1178,27 @@ class FakeToolModel(BaseChatModel):
         if docs.status == "error" or not (snippets := doc_snippets(docs)):
             return "文档没查成。", []
         return f"用 @before_model 在调模型前改消息 [{snippets[0]['id']}]。", []
+
+    @staticmethod
+    def _here(text: str, turn: list[BaseMessage], n: str) -> tuple[str, list[dict]]:
+        here = history.CURRENT_LOCATION
+        weather = {"name": WEATHER_TOOL, "args": {"location": here, "location_source": here}, "id": f"call_{WEATHER_TOOL}_{n}"}
+        nearby = {"name": PLACE_TOOL, "args": {"query": "咖啡", "anchor_source": here, "limit": 2}, "id": f"call_{PLACE_TOOL}_{n}"}
+        route = {"name": ROUTE_TOOL, "id": f"call_{ROUTE_TOOL}_{n}", "args": {
+            "origin": here, "origin_source": here, "destination": "外滩", "destination_source": "named", "modes": ["driving", "transit"]}}
+        done = [m for m in turn if isinstance(m, ToolMessage) and m.name in (WEATHER_TOOL, PLACE_TOOL, ROUTE_TOOL)]
+        if not done:
+            return "", [weather, nearby] if "两处" in text else [route if "路线" in text else weather if "天气" in text else nearby]
+        if done[-1].status == "error":
+            said = (history.located_of(done[-1]) or {}).get("answer")
+            if said and len(done) == 1:
+                return "", [{**weather, "args": {"location": said}}]
+            if "硬要" in text and len(done) == 1:
+                return "", [nearby]
+            return "没拿到你的位置，你在哪个城市？", []
+        if "再查" in text and len(done) == 1:
+            return "", [nearby]
+        return "查好了，看卡片。", []
 
     @staticmethod
     def _maps(text: str, turn: list[BaseMessage], call) -> tuple[str, list[dict]]:

@@ -103,6 +103,8 @@ class ChatContext:
     thread_id: str | None = None  # 这段对话的编号：模型写的文件记在这个工作区下
     # 知识库（app.knowledge.service.KnowledgeBase）：查知识库、read_file 读知识库的文件、第一轮取文件列表。命令行、评测没有：这个工具不出现
     kb: Any = None
+    # 这一轮里用户给的位置（app.tools.location.Places，只在内存里）：模型选了当前位置时停下来要、要到了放在这里。命令行、评测没有：不停下来要
+    places: Any = None
 
 
 def now() -> str:
@@ -811,6 +813,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     from app.tools.flyai_mcp import TravelMiddleware, itinerary_tool
     from app.tools.image_mcp import ImageMiddleware
     from app.tools.knowledge import make_search_knowledge_tool
+    from app.tools.location import LocationMiddleware
     from app.tools.maps_mcp import MapsMiddleware
     from app.tools.vision import make_view_image_tool
     from app.tools.weather_mcp import WeatherMiddleware
@@ -834,8 +837,11 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
             CompactionMiddleware(planner, tools, memory),  # 在 ContentGuard 里面：被内容审核停下的那几轮先去掉再压；用户插的话放进对话以后再估
             ToolChargeMiddleware(),  # 做成了的工具调用记账；看的结果和 ToolProgressMiddleware 一样是整理好的
             ToolProgressMiddleware(),
-            WeatherMiddleware(),  # 在 ToolProgressMiddleware 里面：过程记录看到的是整理好的天气结果
-            TravelMiddleware(),  # 同上：航班火车的结果、每轮的次数、排行程；在 MapsMiddleware 外面：车站城市不对的比路线不交给地图
+            TravelMiddleware(),  # 在 ToolProgressMiddleware 里面：过程记录看到的是整理好的结果。航班火车的结果、每轮的次数、排行程；在 MapsMiddleware 外面：车站城市不对的比路线不交给地图
+            # 模型选了当前位置的先停下来跟用户要（见 app.tools.location）。在 TravelMiddleware 里面：车站城市不对的不用要；
+            # 在 WeatherMiddleware、MapsMiddleware 外面：它们把里面抛的错都当成没调成，中断得在它们外面抛
+            LocationMiddleware(),
+            WeatherMiddleware(),  # 同上：整理好的天气结果
             MapsMiddleware(),  # 同上：查地点、比路线的结果（地点卡、路线卡要的在 artifact 里）
             WebToolsMiddleware(),  # 同上：搜索、读页的结果带上来源 id
             DocsMiddleware(),  # 同上：查文档的每段带上来源 id（带来源的那几段在 artifact 里）

@@ -6,8 +6,9 @@
 // 每句话和每条回答下面有时间，都能复制；最后一句在空闲时、问着的时候能改，改完按新的话重新回答。这些一直显示，之前各轮的淡一档。
 // 模型做到一半会停下来问用户（状态 asking）：最后一轮下面出一张问题卡（AskCard），点选项、在输入框里写、或者跳过，这一轮接着跑；问过的问题和回答排在过程里。
 // 问着的时候不想答也有出口：输入框空着时右边是停止（这一轮到此为止），那句话下面能编辑，问题卡下面能重新回答。
+// 模型选了“当前位置”时停下来要的是位置（st.ask.kind 是 location）：出位置卡（LocateCard），浏览器里已经允许过定位的不出卡、直接取。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
-import { BriefcaseBusiness, MessageCircleQuestionMark, MessageSquare } from "lucide-react";
+import { BriefcaseBusiness, MapPin, MessageCircleQuestionMark, MessageSquare } from "lucide-react";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
 import shell from "./card.module.css";
@@ -20,11 +21,12 @@ import { IconBook, IconCheck, IconChevron, IconClip, IconCloudSun, IconCopy, Ico
 import { ImageCards, Viewer, drawn, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
+import { locate, locatePermission } from "./locate.js";
 import { Markdown } from "./markdown.jsx";
 import { ActionMenu } from "./menu.jsx";
 import { HeadBar, NavContext, touch, typeHere, typeNext } from "./nav.jsx";
 import proc from "./process.module.css";
-import { ACTIVE, ASKING, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
+import { ACTIVE, ASKING, LOCATION, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
 import task from "./task.module.css";
 import styles from "./timeline.module.css";
@@ -292,7 +294,7 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
         {!error?.quota && <CreditsNote credits={credits} onLogin={picker.onLogin} />}
         {away && <JumpButton more={more} onClick={toBottom} />}
         <Composer thread={tid || "new"} carry={!!live} mode={mode} queueing={queueing} held={pendingKinds.length > 0} stopping={stopping} putBack={putBack} onSend={onSend} onStop={act.stop}
-          above={(running || asking) && <Pending st={st} act={act} asking={asking} />} onTakeBack={pendingKinds.length ? () => act.withdraw(pendingKinds) : null}
+          above={(running || asking) && <Pending st={st} act={act} asking={asking} />} locating={asking && st?.ask?.kind === LOCATION} onTakeBack={pendingKinds.length ? () => act.withdraw(pendingKinds) : null}
           work={!!work?.on}
           tools={<ModelTools models={models} loading={models === null || opening} {...picker} />} />
       </Dock>
@@ -321,7 +323,7 @@ function useAnnounce(st, running, stopping) {
     const t = st?.turns?.at(-1);
     const rec = t?.record;
     const n = Object.keys(citeNumbers((t?.items || []).filter((i) => i.type === "text").map((i) => i.text), st?.sources)).length; // 这一轮正文引用的
-    setSaid(st?.status === ASKING ? `需要你回答：${st.ask?.question || ""}`
+    setSaid(st?.status === ASKING ? (st.ask?.kind === LOCATION ? "需要你的位置" : `需要你回答：${st.ask?.question || ""}`)
       : st?.status === "failed" ? "这一轮中途停下了，可以重试"
       : rec?.outcome === "stopped" ? "已停止"
         : rec?.outcome === "blocked" ? "内容审核没通过，这一轮停下了"
@@ -618,7 +620,7 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
         panel={files} at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && (idle || !!ask)} onEdit={act.edit} />}
       <div className={styles.ai}>
         {who && <div className={styles.aiHead}><ModelIcon m={{ model: ref, name: who, icon: named?.icon }} size={22} />{who}</div>}
-        {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} answering={replied} failed={failed} asking={!!ask} now={now} versions={versions} />}
+        {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} answering={replied} failed={failed} asking={ask ? (ask.kind === LOCATION ? LOCATION : true) : false} now={now} versions={versions} />}
         {forecastsOf(items).map((fc) => <WeatherCard key={fc.location} fc={fc} />)}
         {mapsOf(items).map((card) => <MapCard key={card.key} card={card} />)}
         {travelOf(items).map((card) => <TravelCard key={card.key} card={card} />)}
@@ -627,7 +629,7 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
         {answer.map((it, k) => <Item key={`${it.type}:${it.id}`} it={it} st={st} nums={nums} running={running} lastItem={k === answer.length - 1} />)}
         {files && <FileCards cards={cards} running={running} open={files.open} current={files.current} />}
         {running && <LiveLine live={live} items={items} stopping={stopping} now={now} versions={versions} />}
-        {ask && <AskCard key={ask.id} ask={ask} onAnswer={act.answer} />}
+        {ask && (ask.kind === LOCATION ? <LocateCard key={ask.id} ask={ask} onAnswer={act.answer} /> : <AskCard key={ask.id} ask={ask} onAnswer={act.answer} />)}
         {!running && !ask && <AnswerSources nums={nums} sources={st?.sources} />}
         {!running && rec?.ended_at && rec.outcome === "no_reply" && <p className={styles.muted}>这一轮没有给出文字回复。</p>}
         {failed && <Failed st={st} act={act} />}
@@ -807,7 +809,7 @@ function Process({ k, items, st, nums, rec, running, answering, failed, asking, 
   const shown = open && items.length > 0;
   const time = running ? elapsed(st?.running_since || rec?.started_at, now)
     : rec?.ended_at ? elapsed(rec.started_at, Date.parse(rec.ended_at), rec.waited_ms || 0) : "";
-  const verb = running ? "处理中" : asking ? "等你回答" : failed ? "中途停下" : rec?.outcome === "stopped" ? "已停止" : rec?.outcome === "blocked" ? "已中断" : "已完成";
+  const verb = running ? "处理中" : asking === LOCATION ? "等你的位置" : asking ? "等你回答" : failed ? "中途停下" : rec?.outcome === "stopped" ? "已停止" : rec?.outcome === "blocked" ? "已中断" : "已完成";
   const did = running ? "" : didText(items);
   const label = `${verb}${time ? ` ${time}` : ""}${did ? ` · ${did}` : ""}`;
   return (
@@ -859,13 +861,15 @@ function GuideNote({ it }) {
   );
 }
 
-// 模型停下来问过的问题：一行问题，下面是用户的回答（和插的话一个样子）；跳过的、点了“别再问了”的、没等到回答这一轮就停了的在行尾说一声
+// 模型停下来问过的问题：一行问题，下面是用户的回答（和插的话一个样子）；跳过的、点了“别再问了”的、没等到回答这一轮就停了的在行尾说一声。
+// 要位置时用户没给、直接说了个地方的（kind 是 location）也是这个样子，问题那一行写“你的位置”
 function AskNote({ it }) {
+  const where = it.kind === LOCATION;
   return (
     <>
       <div className={proc.tool}>
-        <MessageCircleQuestionMark size={12} />
-        <span className={proc.question}>{it.question}</span>
+        {where ? <MapPin size={12} /> : <MessageCircleQuestionMark size={12} />}
+        <span className={proc.question}>{where ? "你的位置" : it.question}</span>
         {!it.answer && !it.pending && <span className={proc.sub}>{it.muted ? "你选了别再问" : it.skipped ? "你跳过了" : "没有回答"}</span>}
       </div>
       {it.answer && (
@@ -1226,6 +1230,55 @@ function AskCard({ ask, onAnswer }) {
         <button className="ws-btn ghost sm" onClick={typeHere}><IconEdit size={13} />自己写</button>
         <button className="ws-btn ghost sm" onClick={() => onAnswer({ skip: true })}>跳过</button>
         <button className={"ws-btn ghost sm " + styles.askMute} onClick={() => onAnswer({ mute: true })}>别再问了</button>
+      </div>
+    </div>
+  );
+}
+
+// 模型选了“当前位置”（查天气、找附近、算路线），后端停下来要位置（st.ask 的 kind 是 location，见后端 app.tools.location）。
+// 浏览器里已经允许过定位的不出卡，直接取了交回去（2026-11-11 Sean 定）；浏览器里禁了的当用户不给，取不了的（不是 https、不支持）当取不到，
+// 都不出卡，模型会改成问在哪。别的出这张卡：点“用我的位置”，浏览器弹它自己的授权。不点就一直等；
+// 这时在输入框里直接写个地方也行（和回答问题一样），输入框空着时右边是停止。
+const LOCATE_FOR = { weather: "查天气", nearby: "找附近的地方", route: "算路线" };
+// 这个页面已经替哪几次要位置交过回答（ask 的 id）。没交上的（网络断了、额度用完）卡会重新出来：这时出卡等用户点，不再自己取了交，不然会一直重试
+const locateTried = new Set();
+function LocateCard({ ask, onAnswer }) {
+  const [phase, setPhase] = useState("checking"); // checking：在查浏览器的权限 → card：出卡等用户点 | locating：在取位置
+  const sent = useRef(false); // 交过一次就不再交（开发时 effect 跑两遍、点了两下）
+  const here = useRef(true);
+  const answer = useRef(onAnswer);
+  answer.current = onAnswer;
+  const send = (a) => {
+    if (sent.current || !here.current) return; // 取位置的时候用户已经自己说了地方、点了停止：卡没了，不再交
+    sent.current = true;
+    locateTried.add(ask.id);
+    answer.current(a);
+  };
+  const take = async () => {
+    setPhase("locating");
+    const got = await locate();
+    send(got.location ? { location: got.location, auto: true } : got.denied ? { skip: true, auto: true } : { unavailable: true, auto: true });
+  };
+  useEffect(() => {
+    here.current = true;
+    if (locateTried.has(ask.id)) setPhase("card");
+    else locatePermission().then((p) => {
+      if (!here.current || sent.current) return;
+      if (p === "granted") take();
+      else if (p === "denied") send({ skip: true, auto: true });
+      else if (p === "unsupported") send({ unavailable: true, auto: true });
+      else setPhase("card");
+    });
+    return () => { here.current = false; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- 一张卡只查一次（key 是这次要位置的 id）
+  if (phase === "checking") return null;
+  if (phase === "locating") return <div className={proc.waiting} role="status"><Spinner size={14} /><span className={proc.stage}>正在获取位置…</span></div>;
+  return (
+    <div className={shell.card + " " + styles.ask} role="group" aria-label="需要你的位置">
+      <div className={shell.title}><MapPin size={15} /><span>用你现在的位置{LOCATE_FOR[ask.purpose] || ""}？</span></div>
+      <div className={styles.locateActions}>
+        <button className="ws-btn primary" onClick={take}>用我的位置</button>
+        <button className="ws-btn" onClick={() => send({ skip: true })}>不用</button>
       </div>
     </div>
   );

@@ -100,13 +100,13 @@ The user sent this request in Work mode: they are handing you a task to carry ou
 - Ask one question per call and at most {{ max_asks }} in a turn, the most important first. Decide whatever is still open yourself, and say what you assumed in your answer.
 - Never ask about something the request, the conversation, attached files, or what you remember about the user already tells you, and never ask merely to confirm what the user said or to get permission to begin. If nothing that matters is left open, start right away.
 - Also start right away when the user tells you to go ahead or to decide for yourself.
-- When the message is not a task (a question, a lookup, a small edit, or a remark about work already done), handle it as usual without ask_user. If it is missing an input you cannot infer, such as the place for a weather question, ask for it in your reply."""
+- When the message is not a task (a question, a lookup, a small edit, or a remark about work already done), handle it as usual without ask_user. If it is missing an input you cannot infer, such as where they want to go for a route question, ask for it in your reply."""
 # Work 模式的轮、但这段对话用户在问题卡上点过“别再问了”（history.ASKS_OFF，2026-11-11 Sean 定）：不给 ask_user，上面 work 那段换成这一段。
 # 方向、范围这类自己定并说明；只有用户知道、又没法合理假设的条件（比如哪个城市）在正文里问一句，不瞎猜（真实模型试过：跳过问城市的卡，Flash 3 次都按上海查）
 work_quiet = """[Work mode, questions turned off]
 The user sent this request in Work mode, but they have turned off question cards for this conversation, so there is no ask_user tool.
 - When the request is a task, such as planning something, researching a topic, analysing or comparing options, or producing a report or other document, start right away. Do not ask first, neither in a card nor in your reply. Decide what the result is for, its scope, focus and depth on your own best assumption, and state the assumptions that shaped the result briefly in your answer so the user can correct them.
-- Only when the request cannot be carried out without an input that only the user has and no reasonable assumption exists, such as the place for a weather question, ask for it in your reply."""
+- Only when the request cannot be carried out without an input that only the user has and no reasonable assumption exists, such as where they want to go for a route question, ask for it in your reply."""
 
 # 长期记忆（见 memory.py）：有记忆时才有这一段，整份放进来。灵稿自己写的（2026-11-03），没有照抄哪一家
 memory = """[What you remember about the user]
@@ -256,10 +256,22 @@ unavailable = "Not read: the page-reading service could not be reached. You may 
 quota_exhausted = "Not read: the page-reading service has used up its quota for today, so other pages will fail the same way. Do not keep trying other pages; continue with search results and pages already read, and say what could not be checked. The page cannot be used as evidence; do not fabricate its content."
 
 # 天气工具的说明在 agent-tools 的 weather-service 里（Fusion 和灵稿共用，照 Fusion 踩过的坑写的），连上时取来；
-# 这里只有接在它后面的灵稿自己的话（天气卡片、查不到时用哪个工具），和没调成时给模型的话（见 app.tools.weather_mcp）
+# 这里只有接在它后面的灵稿自己的话（天气卡片、当前位置从浏览器来、查不到时用哪个工具），和没调成时给模型的话（见 app.tools.weather_mcp）
 [tools.get_weather]
-lingdraft = """In LingDraft the forecast is shown to the user as a weather card that credits QWeather, with the daily forecast and, when hourly data is returned, a chart of temperature and precipitation probability, so do not recite it day by day. When this tool fails or cannot cover what the user asked, use search_web and read_page to find authoritative sources."""
+lingdraft = """In LingDraft the forecast is shown to the user as a weather card that credits QWeather, with the daily forecast and, when hourly data is returned, a chart of temperature and precipitation probability, so do not recite it day by day. When you use current_location, LingDraft gets the device location from the user's browser, which the user may decline. If the location is not provided, do not use current_location again in this turn. When this tool fails or cannot cover what the user asked, use search_web and read_page to find authoritative sources."""
 unavailable = "The weather service returned no usable result. Answer from available information and do not fabricate weather facts."
+
+# 模型选了当前位置（current_location）而没拿到用户的位置时，天气、查地点、比路线回给模型的话（灵稿自己回的，工具没调，见 app.tools.location）。
+# 照 Fusion 踩过的坑（backend/app/services/stream/tool_context.py）：说清工具没执行、别说拿到了位置、这一轮别再要。
+# 记忆里有用户在哪的可以拿来用（2026-11-11 Sean 定：和记忆搭配），用了要说；said 是位置卡出着时用户直接说了个地方
+[tools.location]
+declined = "The tool was not run: the user chose not to share their device location. Do not use current_location again in this turn, and do not claim to know where the user is from their device. If what you remember about the user says where they are and that is precise enough for this request, use that place and tell the user which place you used; otherwise ask the user which place to use."
+unavailable = "The tool was not run: the user's browser could not provide the device location. Do not use current_location again in this turn, and do not claim to know where the user is from their device. If what you remember about the user says where they are and that is precise enough for this request, use that place and tell the user which place you used; otherwise ask the user which place to use."
+said = """The tool was not run: instead of sharing their device location, the user replied with the text below. Take the place from that reply and call the tool again with it; do not use current_location again in this turn. If the reply does not name a place, ask the user which place to use.
+<user_reply>
+{{ answer }}
+</user_reply>"""
+again = "The tool was not run: the device location was already requested in this turn and was not provided. Do not use current_location again in this turn; use a place the user named, or ask the user which place to use."
 
 # 查文档：Context7 的两个工具，说明、参数是 Context7 的（经 agent-tools 的 context7 服务），连上时取来；
 # 这里是接在后面的灵稿自己的话（什么时候用、来源 id、查不到怎么办），和灵稿自己回的三种失败（见 app.tools.docs_mcp）。灵稿自己写的
@@ -277,16 +289,16 @@ quota_exhausted = "No documentation was looked up: today's documentation lookups
 rate_limited = "No documentation was looked up: the documentation service is rate-limited, possibly because its monthly quota is used up, so further calls will likely fail the same way. Do not call resolve-library-id or query-docs again in this turn; use search_web and read_page to find the official documentation instead, or answer from what you know and say it is unverified. Do not fabricate APIs."
 
 # 地图两个工具的说明、参数、结果、失败时给模型的话都在 agent-tools 的 maps-service 里（Fusion 和灵稿共用，照 Fusion 踩过的坑写的），连上时取来；
-# 这里是接在它后面的灵稿自己的话（卡片、拿不到用户位置、查不到时用哪个工具），还没连上时占位工具的说明，和灵稿自己回的两种失败（见 app.tools.maps_mcp）。
-# 灵稿没有浏览器定位，不传设备位置（11-04 Sean 定以后单独做）
+# 这里是接在它后面的灵稿自己的话（卡片、当前位置从浏览器来、查不到时用哪个工具），还没连上时占位工具的说明，和灵稿自己回的两种失败（见 app.tools.maps_mcp）。
+# 当前位置 11-11 做了（见 app.tools.location）：之前这里写的是“灵稿拿不到用户的位置，不要用 current_location”
 [tools.place_search]
-lingdraft = """In LingDraft the places are shown to the user as a place card that credits the map provider, with each place's address, distance, rating, average cost per person, and opening hours when available, so do not list every field again; pick out and explain what matters for the user's request. LingDraft cannot share the user's device location, so never use current_location; when the user asks for places near them without naming a place, ask where they are or which place to search near. When this tool fails or cannot cover the request, use search_web and read_page to find authoritative sources."""
+lingdraft = """In LingDraft the places are shown to the user as a place card that credits the map provider, with each place's address, distance, rating, average cost per person, and opening hours when available, so do not list every field again; pick out and explain what matters for the user's request. When you use current_location, LingDraft gets the device location from the user's browser, which the user may decline. If the location is not provided, do not use current_location again in this turn. When this tool fails or cannot cover the request, use search_web and read_page to find authoritative sources."""
 brief = "Search for places such as restaurants, shops, attractions, and facilities in mainland China, within a city or near a named place."
 unavailable = "No place was found: the map service could not be reached. You may retry once; if it fails again, use search_web and read_page instead. Do not fabricate place facts."
 quota_exhausted = "No place was found: the map service has used up its quota for today, so further map calls will fail the same way. Do not call place_search or route_compare again today; use search_web and read_page instead. Do not fabricate place facts."
 
 [tools.route_compare]
-lingdraft = """In LingDraft the routes are shown to the user as a route card that credits the map provider, with each mode's time, distance, and cost and the transit lines and stops, so do not recite them step by step; compare the modes and recommend one for the user's situation. LingDraft cannot share the user's device location, so never use current_location; when the user asks how to get somewhere without saying where they start, ask where they are starting from. When this tool fails or cannot cover the request, use search_web and read_page to find authoritative sources."""
+lingdraft = """In LingDraft the routes are shown to the user as a route card that credits the map provider, with each mode's time, distance, and cost and the transit lines and stops, so do not recite them step by step; compare the modes and recommend one for the user's situation. When you use current_location, LingDraft gets the device location from the user's browser, which the user may decline. If the location is not provided, do not use current_location again in this turn. When this tool fails or cannot cover the request, use search_web and read_page to find authoritative sources."""
 brief = "Compare transport modes (driving, transit, walking, bicycling) between two places in mainland China."
 unavailable = "No route was computed: the map service could not be reached. You may retry once; if it fails again, use search_web and read_page instead. Do not fabricate route facts."
 quota_exhausted = "No route was computed: the map service has used up its quota for today, so further map calls will fail the same way. Do not call place_search or route_compare again today; use search_web and read_page instead. Do not fabricate route facts."

@@ -283,8 +283,10 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         text = _text(art.get("name")) or _text(args.get("file_id"))
         q = _text(args.get("query"))
         extra = {"limits": [q] if q else [], "parts": "" if q else _text(args.get("parts"))}
-    else:
-        text, extra = str(args.get("url" if kind == "read" else "location", "")), {}
+    elif kind == "read":
+        text, extra = str(args.get("url", "")), {}
+    else:  # 天气：选了当前位置的，地名那一项是 current_location
+        text, extra = _endpoint(args.get("location")), {}
     if result is None:
         return ToolStep(id=cid, kind=kind, text=text, pending=True, **extra)
     if isinstance(result.artifact, dict) and result.artifact.get("stopped"):
@@ -406,6 +408,8 @@ WEATHER_FAILURES = {
     "ambiguous_location": "对得上好几个地方",
     "location_not_found": "和风天气里没找到这个地方",
     "invalid_arguments": "查询的参数不对",
+    "location_unavailable": "拿不到当前位置",
+    "location_declined": "没用当前位置",  # 灵稿自己回的：用户没给位置（见 app.tools.location）
 }
 
 
@@ -478,6 +482,7 @@ MAPS_FAILURES = {
     "place_not_found": "地图里没找到这个地方",
     "place_id_unresolved": "地点编号查不到",
     "location_unavailable": "拿不到当前位置",
+    "location_declined": "没用当前位置",  # 灵稿自己回的：用户没给位置（见 app.tools.location）
     "no_route": "算不出路线",
     "invalid_arguments": "查询的参数不对",
     "quota_exhausted": "地图今天的额度用完了",
@@ -751,6 +756,31 @@ def broken_write(call: dict) -> ToolStep | None:
     return ToolStep(id=call["id"], kind="write", text="", ok=False, message=WRITE_FAILURES["broken"], edit=call["name"] == EDIT_TOOL)
 
 
+# ---- 用户的当前位置（见 app.tools.location）----
+
+LOCATION = "location"  # 停下来等用户时 state.ask 的 kind：要的是位置，页面出位置卡
+LOCATED = "located"  # 工具结果的 artifact 里：这次调用停下来要过位置，用户怎么回的（{status, answer, asked_at, answered_at}）
+LOCATION_UNAVAILABLE = "location_unavailable"  # 没拿到位置时结果里的错误码：浏览器取不到（服务没收到位置时回的也是这个）
+LOCATION_DECLINED = "location_declined"  # 用户没给（点了不用，或者直接说了个地方）
+
+
+def located_of(m: BaseMessage) -> dict | None:
+    """这条工具结果是停下来要过位置以后得到的：用户怎么回的；没要过是 None。"""
+    art = m.artifact if isinstance(m, ToolMessage) else None
+    got = art.get(LOCATED) if isinstance(art, dict) else None
+    return got if isinstance(got, dict) else None
+
+
+def where_of(call: dict, result: ToolMessage | None) -> dict | None:
+    """位置卡出着的时候用户没给位置、直接说了个地方：过程里列一条，和回答过的问题一个样子（kind 是 location，没有问题的字）。
+    别的回法（给了、不用、取不到）不另外列，那一步自己看得出来。"""
+    got = located_of(result) if result is not None else None
+    if not got or got.get("status") != "said" or not call.get("id"):
+        return None
+    return {"type": "ask", "kind": LOCATION, "id": f"{call['id']}:where", "question": "", "options": [], "pending": False,
+            "answer": _text(got.get("answer")), "skipped": False, "muted": False}
+
+
 # ---- 模型问用户（ask_user，见 app.tools.ask_user）----
 
 
@@ -800,10 +830,11 @@ def asks_before(messages: list[BaseMessage], call_id: str) -> int:
 
 
 def waited_ms(messages: list[BaseMessage]) -> int:
-    """这一轮里等用户回答一共等了多久（毫秒）：每次提问从问出来到回答的那段时间，重叠的（一次问了两个）只算一遍。算这一轮用时的时候去掉。"""
+    """这一轮里等用户回答一共等了多久（毫秒）：每次提问（要位置也算）从问出来到回答的那段时间，重叠的（一次问了两个）只算一遍。
+    算这一轮用时的时候去掉。"""
     spans = []
     for m in messages:
-        if got := ask_answer(m):
+        if got := ask_answer(m) or located_of(m):
             try:
                 a, b = datetime.fromisoformat(got["asked_at"]), datetime.fromisoformat(got["answered_at"])
             except (KeyError, TypeError, ValueError):

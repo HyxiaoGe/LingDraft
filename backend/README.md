@@ -347,18 +347,19 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `gateway.py`：agent-tools 网关客户端（传图、按编号取图、删图），和网关出错时的几种异常。
   - `files.py`：用户发的文件怎么给模型，`read_file`。`write_file.py`：`create_file`、`edit_file`。`vision.py`：用户发的图怎么给模型，`view_image`。`knowledge.py`：`search_knowledge`。
   - `research_tools.py`：agent 自己的工具（`get_current_time`），描述在 `prompts.toml` 的 `[tools.*]`。
-  - `mcp.py`：MCP 工具共用的部分：经网关连、取工具、认出网关的 401/403（让这一轮失败）和 429（今天的上限到了）。
+  - `mcp.py`：MCP 工具共用的部分：经网关连、取工具、认出网关的 401/403（让这一轮失败）和 429（今天的上限到了）；`request_meta` 让一次调用带上 MCP 请求的 `_meta`（不经过模型的东西，比如用户的位置）。
+  - `location.py`：用户的当前位置。模型查天气、查地点、比路线时选了 `current_location` 的，中间件先停下来跟页面要位置（和问用户同一套 `interrupt`，页面出位置卡，浏览器里已经允许过定位的直接取）；坐标放在这次 MCP 调用的 `_meta` 里交给服务，只在内存里留这一轮，不进模型的参数、检查点和日志。没给的不调工具，告诉模型改用用户说的或记忆里的地方，或者问用户。
   - `web_mcp.py`：搜索、读网页。`search_web`、`read_page` 是 agent-tools 的 MCP 工具（怎么搜、怎么读、结果的样子、失败时给模型的话都在 search-service、reader-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明（什么时候搜、搜够没有、来源 id），中间件给结果带上来源 id、把失败整理成页面上的中文，没连上时用同名的占位工具。
   - `image_mcp.py`：画图、改图。`generate_image` 是 agent-tools 的 MCP 工具（出图、存图、改图找原图、比例、给模型的说明都在 image-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明，中间件管每轮最多画 3 张、改图只认这段对话里画的和用户发的图、给带图的话接上说明，把结果整理成图片卡片要的东西，没连上时用同名的占位工具。
   - `weather_mcp.py`：查天气。`get_weather` 是 agent-tools 的 MCP 工具（挑城市、整理预报、缓存、给模型的说明都在 weather-service 里，和 Fusion 共用），用 LangChain 的 MCP 适配器接进来；这里接上灵稿自己的一段说明，中间件把结果整理成模型看的文字，网关出问题算没查到、密钥不对让这一轮失败。
-  - `maps_mcp.py`：查地点、比路线。`place_search`、`route_compare` 是 agent-tools 的 MCP 工具（先高德后腾讯、地名怎么定、重名怎么问、给模型的说明都在 maps-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明（卡片署了服务商不用重复、拿不到用户位置要问），中间件把整份结果留给地点卡、路线卡，网关今天的上限到了算额度用完，没连上时用同名的占位工具。
+  - `maps_mcp.py`：查地点、比路线。`place_search`、`route_compare` 是 agent-tools 的 MCP 工具（先高德后腾讯、地名怎么定、重名怎么问、给模型的说明都在 maps-service 里，和 Fusion 共用）；这里接上灵稿自己的一段说明（卡片署了服务商不用重复、当前位置从浏览器来），中间件把整份结果留给地点卡、路线卡，网关今天的上限到了算额度用完，没连上时用同名的占位工具。
   - `flyai_mcp.py`：查航班、火车，排行程。`search_flights`、`search_trains` 是 agent-tools flyai 的 MCP 工具（日期定不了先问、只要高铁、飞猪认不出的地名、结果的样子都在服务里，和 Fusion 共用）；这里接上灵稿自己的一段说明（卡片上都列了、别贴预订链接、接站换乘用查到的站名和城市），中间件把整份结果留给航班卡、火车卡，每轮最多查 4 次；比路线的起终点是查到的车站时，城市没填对就不交给地图、告诉模型该填哪个。`present_itinerary` 是灵稿自己的：模型按这段对话查到的班次编号排方案，核对编号和先后后画成行程卡，一个回答最多一张。
   - `docs_mcp.py`：查文档。`resolve-library-id`（按库名找库）、`query-docs`（查这个库的文档）是 Context7 的 MCP 工具，经 agent-tools 的 context7 服务（注入密钥、只放这两个工具、限流时标出来）；这里接上灵稿自己的一段说明（什么时候用、引用来源 id），中间件给每段文档的出处带上来源 id，带来源的那几段记在 artifact 里给来源列表和压缩后取回。Context7 免费版每月 1000 次（每月初重置，和 Fusion 共用），网关给灵稿设了每天 30 次；限流、上限到了、连不上都告诉模型改用搜索和读官方文档。连上了才带（和天气一样）。
 - `app/model_guard.py` 模型服务出错的分类和熔断；`app/aio.py` 对话的事件循环
 - `app/evals/` + `evals/` 回放评测：用真实模型跑 `evals/research/cases.yaml`，按轨迹和裁判模型打分，用法和写用例的约定见 `evals/README.md`
 - `../frontend/` Vite + React 对话式页面（参照 WorkBuddy）。
   - 海报（`#poster`）：需求气泡 → 漂浮问题卡逐项确认事实 → 风格卡 → 海报 + 元素状态内嵌在助手回复里 → 评审卡 / 自由文本改稿 → 导出。
-  - 对话页：`src/workspace.jsx`。左栏（`sidebar.jsx`）是对话列表（能搜标题，每条能置顶、改名、导出、删除）、资料库入口、额度和账号；中间是对话；右栏看模型写的文件（`artifact.jsx`）、这段对话的文件列表和用户发的文件（`workspace-files.jsx`）。`timeline.jsx` 里每一轮先是过程（思考、搜索、读页、子任务按先后，跑的时候展开，跑完收起），然后是天气卡片、地点卡、路线卡、航班卡、火车卡、行程卡、画的图，再是带来源角标的正文、写的文件的卡片和这条回答用到的来源，最后一轮下面是推荐问题；回答时又说的话贴在输入框上沿。设置窗口（`settings.jsx`）里有记忆（`memory.jsx`）；资料库是单独一页（`/library`，`knowledge.jsx`）。
+  - 对话页：`src/workspace.jsx`。左栏（`sidebar.jsx`）是对话列表（能搜标题，每条能置顶、改名、导出、删除）、资料库入口、额度和账号；中间是对话；右栏看模型写的文件（`artifact.jsx`）、这段对话的文件列表和用户发的文件（`workspace-files.jsx`）。`timeline.jsx` 里每一轮先是过程（思考、搜索、读页、子任务按先后，跑的时候展开，跑完收起），然后是天气卡片、地点卡、路线卡、航班卡、火车卡、行程卡、画的图，再是带来源角标的正文、写的文件的卡片和这条回答用到的来源，最后一轮下面是推荐问题；回答时又说的话贴在输入框上沿。模型停下来问用户时出问题卡，要用户位置时出位置卡（取位置在 `locate.js`）。设置窗口（`settings.jsx`）里有记忆（`memory.jsx`）；资料库是单独一页（`/library`，`knowledge.jsx`）。
 - `tests/`：
   - 海报：T1 T2 T4 T5 T6 T8 + 校验重试、风格自定义、cta 绑定等。
   - 对话（都只用假模型）：

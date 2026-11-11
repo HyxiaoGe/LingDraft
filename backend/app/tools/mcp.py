@@ -7,12 +7,17 @@
 MCP 客户端出错时只给一个笼统的 MCPError，看不出 HTTP 状态，所以网关的 401/403、429 在 HTTP 客户端的钩子里认出来：
 - 401/403：密钥不对、网关没放行，配置问题，让这次运行失败、把错误亮出来；
 - 429：网关的每日上限（SERVICE_DAILY_LIMITS），今天再调也一样，工具按“额度用完”告诉模型。
+
+随这一次调用带给服务、不经过模型的东西（MCP 请求的 _meta，比如用户的当前位置，见 app.tools.location）用 request_meta 包住这次调用：
+LangChain 的适配器调工具时不带 _meta，所以带着 _meta 的这一次不走它，直接用 FastMCP 的客户端调，结果整理成和它一样的样子。
 """
 
 from __future__ import annotations
 
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 import httpx2
@@ -27,6 +32,19 @@ from app.tools.gateway import GatewayAuthError, GatewayLimitError
 with warnings.catch_warnings():  # langchain.mcp 还是 beta，导入时警告一次；知道了，不打进日志
     warnings.simplefilter("ignore", LangChainBetaWarning)
     from langchain.mcp import MCPAdapter
+
+_META: ContextVar[dict[str, Any] | None] = ContextVar("mcp_request_meta", default=None)
+
+
+@contextmanager
+def request_meta(meta: dict[str, Any]) -> Iterator[None]:
+    """这里面调的 MCP 工具，请求的 _meta 带上 meta（见模块说明）。不进工具的参数：模型看不到，过程记录、检查点里也没有。"""
+    token = _META.set(meta)
+    try:
+        yield
+    finally:
+        _META.reset(token)
+
 
 # 一次调用最多等这么久：服务自己限时（天气 20 秒、搜索 25 秒、读页 12 秒），网关转发限 30 秒。生图另外给（见 image_mcp）
 CALL_TIMEOUT = 40.0
@@ -71,7 +89,26 @@ class McpTool:
         if found is None:
             raise RuntimeError(f"MCP 里没有 {self.name}（有 {[t.name for t in tools]}）")
         found.description = f"{found.description}\n\n{prompts.render(f'tools.{self.name}.lingdraft')}"
+        found.coroutine = self._with_meta(found.coroutine)  # type: ignore[attr-defined]
         self.tool = self.wrap(found) if self.wrap else found
+
+    def _with_meta(self, plain: Callable[..., Any]) -> Callable[..., Any]:
+        """有 request_meta 的这一次自己调（带上 _meta），别的照常走适配器的。结果和适配器给的一样：内容块的文字、artifact 里整份结果；
+        服务说出错了的（isError）只有文字、没有整份结果，各工具的中间件按没调成处理。"""
+
+        async def call(**arguments: Any) -> Any:
+            meta = _META.get()
+            if not meta:
+                return await plain(**arguments)
+            target = self._target()
+            client = target if isinstance(target, Client) else Client(target)
+            async with client:
+                result = await client.call_tool(self.name, arguments, raise_on_error=False, meta=meta)
+            blocks = [{"type": "text", "text": b.text} for b in result.content if getattr(b, "type", "") == "text"]
+            whole = result.structured_content
+            return blocks, ({"structured_content": whole} if whole is not None and not result.is_error else None)
+
+        return call
 
 
 def find_error[E: BaseException](error: BaseException, kind: type[E]) -> E | None:

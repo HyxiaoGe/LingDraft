@@ -107,6 +107,7 @@ const PLACEHOLDER = {
   failed: "这一轮没有完成，点上面的“重试”",
   asking: "写下你的回答…", // 模型停下来问了：这里写的就是回答
 };
+const PLACEHOLDER_LOCATING = "也可以直接说你在哪…"; // 停下来要的是位置：不给位置、写个地方也行
 const MAX_ANSWER = 2000; // 回答问题最多这么多字（后端 app.tools.ask_user 的 MAX_ANSWER）
 const HELD = "上面那句发出去以后才能再发，也可以撤回它一起改";
 const WITH_IMAGE = "问问图里的内容，或者说说要怎么改";
@@ -271,7 +272,8 @@ function dropFile(thread, key) {
 // onTakeBack：有没发出去的话时，光标在最前面（输入框空着也算）按 ↑ 把它们取回来。光标在最前面时 ↑ 本来什么也不做，不和挪光标抢
 // 模型停下来问用户时（mode 是 asking）：这里写的就是回答，只发字（最多 MAX_ANSWER 个），选着的图和文件留着下一句用
 // work：这一页是工作任务（新页面上选着“工作”，或者开着的是工作任务）：只换占位的字
-export function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSend, onStop, above, onTakeBack, work, tools }) {
+// locating：问着的是位置（见 timeline.jsx 的 LocateCard）：也只换占位的字
+export function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSend, onStop, above, onTakeBack, work, locating, tools }) {
   const [text, setText] = useState(() => getDraft(thread));
   const [images, setImages] = useState(() => attachments.get(thread) || []); // 见 attachments
   const [attachError, setAttachError] = useState(null); // 选图、选文件时说的一句（超过张数、图读不出来）
@@ -557,7 +559,7 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
       <div className={styles.box} onClick={(e) => { if (e.target === e.currentTarget || e.target.hasAttribute("data-blank")) ref.current?.focus(); }}>
         {(images.length > 0 || docs.length > 0) && <Attachments list={images} docs={docs} onRemove={removeImage} onRemoveDoc={removeDoc} />}
         <textarea ref={ref} rows={1} value={text} aria-label="输入"
-          placeholder={queueing && held ? HELD : withWhat && sendNow ? withWhat : (work && PLACEHOLDER_WORK[mode]) || PLACEHOLDER[mode] || PLACEHOLDER.busy}
+          placeholder={queueing && held ? HELD : withWhat && sendNow ? withWhat : asking && locating ? PLACEHOLDER_LOCATING : (work && PLACEHOLDER_WORK[mode]) || PLACEHOLDER[mode] || PLACEHOLDER.busy}
           onChange={(e) => setText(e.target.value)} onPaste={onPaste}
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
