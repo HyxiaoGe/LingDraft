@@ -303,8 +303,9 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
   const enabled = sendNow || asking || (queueing && !held); // 能说话了（光标该回来了）
   // 问着的时候输入框空着：右边是停止（不回答了，这一轮到此为止，2026-11-11 Sean 定）；打了字就变回发送回答
   const canDismiss = asking && !hasText;
-  const stopNow = useRef(null); // 按 Esc 时调的：能停才有
-  stopNow.current = (canStop || canDismiss) && !stopping ? onStop : null;
+  // 按 Esc 时调的：回答进行中才有。问着的时候 Esc 不停，只留停止按钮（2026-11-11 Sean 定：这时没有东西在跑，误按一下这一轮就没了）
+  const stopNow = useRef(null);
+  stopNow.current = canStop && !stopping ? onStop : null;
   useAutoHeight(ref, text);
   useLayoutEffect(() => {
     const r = selectNext.current;
@@ -587,7 +588,7 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
           )}
           {canStop || canDismiss
             ? <button className={styles.send + " " + styles.stop} aria-label={stopping ? "正在停止" : canDismiss ? "不回答，停止这一轮" : "停止回答"}
-              title={stopping ? "正在停止" : canDismiss ? "不回答，停止这一轮（Esc）" : "停止回答（Esc）"} disabled={stopping} onClick={onStop}>
+              title={stopping ? "正在停止" : canDismiss ? "不回答，停止这一轮" : "停止回答（Esc）"} disabled={stopping} onClick={onStop}>
               {stopping ? <Spinner size={14} /> : <IconStop size={13} />}
             </button>
             : <button className={styles.send} aria-label={asking ? "发送回答" : "发送"} disabled={asking ? !hasText || tooLong : !sendNow || !hasText || processing} onClick={send}><IconArrowUp size={15} /></button>}
