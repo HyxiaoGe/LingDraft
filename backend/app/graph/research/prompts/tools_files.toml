@@ -1,0 +1,99 @@
+# 文件：用户发的文件怎么给模型看（[files]）、读文件、查资料库、写文件和改文件。
+# description 是工具说明，和参数同名的键是参数说明，其余是工具结果里给模型看的话。
+
+[files]
+# 用户发的文件：放在那句话前面给模型（存着的消息里没有，见 app.tools.files）。
+# 短的整篇；长的、这句话里放不下的、压缩时压过的（之前几轮）只给目录和开头，用 read_file 读
+full = """<file id="{{ id }}" name="{{ name }}" type="{{ type }}" parts="{{ count }}">
+{{ body }}
+</file>"""
+brief = """<file id="{{ id }}" name="{{ name }}" type="{{ type }}" parts="{{ count }}" shown="outline and beginning">
+{% if facts %}{{ facts }}
+{% endif %}{% if outline %}Outline:
+{{ outline }}
+
+{% endif %}Beginning:
+{{ body }}
+</file>"""
+brief_note = """[{{ "These files are" if n > 1 else "This file is" }} not shown in full{% if earlier %} (shortened to save space){% endif %}. Call read_file with the file id to read specific parts or search the file before relying on what it says.]"""
+gone = """<file id="{{ id }}" name="{{ name }}" type="{{ type }}">
+[This file can no longer be read.]
+</file>"""
+part = """[part {{ n }}: {{ title }}]"""
+sheets = """Sheets: {{ sheets }}"""
+sheet_cut = """Only the first {{ rows }} data rows of {{ names }} were extracted."""
+truncated = """The file is very long; only its first {{ chars }} characters were extracted."""
+
+[tools.read_file]
+# 读用户发的文件（app.tools.files）：短的文件整篇在那句话前面，长的只有目录和开头，模型用它按段读、在文件里找（2026-11-08 Sean 定）
+description = """Read a file in this conversation: one the user attached, or one you wrote with create_file or edit_file (always its latest version). It also reads files in the user's libraries (资料库), by the file id given in search_knowledge results. Each attached file is shown in the user's message inside <file> tags with its id: a short file is shown in full, a long one only by its outline and beginning, and files from earlier turns may have been shortened to save space. A file you wrote is identified by the file_id in the create_file result; its content in earlier turns may have been omitted to save space. Files are split into numbered parts (for a PDF, part n is page n; for a presentation, slide n). Use this to read specific parts, or to search the file for words, when what you need is not already shown. Read what you need before answering or editing; never guess what a part says."""
+file_id = "Id of a file the user attached, as given in its <file> tag, the file_id of a file you wrote in this conversation, or the file id of a library file from search_knowledge results."
+parts = "Part numbers to read, such as \"3\", \"5-8\", or \"2,7,9\". Leave empty to read from the beginning."
+query = "Words or a phrase to search for in the file, in the file's language. Matching parts are returned with the text around each match. Use this instead of parts when you do not know where something is."
+# 工具结果
+not_found = """No file with id {{ id }} exists in this conversation or the user's libraries. Use an id given in a <file> tag, a create_file result, or search_knowledge results; do not guess ids."""
+unavailable = """The file {{ name }} can no longer be read. Tell the user plainly if it matters; do not guess what it says."""
+bad_parts = """"{{ parts }}" is not a valid part range. This file has parts 1 to {{ count }}; give numbers like "3", "5-8", or "2,7,9"."""
+out_of_range = """This file has parts 1 to {{ count }} only."""
+no_match = """No part of {{ name }} contains "{{ query }}". Try other words, a shorter phrase, or read parts directly; the file has {{ count }} parts."""
+matches = """{{ found }} part{{ "s" if found > 1 }} of {{ name }} match "{{ query }}"{% if shown < found %}; the {{ shown }} with the most matches are shown{% endif %}:"""
+cut = """[Output limit reached. Continue with parts="{{ next }}-{{ count }}" if you need the rest.]"""
+part_cut = """[Part {{ n }} is longer than the output limit and was cut here.]"""
+
+[tools.search_knowledge]
+# 查用户的资料库（app.tools.knowledge，2026-11-09 Sean 定；11-10 起界面叫“资料库”、一个人能有几个）：有文件才有这个工具，说明里列出每个资料库的名字、
+# 说明和文件名（Fusion #372：只写库名时模型老是跳过知识库直接上网搜）。告诉模型界面上叫“资料库”，它回答时说法和页面一样。
+# 列表每段对话第一轮取一次，后面沿用（前缀缓存）。“不一定相关、没有就直说”写在结果开头，不写在说明里（Fusion #373、#374：写在说明里 DeepSeek、豆包不照做）
+# 11-10 Sean 定（方案 A）：几个资料库都自动能查；默认查全部，模型可以给 library 只查一个
+description = """Search the user's libraries: documents the user has saved to use across all conversations, grouped into named libraries. The interface calls them 资料库; use that word when you mention them to the user. The libraries and their files:
+{% for lib in libraries %}
+Library "{{ lib.name }}"{% if lib.description %}: {{ lib.description }}{% endif %}
+{% for f in lib.files %}- {{ f }}
+{% endfor %}{% if lib.more %}- and {{ lib.more }} more files
+{% endif %}{% endfor %}
+When the request may be answered by these documents, search them before searching the web: their content, the user's own plans, notes, reports, or materials, or anything the user refers to as their documents, library, or knowledge base. Every library is searched unless you name one in library; name one only when the request clearly concerns that library. Results are the passages closest in meaning to the query, each with its library, file, part number, file id, and source id."""
+query = "What to find: the question or the specific facts you need, in the language of the documents. Search one topic at a time; if the results miss, search again with different words."
+library = "Name of one library to search, exactly as listed. Leave empty to search all of them."
+results = """Passages from {% if library %}the user's library "{{ library }}"{% else %}the user's libraries{% endif %} closest to "{{ query }}", most relevant first. Closest does not mean relevant: use only passages that actually answer the request, and cite each one you use by its source id. If none of them answers it, say plainly that the user's documents do not cover this rather than guessing, and then decide whether to search the web. To see the text around a passage, read that part with read_file using its file id and part number.
+{% for h in hits %}
+[{{ loop.index }}] {{ h.name }}{% if h.title %} · {{ h.title }}{% endif %} (library "{{ h.library }}", file id {{ h.file_id }}, part {{ h.part }})
+Source id: {{ h.id }}
+{{ h.content }}
+{% endfor %}"""
+no_hits = """Nothing in {% if library %}the user's library "{{ library }}"{% else %}the user's libraries{% endif %} matches "{{ query }}". If the wording may be the problem, search again with different words{% if library %} or search all libraries{% endif %}; otherwise say plainly that the user's documents do not cover this rather than guessing, and decide whether to search the web."""
+no_such_library = """There is no library named "{{ library }}". {% if names %}The user's libraries are {% for n in names %}"{{ n }}"{{ ", " if not loop.last }}{% endfor %}. Use one of these names exactly, or leave library empty to search all of them.{% else %}The user has no libraries now.{% endif %}"""
+unavailable = "The user's libraries could not be searched just now. Tell the user if it matters, and do not guess what their documents say."
+empty_query = "The query is empty. Give the question or the facts you need."
+
+[tools.create_file]
+# 模型写文件（app.tools.write_file）：参数的先后照工具定义，标题、类型在前，页面边写边显示时先知道是哪份
+description = """Create a new file for the user: a document (Markdown), a web page (one HTML file), or a code file. It is saved as version 1 and opens in the file panel beside the conversation. Write the complete content in this one call; to change the file later, use edit_file with the file_id this returns. See [Files you write] in your instructions for when to write a file."""
+title = "For a document or web page, its title in the language of the user's request, such as 上海三日游攻略. For a code file, its file name with extension, such as fetch_prices.py."
+type = "markdown for a document, html for a web page, code for any other code or plain-text file."
+content = "The complete content of the file. A document is well-structured Markdown with headings, and puts source ids in square brackets after the facts they support."
+
+[tools.edit_file]
+description = """Revise a file you wrote earlier in this conversation. This saves a new version; earlier versions stay viewable. Give either edits, to change specific passages, or content, to rewrite the whole file. Use edits whenever most of the file stays as it is, even if the change touches several places (for example, a new feature that needs new styles, a new control, and changes to a few functions): one edit for each place. Edits finish sooner for the user and leave the rest of the file exactly as it was. Rewrite with content only when most of the file changes or its overall structure is reorganized. Each old_text must be copied exactly from the current version, including spaces, line breaks, and punctuation, and must appear exactly once in it; include enough surrounding text to make it unique. If you are not sure of the current text, read it with read_file first. Files the user attached cannot be edited; write a new file with create_file instead."""
+file_id = "The file_id of a file you wrote in this conversation, as given in the create_file result. It always refers to the latest version."
+change_note = "A short phrase in the language of the user's request saying what changed in this version, such as 第二节改短 or 补充了交通费用. It is shown to the user on the file card."
+title = "A new title, only if the user asked to rename the file. Leave empty to keep the current title."
+edits = "Changes to specific passages, applied in order. Leave empty when rewriting with content."
+old_text = "Text copied exactly from the current version of the file; it must appear exactly once."
+new_text = "The text that replaces old_text; empty to delete it."
+content = "The complete new content, to rewrite the whole file. Leave empty when using edits."
+
+[tools.write_file]
+# create_file、edit_file 的结果
+saved = """Saved version {{ version }} of "{{ title }}" (file_id: {{ id }}, {{ chars }} characters).{% if redo %} It replaces what you saved earlier in this turn, so it is still version {{ version }}.{% endif %} The user can open it from the file card under your reply. Do not repeat its content in your reply; say briefly what you {{ "changed" if edited else "wrote" }}."""
+cut_off = """The file was not saved: your output reached its maximum length and was cut off in the middle of this call. Write a shorter version, or create the file with the first part and add the rest with edit_file in later calls."""
+unavailable = """The file could not be saved because file storage is unavailable right now. Tell the user plainly that the file was not saved."""
+empty = """The file was not saved because its content is empty."""
+no_title = """The file was not saved because its title is empty. Give it a title."""
+too_long = """The file was not saved: it has {{ chars }} characters, more than the limit of {{ limit }}. Shorten it or split it into several files."""
+not_found = """No file with id {{ id }} was written in this conversation. Use the file_id given in a create_file result; do not guess ids."""
+read_only = """Files the user attached cannot be edited. Write the revised version as a new file with create_file instead."""
+edits_or_content = """Nothing was changed: give either edits or content, not both and not neither."""
+edit_empty = """Nothing was changed: edit {{ n }} has an empty old_text. Copy the exact text to replace from the file."""
+edit_missing = """Nothing was changed: the old_text of edit {{ n }} does not appear in the current version of "{{ title }}". Read that passage with read_file, copy the text exactly, and try again."""
+edit_ambiguous = """Nothing was changed: the old_text of edit {{ n }} appears {{ count }} times in "{{ title }}". Include more surrounding text so that it appears exactly once."""
+no_change = """No new version was saved because the content would not change."""

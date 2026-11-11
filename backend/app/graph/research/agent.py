@@ -68,7 +68,7 @@ TURN_END = "TurnMiddleware.after_agent"  # 一轮的最后一个节点：在它�
 LOOP_ENTRY = "TurnMiddleware.before_model"  # 每次调模型从这个节点开始（工具做完也回到这里）：停在它前面的检查点就是“要调模型了”
 CHINA_TZ = timezone(timedelta(hours=8))
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
-# 系统提示词按这个顺序拼（见 prompts.toml 的 [agent]）
+# 系统提示词按这个顺序拼（见 prompts/agent.toml 的 [agent]）
 # memory 是长期记忆，没有记忆时不拼（见 memory.py）
 SYSTEM_SECTIONS = ("identity", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "files", "memory", "language")
 MEMORY_SECTION = "agent.memory"

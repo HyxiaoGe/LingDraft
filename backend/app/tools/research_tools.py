@@ -1,4 +1,4 @@
-"""agent 自己的工具：取当前时间。工具描述在 app/graph/research/prompts.toml 的 [tools.*]。
+"""agent 自己的工具：取当前时间。工具描述在 app/graph/research/prompts/tools_web.toml 的 [tools.get_current_time]。
 搜索、读网页、查天气、画图是 agent-tools 的 MCP 工具，见 app.tools.web_mcp、weather_mcp、image_mcp。
 
 当前时间：系统提示词里只有日期，几点钟要模型自己来取。放进提示词的话每次请求都不一样，前缀缓存就断了；页面上不显示这一步。

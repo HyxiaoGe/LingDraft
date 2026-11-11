@@ -3,7 +3,7 @@
 出图、存图、改图找原图、比例、缓存、给模型的说明都在 image-service 里，Fusion 和灵稿共用（见 agent-tools 的
 services/image/README.md「产品用的生图工具」）。图存在服务里、归灵稿，结果里只有图片编号，没有地址；
 页面要看时灵稿后端按编号经网关取（见 api.main），删对话、重新回答时按编号删（见 api.research_runner）。
-工具说明后面接上灵稿的一段（prompts.toml 的 tools.generate_image.lingdraft）。这里只做灵稿自己的事（ImageMiddleware）：
+工具说明后面接上灵稿的一段（prompts/tools_images.toml 的 tools.generate_image.lingdraft）。这里只做灵稿自己的事（ImageMiddleware）：
 - 每轮最多画 MAX_IMAGES_PER_TURN 张。照 Fusion：发出去就可能花了钱，没画成的也算；参数不对、找不到原图的服务没去画，不算。
 - 改图只认这段对话里画的、用户发的、还在服务里的图：别的编号（编的、别的对话的、以前灵稿自己存的）不交给服务，照找不到原图告诉模型。
 - 用户发的图（见 history.attached_images）：怎么给模型（看得见的直接看、看不见的调看图工具，说明里都有编号、要改就当 source_image_id）
