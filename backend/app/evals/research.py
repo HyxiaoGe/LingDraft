@@ -189,6 +189,10 @@ class Judge(Protocol):
 
     def rubric(self, said: str, rubric: str, reply: str, today: str) -> RubricJudgement: ...  # today 是那一轮的日期（回放时是录的那天）
 
+    def title(self, said: str, title: str) -> RubricJudgement: ...  # 给这句话起的标题是不是标题（见 decisions 的 title）
+
+    def brief(self, said: str, briefs: list[dict], today: str) -> RubricJudgement: ...  # 写给子 agent 的交代（见 decisions 的 brief）
+
 
 class LiveJudge:
     """models.toml 里 roles.judge 那个模型，不开思考，结构化输出。换被测的模型（--model）时裁判不变，分数才比得了。"""
@@ -211,6 +215,13 @@ class LiveJudge:
 
     def rubric(self, said: str, rubric: str, reply: str, today: str) -> RubricJudgement:
         return self._ask(RubricJudgement, "rubric", said=said, rubric=rubric, reply=reply, today=today)
+
+    def title(self, said: str, title: str) -> RubricJudgement:
+        return self._ask(RubricJudgement, "title", said=said, title=title)
+
+    def brief(self, said: str, briefs: list[dict], today: str) -> RubricJudgement:
+        """briefs 是这一下派出去的每个子 agent 的 {title, prompt}，一起看：有一份不行就不通过。"""
+        return self._ask(RubricJudgement, "brief", said=said, briefs=briefs, today=today)
 
 
 # ---- 跑一轮 ----

@@ -167,3 +167,123 @@
   work: true
   source: 查东西缺条件（没说哪儿）：出卡问、正文里问都行；不该的是没问就挑一个城市查
   expect: {looked_up: false}
+
+# ---- 稳定的常识、手头就能做的活：直接答，不去查 ----
+# 2026-11-11 提示词梳理补的：“什么时候搜”在提示词里写了三处（agent.tool_selection、agent.tool_usage、搜索工具的说明），要合并之前先有个底。
+# 该查的那一边有 lookup-* 的整段用例；不该查的这一边之前一句都没有。
+# 跑这一组：decisions --decision 'direct-*' --samples 5 --no-sources，Auto（不给 --model）和 --model deepseek-v4-pro --no-thinking 各一遍。
+# 句子从哪来分三种，source 里写明：Sean 在 dev 上问的原话只有一句（他平时问的大多是要查的）；
+# 三句是他那几段对话里页面给的推荐问题（模型写的）；剩下四句是我照提示词点名的类别造的，只用来看有没有改坏，不拿来调提示词。
+# 11-11 的底：Auto 40/40、Pro 关思考 40/40 都没查、直接答（Auto 把其中 4 句判成复杂，走的是开思考的 Pro）
+
+- id: direct-ev-fast
+  say: 电动车为什么能跑那么快
+  source: Sean 11-07 在 dev 上问的原话（Auto，当时没查直接答的）：原理类的常识
+  expect: {looked_up: false, replied: true}
+
+- id: direct-ev-topspeed
+  say: 电动车起步快，但为什么很多车型的极速反而不如燃油车？
+  source: 上面那段对话回答后页面给的推荐问题：原理类的常识
+  expect: {looked_up: false, replied: true}
+
+- id: direct-ev-battery
+  say: 电动车频繁急加速会对电池寿命和续航有什么影响？
+  source: 同上，另一个推荐问题：经验和原理，不靠最新的事实
+  expect: {looked_up: false, replied: true}
+
+- id: direct-ink-avatar
+  say: 水墨头像的构图有什么讲究，怎么让它在小尺寸下也清晰好看？
+  source: Sean 11-08 在 dev 上那段画头像的对话后页面给的推荐问题：经验类的建议
+  expect: {looked_up: false, replied: true}
+
+- id: direct-translate
+  say: 把这句话翻译成英文：这个功能下周上线，上线前还要再测一轮。
+  source: 我造的。提示词点名不用查的类别：翻译用户给的文字
+  expect: {looked_up: false, replied: true}
+
+- id: direct-code
+  say: 用 Python 写一个函数，把嵌套的列表拍平成一层
+  source: 我造的。提示词点名不用查的类别：写代码（只用到语言本身，不涉及哪个库现在怎么用）
+  expect: {looked_up: false, replied: true}
+
+- id: direct-write
+  say: 帮我写一段 100 字左右的生日祝福，送给刚退休的老师
+  source: 我造的。提示词点名不用查的类别：写作
+  expect: {looked_up: false, replied: true}
+
+- id: direct-background
+  say: HTTPS 握手的时候为什么要先用非对称加密，再换成对称加密？
+  source: 我造的。提示词写了“光是提到某个产品、协议不等于要搜”：问的是不变的背景和原因
+  expect: {looked_up: false, replied: true}
+
+# ---- 派子 agent：交代里别把没查过的当前事实当成已知 ----
+# 2026-11-01 Sean 在页面上试，Pro 想 5 秒就派出去，交代里凭印象写了版本号，子 agent 照着白搜了好几次；
+# 之后 task 工具的说明里加了“拿不准的当前事实别当成已知写进交代，列成要查的”（prompts/subagent.toml 的 [tools.task]），当时只人看了 4 次，没留用例。
+# brief: true：这一下派了子 agent 的，裁判看交代（标准在 app/evals/prompts.toml 的 [brief]）；先自己搜一下再派的、不派的都不算错，也不检查。
+# 跑这一组：decisions --decision 'brief-*' --samples 5 --no-sources --model deepseek-v4-pro，开着思考、关着思考（--no-thinking）各一遍。
+# 看的只是第一次调模型：先自己搜、下一步才派的那种，交代写得怎么样这里看不到（要录整段才有）。
+# 11-11 的底（Pro）：版本号那句开、关思考各 5 次都直接派，10 次交代里的版本号都标了“例如、大概、以查到的为准”，通过；
+# 购房政策开思考派了 2 次（通过）、其余先自己搜；折叠屏 10 次都先自己搜；框架那句开思考派了 4 次，都把记忆里 AutoGen 拆成了哪几个项目当背景写（裁判判不稳，见 README）
+
+- id: brief-langs
+  say: 帮我分别深入调研一下 Rust、Go、Zig 这三门语言 2026 年下半年各自的版本更新和主要变化
+  source: 出事的就是这一类（版本号）。句子是 11-02 量子 agent 预算时我写的（docs LangGraph研究/实验/06-subagent-budget/e2e.py），那次实验三遍 Pro 都派了三个子 agent
+  brief: true
+
+- id: brief-cities
+  say: 帮我对比一下杭州、成都、武汉这三个城市 2026 年出台的购房支持政策
+  source: 同上那次实验的另一句：现行政策的条款和数字
+  brief: true
+
+- id: brief-foldables
+  say: 帮我对比下2026年新出的折叠屏手机，出一份对比报告
+  source: Sean 11-10 在 dev 上问的原话（他是在工作任务里问的，模型先出了问题卡；这里当对话问，看它直接动手时怎么写）：现在有哪些产品
+  brief: true
+
+- id: brief-frameworks
+  say: 帮我分别深入调研一下 LangGraph、CrewAI、AutoGen 这三个 agent 框架，各自现在最新的版本有哪些主要变化
+  source: 我造的，照出事的那一类换个题目：更新很快的库，凭印象写的版本号多半已经过时
+  brief: true
+
+# ---- 起标题：起的是标题，不是去回答这句话 ----
+# 2026-11-02：原话直接贴在提示词后面时，问题看起来要最新信息，起标题的模型就去回答它（“抱歉，我无法提供 2026 年 10 月苹果发布会……”），
+# 或者把原话照抄回来；之后提示词里把原话包进 <conversation>、写明是要概括的材料（prompts/background.toml 的 [title]）。
+# 11-07 起页面不用不像标题的（agent.usable_title），拿原话顶，所以出了事页面上看不出来，只能在这里量。
+# title: true：不调主 agent，只调起标题那一下（roles.title 的模型，--model 管不到）。
+# 跑这一组：decisions --decision 'title-*' --samples 5。除了第一句，都是 Sean 在 dev 上新对话的第一句话。
+# 11-11 的底（Flash）：35/35 都是标题，没有去回答、拒答、反问或照抄的
+
+- id: title-apple-event
+  say: 2026 年 10 月苹果发布会发布了什么？
+  source: 11-02 出事的那一类。原话没留下来，这句是照当时那句拒答（见上）倒推的
+  title: true
+
+- id: title-openai-funding
+  say: OpenAI融资和估值缩水是怎么回事
+  source: Sean 11-08 在 dev 上问的原话：要查最新消息的问题
+  title: true
+
+- id: title-nvidia-news
+  say: 帮我调研下英伟达最近的新闻进展
+  source: Sean 11-10 在 dev 上问的原话：让它去做一件事
+  title: true
+
+- id: title-weather
+  say: 明天天气怎么样
+  source: Sean 11-11 在 dev 上问的原话：很短、缺条件，容易反问“哪个城市”
+  title: true
+
+- id: title-nearby-food
+  say: 附近有什么好吃的
+  source: Sean 11-11 在 dev 上问的原话：要位置才答得了，容易说“我不知道你在哪”
+  title: true
+
+- id: title-gpu-price
+  say: 显卡价格连续下跌，现在DIY装机和买整机哪个划算
+  source: Sean 11-08 在 dev 上问的原话：长一些、要给建议的，容易照抄或者直接给结论
+  title: true
+
+- id: title-ask-first
+  say: 帮我做个下周去成都的出行计划，开始前先用问题卡问我
+  source: Sean 11-10 在 dev 上问的原话：话里带着指示（先问我），起标题的不该照着做
+  title: true
