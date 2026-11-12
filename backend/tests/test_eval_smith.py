@@ -226,7 +226,7 @@ def test_decisions_cli_uploads_each_sample(offline_eval, tmp_path):
     assert {f["key"] for f in offline_eval.m_feedback} == {"passed", "looked_up", "replied"}
 
 
-def test_decisions_cli_runs_first_message_decisions_without_a_recording(offline_eval, tmp_path):
+def test_decisions_cli_runs_first_message_decisions_without_a_recording(offline_eval, tmp_path, capsys):
     """只写一句话的决策点不用先录；--decision 可以用 * 挑一组。"""
     asks = [d for d in decisions.load_decisions() if d.id.startswith(("ask-yes-", "ask-no-"))]
     assert asks and all(d.say and d.case is None and d.expect.asked is not None for d in asks)
@@ -243,8 +243,14 @@ def test_decisions_cli_runs_first_message_decisions_without_a_recording(offline_
     assert all(d.work for d in asks)
     # --no-thinking：关着思考跑，写进结果文件名和开头；要和 --model 一起给
     assert got["thinking"] == "default"
-    decisions.main(["--decision", "ask-no-question", "--samples", "1", "--model", "deepseek-flash", "--no-thinking", "--no-sources"])
+    decisions.main(["--decision", "direct-translate", "--samples", "1", "--model", "deepseek-flash", "--no-thinking", "--no-sources"])
     off = [json.loads(p.read_text(encoding="utf-8")) for p in (tmp_path / "results").glob("*-nothink.json")]
     assert len(off) == 1 and off[0]["thinking"] == "off" and off[0]["results"][0]["model"]["thinking"] is False
+    # 工作任务关不了思考（2026-11-12 Sean 定）：它的决策点给了 --no-thinking 也是开着跑的，每条结果里记的是实际的，并且说一声
+    capsys.readouterr()
+    decisions.main(["--decision", "ask-no-question", "--samples", "1", "--model", "deepseek-flash", "--no-thinking", "--no-sources", "--label", "work"])
+    on = [json.loads(p.read_text(encoding="utf-8")) for p in (tmp_path / "results").glob("*-nothink-work.json")]
+    assert len(on) == 1 and on[0]["results"][0]["model"]["thinking"] is True
+    assert "一直开着思考" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         decisions.main(["--decision", "ask-no-question", "--samples", "1", "--no-thinking"])

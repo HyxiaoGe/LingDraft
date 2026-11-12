@@ -273,7 +273,7 @@ async def export_zip(thread_id: str):
 
 
 class ResearchMessageBody(BaseModel):
-    """thinking 是输入框旁边的思考开关，没给按模型的默认（能开关的默认开）。
+    """thinking 是输入框旁边的思考开关，没给按模型的默认（能开关的默认开）。只管对话：工作任务不看它，一直按模型的默认（2026-11-12 Sean 定）。
     work 只在新建对话时看：true 是工作任务，没给是对话；定下以后整段不变（2026-11-11 Sean 定）。接着说、排队、改最后一句的请求里
     带了也不看（11-11 以前每句话都能换，那时打开着的页面还会带，所以还收着）。
     files 是这句话带的文件的编号（先传到 /api/files、解析好了才能发），最多 history.MAX_FILES 个。"""

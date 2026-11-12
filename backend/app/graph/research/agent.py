@@ -252,10 +252,13 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         Work 的轮 Auto 不看难易，一律用复杂的那个（Pro，游客是备用）。2026-11-11 Sean 定：Work 本身就是复杂的活；真实模型评测里
         Kimi K3 拿着问用户的工具不用（3 次里 0 次出问题卡）。自己选了模型的不受影响。
         11-11 以前一段对话里每句话都能换模式：Chat 开头、定了给简单问题的免费模型的，第一次 Work 的轮起换成复杂的那个、不再换回去
-        （_begin 记进 auto_model）；现在模式按对话定，这种情况只剩那时候的对话。"""
+        （_begin 记进 auto_model）；现在模式按对话定，这种情况只剩那时候的对话。
+        Work 的轮也不看思考开关，按模型的默认（能开关的就是开；一直思考、不思考的照旧）。2026-11-12 Sean 定：思考开关只管对话。
+        同一张表、同一句话让 DeepSeek V4 Pro 分析，关思考 5 次每次回答里都有算错、说错的地方（3 次把上半年销售额除以开业以来的时间，
+        最低的门店成了“最高”），开思考 4 次没有。在这里管而不是在收下这句话时：老页面还带着关、重新回答以前关着发的轮，也都是开。"""
         catalog, msgs = self.planner.catalog, state["messages"]
         human = msgs[history.last_human(msgs)]
-        thinking = history.thinking_switch(human)
+        thinking = None if history.work_switch(human) else history.thinking_switch(human)
         now = self.planner.clock.now()
         if history.work_switch(human):
             pick = catalog.pick(False, _guest(runtime), self.planner.usable, now)

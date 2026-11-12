@@ -545,7 +545,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--label", default="", help="写进结果文件名，方便对比")
     ap.add_argument("--no-smith", action="store_true", help="不传 LangSmith（配了 LANGSMITH_API_KEY 时默认传）")
     ap.add_argument("--model", default=AUTO, help="对话选哪个模型（app/models.toml 里选项的 id），默认 Auto；裁判不跟着换")
-    ap.add_argument("--no-thinking", action="store_true", help="关着深度思考跑；不给按选项的默认，能开关的默认开")
+    ap.add_argument("--no-thinking", action="store_true", help="关着深度思考跑；不给按选项的默认，能开关的默认开。只管对话的用例：工作任务一直开着思考，给了也不关")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--record", action="store_true", help="真跑，把工具结果录下来（整份换掉这些用例原来的录像）")
     mode.add_argument("--replay", action="store_true", help="用录像回放工具结果，没对上的真调并补录；时钟挪到录的时候")

@@ -630,6 +630,7 @@ function Attachments({ list, docs, onRemove, onRemoveDoc }) {
 // 模型按钮点不开（2026-11-09 Sean 定：点开了又选不了，体验不好），桌面悬停、键盘移上去时在上方说一句（LOCKED_NOTE），去掉下拉箭头；
 // 手机没有悬停：模型能开关思考的，点开弹层只有思考开关和这句话（思考开关在手机上只在这里），不能开关的点了浮出这句话、几秒后收起。
 // 思考开关每句话都能改，按下去不抢光标（输入框里的字和光标都留着）。
+// thinkAlways：工作任务，深度思考一直开着、关不了（2026-11-12 Sean 定：开关只管对话）。开关显示成开、点不动，说明换成 THINK_WORK。
 // 模型分两组：可用（“自动”排第一个，只写名字，不写它现在用哪个、不加说明：2026-11-07 Sean 定）、登录后可用（游客锁着的，默认收起）。
 // 每个模型前面是厂商的小图标（见 ModelIcon），输入框里的模型按钮上也有。
 // 桌面是菜单：往放得下的那边开（新对话的输入框在页面中间，往下开），高度按那边剩下的空间，再多就在里面滚，第一项不会被切掉。
@@ -638,7 +639,8 @@ function Attachments({ list, docs, onRemove, onRemoveDoc }) {
 // locked：对话开始了，模型不能换。游客看到的要登录的模型（m.locked）点了去登录（onLogin），登录了还锁着的（只给管理员的）不列，见 ModelList。
 // loading：模型列表还没取到、或者打开的对话状态还没回来，先放一块占位（输入框照常能打字、能发，按 Auto）
 const LOCKED_NOTE = "对话开始后不能换模型，想换模型请开新对话";
-export function ModelTools({ models, loading, current, locked, onPick, thinking, onThinking, onLogin }) {
+export function ModelTools({ models, loading, current, locked, onPick, thinking: picked, onThinking, thinkAlways, onLogin }) {
+  const thinking = thinkAlways || picked;
   const mobile = !!useContext(NavContext)?.mobile;
   const [open, setOpen] = useState(false);
   const [tip, setTip] = useState(false); // 定下以后那句说明浮着
@@ -680,7 +682,7 @@ export function ModelTools({ models, loading, current, locked, onPick, thinking,
   );
   return (
     <div className="relative flex min-w-0 items-center gap-1" ref={box}>
-      {toggle && !mobile && <ThinkToggle on={thinking} onChange={onThinking} />}
+      {toggle && !mobile && <ThinkToggle on={thinking} onChange={onThinking} always={thinkAlways} />}
       <button ref={btn} className={styles.modelBtn} aria-haspopup={opens ? (mobile ? "dialog" : "menu") : undefined} aria-expanded={opens ? open : undefined}
         aria-disabled={hint || undefined} aria-describedby={hint ? "ws-model-tip" : undefined}
         aria-label={mobile && toggle ? `${name}，深度思考${thinking ? "已开" : "已关"}` : undefined}
@@ -698,7 +700,7 @@ export function ModelTools({ models, loading, current, locked, onPick, thinking,
       )}
       {open && mobile && (
         <ModelSheet title={locked ? name : "选模型"} onClose={close}>
-          {toggle && <ThinkSwitch on={thinking} onChange={onThinking} />}
+          {toggle && <ThinkSwitch on={thinking} onChange={onThinking} always={thinkAlways} />}
           <div className={menu.note}>{locked ? LOCKED_NOTE : "开始对话后不能换模型"}</div>
           {list}
         </ModelSheet>
@@ -710,34 +712,40 @@ export function ModelTools({ models, loading, current, locked, onPick, thinking,
 // 深度思考：开、关各是什么样（2026-11-06 Sean 定这段话，不写具体秒数、额度）
 const THINK_ON = "开：先想清楚再答，复杂问题更稳，要多等一会儿、多花点额度";
 const THINK_OFF = "关：直接答，更快更省";
+// 工作任务里（2026-11-12 Sean 定这个意思：开关只对对话有效，为了保证质量工作任务关不了）
+const THINK_WORK = "为了保证质量，工作任务里深度思考一直开着，不能关。";
 
-// 桌面的思考开关：悬停或用键盘移到上面时，在上方说明开、关的差别（不用浏览器自带的 title：出得慢、键盘看不到）。Esc 收起说明
-function ThinkToggle({ on, onChange }) {
+// 桌面的思考开关：悬停或用键盘移到上面时，在上方说明开、关的差别（不用浏览器自带的 title：出得慢、键盘看不到）。Esc 收起说明。
+// always：工作任务，点不动，说明只有 THINK_WORK 一句
+function ThinkToggle({ on, onChange, always }) {
   const [tip, setTip] = useState(false);
   useLayer(tip, () => setTip(false)); // 说明浮着时 Esc 先收说明（光标在输入框里也是），再按才停止回答
   return (
     <span className="relative inline-flex" onMouseEnter={() => setTip(true)} onMouseLeave={() => setTip(false)}>
-      <button className={styles.think + (on ? " " + styles.on : "")} aria-pressed={on} aria-describedby="ws-think-tip" onMouseDown={(e) => e.preventDefault()} onClick={() => onChange(!on)}
+      <button className={styles.think + (on ? " " + styles.on : "")} aria-pressed={on} aria-disabled={always || undefined} aria-describedby="ws-think-tip"
+        onMouseDown={(e) => e.preventDefault()} onClick={() => !always && onChange(!on)}
         onFocus={(e) => { if (e.currentTarget.matches(":focus-visible")) setTip(true); }} onBlur={() => setTip(false)}>
         <IconBulb size={14} />深度思考
       </button>
       <span id="ws-think-tip" role="tooltip" className={styles.tip + (tip ? " " + styles.show : "")}>
         <b>深度思考{on ? "已开" : "已关"}</b>
-        <span className={on ? styles.cur : undefined}>{THINK_ON}</span>
-        <span className={on ? undefined : styles.cur}>{THINK_OFF}</span>
+        {always ? <span className={styles.cur}>{THINK_WORK}</span> : <>
+          <span className={on ? styles.cur : undefined}>{THINK_ON}</span>
+          <span className={on ? undefined : styles.cur}>{THINK_OFF}</span>
+        </>}
       </span>
     </span>
   );
 }
 
-// 底部弹层里的思考开关：一整行都能点，下面写明开、关的差别
-function ThinkSwitch({ on, onChange }) {
+// 底部弹层里的思考开关：一整行都能点，下面写明开、关的差别。always：工作任务，点不动，下面只有 THINK_WORK 一句
+function ThinkSwitch({ on, onChange, always }) {
   return (
     <div className="mb-1 border-b border-line pb-3">
-      <button className={styles.switchRow} role="switch" aria-checked={on} aria-describedby="ws-think-desc" onClick={() => onChange(!on)}>
+      <button className={styles.switchRow} role="switch" aria-checked={on} aria-disabled={always || undefined} aria-describedby="ws-think-desc" onClick={() => !always && onChange(!on)}>
         <IconBulb size={16} /><span className="flex-1">深度思考</span><span className={"ws-switch" + (on ? " on" : "")} aria-hidden="true" />
       </button>
-      <p id="ws-think-desc" className="m-0 flex flex-col gap-1 px-3 text-[13px] leading-[1.6] text-muted"><span>{THINK_ON}</span><span>{THINK_OFF}</span></p>
+      <p id="ws-think-desc" className="m-0 flex flex-col gap-1 px-3 text-[13px] leading-[1.6] text-muted">{always ? <span>{THINK_WORK}</span> : <><span>{THINK_ON}</span><span>{THINK_OFF}</span></>}</p>
     </div>
   );
 }

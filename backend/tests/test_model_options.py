@@ -245,6 +245,32 @@ def test_regenerate_and_edit_take_a_new_thinking_switch():
     assert _records(st)[0]["model"]["thinking"] is False and len(st["turns"]) == 1
 
 
+def test_work_tasks_always_think():
+    """工作任务不看思考开关（2026-11-12 Sean 定：开关只管对话）：新建、接着说、重新回答、改话带了关都照常思考，子 agent 也是；
+    关不掉、开不了的模型照旧；对话不受影响。"""
+    p = FakeResearchPlanner()
+    http, rr = _client(p)
+    st = _create(http, "直接答：你好", model="doubao-seed-2-1-pro", thinking=False, work=True)
+    tid, base = st["thread_id"], f"/api/research/threads/{st['thread_id']}"
+    assert st["work"] is True
+    assert _records(st)[0]["model"] == {"ref": DOUBAO, "thinking": True, "effort": _records(st)[0]["model"]["effort"]}
+    p.model_uses.clear()
+    st = last(events(say(http, tid, "子任务：查一下", thinking=False)), "state")
+    assert [(r["model"]["thinking"], r["subagent_model"]["thinking"]) for r in _records(st)] == [(True, True)] * 2
+    assert (ModelUse(ref=LITE, thinking=False), True) not in p.model_uses and not any(not u.thinking for u, _ in p.model_uses)
+    st = last(events(http.post(f"{base}/regenerate", json={"thinking": False})), "state")
+    assert _records(st)[-1]["model"]["thinking"] is True
+    st = last(events(http.post(f"{base}/edit", json={"text": "直接答：改一下", "thinking": False})), "state")
+    assert _records(st)[-1]["model"]["thinking"] is True and st["turns"][-1]["user"] == "直接答：改一下"
+    # 不思考的模型（never）在工作任务里也不思考：看的是模型的默认，不是硬开
+    p.catalog = p.catalog.model_copy(update={"options": [o.model_copy(update={"thinking": "never"}) if o.id == "doubao-seed-2-1-pro" else o
+                                                         for o in p.catalog.options]})
+    st = last(events(say(http, tid, "直接答：再说一句", thinking=True)), "state")
+    assert _records(st)[-1]["model"]["thinking"] is False
+    # 对话照开关
+    assert _records(_create(http, "直接答：你好", model="doubao-seed-2-1-pro", thinking=False))[0]["model"]["thinking"] is False
+
+
 def test_retired_model_switches_to_auto_without_its_thinking():
     """厂商停了的模型：老对话下一轮起改用 Auto，之后都是 Auto；发给新模型的之前几轮不带原来那个模型的思考。只是不再提供的照常用。"""
     p = FakeResearchPlanner()

@@ -93,6 +93,9 @@
   color: var(--muted); font-size: 12.5px; white-space: nowrap; transition: background .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease); }
 @media (hover: hover) { .think:hover { background: var(--hover); color: var(--ink2); } }
 .think.on { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-line); }
+/* 工作任务里关不了的思考开关：不像能点；弹层里那一行的开关淡一点、按下去不变色 */
+.think[aria-disabled="true"], .switchRow[aria-disabled="true"] { cursor: default; }
+.switchRow[aria-disabled="true"] :global(.ws-switch) { opacity: .55; }
 .modelBtn { position: relative; min-width: 0; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 4px 0 8px; border-radius: var(--r-sm);
   color: var(--ink2); font-size: 13px; white-space: nowrap; transition: background .15s var(--ease); }
 .modelBtn[aria-expanded="true"] { background: var(--hover); }
@@ -158,7 +161,7 @@
   text-align: left; font-size: 16px; color: var(--ink); }
 /* 触屏没有悬停（悬停的灰底都包在 hover: hover 里）；按下去的那一下给灰底 */
 @media (hover: none) {
-  [data-sheet] .row:active:not(:disabled), [data-sheet] .group.toggle:active, .switchRow:active, .attach:active:not(:disabled) { background: var(--hover); }
+  [data-sheet] .row:active:not(:disabled), [data-sheet] .group.toggle:active, .switchRow:active:not([aria-disabled="true"]), .attach:active:not(:disabled) { background: var(--hover); }
 }
 
 /* 手机：看得见的不变，透明点按区补到 44px，相邻的不重叠 */

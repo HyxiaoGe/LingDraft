@@ -56,7 +56,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
 
 ## 对话接口
 
-前缀 `/api/research/threads`。除了取图，接口都要带 `Authorization: Bearer <令牌>`（游客令牌或 auth 服务的 access token，见下面的“身份和其他接口”），没带、不对、过期都是 401。线程不存在、不归这个人，一律 404。请求体是 json `{"text", "thinking", "work", "files"}`（`thinking` 是思考开关，不给按模型的默认；`work` 只在新建对话时看：true 是工作任务，不给是对话，见下面；`files` 见下面的“图片和文件”），说的话为空返回 400；正在跑、或者上一轮没跑完时，大多数操作返回 409（各接口另有的 409 写在后面）；开始一轮之前额度用完了返回 429（见“存储”里的额度）。
+前缀 `/api/research/threads`。除了取图，接口都要带 `Authorization: Bearer <令牌>`（游客令牌或 auth 服务的 access token，见下面的“身份和其他接口”），没带、不对、过期都是 401。线程不存在、不归这个人，一律 404。请求体是 json `{"text", "thinking", "work", "files"}`（`thinking` 是思考开关，不给按模型的默认，只管对话：工作任务不看它，一直按模型的默认，见下面；`work` 只在新建对话时看：true 是工作任务，不给是对话，见下面；`files` 见下面的“图片和文件”），说的话为空返回 400；正在跑、或者上一轮没跑完时，大多数操作返回 409（各接口另有的 409 写在后面）；开始一轮之前额度用完了返回 429（见“存储”里的额度）。
 
 - 说话：
   - `GET /api/models`：新对话能选的模型（`models`：`{id, name, description, thinking, model, locked}`，Auto 在第一个；`model` 是主 agent 用的“厂商:模型”，页面按它给每轮找名字；这一档选不了的也列出来，`locked` 为 true）。`names` 是选项以外、回答开头可能出现的模型（Auto 用的免费额度）的名字和图标。回答开头显示的这个名字也写进这一轮的系统提示词（`prompts/agent.toml` 的 `[agent].model`，`Catalog.shown_name`）：问到是什么模型，模型照实说，和页面对得上；一次调用里换了备用的，发给备用的那份写备用自己。
@@ -71,6 +71,9 @@ cd ../frontend && npm install && npm run dev                    # http://localho
     工作任务的每一轮系统提示词多一段（`prompts/agent.toml` 的 `[agent].work`：计划、调研、写报告这类任务先问用户再动手），并且给模型问用户的工具
     `ask_user`；对话的轮两样都没有，硬调了工具也不停下来。接着说、排队、改写、重新回答的请求里带了 `work` 也不看。对话的状态、线程列表的每一行、
     每轮的记录里都有 `work`。2026-11-11 以前每句话都能换，那时的对话里有过 Work 的轮的算工作任务（`history.work_mode`）。
+    工作任务的轮不看思考开关，按模型的默认（能开关的就是开，`TurnMiddleware._plan`）：新建、接着说、重新回答、改写带了 `"thinking": false` 也照常思考，
+    子 agent 一样。2026-11-12 Sean 定：同一张表、同一句话让 V4 Pro 在沙箱里分析，关思考 5 次每次回答里都有算错、说错的地方，开思考 4 次没有。
+    页面上工作任务的思考开关显示成开、点不动，设置里写明开关只对对话有效。
   - `/{id}/answer`：回答模型问的问题，`{"id", "text"}`；`{"id", "skip": true}` 是跳过；`{"id", "mute": true}` 是问题卡上的“别再问了”：这个问题当跳过
     （同一条消息里还等着的别的问题也跳过），并且这段对话记成不再问（状态里的 `asks_off`）。之后的轮也不给 `ask_user`，`work` 那段换成
     `[agent].work_quiet`（不先问，自己定并说明；只有用户知道、没法合理假设的条件在正文里问）。
