@@ -57,11 +57,13 @@ from app.identity import Identity, is_guest_sub
 from app.graph.research.sources import collect_sources, export_markdown, subagent_messages
 from app.graph.research.state import AttachedFile, AttachedImage, Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
+from app.scheduled import rule
 from app.scheduled import service as scheduled
 from app.scheduled.service import ScheduledTasks
 from app.scheduled.store import MemoryTaskStore, PostgresTaskStore, Task, TaskStore
 from app.model_guard import ContentBlocked, Interrupted, ModelUnavailable
 from app.tools.ask_user import ASK, MAX_ANSWER, AskAnswer
+from app.tools.schedule import when as say_when
 from app.tools.location import DECLINED, PROVIDED, SAID, UNAVAILABLE, Device, PlaceAnswer, Places, holder
 from app.tools.gateway import IMAGE_ID, SANDBOX_MAX_UPLOAD_BYTES, GatewayError
 from app.tools.run_command import Sandbox
@@ -1460,6 +1462,22 @@ class ResearchRunner(BaseRunner):
             if t.id not in self._scheduled.values():
                 await self.tasks.finished(t.id, scheduled.LOST)
 
+    def read_schedule(self, who: Identity, text: str) -> dict:
+        """表单里“自定义”的时间：一句话（“每个月的第 1、15 号早上 9 点半”）由轻量模型转成 cron 或一个时间点，照样过校验。
+        返回 {cron, once_at, schedule（给人看的一行）, next_at}。没看懂、转出来的不合规矩抛 scheduled.TaskError（UNCLEAR_TIME，
+        太密、已经过了的照原来的 code）；模型出错照常抛出。这次调模型记在这个人名下，不扣他的额度（同起标题）。"""
+        return aio.run(self._aread_schedule(who.sub, text))
+
+    async def _aread_schedule(self, owner: str, text: str) -> dict:
+        with costs.within(costs.Scope(owner=owner)):
+            cron, run_at = await self.planner.when(" ".join(text.split()), say_when(self.tasks.now()))
+        if bool(cron) == bool(run_at):
+            raise scheduled.TaskError(scheduled.UNCLEAR_TIME, text)
+        try:
+            return self.tasks.schedule_of(cron or None, run_at or None)
+        except scheduled.TaskError as e:  # 写法不对的算没看懂；太密、时间过了、永远到不了的，照实告诉用户
+            raise scheduled.TaskError(scheduled.UNCLEAR_TIME, text) if e.code in (rule.BAD_CRON, rule.BAD_TIME) else e from None
+
     def scheduled_tasks(self, who: Identity) -> list[dict]:
         """这个人的定时任务，先建的在前。"""
         return [self.tasks.view(t) for t in aio.run(self.tasks.of_owner(who.sub))]
@@ -1478,7 +1496,8 @@ class ResearchRunner(BaseRunner):
 
     def run_task(self, who: Identity, task_id: str) -> dict:
         """立即执行一次（不动原来定的下一次；停着的、跑完了的也能执行），返回任务现在的样子（thread_id 是跑在哪段对话里）。
-        那段对话正在跑抛 RunConflict，卡着（上一轮没跑完、在等回答）抛 NotIdle；没有这个任务抛 scheduled.TaskError。"""
+        没跑起来抛 scheduled.TaskError：那段对话正在跑（THREAD_BUSY）、卡着（上一轮没跑完、在等回答，THREAD_STUCK）、
+        点的工夫任务刚被改了（CHANGED）、没有这个任务（NOT_FOUND）。"""
         return aio.run(self._arun_task(who, task_id))
 
     async def _arun_task(self, who: Identity, task_id: str) -> dict:
@@ -1488,9 +1507,9 @@ class ResearchRunner(BaseRunner):
         got = await self._afire(t, manual=True)
         if got in (BUSY, GONE):  # GONE：点的工夫任务被删了（下面取任务时报没有），或者它挂着的那段对话刚删了
             await self.tasks.get(who.sub, task_id)
-            raise RunConflict("这段对话正在回答，等它答完再运行" if got == BUSY else "任务刚有改动，再点一次")
+            raise scheduled.TaskError(scheduled.THREAD_BUSY if got == BUSY else scheduled.CHANGED)
         if got == scheduled.BLOCKED:
-            raise NotIdle("这段对话上一轮没跑完，先去对话里看看")
+            raise scheduled.TaskError(scheduled.THREAD_STUCK)
         return self.tasks.view(await self.tasks.get(who.sub, task_id))
 
     # ---- 运行记录 ----

@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator,
 
 PATH = Path(__file__).with_name("models.toml")
 AUTO = "auto"
-ROLES = ("title", "suggest", "probe", "summarize", "dream", "judge", "route", "vision")
+ROLES = ("title", "suggest", "probe", "summarize", "dream", "judge", "route", "vision", "schedule")
 FREE_TIER = "free_tier"  # 免费额度的调用记账时的价格类型（见 Catalog.rate）
 # 谁在用：游客（没登录也能聊）、登录用户、管理员，从低到高（2026-11-06 Sean 定，credits 的额度也按这三档）。选项的 access 是最低哪一档能选
 TIERS = ("guest", "user", "admin")

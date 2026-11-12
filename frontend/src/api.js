@@ -407,3 +407,49 @@ export async function followResearchThread(threadId, after, onEvent, signal) {
   const q = after ? `?after=${encodeURIComponent(after)}` : "";
   return sse(`/api/research/threads/${threadId}/events${q}`, {}, onEvent, signal);
 }
+
+// ---- 定时任务（见后端 app/scheduled，页面是 scheduled.jsx）：到点了灵稿自己在一段对话里多跑一轮。只给登录用户，游客 available 是 false ----
+
+// {available, tasks: [{id, title, prompt, cron | once_at, schedule（“每天 · 08:00”）, status: active / paused / done, paused_by: user / failures,
+//  thread_id（跑在哪段对话里，还没跑过是 null）, work, model, next_at, last_at, last_status: running / ok / failed / stopped / no_credits / blocked / lost}],
+//  limit（最多几个，跑完了的一次性任务不算）}
+export async function getScheduledTasks(signal) {
+  const resp = await authFetch("/api/scheduled-tasks", { signal });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 建一个：{title, prompt, cron 或 once_at, work?, model?}，回建好的任务。不收时抛 httpError，detail 是 {code: "task_rejected", reason, message, limit?}
+// （reason 见 scheduled.jsx 的 taskErrorText）
+export async function createScheduledTask(body) {
+  const resp = await authFetch("/api/scheduled-tasks", postJson(body));
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 改名称、交代、什么时候运行，或者暂停、恢复（{status: "paused" | "active"}）；没给的不改。回改好的任务
+export async function updateScheduledTask(id, body) {
+  const resp = await authFetch(`/api/scheduled-tasks/${encodeURIComponent(id)}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 删掉，以后不再运行（跑出来的对话留着）。keepalive：关页面时撤销还没过期，照样发出去
+export async function deleteScheduledTask(id, { keepalive = false } = {}) {
+  const resp = await authFetch(`/api/scheduled-tasks/${encodeURIComponent(id)}`, { method: "DELETE", keepalive });
+  if (!resp.ok && resp.status !== 404) throw await httpError(resp);
+}
+
+// 立即运行一次（不动原来定的下一次），回任务（thread_id 是跑在哪段对话里）。额度用完了 429；那段对话正在回答、卡着 409（reason: thread_busy / thread_stuck / changed）
+export async function runScheduledTask(id) {
+  const resp = await authFetch(`/api/scheduled-tasks/${encodeURIComponent(id)}/run`, { method: "POST" });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
+// 表单里“自定义”的时间：一句话（“每个月的第 1、15 号早上 9 点半”）转成 {cron | once_at, schedule, next_at}，不存。没看懂 422（unclear_time）
+export async function readSchedule(text, signal) {
+  const resp = await authFetch("/api/scheduled-tasks/schedule", { ...postJson({ text }), signal });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}

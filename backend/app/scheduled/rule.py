@@ -5,7 +5,7 @@
 分钟那一段只能是一个数：一小时里最多跑一次（2026-11-12 定最密每小时一次）。
 只跑一次的：一个时间点（没带时区的按北京时间）。
 
-页面上怎么说（describe）：每小时、每天、每周几、每月几号这几种常见的写成中文，别的照原样给表达式。
+页面上怎么说（describe）：都写成中文（“每天 · 07:22”“工作日 · 09:00–18:00 每小时”），不把表达式给人看。
 没用现成的 cron 库：要的只是“下一次是什么时候”，几十行；依赖里没有（croniter 这类），不为这个加一个。
 """
 
@@ -118,22 +118,49 @@ def _hhmm(h: int, m: int) -> str:
     return f"{h:02d}:{m:02d}"
 
 
+def _weekly(c: Cron) -> str:
+    if c.weekdays == frozenset(range(5)):
+        return "工作日"
+    if c.weekdays == frozenset({5, 6}):
+        return "周末"
+    return "每周" + "、".join(WEEKDAYS[d] for d in sorted(c.weekdays))
+
+
+def _days(c: Cron) -> str:
+    """哪些日子：每天、工作日、每周一、每月 1、15 号、每年 6 月的工作日……日和周都写了的是“或”（对上一个就算）。"""
+    by_day, by_week = not c.any_day and len(c.days) < 31, not c.any_weekday and len(c.weekdays) < 7
+    if not (c.any_day or c.any_weekday) and not (by_day and by_week):
+        by_day = by_week = False  # 两段都写了、其中一段是全的：对上一个就算，也就是每天
+    nums = "、".join(str(d) for d in sorted(c.days))
+    if len(c.months) == 12:
+        return f"每月 {nums} 号或{_weekly(c)}" if by_day and by_week else f"每月 {nums} 号" if by_day else _weekly(c) if by_week else "每天"
+    year = f"每年 {'、'.join(str(m) for m in sorted(c.months))} 月"
+    if by_day:
+        return f"{year} {nums} 号" + (f"或{_weekly(c)}" if by_week else "")
+    return f"{year}的{_weekly(c)}" if by_week else f"{year}每天"
+
+
+def _times(c: Cron) -> tuple[str, str]:
+    """一天里的哪些时间：（接在日子后面的“每小时”“每 2 小时”，没有是空的；点后面的那一截）。"""
+    hours = sorted(c.hours)
+    first, last = _hhmm(hours[0], c.minute), _hhmm(hours[-1], c.minute)
+    steps = {b - a for a, b in zip(hours, hours[1:], strict=False)}
+    if len(hours) == 24:
+        return "每小时", f"第 {c.minute} 分"
+    if len(hours) > 3 and len(steps) == 1:  # 隔得一样远的一串
+        n = steps.pop()
+        if n > 1 and hours[0] < n and hours[-1] + n > 23:  # 一整天都在跑
+            return f"每 {n} 小时", f"{first} 起"
+        return "", f"{first}–{last} 每小时" if n == 1 else f"{first}–{last} 每 {n} 小时"
+    return "", "、".join(_hhmm(h, c.minute) for h in hours)
+
+
 def describe(cron: str | None, once_at: datetime | None) -> str:
-    """页面上那一行“每天 · 07:22”。常见的几种写成中文，别的给表达式本身。"""
+    """页面上那一行“每天 · 07:22”：都说成中文，不把表达式给人看（模型、表单里“自定义”建的可以是任何写法）。"""
     if cron is None:
         return f"仅一次 · {once_at.astimezone(CHINA_TZ):%Y-%m-%d %H:%M}" if once_at else ""
     c = parse_cron(cron)
-    if len(c.months) < 12 or not (c.any_day or c.any_weekday):
-        return cron
-    if len(c.hours) == 24 and c.any_day and c.any_weekday:
-        return f"每小时 · 第 {c.minute} 分"
-    if len(c.hours) > 3:
-        return cron
-    times = "、".join(_hhmm(h, c.minute) for h in sorted(c.hours))
-    if not c.any_day:
-        return f"每月 {'、'.join(str(d) for d in sorted(c.days))} 号 · {times}"
-    if c.any_weekday or len(c.weekdays) == 7:
-        return f"每天 · {times}"
-    if c.weekdays == frozenset(range(5)):
-        return f"工作日 · {times}"
-    return f"每周{'、'.join(WEEKDAYS[d] for d in sorted(c.weekdays))} · {times}"
+    days, (often, times) = _days(c), _times(c)
+    if often:
+        return f"{'' if days == '每天' else days}{often} · {times}"
+    return f"{days} · {times}"

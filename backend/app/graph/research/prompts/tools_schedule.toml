@@ -45,6 +45,27 @@ not_found = "There is no scheduled task with this id. Call list_scheduled_tasks 
 bad_status = "Not saved: paused must be true or false."
 
 [scheduled]
+# 定时任务表单里“自定义”的时间（照豆包：用一句话说，比如“每个月的第 1、15、30 号早上 9 点半”）：轻量模型转成 cron 或一个时间点，
+# 转出来的照样过 app.scheduled.rule 的校验。now 是现在（北京时间，带星期），“明天”“下周一”这类按它算。看不懂、表达不了的两样都空着，页面请用户换个说法。
+# 比每小时一次还密的照用户说的写出来，不让模型自己拦：拦在校验那里，页面才说得出“最密每小时运行一次”（让模型留空的话只能说“没看懂”）
+when = """Convert a user's description of when a scheduled task should run into a schedule. The current time is {{ now }} (Asia/Shanghai). The description is usually in Chinese.
+
+- A repeating schedule: give cron, a 5-field cron expression in Asia/Shanghai time, 'minute hour day-of-month month day-of-week', and leave run_at empty. Numbers, *, lists such as 1,15, ranges such as 1-5 and steps such as */2 are supported; day-of-week is 0-7, where 0 and 7 are Sunday. Names such as MON, and L, W and #, are not supported. Write the schedule as the user described it, even when it is more often than once an hour; the limit on how often a task may run is checked afterwards.
+- A single run: give run_at as 'YYYY-MM-DD HH:MM' in Asia/Shanghai, worked out from the current time, and leave cron empty.
+- When the description gives a day but no time of day, use 09:00.
+- Leave both empty when the text does not say when to run, or when it cannot be written this way, such as the last day of every month.
+
+Examples:
+"每个月的第 1、15、30 号早上 9 点半" -> cron "30 9 1,15,30 * *"
+"工作日下午六点" -> cron "0 18 * * 1-5"
+"每两小时一次" -> cron "0 */2 * * *"
+"每周一和周四晚上 8 点 15" -> cron "15 20 * * 1,4"
+"每 10 分钟" -> cron "*/10 * * * *"
+"随便什么时候都行" -> both empty
+
+Description:
+{{ text }}"""
+
 # 定时任务触发的一轮：发给模型时接在任务里存的那份交代前面（app.tools.schedule.with_run_notes），存下来的消息里没有，页面上也不显示。
 # 没人在场：不问、不等确认，自己定并说明；没有新东西就照实说，不凑数。at 是触发的时间（北京时间，带星期），模型不用再去取
 run = """[Scheduled run]

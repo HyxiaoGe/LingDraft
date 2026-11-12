@@ -62,6 +62,7 @@ log = logging.getLogger(__name__)
 PROBE_WORKERS = 4  # 单条送审同时发几个
 TITLE_TIMEOUT = 8  # 照 Fusion：起标题的超时（秒）
 FIRST_TOKEN_S = 30  # 主 agent、子 agent 等第一个片段最多多少秒，过了换备用（2026-11-08 Sean 定，见 model_guard 的说明）。实测 V4 Pro 10 万 token 没命中缓存约 10 秒
+WHEN_TIMEOUT = 20  # 定时任务表单里把一句话说的时间转成 cron 的超时（秒）：用户在表单里等着
 ROUTE_TIMEOUT = 10  # Auto 第一句话判断难易的超时（秒）：慢了当复杂，不让用户多等
 TITLE_MAX_TOKENS = 64  # 起标题最多生成这么多：标题要的是 15 个字以内，模型不照做、去回答问题时到这里就截住
 SUMMARY_MAX_TOKENS = 2000  # 写短版最多生成这么多（要的是 300 词、600 字以内）
@@ -73,6 +74,13 @@ class Route(BaseModel):
     model_config = ConfigDict(extra="forbid")
     reason: str = Field(description="One short sentence on why")
     simple: bool = Field(description="True if a lightweight model can answer this conversation well")
+
+
+class When(BaseModel):
+    """一句话说的“什么时候跑”转成的：重复的给 cron，只跑一次的给 run_at，看不懂的两样都空着。"""
+    model_config = ConfigDict(extra="forbid")
+    cron: str = Field(description="For a repeating schedule: a 5-field cron expression in Asia/Shanghai time. Otherwise an empty string.")
+    run_at: str = Field(description="For a single run: the date and time in Asia/Shanghai as 'YYYY-MM-DD HH:MM'. Otherwise an empty string.")
 
 
 class Suggestions(BaseModel):
@@ -101,6 +109,8 @@ class ResearchPlanner(Protocol):
     async def route(self, text: str) -> bool: ...  # Auto 第一句话：简单的（轻量模型就够）返回 True；出错照常抛出（调用方当复杂）
 
     async def suggest(self, question: str, reply: str) -> list[str]: ...
+
+    async def when(self, text: str, now: str) -> tuple[str, str]: ...  # 一句话说的什么时候跑 →（cron，run_at），看不懂的都是空的（见 When）
 
     async def blocked(self, texts: Sequence[str]) -> list[bool]: ...
 
@@ -496,6 +506,7 @@ class LiveResearchPlanner:
         self._summarizer = RoleModel(self.catalog, "summarize", self.usable, timeout=120, max_tokens=SUMMARY_MAX_TOKENS)
         self._dreamer = RoleModel(self.catalog, "dream", self.usable, timeout=300)
         self._router = RoleModel(self.catalog, "route", self.usable, timeout=ROUTE_TIMEOUT, guard="判断难易")  # 熔断单独记，理由和起标题一样
+        self._scheduler = RoleModel(self.catalog, "schedule", self.usable, timeout=WHEN_TIMEOUT, guard="认时间")  # 定时任务表单里一句话说的时间
         self._viewer = RoleModel(self.catalog, "vision", self.usable, timeout=120, guard="看图")  # 看图工具；熔断单独记：它坏了不拦别的用 Flash 的
         # Auto 的两个、备用的先建好：没配 key 在这里就报错，不等到第一个对话
         auto = self.catalog.plan(None, None, self.usable)
@@ -540,6 +551,11 @@ class LiveResearchPlanner:
         res = await self._router.ainvoke([("user", prompts.render("route.prompt", message=text))], {"run_name": "route"}, lambda m: _structured(m, Route))
         log.info("Auto 判断难易：%s（%s）", "简单" if res.simple else "复杂", res.reason)
         return res.simple
+
+    async def when(self, text: str, now: str) -> tuple[str, str]:
+        res = await self._scheduler.ainvoke([("user", prompts.render("scheduled.when", text=text, now=now))], {"run_name": "schedule"},
+                                            lambda m: _structured(m, When))
+        return res.cron.strip(), res.run_at.strip()
 
     async def suggest(self, question: str, reply: str) -> list[str]:
         res = await self._suggester.ainvoke([("user", prompts.render("suggest.prompt", question=question, reply=reply))], {"run_name": "suggest"},
@@ -1622,6 +1638,8 @@ class FailingModel(BaseChatModel):
 
 
 FAKE_BLOCKED = "【审核不通过】"
+# 假模型认得的几句“什么时候跑”（见 FakeResearchPlanner.when）：重复的、只跑一次的、太密的（转出来的不合规矩，由服务拒掉）
+FAKE_WHEN = {"每个月 1 号和 15 号早上 9 点半": ("30 9 1,15 * *", ""), "2099 年元旦早上九点": ("", "2099-01-01 09:00"), "每 5 分钟": ("*/5 * * * *", "")}
 FAKE_SIMPLE = "简单问题"  # 假模型判断难易：第一句话里有这几个字算简单（只是离线的假实现，真的由模型判断）
 _CUT: set[str] = set()  # 假模型“中途断”已经断过的（模型的前缀:这一轮那条用户消息的 id）
 FAKE_REMEMBER = "记住："  # 假模型整理记忆时，用户说的这几个字后面那句记成一条
@@ -1664,6 +1682,7 @@ class FakeResearchPlanner:
         self.model_uses: list[tuple[ModelUse, bool]] = []  # 每次调模型用的（模型, 是不是子 agent），测试看选对了没有
         self.broken: dict[str, BaseChatModel] = {}  # 这些模型（"厂商:模型"）换成坏的（FailingModel），测换备用
         self.fail_route = False
+        self.fail_when = False
         self.calls: list[tuple[str, Any]] = []
         self.fail_title = False
         self.dream_replies: list[str] = []  # 整理记忆时按顺序给这些回答；用完了照 dream 的说明
@@ -1706,6 +1725,13 @@ class FakeResearchPlanner:
         if self.fail_route:
             raise RuntimeError("假模型：判断难易失败")
         return FAKE_SIMPLE in text
+
+    async def when(self, text: str, now: str) -> tuple[str, str]:
+        """认得 FAKE_WHEN 里那几句，别的都当看不懂（只是离线的假实现，真的由模型转）。"""
+        self.calls.append(("when", text))
+        if self.fail_when:
+            raise RuntimeError("假模型：认时间失败")
+        return FAKE_WHEN.get(text, ("", ""))
 
     async def suggest(self, question: str, reply: str) -> list[str]:
         self.calls.append(("suggest", question))

@@ -34,7 +34,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - 选项（`[[options]]`）是输入框旁边能选的，Auto 在第一个。模型写成 LangChain `init_chat_model` 的“厂商:模型”，可以另配子 agent 用的模型、思考开关（`toggle` 用户能开关、`always`、`never`）和思考强度（不给用户看）。`vision = true` 是看得见图（用户发的图直接给它看，看不见的用看图工具，见下面的“图片和文件”）。没配 key 的那家不出现在列表里。`status = "hidden"` 是新对话不再提供、老对话照常用；`"retired"` 是厂商也停了，老对话从下一轮起改用 Auto。`access` 是最低哪一档能选（`guest` 游客、`user` 登录用户、`admin` 管理员；不写是 `user`）：游客能选 Auto 和轻量模型，要登录的照样列出来、页面上锁着，直接调接口选它返回 403。Auto 必须给游客。
   - 对话第一句话时定下选项，之后不能换（Auto 例外，由系统在里面换）。每一轮开始时定下这一轮主 agent、子 agent 用的模型，记进这一轮的记录（`model_catalog.Catalog.plan`）；之前几轮是别的模型答的，发过去时不带那几轮的思考。
   - `max_output`：主 agent、子 agent 每次最多输出多少 token（思考也算），现在是 65536。不带的话有的厂商默认只有几千，模型写长文件会被截断。
-  - 内部用途（`[roles]`）：起标题（`title`）、推荐问题（`suggest`）、单条送审（`probe`）、写短版（`summarize`）、整理记忆（`dream`）、评测的裁判（`judge`）、Auto 判断难易（`route`）、看图工具（`vision`）各用哪个，不跟着选项走。除了单条送审，都先走同一个模型的免费额度。
+  - 内部用途（`[roles]`）：起标题（`title`）、推荐问题（`suggest`）、单条送审（`probe`）、写短版（`summarize`）、整理记忆（`dream`）、评测的裁判（`judge`）、Auto 判断难易（`route`）、看图工具（`vision`）、定时任务表单里一句话说的时间（`schedule`）各用哪个，不跟着选项走。除了单条送审，都先走同一个模型的免费额度。
   - Auto（`[auto]`，`Catalog.pick`）：对话第一句话由 `route` 判断难易（最多等 10 秒，等不到、出错当复杂），定下以后整段沿用。复杂的用 Auto 选项的模型（`deepseek:deepseek-v4-pro`），游客用备用；简单的按到期日从早到晚挑第一个还能用的免费额度（没有 `same_as` 的那种），都用不了用备用。备用是 `fallback`（选项 `deepseek-flash`）。工作任务（新建时选的“工作”）不判断难易，一律按复杂的走（`TurnMiddleware._plan`）。
   - 免费额度（`[[free]]`）：各家给的试用额度，现在是百炼（`dashscope`）和 TokenHub（`tokenhub`）的。`until` 那天北京时间 0 点起不再用。写了 `same_as` 的和某个选项是同一个模型：用到那个模型的（选了它、Auto 判为复杂、子 agent、内部用途、备用 Flash）都先走免费额度，用完、到期、出错再走直连，页面上还是那个选项。没有 `same_as` 的只给 Auto 判为简单的用，要写 `name`、`icon`（回答开头显示，见 `/api/models` 的 `names`）。免费模型不能同时是选项或内部用途。厂商报额度用完（`model_guard.FREE_TIER_CODES`，百炼还有 403 `insufficient_quota`）就记进 `free_used_up` 表，重启以后也不再用；续了额度改 `until` 就重新能用。
   - 换备用（`agent.ModelSelect`）：这次调模型不可用（包括首字超时、免费额度用完；走免费额度时认不出来的出错也算），按“免费额度 → 直连的同一个模型 → 备用 Flash 的免费额度 → 直连的 Flash”往下换，试过的不再试，换到头照常失败。换的时候发 `model` 事件，流出了半截的先发 `restart`。Auto 的对话以后几轮都用换上的那个；用户自己选的只这一轮换。子 agent 只做“免费额度 → 直连”这一步，这个子任务剩下的都用直连。
@@ -260,9 +260,10 @@ SSE 事件：
 
 接口（游客：`GET` 的 `available` 是 false，其余 403 `login_required`；别人的、没有的 404）：
 
-- `GET /api/scheduled-tasks`：`{available, tasks, limit}`。每个任务有 `id`、`title`、`prompt`、`cron` 或 `once_at`、`schedule`（给人看的一行，像“每天 · 07:22”）、`status`（`active` / `paused` / `done`）、`paused_by`、`thread_id`、`work`、`model`、`next_at`、`last_at`、`last_status`（`running` / `ok` / `failed` / `stopped` / `no_credits` / `blocked` / `lost`）。
+- `GET /api/scheduled-tasks`：`{available, tasks, limit}`。每个任务有 `id`、`title`、`prompt`、`cron` 或 `once_at`、`schedule`（给人看的一行，像“每天 · 07:22”“工作日 · 09:30–18:30 每小时”；什么写法都说成中文，不把表达式给人看）、`status`（`active` / `paused` / `done`）、`paused_by`、`thread_id`、`work`、`model`、`next_at`、`last_at`、`last_status`（`running` / `ok` / `failed` / `stopped` / `no_credits` / `blocked` / `lost`）。
 - `POST /api/scheduled-tasks`（json `{title, prompt, cron | once_at, work?, model?}`）建；`PATCH /api/scheduled-tasks/{id}` 改，没给的不改，`status` 给 `paused` / `active` 是暂停、恢复；`DELETE` 删，跑出来的对话留着。不收的 `detail` 是 `{code: "task_rejected", reason, message, …}`：写得不对 422（`bad_title` / `bad_prompt` / `no_schedule` / `bad_cron` / `too_often` / `never_runs` / `bad_time` / `in_the_past`），满了 409（`too_many`，带 `limit`）。
-- `POST /api/scheduled-tasks/{id}/run`：立即执行一次，不动原来定的下一次，停着的也能跑。额度用完 429；那段对话正在回答、上一轮没跑完 409。
+- `POST /api/scheduled-tasks/{id}/run`：立即执行一次，不动原来定的下一次，停着的也能跑。额度用完 429；没跑起来 409，`reason` 是 `thread_busy`（那段对话正在回答）、`thread_stuck`（那段对话上一轮没跑完）、`changed`（点的工夫任务刚被改了）。
+- `POST /api/scheduled-tasks/schedule`（json `{text}`，最多 200 字）：表单里“自定义”的时间。用户用一句话说什么时候跑（“每个月 1 号和 15 号早上 9 点半”），轻量模型（`models.toml` 的 `schedule` 用途，提示词是 `prompts/tools_schedule.toml` 的 `scheduled.when`）转成 cron 或一个时间点，照样过上面的校验；只校验不存，返回 `{cron, once_at, schedule, next_at}`，页面拿去显示、存的时候再发回来。没看懂、表达不了的 422 `unclear_time`；比每小时一次还密的照用户说的转出来、拦在校验那里（`too_often`），页面才说得出为什么；模型没答上来 503 `busy`。
 
 ## 身份和其他接口
 

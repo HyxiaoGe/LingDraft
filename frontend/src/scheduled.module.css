@@ -1,0 +1,132 @@
+/* 定时任务页（scheduled.jsx）：占对话那一栏，上面是和对话页一样的顶栏，中间自己滚，最底下是和对话一样的输入框。
+   卡片两列（放不下两列时一列），正文那一栏和对话同宽（832）。窗口用 dialog.module.css 的外壳 */
+.page { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
+.scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.wrap { display: flex; flex-direction: column; gap: 28px; max-width: 888px; margin: 0 auto; padding: 24px 28px 32px; }
+.wrap > :global(.ws-error) { margin: 0; }
+.new { gap: 4px; }
+
+.groupHead { margin-bottom: 10px; font-size: 13px; font-weight: 500; color: var(--muted); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.grid > li { min-width: 0; }
+
+/* 任务卡片：上面整块能点，下面一行是什么时候运行和三个钮 */
+.card { display: flex; flex-direction: column; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg);
+  transition: border-color .15s var(--ease), box-shadow .15s var(--ease); }
+@media (hover: hover) { .card:hover { border-color: var(--line2); box-shadow: 0 2px 10px rgba(20, 24, 31, .06); } }
+.card.open { border-color: var(--line2); }
+.cardMain { flex: 1; display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding: 14px 16px 12px; border-radius: var(--r-lg) var(--r-lg) 0 0;
+  text-align: left; color: inherit; }
+.cardMain:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cardHead { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cardTitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; }
+.running { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--accent); }
+.cardPrompt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; min-height: 42px; font-size: 13px; line-height: 21px;
+  color: var(--muted); overflow-wrap: anywhere; }
+.cardNote { font-size: 12px; line-height: 1.5; color: var(--warn); }
+.cardFoot { display: flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 6px 0 16px; border-top: 1px solid var(--line); }
+.when { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.when svg { flex: none; color: var(--faint); }
+.when span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 三个钮：有鼠标时移到卡片上（或者键盘走到卡片里、开着菜单）才出来；触屏上一直在 */
+.acts { flex: none; display: flex; align-items: center; gap: 2px; }
+.acts :global(.ws-icon-btn):disabled { opacity: .45; }
+@media (hover: hover) {
+  .acts { opacity: 0; transition: opacity .12s var(--ease); }
+  .card:hover .acts, .card:focus-within .acts, .card.open .acts { opacity: 1; }
+}
+
+/* 为你推荐：虚线边的例子，右边一个加号 */
+.preset { display: flex; align-items: center; gap: 12px; width: 100%; height: 100%; min-height: 72px; padding: 12px 14px 12px 16px; border: 1px dashed var(--line2);
+  border-radius: var(--r-lg); text-align: left; color: inherit; transition: border-color .15s var(--ease), background .15s var(--ease); }
+@media (hover: hover) {
+  .preset:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); }
+  .preset:hover:not(:disabled) .presetPlus { color: var(--accent); }
+}
+.preset:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.preset:disabled { opacity: .5; }
+.presetText { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.presetAbout { font-size: 13px; line-height: 1.5; color: var(--muted); }
+.presetPlus { flex: none; color: var(--faint); transition: color .15s var(--ease); }
+
+/* 空的、游客、正在取 */
+.none { padding: 28px 24px; border: 1px dashed var(--line2); border-radius: var(--r-lg); text-align: center; }
+.none b, .empty b { display: block; font-weight: 500; }
+.none p, .empty p { margin-top: 4px; font-size: 13px; line-height: 1.6; color: var(--muted); text-wrap: pretty; }
+.empty { display: flex; flex-direction: column; align-items: center; max-width: 420px; margin: 0 auto; padding: 72px 24px 48px; text-align: center; }
+.empty :global(.ws-btn) { margin-top: 16px; }
+.emptyIcon { color: var(--faint); margin-bottom: 12px; }
+.status { color: var(--muted); font-size: 13px; padding: 24px; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; }
+
+/* 最底下的输入框（框和发送钮用对话输入框的样式） */
+.ask { padding: 10px 28px 20px; }
+.askTools { display: flex; justify-content: flex-end; margin-top: 4px; }
+
+/* 新建、编辑的窗口 */
+form.form { max-width: 520px; }
+.formTitle { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+.fieldHead { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 14px 0 6px; font-size: 13px; font-weight: 500; }
+.field { display: block; width: 100%; height: 40px; border: 1px solid var(--line2); border-radius: var(--r); padding: 0 12px; font-size: 14px; color: var(--ink);
+  background: var(--paper); transition: border-color .15s var(--ease), box-shadow .15s var(--ease); }
+.field:focus { outline: none; border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
+.field::placeholder { color: var(--faint); }
+.area { height: auto; min-height: 104px; padding: 9px 12px; line-height: 1.6; resize: vertical; }
+.select { appearance: none; padding-right: 32px; cursor: pointer; text-overflow: ellipsis;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a8f98' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center; }
+.pair { display: flex; align-items: flex-end; gap: 16px; }
+.grow { flex: 1; min-width: 0; }
+
+/* 几选一的一排：一条浅灰的槽，选中的那一格白底浮起来 */
+.seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: var(--r); background: var(--hover); }
+.seg button { height: 34px; padding: 0 14px; border-radius: calc(var(--r) - 3px); font-size: 13.5px; color: var(--muted); white-space: nowrap;
+  transition: background .15s var(--ease), color .15s var(--ease); }
+.seg button[aria-checked="true"] { background: var(--paper); color: var(--ink); font-weight: 500; box-shadow: 0 0 0 1px var(--line), 0 1px 2px rgba(20, 24, 31, .06); }
+:global(.ws[data-theme="dark"]) .seg button[aria-checked="true"] { background: var(--sel); } /* 深色下白底那一格换成选中的灰（同新页面的对话 / 工作开关） */
+@media (hover: hover) { .seg button:hover:not([aria-checked="true"]) { color: var(--ink2); } }
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.modes { display: flex; }
+.modes button { flex: 1; padding: 0 4px; }
+
+/* “重复”选了哪种，下面跟着要填的 */
+.rule { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; margin-top: 10px; }
+.inline { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink2); }
+.minute { width: 76px; text-align: center; }
+.time { width: 132px; }
+.date { width: 232px; max-width: 100%; }
+.days { display: flex; gap: 6px; }
+.days button { width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--line2); font-size: 13.5px; color: var(--ink2);
+  transition: background .15s var(--ease), border-color .15s var(--ease), color .15s var(--ease); }
+.days button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--paper); font-weight: 500; }
+@media (hover: hover) { .days button:hover:not([aria-pressed="true"]) { background: var(--hover); } }
+.days button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.custom { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.customRow { display: flex; gap: 8px; }
+.customRow .field { flex: 1; min-width: 0; }
+.customRow :global(.ws-btn) { flex: none; height: 40px; }
+.read { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink2); }
+.read svg { flex: none; color: var(--ok); }
+.zone { margin-top: 8px; font-size: 12px; color: var(--faint); }
+.form :global(.ws-error) { margin: 14px 0 0; }
+.formActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+@media (max-width: 720px) {
+  .wrap { gap: 24px; padding: 16px 16px 24px; }
+  .new { height: 44px; padding: 0 12px; font-size: 14px; }
+  .cardFoot { padding-right: 0; }
+  .preset { min-height: 76px; }
+  .empty :global(.ws-btn), .status :global(.ws-btn), .formActions :global(.ws-btn), .customRow :global(.ws-btn) { height: 44px; }
+  .formActions :global(.ws-btn) { flex: 1; justify-content: center; padding: 0 16px; font-size: 14px; }
+  .ask { padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); }
+  .field { height: 44px; font-size: 16px; } /* iOS 上聚焦不自动放大页面 */
+  .area { height: auto; }
+  .pair { flex-direction: column; align-items: stretch; gap: 0; }
+  .seg button { height: 38px; } /* 加上槽的上下 3px 正好 44 */
+  .seg { display: flex; }
+  .seg button { flex: 1; padding: 0 4px; }
+  .days { justify-content: space-between; width: 100%; gap: 0; }
+  .days button { width: 44px; height: 44px; }
+  .time { width: 148px; }
+  .date { width: 100%; }
+  .minute { width: 84px; }
+}
