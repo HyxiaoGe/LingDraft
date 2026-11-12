@@ -108,6 +108,30 @@ def test_store_delete_thread(store):
     assert store.for_thread("t1") == [] and [r["id"] for r in store.for_thread("t2")] == ["b"]
 
 
+def test_store_unread(store):
+    """未读记在归谁那张表上：每次加一、通知换成最近那一次；看过了清零；没归谁的不记；跟着对话并进账号，删对话一起没。"""
+    store.claim("t1", "guest:a")
+    store.claim("t2", "u9")
+    assert store.unread_of("guest:a") == {}
+    store.notify("t1", {"title": "早报", "text": "第一次", "ok": True})
+    store.notify("t1", {"title": "早报", "text": "", "ok": False})
+    store.notify("nobody", {"title": "x", "text": "", "ok": True})
+    got = store.unread_of("guest:a")
+    assert list(got) == ["t1"] and got["t1"]["unread"] == 2
+    n = got["t1"]["notice"]
+    assert (n["title"], n["text"], n["ok"]) == ("早报", "", False) and n["at"].endswith("+00:00")
+    assert store.unread_of("u9") == {}
+    assert store.transfer("guest:a", "u9") == 1 and store.unread_of("u9")["t1"]["unread"] == 2
+    store.mark_read("t1")
+    store.mark_read("t2")  # 没有未读的：什么都不动
+    assert store.unread_of("u9") == {}
+    store.notify("t1", {"title": "早报", "text": "又一次", "ok": True})
+    assert store.unread_of("u9")["t1"]["unread"] == 1
+    store.delete_thread("t1")
+    assert store.unread_of("u9") == {}
+    store.delete_thread("t2")
+
+
 def test_store_pending_messages(store):
     """排着的话：每个对话、每种方式一句；又说的接在后面（front 放到前面），取走就没了；删掉对话一起删。"""
     assert store.get_pending("t1", QUEUE) is None and store.take_pending("t1", QUEUE) is None

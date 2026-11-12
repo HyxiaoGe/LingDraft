@@ -21,6 +21,7 @@ from app.quota import Limits
 from app.research_llm import FakeResearchPlanner, FakeToolModel
 from app.scheduled import rule
 from app.scheduled import service as sv
+from app.scheduled.notice import opening
 from app.scheduled.rule import CHINA_TZ, BadRule
 from app.scheduled.service import ScheduledTasks, TaskError
 from app.scheduled.store import MemoryTaskStore
@@ -769,6 +770,78 @@ def test_running_conversation_makes_the_task_wait(clock):
     _settled(client, t["id"])
     _fire(rr, client, t["id"])  # 下一拍：跑了
     assert len(state(client, first["thread_id"])["turns"]) == 2
+
+
+# ---- 跑完以后的未读和通知 ----
+
+
+def _row(client: TestClient, tid: str, **headers) -> dict:
+    return next(r for r in client.get("/api/research/threads", **({"headers": headers} if headers else {})).json()["threads"] if r["thread_id"] == tid)
+
+
+def test_finished_run_leaves_an_unread_notice(clock):
+    rr, client = _api(clock)
+    t = _create(client)
+    clock[0] = at(13, 7, 22)
+    tid = _fire(rr, client, t["id"])["thread_id"]
+    row = _row(client, tid)
+    assert row["unread"] == 1
+    n = row["notice"]
+    assert (n["title"], n["text"], n["ok"]) == ("每日简报", "直接回答：这个问题不用查。", True) and n["at"]
+    client.patch(f"/api/scheduled-tasks/{t['id']}", json={"title": "早报"})
+    clock[0] = at(14, 7, 22)
+    _fire(rr, client, t["id"])
+    again = _row(client, tid)
+    assert again["unread"] == 2 and again["notice"]["title"] == "早报" and again["notice"]["at"] > n["at"]
+    # 看过了：清零。别人的对话 404，不清
+    assert client.post(f"/api/research/threads/{tid}/read", headers=bearer(user_token("u2"))).status_code == 404
+    assert _row(client, tid)["unread"] == 2
+    read = client.post(f"/api/research/threads/{tid}/read").json()
+    assert (read["thread_id"], read["unread"], read["notice"]) == (tid, 0, None) and _row(client, tid)["unread"] == 0
+    # 用户自己说的一轮不算未读
+    assert last(events(say(client, tid, "直接答：好")), "state")["status"] == "idle"
+    assert _row(client, tid)["unread"] == 0
+
+
+def test_failed_run_is_unread_too_and_a_stopped_one_is_not(clock):
+    rr = flaky_runner(None, _scheduled_call)  # 定时触发的这一轮第一次调模型就断了
+    rr, client = _api(clock, rr)
+    t = _create(client)
+    clock[0] = at(13, 7, 22)
+    tid = _fire(rr, client, t["id"])["thread_id"]
+    row = _row(client, tid)
+    assert row["unread"] == 1 and row["notice"] == {"title": "每日简报", "text": "", "ok": False, "at": row["notice"]["at"]}
+
+    rr, client = _api(clock)
+    t = _create(client)
+    gate = hold_model(rr.planner)
+    try:
+        tid = client.post(f"/api/scheduled-tasks/{t['id']}/run").json()["thread_id"]
+        assert client.post(f"/api/research/threads/{tid}/stop").status_code == 200
+    finally:
+        gate.set()
+    assert _settled(client, t["id"])["last_status"] == sv.STOPPED
+    assert _row(client, tid)["unread"] == 0  # 用户自己点了停止：人就在场
+
+
+def test_notice_text_is_the_plain_opening_of_the_reply():
+    reply = """## 今日要点
+
+- **OpenAI** 发布了新模型[s3fa9c1]，详见[官方公告](https://example.com/a)。
+- 价格下调 *20%*[s0b1c2d3e4f]
+
+| 模型 | 价格 |
+| --- | --- |
+| A | 1 |
+
+```python
+print("hi")
+```
+"""
+    assert opening(reply) == '今日要点 OpenAI 发布了新模型，详见官方公告。 价格下调 20% 模型 价格 A 1 print("hi")'
+    assert opening("1. 第一条\n2. 第二条\n\n---\n> 引用的话") == "1. 第一条 2. 第二条 引用的话"
+    assert opening("a * b * c，snake_case_name 不动") == "a * b * c，snake_case_name 不动"
+    assert opening("长" * 200) == "长" * 120 + "…" and opening("") == ""
 
 
 # ---- 表单里“自定义”的时间：一句话转成什么时候跑 ----

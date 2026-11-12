@@ -7,7 +7,7 @@
 // 问着的时候点停止走 dismiss：没有事件流，服务器收尾以后取一次状态；重新回答、改那句话和空闲时一样（服务器先把这一轮收尾）。
 import { useEffect, useRef, useState } from "react";
 import { answerResearchThread, createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads,
-  pinResearchThread, queueResearch, regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, setResearchAsks, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
+  markThreadRead, pinResearchThread, queueResearch, regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, setResearchAsks, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
 import { localWho } from "./auth.js";
 import { setDraft } from "./drafts.js";
 import { AFTER_RUN_ERROR, errorText, quotaText } from "./errors.js";
@@ -23,7 +23,8 @@ import { ACTIVE, ASKING, LOCATION, QUEUED, addLive, itemKey, saveFile, threadMar
 import { FilePanel } from "./artifact.jsx";
 import { FileList, KnowledgePanel, SentPanel } from "./workspace-files.jsx";
 import { opener } from "./layers.js";
-import { useDoneAlert } from "./alert.jsx";
+import { away, useDoneAlert, useTaskAlert } from "./alert.jsx";
+import { NOTICES_MAX, Notices, noticeLine } from "./notice.jsx";
 import { Conversation, forgetReading } from "./timeline.jsx";
 import { UndoToast, useUndo } from "./undo.jsx";
 import { notSendableText, uploadErrorText } from "./upload.js";
@@ -170,12 +171,46 @@ export default function Workspace() {
   const toggleFiles = () => (file?.list ? closeFile() : file ? navFile({ list: true }) : openFile({ list: true }));
   const [gone, setGone] = useState(() => new Set()); // 点了删除、还在等撤销的对话：列表里不显示（隔几秒取回的列表里还有它）
 
+  // 定时任务跑完的未读和通知（2026-11-13）：列表每行带 unread（几条没看）和 notice（最近那条：任务名、回答的开头、跑成没有、什么时候）。
+  // 页面开着时新到的在右上角弹出来（notices，见 notice.jsx）；人没在看页面时标题、图标提醒，开了通知的发系统通知（见 alert.jsx 的 useTaskAlert）。
+  // noticeAt 记着每段对话见过的最近一条的时间：头一次取到列表只记不弹（刷新页面不补弹旧的），之后时间更新的才算新到（晚到的旧列表不会再弹一遍）
+  const [notices, setNotices] = useState([]);
+  const noticeAt = useRef(null);
+  const [taskMark, raiseTask] = useTaskAlert();
+  const opening = useRef(0); // 有几次“打开对话”还在取状态（见 restore）：这期间列表说它在跑，也不另外去接
+  const idleAt = useRef(0); // 开着的对话最近一次停下来是什么时候：在那之前发出去的列表请求说它在跑的不算（晚到的旧列表）
+
   const setBusy = (b) => {
+    if (busyRef.current && !b) idleAt.current = Date.now();
     busyRef.current = b;
     setBusyState(b);
   };
 
-  const refreshList = () => listResearchThreads().then(setThreads).catch(() => {});
+  // 取回来的列表：除了显示，还看两件事——有没有新到的通知；开着的这段对话是不是在页面不知道的时候跑起来了
+  function takeList(list, sent) {
+    setThreads(list);
+    const seen = noticeAt.current;
+    const next = { ...seen };
+    for (const t of list) {
+      const at = t.notice?.at;
+      if (!at || at <= (next[t.thread_id] || "")) continue;
+      next[t.thread_id] = at;
+      if (!seen || !t.unread) continue;
+      const n = { key: `${t.thread_id}@${at}`, thread_id: t.thread_id, title: t.notice.title || t.title, text: noticeLine(t.notice), ok: t.notice.ok };
+      const open = t.thread_id === tidRef.current;
+      if (open) freshen(t.thread_id);
+      // 正看着的那段对话不弹：结果就在眼前。同一段对话只留最新的一条
+      if (!open || pageRef.current) setNotices((ns) => [n, ...ns.filter((x) => x.thread_id !== n.thread_id)].slice(0, NOTICES_MAX));
+      raiseTask(n, (id) => select(id, "push", false, true));
+    }
+    noticeAt.current = next;
+    const id = tidRef.current;
+    if (id && !busyRef.current && !opening.current && sent > idleAt.current && list.some((t) => t.thread_id === id && ACTIVE.has(t.status))) adopt(id);
+  }
+  const refreshList = () => {
+    const sent = Date.now();
+    return listResearchThreads().then((list) => takeList(list, sent), () => {});
+  };
   const anyActive = busy || (threads || []).some((t) => ACTIVE.has(t.status));
   const now = useNow(anyActive);
 
@@ -210,13 +245,37 @@ export default function Workspace() {
   useEffect(() => {
     const t = setInterval(refreshList, anyActive ? 4000 : 20000);
     return () => clearInterval(t);
+    // refreshList 里用到的（takeList、select、restore……）都认 ref，不认哪一次渲染
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [anyActive]);
   const title = live?.title || st?.title; // 执行中起好的标题跟着事件来，库里一轮跑完才有（之前是用户的原话）
   const done = useDoneAlert(tid, busy || ACTIVE.has(st?.status), st, title); // 用户没在看时答完了（或停下来等回答）：标题前加“（答完了）”，见 alert.jsx
   useEffect(() => {
     const base = page ? `${PAGE_TITLES[page]} · 灵稿` : title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : newWork ? "灵稿 · 新工作任务" : "灵稿 · 新对话";
-    document.title = (done ? `（${done}）` : "") + base;
-  }, [title, tid, done, page, newWork]);
+    const mark = done || taskMark; // 两样都有时说开着的这段对话的
+    document.title = (mark ? `（${mark}）` : "") + base;
+  }, [title, tid, done, taskMark, page, newWork]);
+  // 开着的这段对话有未读、人正看着（页面在前台，没在定时任务页、资料库页上）：标成已读，左栏的数字消掉。人不在时留着，回来再标
+  const openUnread = (!page && tid && threads?.find((t) => t.thread_id === tid)?.unread) || 0;
+  useEffect(() => {
+    if (!openUnread) return undefined;
+    const read = () => {
+      if (away()) return;
+      setThreads((ts) => ts && ts.map((t) => (t.thread_id === tid ? { ...t, unread: 0, notice: null } : t)));
+      markThreadRead(tid).catch(() => {}); // 没标上：下次取回的列表里数字还在，到时再标
+    };
+    read();
+    document.addEventListener("visibilitychange", read);
+    addEventListener("focus", read);
+    return () => {
+      document.removeEventListener("visibilitychange", read);
+      removeEventListener("focus", read);
+    };
+  }, [openUnread, tid, page]);
+  // 打开了哪段对话，它的通知就不用留着了
+  useEffect(() => {
+    if (tid && !page) setNotices((ns) => (ns.some((n) => n.thread_id === tid) ? ns.filter((n) => n.thread_id !== tid) : ns));
+  }, [tid, page]);
 
   // 深色（批次 G 第 16 条；设置窗口里能选跟随系统、浅色、深色）：深色时浏览器顶栏跟着深；只在对话页加，海报页还是浅色（index.html 里那条白的）
   useEffect(() => {
@@ -313,10 +372,17 @@ export default function Workspace() {
     if (tidRef.current === null && !busyRef.current && !thinkSet.current.has("new")) setThinkingState(v);
   };
 
-  // 打开一个线程：取状态；服务器上还在跑，就接上这次执行的事件流（从这次执行的头一个事件补发）
-  async function restore(id, g) {
+  // 打开一个线程：取状态；服务器上还在跑，就接上这次执行的事件流（从这次执行的头一个事件补发）。
+  // quiet：不是用户打开的（见 adopt），取不到就算了，不报错
+  async function restore(id, g, quiet = false) {
     try {
-      const s = await getResearchState(id);
+      let s;
+      opening.current += 1;
+      try {
+        s = await getResearchState(id);
+      } finally {
+        opening.current -= 1; // 和下面接上去（follow 里记成在跑）之间没有空当：列表这时回来不会再接一次
+      }
       if (g !== gen.current) return;
       setSt(s);
       if (ACTIVE.has(s.status)) {
@@ -327,10 +393,30 @@ export default function Workspace() {
         if (s.suggesting) awaitSuggestions(id, g);
       }
     } catch (e) {
-      if (g !== gen.current) return;
+      if (g !== gen.current || quiet) return;
       if (e.status === 404) select(null, "replace"); // 线程确实不在了才换成新对话；网络抖动时地址留着，刷新还能再试
       setError(errorText("没能打开这个对话", e, e.status === 404 ? null : "刷新页面再试一次"));
     }
+  }
+
+  // 开着的这段对话没在跑，服务器上却跑起来了（定时任务到点了，或者在别的页面、别的设备上发的；见 takeList）：接上去，边跑边出。
+  // 没接上的话下次取列表再来
+  function adopt(id) {
+    ctl.current.abort(); // 上一轮的连接可能还开着在等推荐问题：不要了
+    ctl.current = new AbortController();
+    lastEvent.current = null;
+    setSuggesting(false);
+    restore(id, gen.current, true);
+  }
+
+  // 开着的这段对话来了通知而页面可能没跟上（定时任务那一轮没来得及接上就跑完了）：取一次状态。
+  // 正在跑、正在接的不动：它们结束时以最终状态为准
+  function freshen(id) {
+    const g = gen.current;
+    if (busyRef.current || opening.current) return;
+    getResearchState(id).then((s) => {
+      if (g === gen.current && id === tidRef.current && !busyRef.current && !ACTIVE.has(s.status)) setSt(s);
+    }).catch(() => {});
   }
 
   // 打开时这一轮已经结束、推荐问题还在起（刷新、切回来）：接上事件流等着，服务器从现在接着发（不从头补发整轮），起好了会再来一次状态。
@@ -865,7 +951,8 @@ export default function Workspace() {
   }, [asked]);
   // openKnowledge(f, at)：在右栏看资料库里的文件（f：{id, name?, type?…}），at 是翻到第几段（点回答里引用的资料库来源）
   const nav = { mobile, collapsed: sideOff, drawer, toggleSide, openDrawer: () => setDrawer(true), closeDrawer, newChat: () => select(null), search: openSearch,
-    openKnowledge: (f, at = null) => openFile({ kb: f, at }) };
+    openKnowledge: (f, at = null) => openFile({ kb: f, at }),
+    unread: (threads || []).reduce((n, t) => n + (gone.has(t.thread_id) ? 0 : t.unread || 0), 0) }; // 左栏里一共几条未读（见 nav.jsx 的 HeadBar）
   useEffect(() => {
     const to = navFocus.current;
     navFocus.current = null;
@@ -941,6 +1028,8 @@ export default function Workspace() {
         )}
         <LoginDialog open={loginOpen} crowded={auth.crowded} want={loginWant} credits={credits} onClose={closeLogin} />
         <UndoToast undo={undo} />
+        <Notices items={notices} href={chatPath} onClose={(key) => setNotices((ns) => ns.filter((n) => n.key !== key))}
+          onOpen={(n) => { setNotices((ns) => ns.filter((x) => x.key !== n.key)); select(n.thread_id, "push", false, true); }} />
       </div>
     </NavContext.Provider>
   );
