@@ -6,6 +6,7 @@
 //   手机上 PDF 点了直接下载（见 files.jsx 的 previewable）。太长的只显示前面一部分，底下能下载原件。选中一段能引用到输入框。
 // - 这段对话里的 PPT（发的、命令做出来的；2026-11-12 Sean 定）：登录了的在桌面上先看排出来的页面（后端在沙箱里排成 PDF，
 //   一张一页），顶上能切回文字；下载能选 PPT、PDF。游客、手机、资料库里的照旧看文字。
+// - 网页（.html，发的、命令做出来的，比如 plotly 出的能点的图表；2026-11-12）：和模型写的网页一样先看页面（artifact.jsx），顶上能切到源码。
 // - 资料库里的文件也在这里看（kb，2026-11-09）：从资料库页点开，或者点回答里引用的资料库来源——那样会翻到引用的那一段并标出来，
 //   PDF 翻到那一页。
 import { useContext, useEffect, useRef, useState } from "react";
@@ -202,6 +203,30 @@ function usePdf(src, id) {
   return { url, error, retry: () => setTries((n) => n + 1) };
 }
 
+// 网页的原件，给预览用：抽出来的文字太长时只有前面一部分，不能拿来当页面。多半是 UTF-8；不是的按 GB18030 认（老的中文网页）
+function decodePage(bytes) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder("gb18030").decode(bytes);
+  }
+}
+
+function usePage(src, id) {
+  const [got, setGot] = useState(null); // {id, html}
+  const [error, setError] = useState(null);
+  const [tries, setTries] = useState(0);
+  useEffect(() => {
+    setError(null);
+    if (!src.key || !id) return undefined;
+    const ctl = new AbortController();
+    src.blob(id, ctl.signal).then((b) => b.arrayBuffer()).then((bytes) => { if (!ctl.signal.aborted) setGot({ id, html: decodePage(bytes) }); })
+      .catch((e) => { if (!ctl.signal.aborted) setError(e.status === 404 ? "gone" : "failed"); });
+    return () => ctl.abort();
+  }, [src.key, id, tries]); // eslint-disable-line react-hooks/exhaustive-deps -- 同上
+  return { html: id && got?.id === id ? got.html : null, error, retry: () => setTries((n) => n + 1) };
+}
+
 // 这段对话里的 PPT 排成的 PDF（一张一页，看得到每一页排出来的样子；2026-11-12 Sean 定，见 docs/沙箱方案.md）：
 // 后端在沙箱里现排一份，不经过模型；只有登录了的能用（和文档导出 PDF 一样）
 const pagesOf = (tid) => ({ key: tid, blob: (id, sig) => threadFileExport(tid, id, "pdf", sig) });
@@ -219,6 +244,7 @@ const SLIDE_EXPORT_ERRORS = { not_found: "这个文件已经不在了", too_big:
 
 const DOC_LIKE = new Set(["markdown", "docx"]); // 整篇当 Markdown 排（Word 抽出来的标题、表格已经是 Markdown）
 const LINES = new Set(["code", "text"]); // 按行切的：接回去就是原文
+const WEB = new Set(["html", "htm"]); // 网页：类型登记的是代码，按后缀认
 const ext = (name) => (/\.([A-Za-z0-9]{1,8})$/.exec(name || "")?.[1] || "").toLowerCase();
 const noCite = () => null;
 
@@ -306,26 +332,29 @@ export function SentPanel({ tid, f, back, kb = false, at = null, onNav, onClose,
   const pdf = f.type === "pdf" && !mobile;
   const deck = f.type === "pptx" && !kb; // 这段对话里的 PPT：能排成 PDF
   const slides = deck && !mobile && canExport; // 右栏里能看排出来的页面（手机上的浏览器不在页面里显示 PDF）
+  const web = f.type === "code" && WEB.has(ext(f.name)) && !at; // 网页能当页面看；要翻到引用的那一段时看文字
   const src = kb ? fromKnowledge : fromThread(tid);
-  // PPT 怎么看：预览（排出来的页面）/ 文字。没点过的先看预览，排不出来就看文字；点过的照点的来。换了文件重新算
+  // PPT、网页怎么看：预览（排出来的页面 / 网页）/ 文字（源码）。没点过的先看预览，PPT 排不出来就看文字；点过的照点的来。换了文件重新算
   const [picked, setPicked] = useState(null); // {id, view}
   const pages = usePdf(pagesOf(tid), slides ? f.id : null);
-  const view = slides ? (picked?.id === f.id ? picked.view : pages.error ? "text" : "preview") : null;
-  const paged = pdf || view === "preview"; // 用浏览器自带的 PDF 查看器看
-  const text = useParts(src, paged ? null : f.id);
+  const view = picked?.id === f.id && (slides || web) ? picked.view : slides ? (pages.error ? "text" : "preview") : web ? "preview" : null;
+  const paged = pdf || (slides && view === "preview"); // 用浏览器自带的 PDF 查看器看
+  const live = web && view === "preview"; // 网页当页面看
+  const text = useParts(src, paged || live ? null : f.id);
   const original = usePdf(src, pdf ? f.id : null);
+  const page = usePage(src, live ? f.id : null);
   const sheet = pdf ? original : pages;
   const { data } = text;
-  const error = paged ? sheet.error : text.error;
-  const retry = paged ? sheet.retry : text.retry;
-  const ready = paged ? !!sheet.url : !!data;
+  const error = paged ? sheet.error : live ? page.error : text.error;
+  const retry = paged ? sheet.retry : live ? page.retry : text.retry;
+  const ready = paged ? !!sheet.url : live ? page.html != null : !!data;
   const bodyRef = useRef(null);
-  const sel = useSelected(bodyRef, !paged && !!data);
+  const sel = useSelected(bodyRef, !paged && !live && !!data);
   const [saving, setSaving] = useState(null); // busy / failed
   useEffect(() => setSaving(null), [f.id]);
   const { exporting, failed: exportFail, exportAs, clear: clearExportFail } = useExport(tid, SLIDE_EXPORT_ERRORS);
   // 换了文件回到顶上；要翻到某一段的，文字到了以后滚到那一段（PDF 的翻页在地址里）
-  const shown = !!data && !paged;
+  const shown = !!data && !paged && !live;
   useEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
@@ -333,7 +362,7 @@ export function SentPanel({ tid, f, back, kb = false, at = null, onNav, onClose,
     if (target) target.scrollIntoView({ block: "start" });
     else el.scrollTop = 0;
   }, [f.id, at, shown]);
-  const missing = at && data && !paged && at > data.parts.length; // 引用的那段在只显示了前面一部分之后
+  const missing = at && data && !paged && !live && at > data.parts.length; // 引用的那段在只显示了前面一部分之后
   const download = async () => {
     if (saving === "busy") return;
     setSaving("busy");
@@ -354,7 +383,13 @@ export function SentPanel({ tid, f, back, kb = false, at = null, onNav, onClose,
           <button aria-pressed={view === "text"} onClick={() => setPicked({ id: f.id, view: "text" })}>文字</button>
         </div>
       )}
-      {!paged && <CopyAll text={data ? fullText(data) : null} reset={f.id} />}
+      {web && (
+        <div className={pstyles.seg} role="group" aria-label="网页怎么看">
+          <button aria-pressed={view === "preview"} onClick={() => setPicked({ id: f.id, view: "preview" })}>预览</button>
+          <button aria-pressed={view === "text"} onClick={() => setPicked({ id: f.id, view: "text" })}>源码</button>
+        </div>
+      )}
+      {!paged && !live && <CopyAll text={data ? fullText(data) : null} reset={f.id} />}
       {deck && (canExport || onLogin) ? (
         <SaveMenu file={f} formats={SLIDE_FORMATS} locked={!canExport}
           busy={saving === "busy" ? "正在下载…" : exporting?.id === f.id ? `正在导出 ${exporting.name}…` : null}
@@ -381,6 +416,8 @@ export function SentPanel({ tid, f, back, kb = false, at = null, onNav, onClose,
     );
   } else if (!ready) body = <div className={pstyles.loading} role="status" aria-label="正在打开"><Spinner size={16} /></div>;
   else if (paged) body = <iframe className={pstyles.frame} title={`${f.name}（${pdf ? "PDF" : "预览"}）`} src={pdf && at ? `${sheet.url}#page=${at}` : sheet.url} />;
+  // 和模型写的网页一样关在 sandbox 里（artifact.jsx）：能跑脚本，碰不到灵稿这边的登录信息
+  else if (live) body = <iframe className={pstyles.frame} title={`${f.name}（网页预览）`} sandbox="allow-scripts allow-popups" referrerPolicy="no-referrer" srcDoc={page.html} />;
   else body = (
     <>
       {missing && (
@@ -398,8 +435,8 @@ export function SentPanel({ tid, f, back, kb = false, at = null, onNav, onClose,
       )}
     </>
   );
-  const framed = paged && ready && !error;
-  const padded = !(ready && !error && (paged || data?.type === "code"));
+  const framed = (paged || live) && ready && !error;
+  const padded = !(ready && !error && (paged || live || data?.type === "code"));
   return (
     <PanelShell label={`文件：${f.name}`} title={f.name} badge={!mobile && <span className={styles.headBadge}><FileBadge name={f.name} /></span>} facts={facts} acts={acts}
       onBack={back ? () => onNav({ list: true }) : null} onClose={onClose} focus={focus}>
