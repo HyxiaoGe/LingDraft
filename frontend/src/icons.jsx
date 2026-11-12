@@ -13,6 +13,8 @@ export const IconSearch = (p) => svg(<><circle cx="11" cy="11" r="6" /><path d="
 export const IconPage = (p) => svg(<><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v4h4M9 12h6M9 16h6" /></>, p);
 // 查文档（Context7）：一本打开的书
 export const IconBook = (p) => svg(<><path d="M12 7v14" /><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" /></>, p);
+// 定时任务：一个钟
+export const IconClock = (p) => svg(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>, p);
 export const IconLoop = (p) => svg(<><path d="M4 12a8 8 0 0 1 14-5.3L20 9" /><path d="M20 4v5h-5" /><path d="M20 12a8 8 0 0 1-14 5.3L4 15" /><path d="M4 20v-5h5" /></>, p);
 export const IconWarn = (p) => svg(<><path d="M12 4l9 16H3z" /><path d="M12 10v4M12 17v.01" /></>, p);
 // 天气：晴、多云（晴间多云）、阴、雨、雪、雷、雾霾沙尘

@@ -237,12 +237,13 @@ export function answerText(items, sources, { links = false } = {}) {
   return used.length ? `${body}\n\n来源：\n${links ? "\n" : ""}${used.join("\n")}` : body;
 }
 
-// 整段对话导出成 Markdown：每轮是用户的话（引用块，带的图和文件写一句，回答过程中插进去的话、回答模型问的问题接在后面）和回答，不含思考和搜索步骤
+// 整段对话导出成 Markdown：每轮是用户的话（引用块，带的图和文件写一句，回答过程中插进去的话、回答模型问的问题接在后面；定时任务触发的写是哪个任务）和回答，不含思考和搜索步骤
 export function threadMarkdown(st) {
   const quote = (text) => text.split("\n").map((l) => `> ${l}`).join("\n");
   const turns = st.turns.map((t) => {
     const with_ = [t.images?.length && `${t.images.length} 张图`, t.files?.length && `文件 ${t.files.map((f) => f.name).join("、")}`].filter(Boolean);
-    const said = with_.length ? `${t.user}\n（带了${with_.join("，")}）` : t.user;
+    // 定时任务触发的一轮：写一句由哪个任务触发，不写任务里那份交代
+    const said = t.scheduled ? `（由定时任务「${t.scheduled.title}」触发）` : with_.length ? `${t.user}\n（带了${with_.join("，")}）` : t.user;
     const mid = t.items.flatMap((i) => (i.type === "guide" ? [`（回答过程中插话）${i.text}`] : i.type === "ask" && i.answer ? [`（它问：${i.question}）${i.answer}`] : []));
     const asked = [said, ...mid].map(quote).join("\n>\n");
     let reply = answerText(t.items, st.sources, { links: true }) || "（这一轮没有回答）";

@@ -55,6 +55,7 @@ from app.model_catalog import AUTO, LEGACY_MODEL, LEGACY_USE, ModelUse
 from app.model_guard import ContentBlocked, FreeTierUsedUp, Interrupted, ModelUnavailable, free_failed
 from app.tools.files import with_files
 from app.tools.knowledge import for_libraries
+from app.tools.schedule import with_run_notes
 from app.tools.vision import with_images
 
 TITLE_CHARS = 30  # 标题最长这么多字（汉字算一个、字母算半个，见 _width）：模型给的超过了不用（见 usable_title）；用户原话超过了截掉（照 Fusion）
@@ -109,6 +110,10 @@ class ChatContext:
     places: Any = None
     # 沙箱（app.tools.run_command.Sandbox）：跑命令。命令行、评测没有，配置里关了也没有：这个工具不出现
     sandbox: Any = None
+    # 定时任务（app.scheduled.service.ScheduledTasks）：模型建、改、删、列。命令行、评测没有：这几个工具不出现
+    tasks: Any = None
+    # 这个人是哪一档（user / admin，见 app.identity）：建定时任务时记在任务上，到点发起时查额度用。不知道的是 None
+    tier: str | None = None
 
 
 def now() -> str:
@@ -136,8 +141,8 @@ def working(state: dict) -> bool:
 
 def asking(state: dict) -> bool:
     """正在跑的这一轮能不能停下来问用户：Work 模式的轮，而且这段对话用户没说别再问。按现在的 state 看：这一轮里刚点了“别再问了”，
-    这一轮剩下的几次调模型也不给问了。"""
-    return working(state) and not state.get(history.ASKS_OFF)
+    这一轮剩下的几次调模型也不给问了。定时任务触发的轮没人在场，也不问（见 history.unattended）。"""
+    return working(state) and not state.get(history.ASKS_OFF) and not history.unattended(state)
 
 
 def can_run(state: dict, runtime) -> bool:
@@ -146,6 +151,14 @@ def can_run(state: dict, runtime) -> bool:
     ctx = getattr(runtime, "context", None)
     owner = getattr(ctx, "owner", None)
     return working(state) and getattr(ctx, "sandbox", None) is not None and bool(owner) and not is_guest_sub(owner)
+
+
+def can_schedule(runtime) -> bool:
+    """这段对话里模型能不能动定时任务（见 app.tools.schedule）：要有任务服务，登录了的人才有（游客、没归谁的老对话没有）。
+    一段对话归谁不变，所以整段对话里工具列表不变。"""
+    ctx = getattr(runtime, "context", None)
+    owner = getattr(ctx, "owner", None)
+    return getattr(ctx, "tasks", None) is not None and bool(owner) and not is_guest_sub(owner)
 
 
 def prompt_keys(state: dict) -> tuple[str, ...]:
@@ -738,17 +751,20 @@ class ModelSelect(AgentMiddleware):
         """这次调 use 这个模型的请求：别的模型答的轮次去掉思考；用户发的文件拼进那句话（见 app.tools.files）；
         用户发的图看得见的直接给、看不见的给说明，看图工具只给看不见的（见 app.tools.vision）。一轮里换了备用，按换上的重新组织。
         问用户的工具只在 Work 模式的轮里给，用户说了别再问的对话也不给（见 asking）。跑命令的工具只在工作任务里给，游客没有（见 can_run）。
+        定时任务的工具游客没有（见 can_schedule）；定时任务触发的那几轮，交代前面加一段说明（见 app.tools.schedule.with_run_notes）。
         系统提示词里写着这一轮是哪个模型在答：这次调用里换了备用的，换成备用的名字（见 _renamed）。"""
         catalog = self.planner.catalog
         system = _renamed(request.system_message, model_shown(request.state, catalog), catalog.shown_name(use.ref))
         sees = catalog.sees(use.ref)
-        msgs = await with_files(_others_without_thinking(request.messages, turns, use), getattr(request.runtime.context, "files", None))
+        msgs = await with_files(with_run_notes(_others_without_thinking(request.messages, turns, use)), getattr(request.runtime.context, "files", None))
         msgs = await with_images(msgs, sees, self.planner.image_uri)
         tools = [t for t in request.tools if not (sees and getattr(t, "name", None) == history.VIEW_TOOL)]
         if not asking(request.state):
             tools = [t for t in tools if getattr(t, "name", None) != history.ASK_TOOL]
         if not can_run(request.state, request.runtime):
             tools = [t for t in tools if getattr(t, "name", None) != history.RUN_TOOL]
+        if not can_schedule(request.runtime):
+            tools = [t for t in tools if getattr(t, "name", None) not in history.TASK_TOOLS]
         libs = request.state.get("kb_libraries") or []  # 资料库：第一轮时有文件才给，说明里列着那时的资料库和文件（见 app.tools.knowledge）
         tools = [for_libraries(t, libs) if getattr(t, "name", None) == KB_TOOL else t for t in tools if libs or getattr(t, "name", None) != KB_TOOL]
         return request.override(model=self.planner.chat_model(use), messages=msgs, tools=tools, system_message=system)
@@ -855,6 +871,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     from app.tools.location import LocationMiddleware
     from app.tools.maps_mcp import MapsMiddleware
     from app.tools.run_command import make_run_command_tool
+    from app.tools.schedule import make_schedule_tools
     from app.tools.vision import make_view_image_tool
     from app.tools.weather_mcp import WeatherMiddleware
     from app.tools.web_mcp import WebToolsMiddleware
@@ -865,8 +882,9 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     # 查资料库（search_knowledge）也一直在，这段对话第一轮时资料库里没有文件的调模型时去掉（见 ModelSelect._for）
     # 问用户（ask_user）只给主 agent：子 agent 的工具另外列（见 subagent），它不能问人
     # 跑命令（run_command）也一直在、只给主 agent，不是工作任务、游客的调模型时去掉（见 can_run）
+    # 定时任务的四个（见 app.tools.schedule）排在最后（前面的顺序不动，前缀缓存接得上），只给主 agent，游客的调模型时去掉（见 can_schedule）
     tools = [*planner.tools(), make_task_tool(planner), make_recall_tool(), itinerary_tool(), make_view_image_tool(planner), make_read_file_tool(),
-             make_search_knowledge_tool(), *make_write_tools(), make_ask_tool(), make_run_command_tool()]
+             make_search_knowledge_tool(), *make_write_tools(), make_ask_tool(), make_run_command_tool(), *make_schedule_tools()]
     return create_agent(
         model=planner.chat_model(planner.catalog.plan(None, None, planner.usable).agent),  # 只是占位：每次调模型由 ModelSelect 换上这一轮的
         tools=tools,

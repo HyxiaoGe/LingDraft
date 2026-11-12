@@ -82,6 +82,14 @@ COMPACT_TARGET_TOKENS = int(os.environ.get("COMPACT_TARGET_TOKENS", "100000"))
 DREAM_ENABLED = _flag("LINGDRAFT_DREAM", True)  # 关掉就不按时整理（手动的命令照样能用）
 DREAM_HOUR = int(os.environ.get("LINGDRAFT_DREAM_HOUR", "3"))
 
+# 定时任务（见 app.scheduled，2026-11-12 Sean 定）：到点了在任务挂着的那段对话里多跑一轮。
+# SCHEDULED_ENABLED 关掉就不到点发起（接口、模型的工具照常，任务照样能建）；每隔 TICK_S 秒看一次有没有到点的。
+# 每人最多 TASKS_MAX 个（跑完了的一次性任务不算）；连着 MAX_FAILURES 次没跑成就自己停下，等用户来看
+SCHEDULED_ENABLED = _flag("LINGDRAFT_SCHEDULED", True)
+SCHEDULED_TICK_S = int(os.environ.get("LINGDRAFT_SCHEDULED_TICK_S", "30"))
+SCHEDULED_TASKS_MAX = int(os.environ.get("LINGDRAFT_SCHEDULED_TASKS_MAX", "5"))
+SCHEDULED_MAX_FAILURES = int(os.environ.get("LINGDRAFT_SCHEDULED_MAX_FAILURES", "3"))
+
 ARK_IMAGE_MODEL = os.environ.get("ARK_IMAGE_MODEL", "doubao-seedream-5-0-flash-260915")
 # 背景图生成开关（M2 起默认开）；关闭时背景为模板渐变
 BACKGROUND_ENABLED = _flag("LINGDRAFT_BACKGROUND", True)

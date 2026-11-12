@@ -52,7 +52,8 @@ from app.tools.location import GEO_META_KEY
 from app.tools.maps_mcp import PLACE_TOOL, ROUTE_TOOL, MapsTool
 from app.tools.research_tools import TIME_TOOL, make_research_tools
 from app.tools.vision import ImageUris, view_prompt
-from app.graph.research.history import ASK_TOOL, CREATE_TOOL, EDIT_TOOL, FILE_TOOL, RUN_TOOL, VIEW_TOOL, WRITE_TOOLS
+from app.graph.research.history import (ASK_TOOL, CREATE_TASK_TOOL, CREATE_TOOL, DELETE_TASK_TOOL, EDIT_TOOL, FILE_TOOL, LIST_TASKS_TOOL, RUN_TOOL,
+                                        TASK_TOOLS, UPDATE_TASK_TOOL, VIEW_TOOL, WRITE_TOOLS)
 from app.tools.weather_mcp import WEATHER_TOOL, WeatherTool
 from app.tools.web_mcp import READ_TOOL, SEARCH_TOOL, WebTool
 
@@ -1207,6 +1208,8 @@ class FakeToolModel(BaseChatModel):
     - “知识库里”：查知识库，查的是“知识库里”后面那段，引用查到的第一个来源；没有这个工具就说没有。
     - “问我”：先问用户一个问题（ask_user，带两个选项），拿到回答（或跳过）后回复，回复里说收到了什么；“边搜边问”：同一条消息里搜一次、问一次；
       “问两个”：同一条消息里问两个；“一直问”：每拿到一个回答就接着问下一个，直到工具说不能再问了。
+    - “建定时任务：X”：建一个每天 07:22 的定时任务，交代是 X（“一次性”的只跑一次，“太密”的每 5 分钟一次，会被工具拒掉），建完照结果回复；
+      “停定时任务”“删定时任务”：先列出来，再停掉、删掉第一个。没有这几个工具就说没有。
     用户插进这一轮的话不改这些路径，给出文字回复时开头说一声收到了哪些（测试据此看模型有没有看到）。
     内容审核（模拟服务商）：请求里任何地方有 FAKE_BLOCKED 就整个拒绝；用户的话里有“查完就拦”时，有工具结果就拒绝；
     有“输出拦截”时，吐完思考后输出被截断。
@@ -1250,6 +1253,8 @@ class FakeToolModel(BaseChatModel):
             return "", [{"name": "search_web", "args": _BAD_ARGS, "id": f"bad_{n}", "invalid": True}]
         if "几点" in text and TIME_TOOL in self.bound and TIME_TOOL not in names:
             return call(TIME_TOOL)
+        if any(k in text for k in ("建定时任务", "停定时任务", "删定时任务")):  # 排在“直接答”前面：交代里可以带着别的关键字
+            return self._schedule(text, turn, call, CREATE_TASK_TOOL in self.bound)
         if "直接答" in text:
             return "直接回答：这个问题不用查。", []
         # 这一轮问过了的，工具后来不给了（用户点了“别再问了”）也照样把回复说完
@@ -1399,6 +1404,27 @@ class FakeToolModel(BaseChatModel):
         ids = [a.id for m in messages for a in history.attached_images(m)]
         wanted = m.group(1) if (m := re.search(r"看编号(\S+)", text)) else ids[-1] if ids else "none"
         return call(VIEW_TOOL, image_id=wanted, question=text.splitlines()[0][:40])
+
+    @staticmethod
+    def _schedule(text: str, turn: list[BaseMessage], call, offered: bool) -> tuple[str, list[dict]]:
+        if not offered:
+            return "这里不能用定时任务。", []
+        done = [m for m in turn if isinstance(m, ToolMessage) and m.name in TASK_TOOLS]
+        if "建定时任务" in text:
+            if done:
+                return (f"没建成：{done[-1].content}" if done[-1].status == "error" else f"建好了：{json.loads(done[-1].content)['task_id']}"), []
+            prompt = text.split("建定时任务", 1)[1].lstrip("：:").strip() or "每天的简报"
+            when = {"run_at": "2099-01-01 09:00"} if "一次性" in text else {"cron": "*/5 * * * *" if "太密" in text else "22 7 * * *"}
+            return call(CREATE_TASK_TOOL, title="每日简报", prompt=prompt, **when)
+        if not done:
+            return call(LIST_TASKS_TOOL)
+        if done[-1].name == LIST_TASKS_TOOL:
+            if not (tasks := json.loads(done[-1].content)["tasks"]):
+                return "没有定时任务。", []
+            if "删定时任务" in text:
+                return call(DELETE_TASK_TOOL, task_id=tasks[0]["task_id"])
+            return call(UPDATE_TASK_TOOL, task_id=tasks[0]["task_id"], paused=True)
+        return ("没办成。" if done[-1].status == "error" else "删了。" if "删定时任务" in text else "停了。"), []
 
     @staticmethod
     def _ask(text: str, turn: list[BaseMessage], n: str) -> tuple[str, list[dict]]:

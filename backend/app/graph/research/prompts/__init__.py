@@ -8,6 +8,7 @@
 - tools_images.toml：看图、画图，用户发的图怎么告诉模型。
 - tools_ask.toml：问用户（Work 模式）。
 - tools_sandbox.toml：在沙箱里跑命令（工作任务里才有）。
+- tools_schedule.toml：建、改、删、列定时任务（登录用户才有），和定时任务触发的一轮前面加的说明。
 - compaction.toml：上下文压缩，和取回原文的 recall 工具。
 - background.toml：不在回答里出现的几件事：整理记忆、起标题、Auto 判断难易、推荐问题。
 

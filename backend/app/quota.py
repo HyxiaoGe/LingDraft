@@ -209,6 +209,8 @@ class Quota:
 
     def __init__(self, usage: Usage, limits: Limits | None = None, clock: Callable[[], datetime] = costs.now) -> None:
         self.usage, self.limits, self.clock = usage, limits or Limits.from_config(), clock
+        # 每个人最近一次来查额度时是哪一档（只在内存里）：对话里建定时任务时记到任务上，到点发起时没有令牌，按任务上记的查（见 app.scheduled）
+        self.tiers: dict[str, str] = {}
         aio.run(usage.setup())
 
     async def windows(self, who: Identity) -> list[Window]:
@@ -231,6 +233,7 @@ class Quota:
         return {"day": self.limits.user_daily, "week": self.limits.user_weekly} if who.tier == GUEST else None
 
     async def check(self, who: Identity) -> None:
+        self.tiers[who.sub] = who.tier
         for w in await self.windows(who):
             if w.exhausted:
                 log.info("额度用完：%s %s 用了 %.0f / %d", who.sub, w.kind, w.used, w.limit)

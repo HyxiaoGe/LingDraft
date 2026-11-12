@@ -22,7 +22,7 @@ from langgraph.types import Command, interrupt
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.graph.research import prompts
-from app.graph.research.history import ASK_TOOL, ASKS_OFF, MAX_ASKS, ask_args, asks_before, last_human
+from app.graph.research.history import ASK_TOOL, ASKS_OFF, MAX_ASKS, ask_args, asks_before, last_human, unattended
 
 ASK = "ask"  # interrupt 带的东西里的 type：运行器、页面按它认出这是在问用户（别的中断，比如 MCP 的 elicitation，不是）
 MAX_ANSWER = 2000  # 回答最长这么多字
@@ -67,8 +67,8 @@ def make_ask_tool():
         if not question:
             return ToolMessage(content=prompts.render("tools.ask_user.empty"), name=ASK_TOOL, tool_call_id=call_id, status="error")
         turns = runtime.state.get("turns") or []
-        # Chat 的轮、用户说了别再问的对话不给这个工具（见 agent.ModelSelect）；模型照着之前几轮的样子硬调了也不停下来问
-        if not (turns and turns[-1].work) or runtime.state.get(ASKS_OFF):
+        # Chat 的轮、用户说了别再问的对话、定时任务触发的轮（没人在场）不给这个工具（见 agent.asking）；模型照着之前几轮的样子硬调了也不停下来问
+        if not (turns and turns[-1].work) or runtime.state.get(ASKS_OFF) or unattended(runtime.state):
             return ToolMessage(content=prompts.render("tools.ask_user.chat"), name=ASK_TOOL, tool_call_id=call_id)
         messages = runtime.state.get("messages", [])
         if asks_before(messages[last_human(messages) + 1:], call_id) >= MAX_ASKS:
