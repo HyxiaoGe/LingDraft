@@ -43,6 +43,15 @@ const oldPage = () => location.pathname.match(/^\/(settings|memory)\/?$/)?.[1] |
 // 占对话那一栏的页面，左栏照旧：资料库（2026-11-10，见 knowledge.jsx）、定时任务（2026-11-13，见 scheduled.jsx）。
 // 去这些页时开着的对话不断开（在跑的接着跑），点回来马上接上
 const PAGES = { library: "/library", scheduled: "/scheduled" };
+const PAGE = 50; // 左栏的对话列表一次取多少段：先取最近的这么多，滚到底再多取这么多
+
+// 搜对话、记忆页用的整份列表：all 是打开它们时取的那一次，loaded 是左栏那份（一直在更新）。两边都有的行按左栏的；
+// 取了整份以后才有的（刚新建的）放最前；等着撤销删除的不要
+function wholeList(all, loaded, gone) {
+  const fresh = new Map(loaded.map((t) => [t.thread_id, t]));
+  const had = new Set(all.map((t) => t.thread_id));
+  return [...loaded.filter((t) => !had.has(t.thread_id)), ...all.map((t) => fresh.get(t.thread_id) || t)].filter((t) => !gone.has(t.thread_id));
+}
 const PAGE_TITLES = { library: "资料库", scheduled: "定时任务" };
 const routePage = () => Object.keys(PAGES).find((k) => location.pathname.replace(/\/$/, "") === PAGES[k]) || null;
 const routeId = () => {
@@ -69,9 +78,29 @@ export default function Workspace() {
   const [loginOpen, setLoginOpen] = useState(false);
   const [loginWant, setLoginWant] = useState(null); // 游客点了“登录后可用”里的哪个模型（登录弹窗说登录后就能用它，第 28 条）
   const [threads, setThreads] = useState(null);
+  // 左栏的列表先取最近的 PAGE 段，滚到底再多取（见 loadMore）：more 是下面还有没取的，listLimit 是现在取到最近的多少段。
+  // 搜对话、记忆页对出处要全的，开着它们时另取一次整份（见下面 all）
+  const [more, setMore] = useState(false);
+  const listLimit = useRef(PAGE);
+  const listSeq = useRef(0); // 取列表的请求按发出的先后编号；listTaken 是已经用上的最新那次：比它早发、晚到的不要（多取以后，早发的那次会把列表变短）
+  const listTaken = useRef(0);
+  const listIds = useRef(new Set()); // 手上这份列表里有哪些对话
+  const growing = useRef(false); // 正在多取
   const [tid, setTid] = useState(routeId);
   const [search, setSearch] = useState(false); // 搜对话的窗口开着没有（见 search.jsx）
   const [settings, setSettings] = useState(oldPage); // 设置窗口开着时是窗口里的哪一类（见 settings.jsx，"settings" 是刚打开）；关着是 null
+  // 整份对话列表：搜对话、记忆页对出处要全的（左栏只取了最近的一部分），开着它们时取一次，关上就不留。还在取是 null；没取到就只用左栏那份
+  const [all, setAll] = useState(null);
+  const wantAll = search || settings === "memory";
+  useEffect(() => {
+    if (!wantAll) return undefined;
+    let on = true;
+    listResearchThreads().then((got) => on && setAll(got.threads), () => on && setAll([]));
+    return () => {
+      on = false;
+      setAll(null);
+    };
+  }, [wantAll]);
   const [page, setPageState] = useState(routePage); // 对话那一栏放的是什么：null 是对话，"library" 是资料库页，"scheduled" 是定时任务页
   const [theme, setTheme, dark] = useTheme(); // 主题（设置窗口里选，存本机）：跟随系统、浅色、深色
   const [st, setSt] = useState(null);
@@ -187,8 +216,10 @@ export default function Workspace() {
   };
 
   // 取回来的列表：除了显示，还看两件事——有没有新到的通知；开着的这段对话是不是在页面不知道的时候跑起来了
-  function takeList(list, sent) {
+  function takeList({ threads: list, more: rest }, sent) {
     setThreads(list);
+    setMore(rest);
+    listIds.current = new Set(list.map((t) => t.thread_id));
     const seen = noticeAt.current;
     const next = { ...seen };
     for (const t of list) {
@@ -207,9 +238,31 @@ export default function Workspace() {
     const id = tidRef.current;
     if (id && !busyRef.current && !opening.current && sent > idleAt.current && list.some((t) => t.thread_id === id && ACTIVE.has(t.status))) adopt(id);
   }
+  // 取到的那份（没取到、被更晚发的那次抢先了是 null）
   const refreshList = () => {
     const sent = Date.now();
-    return listResearchThreads().then((list) => takeList(list, sent), () => {});
+    const seq = (listSeq.current += 1);
+    return listResearchThreads({ limit: listLimit.current, current: tidRef.current }).then((got) => {
+      if (seq < listTaken.current) return null;
+      listTaken.current = seq;
+      takeList(got, sent);
+      return got;
+    }, () => null);
+  };
+  // 左栏滚到底了：多取一页。多出来的那一页全是本来就带着的（置顶的、有未读的）时接着取，直到多出几行、或者没有了
+  const loadMore = async () => {
+    if (growing.current) return;
+    growing.current = true;
+    try {
+      for (;;) {
+        const had = listIds.current.size;
+        listLimit.current += PAGE;
+        const got = await refreshList();
+        if (!got?.more || got.threads.length > had) break;
+      }
+    } finally {
+      growing.current = false;
+    }
   };
   const anyActive = busy || (threads || []).some((t) => ACTIVE.has(t.status));
   const now = useNow(anyActive);
@@ -363,6 +416,7 @@ export default function Workspace() {
     autoOpened.current.clear();
     if (how !== "none") navigate(path, how === "push");
     if (id) restore(id, gen.current);
+    if (id && !listIds.current.has(id)) refreshList(); // 开的是更早的、左栏还没取到的那段：取一次，列表会带上开着的这段
   };
 
   // 设置里改了深度思考的默认：之后的新对话按它；正开着一个还没发、也没手动切过的新对话，这个也跟着变（关了窗口看到的就是新默认）
@@ -862,6 +916,7 @@ export default function Workspace() {
             await deleteResearchThread(id, { keepalive });
             forget();
             setThreads((ts) => ts && ts.filter((t) => t.thread_id !== id));
+            setAll((ts) => ts && ts.filter((t) => t.thread_id !== id));
           } catch (e) {
             setError(errorText("没删成", e));
           }
@@ -994,11 +1049,15 @@ export default function Workspace() {
   };
   const listedTitle = tid ? threads?.find((t) => t.thread_id === tid)?.title : null; // 打开中还没取回状态时，顶栏先用列表里的标题
   const shownThreads = threads && (gone.size ? threads.filter((t) => !gone.has(t.thread_id)) : threads); // 等着撤销的不显示
+  const startedHere = !!tid && startedAs.current?.id === tid; // 开着的这段是这个页面刚发起的：列表里还没有它时左栏先补一行（见 withCurrent）
+  // 搜对话、记忆页要的整份列表。左栏那份一直在更新，两边都有的行按左栏的；整份还没取回来（all 是 null）时先只有左栏那些：
+  // 搜对话的窗口一打开就有最近的，搜不到的先不说没有（partial）；记忆页的出处等取全了再对，免得把更早的对话说成删了
+  const allThreads = shownThreads && wholeList(all || [], shownThreads, gone);
 
   return (
     <NavContext.Provider value={nav}>
       <div className={"ws" + (sideOff ? " side-off" : "") + (mobile && drawer ? " drawer" : "") + (file && !mobile ? " with-file" : "")} data-theme={dark ? "dark" : "light"}>
-        <Sidebar threads={shownThreads} current={tid} st={st} live={live} busy={busy} work={work} now={now} href={chatPath} newHref={newPath} onSelect={fromSide(select)} manage={manage}
+        <Sidebar threads={shownThreads} more={more} onMore={loadMore} current={tid} started={startedHere} st={st} live={live} busy={busy} work={work} now={now} href={chatPath} newHref={newPath} onSelect={fromSide(select)} manage={manage}
           onSettings={fromSide(() => setSettings("settings"))} onPage={auth.login || auth.me ? fromSide(openPage) : null} page={page} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
         {page === "library" ? (
           <LibraryPage auth={auth} onLogin={onLogin} undo={undo} onOpenFile={(f) => openFile({ kb: f })} openFileId={file?.kb?.id} />
@@ -1017,14 +1076,14 @@ export default function Workspace() {
             : <FilePanel tid={tid} st={shown} live={live} target={file} onTarget={setFile} onNav={navFile} onClose={closeFile} focus={fileFocus}
               canExport={!!auth.me} onLogin={onLogin} />)}
         {search && (
-          <SearchDialog threads={shownThreads && withCurrent(shownThreads, tid, st, live, busy, work)} now={now} href={chatPath}
+          <SearchDialog threads={allThreads && withCurrent(allThreads, tid, st, live, busy, work, startedHere)} partial={!all} now={now} href={chatPath}
             onOpen={(id) => { setSearch(false); select(id); }} onClose={() => setSearch(false)} />
         )}
         {settings && (
           <SettingsDialog view={settings} onView={setSettings} onClose={() => setSettings(null)} mobile={mobile} auth={auth}
             onLogin={onLogin && (() => { setSettings(null); onLogin(); })}
             theme={theme} onTheme={setTheme} think={thinkOn} onThink={changeThinkDefault}
-            undo={undo} threads={shownThreads} onOpen={(id) => { setSettings(null); select(id); }} />
+            undo={undo} threads={all ? allThreads : null} onOpen={(id) => { setSettings(null); select(id); }} />
         )}
         <LoginDialog open={loginOpen} crowded={auth.crowded} want={loginWant} credits={credits} onClose={closeLogin} />
         <UndoToast undo={undo} />

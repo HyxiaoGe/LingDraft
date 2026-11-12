@@ -700,6 +700,18 @@ class ResearchRunner(BaseRunner):
     def list_threads(self, who: Identity) -> list[dict]:
         return aio.run(self._alist_threads(who))
 
+    def list_page(self, who: Identity, limit: int | None = None, current: str | None = None) -> dict:
+        """页面要的那一部分列表（左栏先取最近的，往下滚再多取）：最近有动静的 limit 段，加上不管排在哪都带上的——
+        置顶的（左栏单独一组）、有未读的（左栏的红点、右上角的通知靠它）、在跑或排队的（页面靠它决定多久取一次列表、要不要接上去）、
+        current（页面开着的那段：选中的那一行、是不是工作任务）。more 是还有没给的。limit 不给是全部（搜对话、记忆页对出处用）。
+        多取就是把 limit 加大再取一次，不用游标：对话一有动静就排到前面，按位置接着取会漏、会重。"""
+        rows = self.list_threads(who)
+        if limit is None:
+            return {"threads": rows, "more": False}
+        shown = [x for i, x in enumerate(rows)
+                 if i < limit or x["pinned_at"] or x["unread"] or x["status"] in ("queued", "running") or x["thread_id"] == current]
+        return {"threads": shown, "more": len(shown) < len(rows)}
+
     def pin(self, thread_id: str, pinned: bool) -> dict | None:
         """置顶或取消（运行中也行：不碰检查点），返回列表里的这一行。"""
         return aio.run(self._apin(thread_id, pinned))

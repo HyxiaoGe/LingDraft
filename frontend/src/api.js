@@ -100,10 +100,15 @@ export async function resumeThread(threadId, payload, onEvent) {
 
 // ---- 对话 ----
 
-export async function listResearchThreads() {
-  const resp = await authFetch("/api/research/threads");
+// 对话列表：{threads, more}。limit：只要最近有动静的这么多段（置顶的、有未读的、在跑的、current 开着的那段不管排在哪都带上），
+// more 是还有没给的；不给 limit 是全部（搜对话、记忆页对出处用）
+export async function listResearchThreads({ limit, current } = {}) {
+  const q = new URLSearchParams();
+  if (limit) q.set("limit", limit);
+  if (limit && current) q.set("current", current);
+  const resp = await authFetch(`/api/research/threads${limit ? `?${q}` : ""}`);
   if (!resp.ok) throw await httpError(resp);
-  return (await resp.json()).threads;
+  return resp.json();
 }
 
 // 长期记忆：{memories: [{id, text, created_at, updated_at, thread_id}], last_dream, next_dream}（见后端 ResearchRunner.memory_view）。
