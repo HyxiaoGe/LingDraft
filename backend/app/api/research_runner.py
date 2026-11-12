@@ -1640,7 +1640,8 @@ class ResearchRunner(BaseRunner):
         return v.get("title") or self._titles.get(thread_id) or fallback_title(history.requests(v["messages"])[0])
 
     async def _asummary_view(self, thread_id: str, pins: dict[str, str] | None = None, unread: dict[str, dict] | None = None) -> dict | None:
-        """线程列表里的一行：标题、状态、是不是工作任务、置顶的时间（没置顶是 None）、几条未读和最近那条通知（没有是 0、None）。不存在返回 None。
+        """线程列表里的一行：标题、状态、是不是工作任务、是不是定时任务的对话、置顶的时间（没置顶是 None）、几条未读和最近那条通知（没有是 0、None）。
+        不存在返回 None。
         pins、unread 是这个人置顶的、有未读的那几段（列表一次取齐）；没给就按这段对话归谁去查。
         未读要在状态之后取（见 _alist_threads）：这里没给的也是看完状态再查。"""
         owner = await self.run_store.owner_of(thread_id) if pins is None or unread is None else None
@@ -1659,6 +1660,7 @@ class ResearchRunner(BaseRunner):
             "title": self._title_of(thread_id, v),
             "status": status,
             "work": history.work_mode(v),
+            "scheduled": history.scheduled_here(v.get("messages") or []),  # 定时任务的对话：页面在左栏用钟的图标
             "updated_at": snap.created_at,
             "running_since": run.get("since") if run else None,
             "pinned_at": pins.get(thread_id),

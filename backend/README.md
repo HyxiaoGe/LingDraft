@@ -93,7 +93,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - `POST /{id}/read`：用户看了这段对话，未读清零（见“定时任务”的未读）。运行中也行，返回列表里的这一行。
   - `DELETE /{id}`：删掉整段对话，找不回来。检查点、运行记录、画的图、用户发的图、用户发的文件和模型写的文件、整理记忆的记录一起删，从这段对话记下的记忆不删。
 - 查看：
-  - `GET`（前缀本身）：这个人的对话列表，每行是 `thread_id`、`title`、`status`、`updated_at`、`running_since`、`pinned_at`、`unread`（几条没看，没有是 0）、`notice`（最近那条通知，没有是 null），最近有动静的在前。登录以前没归谁的老对话谁都看不到。
+  - `GET`（前缀本身）：这个人的对话列表，每行是 `thread_id`、`title`、`status`、`updated_at`、`running_since`、`pinned_at`、`unread`（几条没看，没有是 0）、`notice`（最近那条通知，没有是 null）、`work`（是不是工作任务）、`scheduled`（是不是定时任务的对话：在里面建成过、跑过定时任务的，任务删了也还算；页面在左栏用钟的图标），最近有动静的在前。登录以前没归谁的老对话谁都看不到。
   - `GET /{id}/state`：当前状态。
   - `GET /{id}/events?after=<事件 id>`：断线、刷新后接上事件流。
   - `GET /{id}/images/{image_id}`：对话里画的图、用户发的图，后端经网关从 image-service 取来转给页面。按文件表认是不是这段对话的（图发出去、画好时就登记了，不靠检查点）。页面用 `<img src>` 取、带不了令牌，所以这个接口不认人，对话 id 和图的编号都是随机的。不是这段对话的、编号格式不对、服务里已经没有的返回 404，网关、服务出问题返回 502。

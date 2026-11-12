@@ -779,6 +779,33 @@ def _row(client: TestClient, tid: str, **headers) -> dict:
     return next(r for r in client.get("/api/research/threads", **({"headers": headers} if headers else {})).json()["threads"] if r["thread_id"] == tid)
 
 
+def test_list_row_says_which_conversations_are_scheduled(clock):
+    """左栏用钟的图标的那些：在里面建成过定时任务的、定时任务在里面跑过的。只看对话本身，任务删了也还算。"""
+    rr, client = _api(clock)
+    plain = new(client, "直接答：你好")["thread_id"]
+    assert _row(client, plain)["scheduled"] is False
+    # 在对话里建的：还没跑过也算
+    made = new(client, "建定时任务：直接答今天的新闻")["thread_id"]
+    [t] = client.get("/api/scheduled-tasks").json()["tasks"]
+    assert _row(client, made)["scheduled"] is True and _row(client, plain)["scheduled"] is False
+    assert client.patch(f"/api/research/threads/{made}", json={"title": "早报"}).json()["scheduled"] is True  # 单取一行的也带着
+    client.delete(f"/api/scheduled-tasks/{t['id']}")
+    assert _row(client, made)["scheduled"] is True
+    # 接口建的：到点新开的那段对话
+    t = _create(client)
+    clock[0] = at(13, 7, 22)
+    ran = _fire(rr, client, t["id"])["thread_id"]
+    assert _row(client, ran)["scheduled"] is True
+    client.delete(f"/api/scheduled-tasks/{t['id']}")
+    assert _row(client, ran)["scheduled"] is True
+
+
+def test_conversation_where_making_a_task_failed_is_not_scheduled(clock):
+    rr, client = _api(clock)
+    tid = new(client, "建定时任务：太密 直接答今天的新闻")["thread_id"]  # 工具报了错，结果里没有任务
+    assert client.get("/api/scheduled-tasks").json()["tasks"] == [] and _row(client, tid)["scheduled"] is False
+
+
 def test_finished_run_leaves_an_unread_notice(clock):
     rr, client = _api(clock)
     t = _create(client)

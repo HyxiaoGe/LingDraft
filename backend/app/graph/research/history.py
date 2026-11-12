@@ -179,6 +179,14 @@ def scheduled_of(m: BaseMessage) -> dict | None:
     return v if isinstance(v, dict) and v.get("task_id") else None
 
 
+def scheduled_here(messages: list[BaseMessage]) -> bool:
+    """这段对话是不是定时任务的对话（列表里用钟的图标）：在里面建成过定时任务，或者定时任务在里面跑过。
+    只看对话本身，任务后来删了也还算；没建成的（工具报了错，结果里没有任务）不算。"""
+    def made(m: BaseMessage) -> bool:
+        return isinstance(m, ToolMessage) and m.name == CREATE_TASK_TOOL and isinstance(m.artifact, dict) and isinstance(m.artifact.get("task"), dict)
+    return any(scheduled_of(m) is not None or made(m) for m in messages)
+
+
 def unattended(state: Mapping[str, Any]) -> bool:
     """正在跑的这一轮是不是定时任务触发的（没人在场，停下来问也没人答）。"""
     msgs = state.get("messages") or []
