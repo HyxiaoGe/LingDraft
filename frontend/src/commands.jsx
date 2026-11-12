@@ -1,7 +1,10 @@
 // 在沙箱里跑命令（run_command，工作任务里才有，后端见 app/tools/run_command.py）：
-// - 过程里的一步（CommandRow）：一行是命令的第一行和结果（用时、出错了、超时了…），点开看整条命令和它的输出。默认收着：输出往往很长。
+// - 过程里的一步（CommandRow）：一行是命令的第一行和结果（用时、出错了、超时了…），点开看整条命令和它的输出。
+//   模型写命令时就出现（2026-11-12 Sean 定，s.writing，见 research.addLive）：不止一行的（多半是把脚本写进文件）展开着边写边出，
+//   跑的时候也开着，跑完收起：输出往往很长。一行的命令那一行里已经看全了，不展开。自己点开、收起的照点的来。
 // - 产出（outputsOf）：命令写在 outputs/ 里的文件。图在回答上面（images.jsx 的 ChartCards），别的在回答下面一个一张卡片（OutputFiles）：
 //   抽得出文字的点开在右栏看，别的点了下载。一轮里同一个路径后来又写的，只留最后那个（前面的后端已经删了）。
+import { useLayoutEffect, useRef } from "react";
 import { SentFile } from "./files.jsx";
 import { IconChevron, IconTerminal, Spinner } from "./icons.jsx";
 import proc from "./process.module.css";
@@ -36,12 +39,17 @@ function statusOf(s) {
 
 // 过程里的一步。还没有结果、这一轮却不在跑了（出错停在这一步）：没有完成，和别的步骤一样说
 export function CommandRow({ s, running }) {
-  const [open, toggle, found] = useFoldOpen(`cmd:${s.id}`, false);
   const busy = running && s.pending;
+  const writing = busy && !!s.writing; // 模型还在写这条命令，还没开始跑
   const lines = s.text.split("\n");
   const first = lines.find((l) => l.trim()) || "";
   const more = lines.filter((l) => l.trim()).length > 1;
-  const sub = busy ? "运行中…" : s.pending ? "没有完成" : statusOf(s);
+  const [open, toggle, found] = useFoldOpen(`cmd:${s.id}`, busy && more);
+  const box = useRef(null);
+  useLayoutEffect(() => { // 正在写的时候框里跟着最新的那几行（和思考一样）
+    if (writing && box.current) box.current.scrollTop = box.current.scrollHeight;
+  });
+  const sub = writing ? "正在写…" : busy ? "运行中…" : s.pending ? "没有完成" : statusOf(s);
   const bad = !s.pending && !s.ok;
   const r = s.run;
   return (
@@ -55,7 +63,7 @@ export function CommandRow({ s, running }) {
       <Fold open={open} onFound={found}>
         <div className={styles.detail}>
           <div className={styles.label}>命令</div>
-          <pre className={styles.out}>{s.text}</pre>
+          <pre ref={box} className={styles.out}>{s.text}</pre>
           {r?.stdout && <><div className={styles.label}>输出</div><pre className={styles.out}>{r.stdout}</pre></>}
           {r?.stderr && <><div className={styles.label}>报错</div><pre className={styles.out + " " + styles.err}>{r.stderr}</pre></>}
           {r && !r.stdout && !r.stderr && <div className={styles.none}>没有输出</div>}
