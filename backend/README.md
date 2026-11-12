@@ -94,6 +94,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - `DELETE /{id}`：删掉整段对话，找不回来。检查点、运行记录、画的图、用户发的图、用户发的文件和模型写的文件、整理记忆的记录一起删，从这段对话记下的记忆不删。
 - 查看：
   - `GET`（前缀本身）：这个人的对话列表，每行是 `thread_id`、`title`、`status`、`updated_at`、`running_since`、`pinned_at`、`unread`（几条没看，没有是 0）、`notice`（最近那条通知，没有是 null）、`work`（是不是工作任务）、`scheduled`（是不是定时任务的对话：在里面建成过、跑过定时任务的，任务删了也还算；页面在左栏用钟的图标），最近有动静的在前。登录以前没归谁的老对话谁都看不到。
+    - 每行里从检查点算出来的那几项（标题、没在跑时的状态、`work`、`scheduled`、`updated_at`）记在 `thread_owners` 上，取列表不用把每段对话的检查点读一遍：一次查齐各段最新检查点的编号，记着的是按这个检查点算的就直接用，对不上的（对话有了新的检查点、还没记过、`SUMMARY_V` 变了）才读检查点重算、记下。正在跑、排队的每次都读、不记。重试、回答以后可能停在同一个检查点上、状态却变了，所以每跑一轮开头先把记着的作废。记着的只是算好的结果，以检查点为准（`ResearchRunner._alist_threads`、`_summary_of`）；算法改了要把 `SUMMARY_V` 加一。
   - `GET /{id}/state`：当前状态。
   - `GET /{id}/events?after=<事件 id>`：断线、刷新后接上事件流。
   - `GET /{id}/images/{image_id}`：对话里画的图、用户发的图，后端经网关从 image-service 取来转给页面。按文件表认是不是这段对话的（图发出去、画好时就登记了，不靠检查点）。页面用 `<img src>` 取、带不了令牌，所以这个接口不认人，对话 id 和图的编号都是随机的。不是这段对话的、编号格式不对、服务里已经没有的返回 404，网关、服务出问题返回 502。
@@ -314,7 +315,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 对话用的都存在 Postgres 里（`LINGDRAFT_DATABASE_URL`），共用一个连接池（成本账另用一个连接写，见下面的“成本”）。这个变量必须配：没配、连不上，服务启动时就报错退出。表都在启动时建（`CREATE TABLE IF NOT EXISTS`）：
 
 - 检查点、长期记忆：LangGraph 的 `AsyncPostgresSaver`、`AsyncPostgresStore` 自己建的表。
-- `runs`、`pending_messages`、`thread_owners`（`app/api/run_store.py`）：运行记录、排着的话、每段对话归谁、置顶时间（`pinned_at`）、未读（`unread`、`notice`）。
+- `runs`、`pending_messages`、`thread_owners`（`app/api/run_store.py`）：运行记录、排着的话、每段对话归谁、置顶时间（`pinned_at`）、未读（`unread`、`notice`）、列表里那一行算好的几项（`summary`、`summary_rev`，见上面取对话列表那一条）。
 - `files`、`file_parts`（`app/files/store.py`）：用户发的文件、模型写的文件（一版一行）、图片的登记，一行一个；`workspace_id` 是对话 id 或 `kb:<资料库编号>`。`file_parts` 是抽出来的文字，按段。
 - `kb_libraries`、`kb_chunks`（`app/knowledge/`）：资料库的名字和说明；块的内容、1024 维向量（pgvector）、tsvector，跟着文件删。库里要有 pgvector 扩展：建表时跑 `CREATE EXTENSION IF NOT EXISTS vector`，扩展已经装好的，连库的账号不是超级用户也不报错。
 - `scheduled_tasks`（`app/scheduled/store.py`）：定时任务，一行一个。

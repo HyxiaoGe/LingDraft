@@ -61,5 +61,26 @@ async def thread_ids(checkpointer: BaseCheckpointSaver) -> list[str]:
     raise TypeError(f"不支持列出线程的检查点存储：{type(checkpointer).__name__}")
 
 
+# 每个线程一次倒着走主键（thread_id, checkpoint_ns, checkpoint_id）取第一条，不碰检查点的内容；存储自己取最新的也是按编号倒排取第一条
+LATEST_SQL = ("SELECT t.thread_id, (SELECT c.checkpoint_id FROM checkpoints c WHERE c.thread_id = t.thread_id AND c.checkpoint_ns = '' "
+              "ORDER BY c.checkpoint_id DESC LIMIT 1) AS checkpoint_id FROM unnest(%s::text[]) AS t(thread_id)")
+
+
+async def latest_checkpoints(checkpointer: BaseCheckpointSaver, threads: list[str]) -> dict[str, str]:
+    """这些线程各自最新那个检查点的编号（没有检查点的不在里面）。只查编号，不读检查点的内容：
+    线程列表拿它看记着的那几项还对不对得上（见 ResearchRunner._alist_threads），一次查齐。"""
+    if not threads:
+        return {}
+    if isinstance(checkpointer, AsyncPostgresSaver):
+        async with checkpointer._cursor() as cur:  # 同 thread_ids
+            await cur.execute(LATEST_SQL, (threads,))
+            rows = await cur.fetchall()
+        return {r["thread_id"]: r["checkpoint_id"] for r in rows if r["checkpoint_id"]}
+    if isinstance(checkpointer, InMemorySaver):
+        found = {t: (checkpointer.storage.get(t) or {}).get("") for t in threads}  # 用 get：storage 是 defaultdict，下标取会建出空的
+        return {t: max(ids) for t, ids in found.items() if ids}
+    raise TypeError(f"不支持查最新检查点的检查点存储：{type(checkpointer).__name__}")
+
+
 def build_graph(planner: ResearchPlanner, checkpointer: BaseCheckpointSaver, memory: MemoryBook | None = None):
     return build_agent(planner, checkpointer, memory)

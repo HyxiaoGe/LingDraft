@@ -51,7 +51,7 @@ from app.knowledge.service import KnowledgeBase
 from app.knowledge.store import ChunkStore, MemoryChunkStore, PostgresChunkStore
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, fallback_title, now, stop_turn
-from app.graph.research.graph import NO_POSTGRES, build_graph, make_serde, postgres_pool, thread_ids
+from app.graph.research.graph import NO_POSTGRES, build_graph, latest_checkpoints, make_serde, postgres_pool, thread_ids
 from app.graph.research.memory import MemoryBook, next_at
 from app.identity import Identity, is_guest_sub
 from app.graph.research.sources import collect_sources, export_markdown, subagent_messages
@@ -105,6 +105,8 @@ ASKING_FIRST = "先回答或跳过上面的问题"
 # model：模型服务不可用；blocked：内容审核没通过；cut_short：半路停了、没有错误记录（进程重启）；tool：工具服务（网关）出错；internal：别的
 FAILURE_MODEL, FAILURE_BLOCKED, FAILURE_CUT, FAILURE_TOOL, FAILURE_INTERNAL = "model", "blocked", "cut_short", "tool", "internal"
 NO_UNREAD = {"unread": 0, "notice": None}  # 线程列表里一行没有未读时的那两项（见 _asummary_view）
+# 线程列表里一行从检查点算出来的那几项（见 _summary_of）记在库里时带的版本：哪一项的算法改了、多了一项，就加一，记着的全部作废、重算
+SUMMARY_V = 1
 _SHOWN = {ModelUnavailable.__name__: FAILURE_MODEL, Interrupted.__name__: FAILURE_MODEL, ContentBlocked.__name__: FAILURE_BLOCKED}  # 提示原样给的
 FAILURE_TEXT = {FAILURE_TOOL: "查资料、地图或画图用的服务出了问题", FAILURE_INTERNAL: "处理这一轮时出了意外的错误"}
 # 检查点只在一次运行开头（用户的话写进去，见 accept）和结束时各存一份，中间每一步不存：每份都带着整段对话，每步都存的话按平方增长。
@@ -394,6 +396,8 @@ class ResearchRunner(BaseRunner):
     接口层在线程池里调不带 a 的同步方法：活交给事件循环做、等结果；事件流照旧从事件日志里读（见 BaseRunner._stream）。"""
 
     api_prefix = "/api/research/threads"
+    # 测试里打开（见 tests/conftest.py）：取列表时记着的每一行都和现算的对一遍，对不上就报错（见 _alist_threads）
+    check_summaries = False
 
     def __init__(self, fake: bool | None = None, workers: int | None = None,
                  planner: ResearchPlanner | None = None, checkpointer: BaseCheckpointSaver | None = None,
@@ -874,6 +878,9 @@ class ResearchRunner(BaseRunner):
         模型停下来问用户了（见 app.tools.ask_user）返回 ASKED：这次执行到此结束，这一轮还没完，检查点停在问的地方，
         用户回答以后另起一次执行接着跑（inp 是带着回答的 Command，见 _aanswer_input）。
         locate：有页面可以要用户的位置（经接口跑的），模型选了当前位置时停下来要（见 app.tools.location）。"""
+        # 列表里记着的那几项（见 _alist_threads）先作废。有新的检查点它自己就对不上了，这里管的是不出新检查点就变了状态的：
+        # 重试、回答以后又停在同一步（出错变成等回答、还是出错），检查点还是那个，变的只是它上面记的出错和问题
+        await self._atouch(thread_id)
         # 这一轮调的模型、工具记账时记上对话、轮和归谁（见 app.costs；额度按归谁算，见 app.quota）
         scope = costs.Scope(thread_id=thread_id, turn_id=await self._aturn_of(thread_id), owner=await self.run_store.owner_of(thread_id))
         if self._stop_requested(thread_id):
@@ -1639,44 +1646,100 @@ class ResearchRunner(BaseRunner):
         都没有用这段对话的第一句，和起标题时用原话一样整理（见 agent.fallback_title：纯数字、纯符号的叫“新对话”）。"""
         return v.get("title") or self._titles.get(thread_id) or fallback_title(history.requests(v["messages"])[0])
 
-    async def _asummary_view(self, thread_id: str, pins: dict[str, str] | None = None, unread: dict[str, dict] | None = None) -> dict | None:
-        """线程列表里的一行：标题、状态、是不是工作任务、是不是定时任务的对话、置顶的时间（没置顶是 None）、几条未读和最近那条通知（没有是 0、None）。
-        不存在返回 None。
-        pins、unread 是这个人置顶的、有未读的那几段（列表一次取齐）；没给就按这段对话归谁去查。
-        未读要在状态之后取（见 _alist_threads）：这里没给的也是看完状态再查。"""
-        owner = await self.run_store.owner_of(thread_id) if pins is None or unread is None else None
-        if pins is None:
-            pins = await self.run_store.pins_of(owner) if owner else {}
-        run = self.runs.get(self._run_key(thread_id))
-        snap = await self.graph.aget_state(self._cfg(thread_id))
+    def _summary_of(self, snap) -> dict:
+        """线程列表里一行从检查点算出来的那几项：标题、没在跑时的状态、是不是工作任务、是不是定时任务的对话、最近一个检查点的时间。
+        只看这一个检查点（和它上面记着的出错、等着的问题），算好的记在库里，下次取列表时最新的检查点还是 checkpoint 这个就直接用（见 _alist_threads）。
+        这里哪一项的算法改了（包括它调的 history.work_mode、scheduled_here、fallback_title、_status），把 SUMMARY_V 加一。
+        标题只记 state 里的；没写进 state 的先看这次进程里起好的（_titles，不记进库），再没有用 fallback（第一句话整理出来的，有标题的不算）。"""
         v = snap.values
-        if not v:
-            return None
-        status, _ = self._status(snap, run)
-        if unread is None:
-            unread = await self.run_store.unread_of(owner) if owner else {}
+        title = v.get("title")
         return {
-            "thread_id": thread_id,
-            "title": self._title_of(thread_id, v),
-            "status": status,
+            "v": SUMMARY_V,
+            "checkpoint": snap.config["configurable"]["checkpoint_id"],
+            "title": title,
+            "fallback": None if title else fallback_title(history.requests(v["messages"])[0]),
+            "status": self._status(snap, None)[0],
             "work": history.work_mode(v),
             "scheduled": history.scheduled_here(v.get("messages") or []),  # 定时任务的对话：页面在左栏用钟的图标
             "updated_at": snap.created_at,
-            "running_since": run.get("since") if run else None,
-            "pinned_at": pins.get(thread_id),
-            **(unread.get(thread_id) or NO_UNREAD),
         }
 
+    def _row(self, thread_id: str, s: dict, run: dict | None, pinned_at: str | None, unread: dict | None) -> dict:
+        """线程列表里的一行：s 是从检查点算出来的那几项（见 _summary_of），run 是这段对话占着位的执行（没有是 None）。"""
+        return {
+            "thread_id": thread_id,
+            # 和 _title_of 一样的先后：起好写进 state 的、这次进程里起好的、第一句话
+            "title": s["title"] or self._titles.get(thread_id) or s["fallback"],
+            "status": ("queued" if run["queued"] else "running") if run else s["status"],
+            "work": s["work"],
+            "scheduled": s["scheduled"],
+            "updated_at": s["updated_at"],
+            "running_since": run.get("since") if run else None,
+            "pinned_at": pinned_at,
+            **(unread or NO_UNREAD),
+        }
+
+    async def _asummary_view(self, thread_id: str) -> dict | None:
+        """线程列表里的一行（单取：改名、置顶、标已读以后还给页面的）：标题、状态、是不是工作任务、是不是定时任务的对话、置顶的时间（没置顶是 None）、
+        几条未读和最近那条通知（没有是 0、None）。不存在返回 None。单取的直接读检查点，不看记着的。
+        未读要在状态之后取（见 _alist_threads）。"""
+        owner = await self.run_store.owner_of(thread_id)
+        pins = await self.run_store.pins_of(owner) if owner else {}
+        run = self.runs.get(self._run_key(thread_id))  # 先查占位再取检查点，同 _astate_view
+        snap = await self.graph.aget_state(self._cfg(thread_id))
+        if not snap.values:
+            return None
+        unread = await self.run_store.unread_of(owner) if owner else {}
+        return self._row(thread_id, self._summary_of(snap), run, pins.get(thread_id), unread.get(thread_id))
+
     async def _alist_threads(self, who: Identity) -> list[dict]:
-        """who 的对话，最近有动静的在前。"""
-        pins = await self.run_store.pins_of(who.sub)
-        rows = [x for t in await self.run_store.threads_of(who.sub) if (x := await self._asummary_view(t, pins, {}))]
+        """who 的对话，最近有动静的在前。
+        每行从检查点算出来的那几项记在库里（见 _summary_of、run_store 的模块说明），这里不用把每段对话的检查点都读一遍：
+        先一次查齐各段最新检查点的编号，记着的是按这个检查点算的就直接用；对不上的（对话有了新的检查点、还没记过、版本旧了）才读检查点重算、记下。
+        正在跑、排队的不看记着的也不记：这时检查点和它上面记的东西正在变。跑一轮开头还会把记着的作废（见 _run_turn）。"""
+        rows = await self.run_store.rows_of(who.sub)
+        latest = await latest_checkpoints(self.graph.checkpointer, [r["thread_id"] for r in rows])
+        out: list[dict] = []
+        for r in rows:
+            t = r["thread_id"]
+            if t not in latest:  # 归了人、检查点里却没有（第一句话没写成）：不存在
+                continue
+            run = self.runs.get(self._run_key(t))  # 先查占位再取检查点，同 _astate_view
+            s = r["summary"]
+            kept = run is None and bool(s) and s.get("v") == SUMMARY_V and s.get("checkpoint") == latest[t]
+            if not kept or self.check_summaries:
+                snap = await self.graph.aget_state(self._cfg(t))
+                if not snap.values:
+                    continue
+                fresh = self._summary_of(snap)
+                if kept:  # 只在测试里走到（check_summaries）：检查点没变，记着的就该和现算的一样
+                    if fresh["checkpoint"] == s["checkpoint"] and fresh != s and self.runs.get(self._run_key(t)) is None:
+                        raise AssertionError(f"线程列表里记着的和检查点对不上：{t} 记着 {s}，现算 {fresh}")
+                else:
+                    s = fresh
+                    if run is None:
+                        await self._akeep_summary(t, r["rev"], s)
+            out.append(self._row(t, s, run, r["pinned_at"], None))
         # 未读在各行的状态都看完以后取：定时任务那一轮是先记未读、再退占位（见 _work），这样哪一行看到它跑完了，这次列表里就一定带着它的未读。
         # 反过来先取的话，取完未读到看状态之间跑完的那一轮会是“跑完了、没有未读”，页面要等下一次取列表（空闲时 20 秒）才弹通知
         unread = await self.run_store.unread_of(who.sub)
-        for x in rows:
+        for x in out:
             x.update(unread.get(x["thread_id"]) or NO_UNREAD)
-        return sorted(rows, key=lambda x: x["updated_at"] or "", reverse=True)
+        return sorted(out, key=lambda x: x["updated_at"] or "", reverse=True)
+
+    async def _akeep_summary(self, thread_id: str, rev: int, summary: dict) -> None:
+        """把列表里这一行算好的记下。没记上只打日志：列表照常给，下次再算。"""
+        try:
+            await self.run_store.put_summary(thread_id, rev, summary)
+        except Exception:  # noqa: BLE001
+            log.warning("列表里算好的那几项没记上：%s", self._run_key(thread_id), exc_info=True)
+
+    async def _atouch(self, thread_id: str) -> None:
+        """这段对话要跑一轮了：列表里记着的那几项作废（见 _run_turn）。没作废成只打日志，不耽误这一轮。"""
+        try:
+            await self.run_store.touch(thread_id)
+        except Exception:  # noqa: BLE001
+            log.warning("列表里记着的那几项没作废：%s", self._run_key(thread_id), exc_info=True)
 
     @staticmethod
     def _status(snap, run: dict | None) -> tuple[str, tuple[str, str] | None]:
