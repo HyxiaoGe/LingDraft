@@ -804,11 +804,14 @@ function CopyButton({ text }) {
 // 用时不算等用户回答的那段（rec.waited_ms）。正在跑时展开，正文一出来就收成这一行
 // （2026-11-09 Sean 定，原来跑完不收：过程往往很长，开着把回答推远）。收了这次就不再自动展开：模型有时先写一句“我先查一下”再去搜，
 // 那句字刚出来时算正文、过程收起，搜索来了它归回过程，这时也不再展开（收起是结束动作，Sean 定），在做什么看下面那一行。
-// 按这次运行记（running_since），重新回答是新的一次，又从展开开始
+// 按这次运行记（running_since），重新回答是新的一次，又从展开开始。
+// 例外是跑命令（2026-11-12 Sean）：模型写命令、跑命令的时候要看得见命令一行行出来（见 commands.jsx），收起了的这时重新展开，
+// 下一次出正文再收。模型常常先说一句“我用 Python 生成一份 Excel”再写脚本，不展开的话那几十秒只有底下一行“正在写命令”
 const settled = new Set();
 function Process({ k, items, st, nums, rec, running, answering, failed, asking, now, versions }) {
   const run = running ? `${k}@${st?.running_since ?? ""}` : null;
-  if (run && answering) settled.add(run);
+  if (run && items.some((i) => i.type === "step" && i.kind === "command" && i.pending)) settled.delete(run);
+  else if (run && answering) settled.add(run);
   const [open, toggle, found] = useFoldOpen(`proc:${k}`, running && !settled.has(run)); // 这次运行正文还没出来过的展开；自己点过的照点的来
   const shown = open && items.length > 0;
   const time = running ? elapsed(st?.running_since || rec?.started_at, now)
