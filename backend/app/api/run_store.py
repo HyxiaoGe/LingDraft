@@ -14,6 +14,10 @@
 这张表还记着置顶（pinned_at，2026-11-07 批次 D Sean 定存后端，换设备也在）：置顶跟着对话走，并进账号后还在，删对话一起删。
 还记着未读（unread、notice，2026-11-13 定时任务第 3 步）：用户不在场时跑完的一轮（现在只有定时任务触发的）每次加一，
 notice 是最近那一次的通知 {"title", "text", "ok", "at"}（任务名、回答的开头、跑成没有、什么时候）；用户看了这段对话就清零。同样跟着对话走。
+还记着线程列表里这一行从检查点算出来的那几项（summary、summary_rev，2026-11-13）：标题、状态、是不是工作任务这些原来每次取列表都要把每段对话的检查点
+整个读出来现算，对话多了就慢。算好的记在这里，下次取列表时那段对话最新的检查点还是算的时候那个就直接用（见 ResearchRunner._alist_threads）。
+它只是算好的结果，以检查点为准：没有、对不上的重算，丢了不要紧。summary_rev 每作废一次加一（touch），记的时候对不上就不记：
+免得“读检查点 → 这段对话开跑了 → 才记下”把开跑前算的留下来。
 """
 
 from __future__ import annotations
@@ -58,13 +62,16 @@ class RunStore(Protocol):
     # 对话归谁（见模块说明）
     async def claim(self, thread_id: str, owner: str) -> None: ...  # 记下归谁；已经记过的不改
     async def owner_of(self, thread_id: str) -> str | None: ...  # 没记过（登录以前的老对话）是 None
-    async def threads_of(self, owner: str) -> list[str]: ...  # 这个人的所有对话（线程 id）
     async def transfer(self, source: str, target: str) -> int: ...  # source 的对话全改归 target，返回改了几段
     async def pin(self, thread_id: str, pinned: bool) -> str | None: ...  # 置顶（记下时间，置顶过的不改）或取消，返回置顶的时间；没归谁的不动、返回 None
     async def pins_of(self, owner: str) -> dict[str, str]: ...  # 这个人置顶的对话：线程 id → 置顶的时间
     async def notify(self, thread_id: str, notice: dict) -> None: ...  # 未读加一，记下这一次的通知（时间存储自己记）；没归谁的不动
     async def mark_read(self, thread_id: str) -> None: ...  # 看过了：未读清零，通知一起清掉
     async def unread_of(self, owner: str) -> dict[str, dict]: ...  # 这个人有未读的对话：线程 id → {"unread", "notice"}
+    # 线程列表里从检查点算出来的那几项（见模块说明）
+    async def rows_of(self, owner: str) -> list[dict]: ...  # 这个人的所有对话：{"thread_id", "pinned_at", "summary"（没记是 None）, "rev"}
+    async def put_summary(self, thread_id: str, rev: int, summary: dict) -> None: ...  # 记下算好的；rev 不是现在的（其间作废过）就不记
+    async def touch(self, thread_id: str) -> None: ...  # 记着的作废、rev 加一；没归谁的不动
 
     # 排着的话：{"text", "created_at", "updated_at"}
     # 接在排着的那句后面（front：放到前面，是取出来又放回去的，比排着的那句早），没有就新建
@@ -94,6 +101,8 @@ class MemoryRunStore:
         self._owners: dict[str, str] = {}  # 线程 id → 归谁
         self._pins: dict[str, str] = {}  # 线程 id → 置顶的时间
         self._unread: dict[str, dict] = {}  # 线程 id → {"unread": 几条没看, "notice": 最近那一条}
+        self._summaries: dict[str, dict] = {}  # 线程 id → 列表里那一行算好的几项
+        self._revs: dict[str, int] = {}  # 线程 id → 作废过几次
 
     async def create(self, run_id: str, thread_id: str, kind: str, turn_id: str | None, version: str | None) -> None:
         self._rows[run_id] = dict.fromkeys(FIELDS) | {"id": run_id, "thread_id": thread_id, "kind": kind, "turn_id": turn_id,
@@ -129,15 +138,14 @@ class MemoryRunStore:
         self._owners.pop(thread_id, None)
         self._pins.pop(thread_id, None)
         self._unread.pop(thread_id, None)
+        self._summaries.pop(thread_id, None)
+        self._revs.pop(thread_id, None)
 
     async def claim(self, thread_id: str, owner: str) -> None:
         self._owners.setdefault(thread_id, owner)
 
     async def owner_of(self, thread_id: str) -> str | None:
         return self._owners.get(thread_id)
-
-    async def threads_of(self, owner: str) -> list[str]:
-        return [t for t, o in self._owners.items() if o == owner]
 
     async def transfer(self, source: str, target: str) -> int:
         moved = [t for t, o in self._owners.items() if o == source]
@@ -164,6 +172,19 @@ class MemoryRunStore:
 
     async def unread_of(self, owner: str) -> dict[str, dict]:
         return {t: dict(r) for t, r in self._unread.items() if self._owners.get(t) == owner}
+
+    async def rows_of(self, owner: str) -> list[dict]:
+        return [{"thread_id": t, "pinned_at": self._pins.get(t), "summary": dict(s) if (s := self._summaries.get(t)) else None,
+                 "rev": self._revs.get(t, 0)} for t, o in self._owners.items() if o == owner]
+
+    async def put_summary(self, thread_id: str, rev: int, summary: dict) -> None:
+        if thread_id in self._owners and self._revs.get(thread_id, 0) == rev:
+            self._summaries[thread_id] = dict(summary)
+
+    async def touch(self, thread_id: str) -> None:
+        if thread_id in self._owners:
+            self._summaries.pop(thread_id, None)
+            self._revs[thread_id] = self._revs.get(thread_id, 0) + 1
 
     async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict:
         now = _iso(_now())
@@ -204,6 +225,8 @@ _POSTGRES_DDL = (
     "ALTER TABLE thread_owners ADD COLUMN IF NOT EXISTS pinned_at timestamptz",  # 2026-11-07 加的置顶，之前建好的表补上
     "ALTER TABLE thread_owners ADD COLUMN IF NOT EXISTS unread integer NOT NULL DEFAULT 0",  # 2026-11-13 加的未读，同上
     "ALTER TABLE thread_owners ADD COLUMN IF NOT EXISTS notice jsonb",
+    "ALTER TABLE thread_owners ADD COLUMN IF NOT EXISTS summary jsonb",  # 2026-11-13 加的列表里算好的那几项，同上；老对话是空的，第一次取列表时算
+    "ALTER TABLE thread_owners ADD COLUMN IF NOT EXISTS summary_rev integer NOT NULL DEFAULT 0",
 )
 
 
@@ -268,9 +291,6 @@ class PostgresRunStore:
         rows = await self._exec("SELECT owner FROM thread_owners WHERE thread_id = %s", (thread_id,))
         return rows[0]["owner"] if rows else None
 
-    async def threads_of(self, owner: str) -> list[str]:
-        return [r["thread_id"] for r in await self._exec("SELECT thread_id FROM thread_owners WHERE owner = %s ORDER BY created_at", (owner,))]
-
     async def transfer(self, source: str, target: str) -> int:
         return len(await self._exec("UPDATE thread_owners SET owner = %s WHERE owner = %s RETURNING thread_id", (target, source)))
 
@@ -293,6 +313,16 @@ class PostgresRunStore:
     async def unread_of(self, owner: str) -> dict[str, dict]:
         rows = await self._exec("SELECT thread_id, unread, notice FROM thread_owners WHERE owner = %s AND unread > 0", (owner,))
         return {r["thread_id"]: {"unread": r["unread"], "notice": r["notice"]} for r in rows}
+
+    async def rows_of(self, owner: str) -> list[dict]:
+        return await self._rows("SELECT thread_id, pinned_at, summary, summary_rev AS rev FROM thread_owners WHERE owner = %s ORDER BY created_at",
+                                (owner,))
+
+    async def put_summary(self, thread_id: str, rev: int, summary: dict) -> None:
+        await self._exec("UPDATE thread_owners SET summary = %s WHERE thread_id = %s AND summary_rev = %s", (Jsonb(summary), thread_id, rev))
+
+    async def touch(self, thread_id: str) -> None:
+        await self._exec("UPDATE thread_owners SET summary = NULL, summary_rev = summary_rev + 1 WHERE thread_id = %s", (thread_id,))
 
     async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict:
         # 思考开关按后发的那句：放到前面的（取出来又放回去的）比排着的早

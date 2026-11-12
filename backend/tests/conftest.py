@@ -52,6 +52,13 @@ def _files_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _check_summaries(monkeypatch):
+    """线程列表里每行从检查点算出来的那几项记在库里、不用每次读检查点（见 ResearchRunner._alist_threads）。
+    测试里每次取列表都把记着的和现算的对一遍，对不上就报错：哪条路改了对话、记着的却没跟着作废，整套测试里谁取了列表谁就会报出来。"""
+    monkeypatch.setattr(research_runner.ResearchRunner, "check_summaries", True)
+
+
+@pytest.fixture(autouse=True)
 def _storage(monkeypatch):
     """不传检查点建的对话运行器，存储从 research_runner.open_storage 来。
     没设测试库：换成内存的，同一个测试里建的运行器共用一份，再建一个就像服务重启（运行器的状态丢了，库里的还在）。

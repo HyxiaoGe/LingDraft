@@ -108,6 +108,40 @@ def test_store_delete_thread(store):
     assert store.for_thread("t1") == [] and [r["id"] for r in store.for_thread("t2")] == ["b"]
 
 
+def test_store_summaries(store):
+    """线程列表里算好的那几项记在归谁那张表上：作废一次 rev 加一，按旧的 rev 记不上；跟着对话并进账号，删对话一起没；没归谁的不记。"""
+    store.claim("t1", "guest:a")
+    store.claim("t2", "u9")
+    assert store.rows_of("guest:a") == [{"thread_id": "t1", "pinned_at": None, "summary": None, "rev": 0}]
+    one = {"v": 1, "checkpoint": "c1", "title": "标题", "fallback": None, "status": "idle", "work": False, "scheduled": True,
+           "updated_at": "2026-11-13T01:02:03.456789+00:00"}
+    store.put_summary("t1", 0, one)
+    store.put_summary("nobody", 0, one)
+    pinned = store.pin("t1", True)
+    assert store.rows_of("guest:a") == [{"thread_id": "t1", "pinned_at": pinned, "summary": one, "rev": 0}]
+    assert store.rows_of("u9") == [{"thread_id": "t2", "pinned_at": None, "summary": None, "rev": 0}] and store.rows_of("nobody") == []
+    store.touch("t1")
+    store.touch("nobody")
+    assert store.rows_of("guest:a")[0] | {"pinned_at": None} == {"thread_id": "t1", "pinned_at": None, "summary": None, "rev": 1}
+    store.put_summary("t1", 0, one)  # 读检查点的时候这段对话开跑了：开跑前算的不留
+    assert store.rows_of("guest:a")[0]["summary"] is None
+    two = one | {"checkpoint": "c2", "status": "asking"}
+    store.put_summary("t1", 1, two)
+    assert store.rows_of("guest:a")[0]["summary"] == two
+    assert store.transfer("guest:a", "u9") == 1
+    assert {r["thread_id"]: (r["summary"], r["rev"]) for r in store.rows_of("u9")} == {"t1": (two, 1), "t2": (None, 0)}
+    store.notify("t1", {"title": "早报", "text": "", "ok": True})  # 未读、置顶不动记着的
+    store.mark_read("t1")
+    store.pin("t1", False)
+    assert {r["thread_id"]: (r["summary"], r["rev"]) for r in store.rows_of("u9")}["t1"] == (two, 1)
+    store.delete_thread("t1")
+    assert [r["thread_id"] for r in store.rows_of("u9")] == ["t2"]
+    store.claim("t1", "u9")  # 同一个 id 再建：从头来
+    assert {r["thread_id"]: (r["summary"], r["rev"]) for r in store.rows_of("u9")}["t1"] == (None, 0)
+    store.delete_thread("t1")
+    store.delete_thread("t2")
+
+
 def test_store_unread(store):
     """未读记在归谁那张表上：每次加一、通知换成最近那一次；看过了清零；没归谁的不记；跟着对话并进账号，删对话一起没。"""
     store.claim("t1", "guest:a")
