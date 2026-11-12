@@ -1175,14 +1175,16 @@ function LiveLine({ live, items, stopping, now, versions }) {
   const lastItem = items.at(-1);
   const pending = items.filter((i) => i.type === "step" && i.pending);
   const streaming = lastItem?.live && (lastItem.type === "text" || (lastItem.type === "thinking" && lastItem.ms == null));
-  const kind = WAITING.find(([k]) => pending.some((i) => i.kind === k));
+  // 模型正在写命令（还没开始跑，见 research.addLive 的 writing）：写的字在过程里那一步，这里说在写
+  const acting = pending.filter((i) => !i.writing);
+  const kind = WAITING.find(([k]) => acting.some((i) => i.kind === k));
   // 模型正在写文件（参数还在流出来，还没有那一步）：写的字在卡片和右栏里，这里说在写哪份
   const drafting = Object.values(live?.drafts || {}).filter((d) => !items.some((i) => i.type === "step" && i.id === d.id));
   const d = drafting.at(-1);
   const draftName = d && (d.title || versions?.get(d.file_id)?.at(-1)?.title);
   const draftLine = d && `${d.name === "edit_file" ? "正在修改" : "正在写"}${draftName ? `《${draftName}》` : "文件"}`;
-  const stage = stopping ? "正在停止…" : live?.stage || (kind ? kind[1](pending.filter((i) => i.kind === kind[0]).length)
-    : draftLine || (streaming ? null : PHASES[live?.phase] || "正在准备…"));
+  const stage = stopping ? "正在停止…" : live?.stage || (kind ? kind[1](acting.filter((i) => i.kind === kind[0]).length)
+    : acting.length < pending.length ? "正在写命令" : draftLine || (streaming ? null : PHASES[live?.phase] || "正在准备…"));
   // 看得到的进展：条目多了、字长了、子任务里有动静、阶段变了。变了就重新计时
   const sub = pending.filter((i) => i.kind === "task").map((i) => `${i.items?.length ?? 0}.${i.items?.at(-1)?.text?.length ?? 0}.${i.phase}`).join(",");
   const waited = useWaited(`${items.length}:${lastItem?.text?.length ?? 0}:${pending.length}:${live?.phase}:${stage}:${sub}:${drafting.map((d) => d.text.length).join(",")}`, now);

@@ -300,8 +300,9 @@ export function addLive(l, ev, data) {
   if (!l) return l;
   if (data.sources) l = { ...l, sources: { ...l.sources, ...data.sources } };
   if (data.task) return { ...l, items: addSub(l.items, ev, data) };
-  const items = l.items.slice();
+  let items = l.items.slice();
   if (ev === "delta") {
+    items = items.filter((x) => !(x.writing && x.mid !== data.id)); // 模型开始说下一条了：上一条里没写成的命令（参数坏了，没有那一步）不留
     const i = items.findIndex((x) => x.type === data.kind && x.id === data.id);
     // 想完了，思考那一段带着后端计的用时（ms）：以它为准，页面按收到的时间算的不准（中途打开时一下子补发、标签页在后台都会算短）
     const ms = data.ms != null ? { ms: data.ms } : {};
@@ -311,7 +312,9 @@ export function addLive(l, ev, data) {
     if (data.kind === "text") stopThinking(items);
   } else if (ev === "step") {
     const s = { type: "step", ...data.step };
-    const i = items.findIndex((x) => x.type === "step" && x.id === s.id);
+    let i = items.findIndex((x) => x.type === "step" && x.id === s.id);
+    // 正在写的那条命令（见下面的 writing）写完了，换成这一步。流的时候不给调用 id 的模型两边编号对不上：按先后认
+    if (i < 0 && s.kind === "command") i = items.findIndex((x) => x.writing);
     if (s.kind === "task") s.items = items[i]?.items || []; // 做完的那一步不带子 agent 的条目，留着实时收到的
     if (i < 0) items.push(s);
     else items[i] = s;
@@ -331,8 +334,9 @@ export function addLive(l, ev, data) {
   } else if (ev === "model") {
     return { ...l, model: data.ref }; // 这一轮主 agent 用的模型（Auto 判断完选的、出问题换的备用）：一轮结束才进记录，回答开头先按它显示
   } else if (ev === "restart") {
-    // 模型生成到一半断了、正在再调一次：刚才流出来的半截（思考、正文和正在写的文件，id 是那条消息的；没流出东西时是空的）不要了，空档里说明在重新生成
-    const kept = data.id ? items.filter((x) => !((x.type === "thinking" || x.type === "text") && x.id === data.id)) : items;
+    // 模型生成到一半断了、正在再调一次：刚才流出来的半截（思考、正文、正在写的文件和命令，id 是那条消息的；没流出东西时是空的）不要了，空档里说明在重新生成
+    const half = (x) => (x.writing ? x.mid : x.type === "thinking" || x.type === "text" ? x.id : null) === data.id;
+    const kept = data.id ? items.filter((x) => !half(x)) : items;
     const drafts = data.id && l.drafts ? Object.fromEntries(Object.entries(l.drafts).filter(([, d]) => d.mid !== data.id)) : l.drafts;
     return { ...l, items: kept, drafts, phase: "restart" };
   } else if (ev === "draft") {
@@ -341,6 +345,17 @@ export function addLive(l, ev, data) {
     const d = l.drafts?.[data.id] || { id: data.id, text: "", at: Date.now() };
     const { text, ...rest } = data;
     return { ...l, drafts: { ...l.drafts, [data.id]: { ...d, ...rest, text: d.text + (text || "") } } };
+  } else if (ev === "writing") {
+    // 模型正在写的命令（run_command 的 command 边收边给，见后端 api/drafts.py）：在过程里先占一步（writing），text 是新收到的那截。
+    // 头一条带所属消息（mid），这时命令可能还一个字没有。写完了后端发那一步（step，调用 id 一样），整个换掉；这里的不存
+    const i = items.findIndex((x) => x.type === "step" && x.id === data.id);
+    if (i < 0) {
+      items = items.filter((x) => !(x.writing && x.mid !== data.mid));
+      items.push({ type: "step", kind: "command", id: data.id, mid: data.mid, text: data.text || "", pending: true, writing: true });
+    } else if (items[i].writing) {
+      items[i] = { ...items[i], text: items[i].text + (data.text || "") };
+    }
+    stopThinking(items);
   } else {
     return l;
   }

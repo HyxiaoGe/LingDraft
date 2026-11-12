@@ -108,8 +108,9 @@ SSE 事件：
 - `step`：工具步骤，开始和做完各来一次，做完的带着它得到的来源。
 - `delta`：`{id, kind: thinking|text, text}`，逐字的思考和正文，id 和存下来的消息一致。思考结束时那一段带着 `ms`（想了多久）。
 - `draft`：模型正在写的文件（`create_file`、`edit_file` 的参数边流边解）：`{id, name, mid, title, type, file_id, change_note, text}`，`id` 是那次工具调用的 id，第一条带 `name`（哪个工具）和 `mid`（模型消息的 id），别的字段收完一个给一个，`text` 是内容新增的那一截。和 `delta` 一起每 0.08 秒攒一批发。
+- `writing`：模型正在写的命令（`run_command` 的 `command` 边流边解）：`{id, name, mid, text}`，和 `draft` 一样的给法，`text` 是命令新增的那一截；工具名一到就先来一条（这时可能还没有 `text`）。页面在过程里先占一步，那次调用的 `step` 到了换掉；命令的参数坏了（没有 `step`）的，模型说下一条时页面去掉。
 - `model`：`{ref}`，这一轮主 agent 用的模型（“厂商:模型”）。开始时来一次，换了备用再来一次。
-- `restart`：`{id}`，模型生成到一半断了、要重新生成（再调一次或换备用）。`id` 是要去掉的那条半截消息，没流出东西的是 null。
+- `restart`：`{id}`，模型生成到一半断了、要重新生成（再调一次或换备用）。`id` 是要去掉的那条半截消息（它的思考、正文、写到一半的文件和命令），没流出东西的是 null。
 - `guide`：插进这一轮的话放进了对话。
 - `error`：`{message, kind}`，`kind` 同下面状态里的 `error_kind`。
 - `node`、`end`；`state` 是完整状态。
@@ -213,6 +214,7 @@ SSE 事件：
 - 一轮里同一个路径只留最后一版（图画得不对重画的，前面那张删掉）；重新回答删掉那一轮的产出；删对话连工作区一起删。
 - 用户点了停止：这次执行取消，顺手让服务把正在跑的命令停掉。同一段对话的命令一条一条跑。
 - 给模型看的标准输出、报错各留 1 万字（开头结尾各一半）。结果在 `turns` 的工具步骤里（`kind` 是 `command`，`run` 里是退出码、用时、输出、产出的文件）。
+- 模型写命令的时候页面就看得到（SSE 的 `writing`，`api/drafts.py`）：过程里那一步先出来，脚本一行行出，写完了开始跑。输出还是跑完才有：沙箱跑完才回结果。
 
 图片也登记在文件表里（`kind` 是 `image`，画的图记着哪一轮），页面取图按表认是不是这段对话的。表里没登记的老对话的图要补一次：`uv run python -m app.files.backfill_images` 只数，加 `--write` 才写；可以重跑，登记过的跳过；只看每段对话最后存下的状态。
 
@@ -332,7 +334,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `runner.py`：两种场景共用的部分，即运行占位 `RunRegistry` 和事件日志 `EventLog`（转成 SSE；两者都是进程内实现，多 worker 时换共享存储）；还有海报的 `GraphRunner`（同步的图放进一个工作线程）。
   - `research_runner.py`：对话的运行器，在 `app/aio.py` 的事件循环里异步地跑。管排队、停止、排着的话和插话、重试和重新回答、状态视图；`open_storage` 打开存储。
   - `run_store.py`：运行记录、排着的话、对话归谁和置顶。
-  - `drafts.py`：模型写文件时，把流出来的参数边收边解成 SSE 的 `draft`。
+  - `drafts.py`：模型写文件、写命令时，把流出来的参数边收边解成 SSE 的 `draft`、`writing`。
   - `main.py`：接口；`favicon.py`：来源网站的图标；`inspiration.py`：今日灵感。
 - `app/graph/research/` 对话场景：
   - `agent.py`：`create_agent` 和它的中间件，从外到里：

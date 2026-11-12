@@ -1,15 +1,20 @@
 """边写边出现（2026-11-08 方案第 3 节）：模型调 create_file / edit_file 时参数是一段一段流出来的，边收边解出标题、类型、编号和内容，
 跟正文一样按批推给页面（见 research_runner.StreamBuffer）。半截的不存：写成了页面换成那一版，没写成的过程里照实写（见 history.broken_write）。
 
+跑命令也一样（2026-11-12 Sean 定）：模型常常把几十行脚本写进命令里再跑，写的那几秒到十几秒页面上本来什么都没有。run_command 的 command
+边收边给页面（事件叫 writing，不叫 draft：那是文件，页面收到会在右栏打开），写完了页面换成过程里那一步。
+
 参数是一个 JSON 对象。这里只认顶层的几个字符串字段，边收边解（转义、\\uXXXX、代理对都管）；别的值（edits 数组、数字）跳过。
 每个字只过一遍，几万字的文档也不用每批从头解析。不是 JSON 对象（开头不是 {）的就不解了。
 """
 
 from __future__ import annotations
 
-from app.graph.research.history import WRITE_TOOLS
+from app.graph.research.history import RUN_TOOL, WRITE_TOOLS
 
 FIELDS = ("title", "type", "file_id", "change_note", "content")
+# 哪些工具的参数边收边给页面：事件名、收完才给一次的字段、边收边给的那个字段（给页面时都叫 text）
+STREAMED = {**dict.fromkeys(WRITE_TOOLS, ("draft", FIELDS[:-1], FIELDS[-1])), RUN_TOOL: ("writing", (), "command")}
 _ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f", '"': '"', "\\": "\\", "/": "/"}
 _WS = " \t\r\n"
 
@@ -161,23 +166,25 @@ class PartialArgs:
 
 
 class Draft:
-    """一次写文件调用流出来的参数。每批（take）给页面：头一次带工具名、所属消息；标题这些收完了才给一次；内容给这批新收到的。"""
+    """一次写文件（或跑命令）的调用流出来的参数。每批（take）给页面：头一次带工具名、所属消息；标题这些收完了才给一次；
+    内容（命令）给这批新收到的。event 是给页面的事件名。"""
 
     def __init__(self, call_id: str, name: str, mid: str) -> None:
         self.id, self.name, self.mid = call_id, name, mid
-        self.args = PartialArgs()
+        self.event, self._once, self._body = STREAMED[name]
+        self.args = PartialArgs((*self._once, self._body))
         self._sent: set[str] = set()
         self._content = 0
         self._started = False
 
     def take(self) -> dict | None:
         out: dict = {}
-        for k in FIELDS[:-1]:
+        for k in self._once:
             if k in self.args.done and k not in self._sent:
                 out[k] = self.args.value(k)
                 self._sent.add(k)
-        if (n := self.args.size("content")) > self._content:
-            out["text"] = self.args.value("content", self._content)
+        if (n := self.args.size(self._body)) > self._content:
+            out["text"] = self.args.value(self._body, self._content)
             self._content = n
         if not out and self._started:
             return None
@@ -188,7 +195,7 @@ class Draft:
 
 
 class DraftTracker:
-    """一条条模型消息里写文件的工具调用片段 → Draft。片段按（消息 id，第几个调用）对上：编号、工具名多半只在第一个片段里。"""
+    """一条条模型消息里写文件、跑命令的工具调用片段 → Draft。片段按（消息 id，第几个调用）对上：编号、工具名多半只在第一个片段里。"""
 
     def __init__(self) -> None:
         self._calls: dict[tuple[str, int], dict] = {}
@@ -203,7 +210,7 @@ class DraftTracker:
             st["name"] = st["name"] or c.get("name") or ""
             args = c.get("args") or ""
             if st["draft"] is None:
-                if st["name"] not in WRITE_TOOLS:
+                if st["name"] not in STREAMED:
                     if st["name"]:  # 别的工具：参数不管
                         st["pending"] = ""
                         continue
@@ -217,8 +224,9 @@ class DraftTracker:
             if d not in self._dirty:
                 self._dirty.append(d)
 
-    def take(self) -> list[dict]:
-        out = [e for d in self._dirty if (e := d.take()) is not None]
+    def take(self) -> list[tuple[str, dict]]:
+        """这一批要给页面的：（事件名，内容）。"""
+        out = [(d.event, e) for d in self._dirty if (e := d.take()) is not None]
         self._dirty = []
         return out
 

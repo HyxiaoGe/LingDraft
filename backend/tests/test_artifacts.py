@@ -101,10 +101,31 @@ def test_drafts_send_name_first_fields_once_and_only_new_text():
     t = DraftTracker()
     raw = json.dumps({"title": "T", "type": "markdown", "content": "abcdef"})
     t.add("m1", [{"name": "create_file", "id": "c1", "index": 0, "args": raw[:20]}, {"name": "search_web", "id": "c2", "index": 1, "args": "{}"}])
-    assert t.take() == [{"id": "c1", "title": "T", "name": "create_file", "mid": "m1"}]
+    assert t.take() == [("draft", {"id": "c1", "title": "T", "name": "create_file", "mid": "m1"})]
     t.add("m1", [{"name": None, "id": None, "index": 0, "args": raw[20:-4]}])
     t.add("m1", [{"name": None, "id": None, "index": 0, "args": raw[-4:]}])
-    assert t.take() == [{"id": "c1", "type": "markdown", "text": "abcdef"}] and t.take() == []
+    assert t.take() == [("draft", {"id": "c1", "type": "markdown", "text": "abcdef"})] and t.take() == []
+
+
+def test_a_command_being_written_is_sent_as_it_comes():
+    """run_command 的 command 边收边给（事件 writing）：工具名一到就先说一声（命令还一个字没有），之后只给新收到的那截；
+    timeout_seconds 不管，放在命令前面后面都一样；转义的换行、引号解出来。"""
+    t = DraftTracker()
+    script = "cat > a.py << 'EOF'\nprint(\"一\")\nEOF\npython a.py"
+    raw = json.dumps({"timeout_seconds": 60, "command": script}, ensure_ascii=False)
+    cut = raw.index("print")
+    t.add("m1", [{"name": "run_command", "id": "c1", "index": 0, "args": ""}])
+    assert t.take() == [("writing", {"id": "c1", "name": "run_command", "mid": "m1"})]
+    t.add("m1", [{"name": None, "id": None, "index": 0, "args": raw[:cut]}])
+    assert t.take() == [("writing", {"id": "c1", "text": "cat > a.py << 'EOF'\n"})]
+    t.add("m1", [{"name": None, "id": None, "index": 0, "args": raw[cut:]}])
+    assert t.take() == [("writing", {"id": "c1", "text": script.removeprefix("cat > a.py << 'EOF'\n")})] and t.take() == []
+    # 一条消息里并行的两条命令各是各的；这条消息不要了（模型断了重来）以后，同一个位置是新的一次
+    t.add("m2", [{"name": "run_command", "id": "c2", "index": 0, "args": '{"command": "ls"}'}, {"name": "run_command", "id": "c3", "index": 1, "args": '{"command": "pwd"}'}])
+    assert t.take() == [("writing", {"id": "c2", "text": "ls", "name": "run_command", "mid": "m2"}), ("writing", {"id": "c3", "text": "pwd", "name": "run_command", "mid": "m2"})]
+    t.drop("m2")
+    t.add("m2", [{"name": "run_command", "id": "c4", "index": 0, "args": '{"command": "date"}'}])
+    assert t.take() == [("writing", {"id": "c4", "text": "date", "name": "run_command", "mid": "m2"})]
 
 
 # ---- 工具本身 ----

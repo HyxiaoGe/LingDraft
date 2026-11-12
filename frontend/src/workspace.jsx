@@ -446,7 +446,7 @@ export default function Workspace() {
     } else if (ev === "title") {
       setLive((l) => (l ? { ...l, title: data.title } : l));
       refreshList();
-    } else if (ev === "delta" || ev === "step" || ev === "restart" || ev === "model" || ev === "ask") {
+    } else if (ev === "delta" || ev === "step" || ev === "restart" || ev === "model" || ev === "ask" || ev === "writing") {
       setLive((l) => addLive(l && { ...l, stage: null }, ev, data));
     } else if (ev === "draft") { // 模型正在写文件：攒着（见 addLive），头一次收到这次调用时在右栏打开（见上面 file）
       setLive((l) => addLive(l && { ...l, stage: null }, ev, data));

@@ -151,7 +151,7 @@ class StreamBuffer:
     一条消息想完了（下一个片段是正文或工具调用），思考那一段带上 ms（思考了多久，后端计的）：页面按收到片段的时间自己算不准，
     中途打开对话时前面的事件一下子补发过来、标签页在后台时浏览器拖着不处理，都会算短。
     同时记着主 agent 和每个子 agent 最后一条消息流出来的东西：停止时存下来（主 agent 的是这一轮的回复，子 agent 的进它的子任务卡）。
-    主 agent 写文件的工具调用，参数边收边解出来，同一批发给页面（draft，见 api.drafts）；子 agent 没有写文件的工具。"""
+    主 agent 写文件、跑命令的工具调用，参数边收边解出来，同一批发给页面（draft、writing，见 api.drafts）；子 agent 没有这两种工具。"""
 
     def __init__(self) -> None:
         self._deltas: list[dict] = []
@@ -188,7 +188,7 @@ class StreamBuffer:
         return d
 
     def flush(self) -> list[dict]:
-        out = [{"event": "delta", "data": d} for d in self._deltas] + [{"event": "draft", "data": d} for d in self._drafts.take()]
+        out = [{"event": "delta", "data": d} for d in self._deltas] + [{"event": ev, "data": d} for ev, d in self._drafts.take()]
         self._deltas, self._last = [], time.monotonic()
         return out
 

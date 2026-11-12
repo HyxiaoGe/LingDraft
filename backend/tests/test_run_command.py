@@ -516,6 +516,12 @@ def test_work_task_runs_a_command_and_shows_the_outputs(rr, client):
     # 执行中发的事件：先一条 pending，做完的带着结果，不带工具结果本身
     live = [d["step"] for e, d in evs if e == "step" and d["step"]["kind"] == "command"]
     assert [s["pending"] for s in live] == [True, False, True, False] and live[1]["run"]["files"] and all("result" not in d for e, d in evs if e == "step")
+    # 命令是边写边给页面的（writing）：在那一步出现之前，编号和那一步对得上，接起来就是整条命令；不当成正在写的文件
+    kinds = [(e, (d.get("step") or d).get("id")) for e, d in evs if e == "writing" or (e == "step" and d["step"]["pending"])]
+    assert kinds == [("writing", first["id"]), ("step", first["id"]), ("writing", second["id"]), ("step", second["id"])]
+    typed = [d for e, d in evs if e == "writing" and d["id"] == first["id"]]
+    assert typed[0]["name"] == history.RUN_TOOL and "".join(d.get("text", "") for d in typed) == first["text"]
+    assert not [d for e, d in evs if e == "draft"]
     # 图从取图的接口拿，文件能下载、能看；第一次跑的那两个（同一轮同一个路径）已经作废
     img = client.get(f"/api/research/threads/{tid}/images/{chart['id']}")
     assert img.status_code == 200 and img.headers["content-type"] == "image/png"
