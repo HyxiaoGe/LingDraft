@@ -7,6 +7,9 @@ gVisor 隔离的一次性容器里跑，不联网、装不了包，留得下来�
 - 文件表仍然是唯一的真相（Sean 定）：每次跑之前把这段对话里用户发的文件的原件放进 uploads/（命令只能读；已经在的不重放，
   对话里没有了的删掉），跑完把 outputs/ 里新增、改过的文件登记进文件表：图（PNG / JPEG / WebP，不超过 4 MB）传进 image-service、
   和画的图放在一起，别的原件存数据卷（见 FileService.add_output）。页面上图跟在回复里，别的是文件卡片。工作目录里别的文件只是草稿，不登记。
+- 模型写的文件（create_file / edit_file）也放进去（2026-11-12 Sean 定做出文件）：每份最新的一版在 uploads/documents/，命令只能读，
+  用来转成 PDF / Word（沙箱里的 convert-doc，见 agent-tools 的 services/sandbox/README.md“出文档”）。文档里的来源 id 放进去时换成编号、
+  文末列出来源（sources.export_markdown，和页面上下载的一样）：沙箱里不知道这段对话有哪些来源，原样转出来就是一串 [s1a2b3c]。
 - 一轮里同一个路径只留最后一版：命令又写了这一轮登记过的路径（比如图画得不对重画），前面那个作废删掉。和模型写文件一轮一版是一个道理。
 - 同一段对话的命令一条一条跑（服务那边一个工作区同时只跑一条，一条消息里并行调的在这里排队）。
 - 用户点了停止：这次执行被取消，顺手让服务把正在跑的命令停掉，不等它跑到时限。
@@ -23,6 +26,7 @@ import asyncio
 import logging
 import re
 import weakref
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -35,8 +39,9 @@ from app import config
 from app.files.service import OTHER
 from app.files.store import READY, FileRow
 from app.graph.research import prompts
-from app.graph.research.history import RUN_TOOL, last_human, owned_file_ids
-from app.graph.research.state import CommandRun, ProducedFile
+from app.graph.research.history import RUN_TOOL, last_human, owned_file_ids, written_files
+from app.graph.research.sources import collect_sources, export_markdown
+from app.graph.research.state import CommandRun, ProducedFile, WrittenFile
 from app.tools.gateway import (
     MAX_UPLOAD_BYTES,
     SANDBOX_MAX_UPLOAD_BYTES,
@@ -53,12 +58,15 @@ DEFAULT_TIMEOUT_S, MAX_TIMEOUT_S = 60, 120  # 和服务的默认、上限一样�
 OUTPUT_CHARS = 10_000  # 给模型看的标准输出、报错各留这么多字
 MAX_OUTPUTS = 10  # 一条命令最多登记这么多个产出，再多的告诉模型没给用户
 UPLOADS, OUTPUTS = "uploads/", "outputs/"
+DOCUMENTS = UPLOADS + "documents/"  # 模型写的文件最新的一版放这里（在 uploads/ 下面：服务把 uploads/ 挂成只读）
+PLACED_WORKSPACES = 500  # 记着“沙箱里放的是哪一版”的对话最多这么多段，再多的忘掉最久没用的（忘了只是下次重放一遍）
 WORKSPACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")  # 服务认的工作区编号；对话编号是 uuid，都对得上
 NAME_BYTES = 200  # 沙箱里一级路径最长 255 字节，重名时还要加“ (2)”
 # 起不来（Docker、gVisor 不在）之外，这些都当“这会儿正忙”：工作区上一条命令还没停完、别的对话的命令占着
 BUSY = ("workspace_busy", "sandbox_busy")
 # 工作区坏了、写满了：删掉整个工作区重来（uploads/ 下次跑之前会重新放进去，命令自己写的草稿没了）
 RESET = ("workspace_over_quota", "workspace_corrupted")
+UNPLACEABLE = ("invalid_path", "file_too_large")  # 服务不收这一个文件（名字不合它的规矩、太大）：换谁重试都一样
 
 _cancels: set[asyncio.Task] = set()  # 点了停止以后去停命令的那一下：不等它，留个引用别被回收
 
@@ -69,6 +77,7 @@ class Sandbox:
     def __init__(self, gateway: GatewayClient) -> None:
         self.gateway = gateway
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        self._placed: OrderedDict[str, dict[str, str]] = OrderedDict()
 
     def lock(self, workspace: str) -> asyncio.Lock:
         """这段对话的锁：命令一条一条跑。没人用了自己回收。"""
@@ -77,8 +86,20 @@ class Sandbox:
             lock = self._locks[workspace] = asyncio.Lock()
         return lock
 
+    def placed(self, workspace: str) -> dict[str, str]:
+        """这段对话的 uploads/documents/ 里各个路径放的是文件表里哪一版（路径 → 那一版的编号）。只在内存里：模型改了文件是新的一版、
+        新的编号，对不上就重放。光看大小认不出改没改（“2024”改成“2025”大小一样）；进程重启就都忘了，下一条命令之前全部重放一遍。"""
+        got = self._placed.get(workspace)
+        if got is None:
+            got = self._placed[workspace] = {}
+            while len(self._placed) > PLACED_WORKSPACES:
+                self._placed.popitem(last=False)
+        self._placed.move_to_end(workspace)
+        return got
+
     async def forget(self, workspace: str) -> None:
         """删对话时：工作区一起删。没成只记日志，服务 7 天没用自己清。"""
+        self._placed.pop(workspace, None)
         if WORKSPACE.fullmatch(workspace):
             await self.gateway.sandbox_delete(workspace)
 
@@ -110,23 +131,85 @@ def _fit(name: str) -> str:
     return stem.encode()[:room].decode("utf-8", "ignore") + dot + ext
 
 
+def _free_path(taken: Any, folder: str, name: str) -> str:
+    """folder 下面还没人用的路径：名字被占了的加“ (2)”“ (3)”（加在扩展名前面）。"""
+    name = _fit(name)
+    stem, dot, ext = name.rpartition(".")
+    path, n = folder + name, 2
+    while path in taken:
+        path = folder + (f"{stem} ({n}){dot}{ext}" if dot else f"{name} ({n})")
+        n += 1
+    return path
+
+
 def upload_paths(rows: list[FileRow]) -> dict[str, FileRow]:
-    """用户发的文件在沙箱里的路径（uploads/ 加文件名）→ 那个文件，按发的先后。重名的后来的加“ (2)”“ (3)”。"""
+    """用户发的文件在沙箱里的路径（uploads/ 加文件名）→ 那个文件，按发的先后。重名的后来的加“ (2)”“ (3)”。
+    正好叫 documents 的也算重名：uploads/documents 是放模型写的文件的目录。"""
     out: dict[str, FileRow] = {}
+    reserved = DOCUMENTS.rstrip("/")
     for row in rows:
-        name = _fit(row.name)
-        stem, dot, ext = name.rpartition(".")
-        path, n = UPLOADS + name, 2
-        while path in out:
-            path = UPLOADS + (f"{stem} ({n}){dot}{ext}" if dot else f"{name} ({n})")
-            n += 1
-        out[path] = row
+        out[_free_path({*out, reserved}, UPLOADS, row.name)] = row
     return out
 
 
-async def sync_uploads(gateway: GatewayClient, files: Any, workspace: str, messages: list[BaseMessage]) -> tuple[dict[str, str], list[str]]:
+def document_paths(written: list[WrittenFile]) -> dict[str, WrittenFile]:
+    """模型写的文件在沙箱里的路径（uploads/documents/ 加文件名）→ 最新的那一版，按第一次写的先后。重名的后来的加“ (2)”。"""
+    out: dict[str, WrittenFile] = {}
+    for w in written:
+        out[_free_path(out, DOCUMENTS, w.name)] = w
+    return out
+
+
+def expected_path(w: WrittenFile) -> str:
+    """模型照标题想得到的路径（文档、网页是标题加扩展名，代码是它起的文件名）。实际的路径和它不一样的才在结果里告诉模型。"""
+    return DOCUMENTS + (w.title + {"markdown": ".md", "html": ".html"}.get(w.type, ""))
+
+
+async def sync_documents(sandbox: Sandbox, files: Any, workspace: str, messages: list[BaseMessage],
+                         have: dict[str, int]) -> list[tuple[str, str]]:
+    """把模型写的文件最新的一版放进沙箱的 uploads/documents/：放过这一版的不重放（见 Sandbox.placed），不在了的、不是最新的删掉。
+    文档（Markdown）放的是交出去的样子：来源 id 换成编号、文末列出来源。返回路径和标题对不上的 [(标题, 沙箱里的路径)]。
+    服务不收的那一份（名字不合它的规矩、太大）跳过、记日志，别的照放：一份文件放不进去不该让这段对话从此跑不了命令。"""
+    gateway, placed = sandbox.gateway, sandbox.placed(workspace)
+    wanted = document_paths(list(written_files(messages).values()))
+    known: dict[str, Any] | None = None
+    kept: dict[str, WrittenFile] = {}
+    for path, w in wanted.items():
+        if placed.get(path) == w.id and path in have:
+            kept[path] = w
+            continue
+        text = await files.text(w.id)
+        if text is None:  # 这一版已经不在了（文件被清掉了）
+            continue
+        if w.type == "markdown":
+            if known is None:
+                known = {s.id: s for s in collect_sources(messages)}
+            text = export_markdown(text, known)
+        data = text.encode()
+        if len(data) > SANDBOX_MAX_UPLOAD_BYTES:  # 模型写的最多 30 万字，到不了这里；真到了就不放
+            continue
+        placed.pop(path, None)
+        try:
+            await gateway.sandbox_put(workspace, path, data)
+        except SandboxError as e:
+            if e.kind not in UNPLACEABLE:  # 工作区写满了（也是 413）、服务这会儿不行的照旧往外报
+                raise
+            log.warning("模型写的文件没放进沙箱：%s %s %s", workspace, w.id, e.kind)
+            continue
+        placed[path] = w.id
+        kept[path] = w
+    for path in have:
+        if path.startswith(DOCUMENTS) and path not in kept:
+            await gateway.sandbox_remove(workspace, path)
+    for path in [p for p in placed if p not in kept]:
+        del placed[path]
+    return [(w.title, path) for path, w in kept.items() if path != expected_path(w)]
+
+
+async def sync_uploads(gateway: GatewayClient, files: Any, workspace: str, messages: list[BaseMessage],
+                       have: dict[str, int]) -> tuple[dict[str, str], list[str]]:
     """把这段对话里用户发的文件放进沙箱的 uploads/：已经在的（名字、大小都对得上）不重放，对话里没有了的删掉。
-    返回（在沙箱里换了名字的：原名 → 沙箱里的名字，太大放不进去的原名）。"""
+    have 是工作区里现有的文件（路径 → 大小）。返回（在沙箱里换了名字的：原名 → 沙箱里的名字，太大放不进去的原名）。"""
     sources: dict[str, Path] = {}
     rows: list[FileRow] = []
     too_big: list[str] = []
@@ -141,9 +224,8 @@ async def sync_uploads(gateway: GatewayClient, files: Any, workspace: str, messa
         sources[row.id] = path
         rows.append(row)
     wanted = upload_paths(rows)
-    have = await gateway.sandbox_files(workspace)
     for path in have:
-        if path.startswith(UPLOADS) and path not in wanted:
+        if path.startswith(UPLOADS) and not path.startswith(DOCUMENTS) and path not in wanted:
             await gateway.sandbox_remove(workspace, path)
     for path, row in wanted.items():
         if have.get(path) != row.size:
@@ -259,7 +341,9 @@ def make_run_command_tool():
         gateway: GatewayClient = sandbox.gateway
         async with sandbox.lock(workspace):
             try:
-                renamed, too_big = await sync_uploads(gateway, files, workspace, messages)
+                have = await gateway.sandbox_files(workspace)
+                renamed, too_big = await sync_uploads(gateway, files, workspace, messages, have)
+                documents = await sync_documents(sandbox, files, workspace, messages, have)
                 try:
                     result = await gateway.sandbox_run(workspace, command, timeout)
                 except asyncio.CancelledError:
@@ -285,7 +369,8 @@ def make_run_command_tool():
         workspace_full = bool((result.get("workspace") or {}).get("over_quota")) if isinstance(result.get("workspace"), dict) else False
         text = prompts.render("tools.run_command.result", run=run, seconds=f"{ms / 1000:.1f}", timeout=timeout, max_timeout=MAX_TIMEOUT_S,
                               skipped=skipped, max_outputs=MAX_OUTPUTS, max_mb=config.FILE_MAX_BYTES // (1024 * 1024), renamed=renamed,
-                              too_big=too_big, upload_mb=SANDBOX_MAX_UPLOAD_BYTES // (1024 * 1024), workspace_full=workspace_full)
+                              too_big=too_big, upload_mb=SANDBOX_MAX_UPLOAD_BYTES // (1024 * 1024), workspace_full=workspace_full,
+                              documents=documents)
         return ToolMessage(content=text, name=RUN_TOOL, tool_call_id=runtime.tool_call_id or "", artifact={"run": run.model_dump()})
 
     run_command.handle_tool_error = True

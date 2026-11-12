@@ -186,3 +186,29 @@ def known_in(state: dict) -> dict[str, str]:
 def cited(text: str) -> list[str]:
     """一段文字里引用的来源 id，按第一次出现的先后、去重。"""
     return list(dict.fromkeys(SOURCE_ID.findall(text or "")))
+
+
+def _source_line(s: Source) -> str:
+    """交出去的文档里一个来源写成什么：网页是带网址的链接，资料库的写明是资料库（kb:// 在别处打不开）。"""
+    name = s.title
+    if not name:
+        try:
+            name = (urlsplit(s.url).hostname or "").removeprefix("www.") or s.url
+        except ValueError:
+            name = s.url
+    name = name.replace("[", "").replace("]", "")
+    return f"{name}（资料库）" if s.excerpt_kind == "knowledge" else f"[{name}]({s.url})"
+
+
+def export_markdown(text: str, sources: dict[str, Source]) -> str:
+    """模型写的文档交出去（放进沙箱给命令转 PDF / Word）时的样子：来源 id 换成编号（按第一次出现的先后），文末列出用到的来源。
+    和页面上下载、复制的一样（frontend/src/artifact.jsx 的 fileExport），两边要一起改。不在这段对话来源里的 id 去掉。"""
+    nums: dict[str, int] = {}
+    for sid in cited(text):
+        if sid in sources:
+            nums[sid] = len(nums) + 1
+    body = SOURCE_ID.sub(lambda m: f"[{nums[m.group(1)]}]" if m.group(1) in nums else "", text).rstrip()
+    if not nums:
+        return body + "\n"
+    used = "\n".join(f"{n}. {_source_line(sources[sid])}" for sid, n in nums.items())
+    return f"{body}\n\n## 参考来源\n\n{used}\n"

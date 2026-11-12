@@ -1,10 +1,12 @@
 """在沙箱里跑命令（run_command，2026-11-11 Sean 定，见 docs/沙箱方案.md）：只在工作任务里给、游客没有；跑之前把用户发的文件放进 uploads/，
-跑完把 outputs/ 里的登记进文件表（图进 image-service）；一轮里同一个路径只留最后一版；没跑成的说原因；停止时把命令停掉；
-重新回答、删对话时产出跟着删。只用假模型（“跑命令：…”）和假沙箱（见 FakeSandbox）。"""
+模型写的文件最新的一版放进 uploads/documents/（文档里的来源 id 换成编号）；跑完把 outputs/ 里的登记进文件表（图进 image-service）；
+一轮里同一个路径只留最后一版；没跑成的说原因；停止时把命令停掉；重新回答、删对话时产出跟着删。
+只用假模型（“跑命令：…”）和假沙箱（见 FakeSandbox）。"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from pathlib import Path
 
@@ -21,13 +23,14 @@ from app.files.service import OTHER, FileService
 from app.files.store import MemoryFileStore
 from app.graph.research import history
 from app.graph.research.agent import ChatContext
-from app.graph.research.state import Turn
+from app.graph.research.state import Turn, WrittenFile
 from app.research_llm import FakeImageService, FakeSandbox
 from app.tools import run_command as rc
 from app.tools.gateway import GatewayAuthError, GatewayClient, GatewayLimitError, SandboxError
-from app.tools.run_command import Sandbox, clip, make_run_command_tool, upload_paths
+from app.tools.run_command import Sandbox, clip, document_paths, expected_path, make_run_command_tool, upload_paths
+from app.tools.write_file import make_write_tools
 from tests.auth_helpers import USER, bearer, guest_token
-from tests.research_helpers import events, last, new, run_async, state, wait_until
+from tests.research_helpers import events, last, new, run_async, say, state, wait_until
 
 TID = "0b8c6f0e-3a57-4f0e-9d2f-6c1d2a7b9e10"  # 对话编号是 uuid，沙箱的工作区编号就用它
 
@@ -96,6 +99,23 @@ def test_upload_paths_rename_duplicates_and_shorten():
     assert list(paths)[:5] == ["uploads/销售.csv", "uploads/销售 (2).csv", "uploads/README", "uploads/README (2)", "uploads/销售 (3).csv"]
     long = list(paths)[5]
     assert long.endswith(".xlsx") and len(long.removeprefix("uploads/").encode()) <= rc.NAME_BYTES
+    # 正好叫 documents 的让开：那是放模型写的文件的目录
+    assert list(upload_paths([row(1, "documents"), row(2, "documents.csv")])) == ["uploads/documents (2)", "uploads/documents.csv"]
+
+
+def test_document_paths_follow_the_titles():
+    def w(i: int, title: str, kind: str = "markdown", name: str = "") -> WrittenFile:
+        name = name or title + {"markdown": ".md", "html": ".html"}.get(kind, "")
+        return WrittenFile(id=f"file-{i}", series=f"file-{i}", version=1, title=title, type=kind, name=name, chars=1)
+
+    files = [w(1, "季度报告"), w(2, "季度报告"), w(3, "首页", "html"), w(4, "main.py", "code"), w(5, "notes", "code", "notes.txt"),
+             w(6, "A/B 测试", name="A_B 测试.md"), w(7, "长" * 110)]
+    paths = document_paths(files)
+    assert list(paths)[:6] == ["uploads/documents/季度报告.md", "uploads/documents/季度报告 (2).md", "uploads/documents/首页.html",
+                               "uploads/documents/main.py", "uploads/documents/notes.txt", "uploads/documents/A_B 测试.md"]
+    assert len(list(paths)[6].removeprefix("uploads/documents/").encode()) <= rc.NAME_BYTES and list(paths)[6].endswith(".md")
+    # 和照标题想得到的路径不一样的，才要告诉模型
+    assert [p == expected_path(f) for p, f in paths.items()] == [True, False, True, True, False, False, False]
 
 
 # ---- 工具本身 ----
@@ -110,6 +130,7 @@ class Env:
         self.files = FileService(MemoryFileStore(), tmp_path, isolated=False)
         self.sandbox = Sandbox(self.gateway)
         self.run = make_run_command_tool().coroutine
+        self.create, self.edit = (t.coroutine for t in make_write_tools())
         self.user = HumanMessage("分析一下", id="turn-1")
         self.msgs: list = [self.user]
         self.n = 0
@@ -130,6 +151,18 @@ class Env:
         turns = [Turn(id="turn-1", started_at="2026-11-12T00:00:00+00:00", work=work)]
         return ToolRuntime(state={"messages": list(self.msgs), "turns": turns}, context=ctx, config={}, stream_writer=lambda _: None,
                            tool_call_id=call_id, store=None)
+
+    async def write(self, title: str, content: str, kind: str = "markdown", *, series: str = "") -> WrittenFile:
+        """模型写一份文件（给了 series 的是整篇改写那一份），结果接进对话。"""
+        self.n += 1
+        cid = f"call-{self.n}"
+        self.msgs.append(AIMessage("", tool_calls=[{"name": history.EDIT_TOOL if series else history.CREATE_TOOL, "args": {}, "id": cid}]))
+        if series:
+            out = await self.edit(self.runtime(cid), file_id=series, change_note="改了", content=content)
+        else:
+            out = await self.create(self.runtime(cid), title=title, type=kind, content=content)
+        self.msgs.append(out)
+        return history.written_of(out)
 
     async def call(self, command: str, **kw) -> ToolMessage:
         """模型调一次，结果接进对话。"""
@@ -251,6 +284,98 @@ def test_uploads_follow_the_conversation(tmp_path, monkeypatch):
         assert sorted(env.sb.workspaces[TID]) == ["keep.py", "uploads/数据.csv"] and env.sb.workspaces[TID]["uploads/数据.csv"] == b"a,b\n3,4\n5,6\n"
 
     run_async(go())
+
+
+def test_written_files_are_put_in_the_sandbox(tmp_path):
+    async def go():
+        env = Env(tmp_path)
+        docs = lambda: sorted(p for p in env.sb.workspaces[TID] if p.startswith("uploads/documents/"))  # noqa: E731
+        put = lambda: [p for _, p in env.sb.puts]  # noqa: E731
+        hits = [{"id": "sabc123", "title": "统计局 [公报]", "url": "https://www.stats.example/a", "snippet": "…"},
+                {"id": "sdef456", "title": "", "url": "https://www.news.example/b?x=1", "snippet": "…"}]
+        env.msgs.append(ToolMessage(json.dumps({"ok": True, "query": "q", "results": hits}), tool_call_id="c0", name="search_web"))
+        report = "# 季度报告\n\n增长 12% [sdef456][sabc123]，另见 [sffffff]。再提一次 [sdef456]。\n\n\n"
+        w = await env.write("季度报告", report)
+        out = await env.call("cat uploads/documents/季度报告.md")
+        # 放进去的是交出去的样子：来源 id 换成编号（按第一次出现的先后），不认识的去掉，文末列出来源
+        assert history.run_of(out).stdout == ("# 季度报告\n\n增长 12% [1][2]，另见 。再提一次 [1]。\n\n## 参考来源\n\n"
+                                              "1. [news.example](https://www.news.example/b?x=1)\n2. [统计局 公报](https://www.stats.example/a)\n\n")
+        assert put() == ["uploads/documents/季度报告.md"] and "uploads/documents" not in out.content
+        assert await env.files.text(w.id) == report  # 文件表里的那一版没动
+        # 没改的不重放；改了重放，哪怕大小一样
+        await env.call("echo 好了")
+        assert len(put()) == 1
+        env.msgs += [AIMessage("好了"), HumanMessage("把 12% 改成 13%", id="turn-2")]
+        w2 = await env.write("", report.replace("12%", "13%"), series=w.series)
+        assert w2.id != w.id and w2.version == 2
+        assert "增长 13% [1][2]" in history.run_of(await env.call("cat uploads/documents/季度报告.md")).stdout and len(put()) == 2
+        # 网页、代码原样放；重名的后来的加 (2)，结果里告诉模型在哪
+        page = "<!doctype html><p>见 [sabc123]</p>"
+        await env.write("首页", page, "html")
+        await env.write("main.py", "print('[sabc123]')\n", "code")
+        twin = await env.write("季度报告", "# 另一份\n")
+        out = await env.call("ls")
+        assert docs() == ["uploads/documents/main.py", "uploads/documents/季度报告 (2).md", "uploads/documents/季度报告.md", "uploads/documents/首页.html"]
+        assert env.sb.workspaces[TID]["uploads/documents/首页.html"] == page.encode()
+        assert env.sb.workspaces[TID]["uploads/documents/main.py"] == b"print('[sabc123]')\n"
+        assert "stored under a different name in uploads/documents/:\n- 季度报告 -> uploads/documents/季度报告 (2).md\n" in out.content
+        assert out.content.count("季度报告 ->") == 1 and len(put()) == 5
+        # 服务不收的那一份跳过，别的照放、命令照跑；服务出问题的照旧算没跑成
+        real_put = env.gateway.sandbox_put
+
+        async def picky(workspace: str, path: str, data: bytes) -> None:
+            if path.endswith("坏的.md"):
+                raise SandboxError("往沙箱放文件失败", kind="invalid_path", status=400)
+            await real_put(workspace, path, data)
+        env.gateway.sandbox_put = picky
+        bad = await env.write("坏的", "# 坏的\n")
+        out = await env.call("echo 照跑")
+        assert out.status == "success" and "uploads/documents/坏的.md" not in docs() and len(docs()) == 4
+        # 工作区写满了不算“这一份放不进去”：照旧删掉工作区重来
+        async def full(workspace: str, path: str, data: bytes) -> None:
+            raise SandboxError("往沙箱放文件失败", kind="workspace_over_quota", status=413)
+        env.gateway.sandbox_put = full
+        env.sandbox._placed.clear()
+        out = await env.call("echo 满了")
+        assert out.status == "error" and out.artifact == {"failure": "reset"} and env.sb.deleted == [TID]
+        env.gateway.sandbox_put = real_put
+        env.sb.deleted.clear()
+        env.msgs = [m for m in env.msgs if history.written_of(m) != bad]
+        await env.call("ls")
+        put_before = len(put())
+        # 用户发的文件照旧在 uploads/ 下，互不相干：发了文件不会把 documents/ 清掉，放文档也不动用户的文件
+        await env.attach("数据.csv", b"a,b\n1,2\n")
+        await env.call("ls")
+        assert len(docs()) == 4 and "uploads/数据.csv" in env.sb.workspaces[TID] and len(put()) == put_before + 1
+        # 工作区被服务清了、进程重启忘了放过哪一版：下一条命令之前全部重放
+        env.sb.workspaces[TID].clear()
+        await env.call("ls")
+        assert len(docs()) == 4 and len(put()) == put_before + 6
+        env.sandbox._placed.clear()
+        await env.call("ls")
+        assert len(put()) == put_before + 10
+        # 那一版不在了（重新回答把它去掉了、文件被清了）：沙箱里的跟着删，回到对话里还有的那一版
+        env.msgs = [m for m in env.msgs if history.written_of(m) != twin]
+        await env.files.drop([await env.files.store.get(w2.id)])
+        env.msgs = [m for m in env.msgs if history.written_of(m) != w2]
+        out = await env.call("cat uploads/documents/季度报告.md")
+        assert "增长 12% [1][2]" in history.run_of(out).stdout and "uploads/documents/季度报告 (2).md" not in docs() and len(docs()) == 3
+        assert "different name in uploads/documents" not in out.content
+        # 删对话：记的一起忘
+        await env.sandbox.forget(TID)
+        assert TID not in env.sandbox._placed and env.sb.deleted == [TID]
+
+    run_async(go())
+
+
+def test_placed_versions_are_remembered_for_a_limited_number_of_conversations(monkeypatch):
+    monkeypatch.setattr(rc, "PLACED_WORKSPACES", 2)
+    sandbox = Sandbox(FakeImageService().gateway_client(FakeSandbox()))
+    sandbox.placed("a")["x"] = "1"
+    sandbox.placed("b")
+    sandbox.placed("a")
+    sandbox.placed("c")
+    assert list(sandbox._placed) == ["a", "c"] and sandbox.placed("a") == {"x": "1"}
 
 
 def test_failed_commands_still_count_as_run(tmp_path):
@@ -413,6 +538,21 @@ def test_work_task_runs_a_command_and_shows_the_outputs(rr, client):
     assert client.delete(f"/api/research/threads/{tid}").status_code in (200, 204)
     assert sb.deleted == [tid] and tid not in sb.workspaces and again[0]["id"] in rr.planner.images.deleted
     assert aio.run(rr.files.store.of_workspace(tid)) == []
+
+
+def test_a_written_report_reaches_the_sandbox_through_the_api(rr, client):
+    sb = rr.planner.sandbox
+    v = new(client, "写文档《调研报告》", work=True)
+    tid = v["thread_id"]
+    path = "uploads/documents/调研报告.md"
+    seen = last(events(say(client, tid, f"跑命令：cat {path}；write outputs/调研报告.pdf %PDF-1.7")), "state")
+    (step,) = _steps(seen["turns"][-1])
+    assert step["run"]["stdout"].startswith("# 调研报告\n\n## 一、背景") and [f["name"] for f in step["run"]["files"]] == ["调研报告.pdf"]
+    assert sb.workspaces[tid][path].decode().startswith("# 调研报告")
+    # 改了以后，下一条命令看到的是新的一版
+    events(say(client, tid, "改文档把第一段内容改成开头"))
+    again = last(events(say(client, tid, f"跑命令：cat {path}")), "state")
+    assert "\n开头。" in _steps(again["turns"][-1])[0]["run"]["stdout"] and [p for _, p in sb.puts] == [path, path]
 
 
 def test_chat_and_guests_do_not_get_the_tool(rr, client):
