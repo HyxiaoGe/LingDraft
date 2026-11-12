@@ -424,7 +424,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--label", default="", help="写进结果文件名，方便对比")
     ap.add_argument("--no-smith", action="store_true", help="不传 LangSmith（配了 LANGSMITH_API_KEY 时默认传）")
     ap.add_argument("--model", help="这一下换成哪个模型（app/models.toml 里选项的 id）；不给照录的那遍用的。起标题的（title）不归它管")
-    ap.add_argument("--no-thinking", action="store_true", help="关着深度思考跑（要和 --model 一起给）；不给按选项的默认，能开关的默认开")
+    ap.add_argument("--no-thinking", action="store_true", help="关着深度思考跑（要和 --model 一起给）；不给按选项的默认，能开关的默认开。只管对话的用例：工作任务一直开着思考，给了也不关")
     ap.add_argument("--compare", nargs=2, metavar=("A", "B"), help="不跑：比较两份结果，每项检查差得够不够大")
     args = ap.parse_args(argv)
 
@@ -437,6 +437,8 @@ def main(argv: list[str] | None = None) -> int:
     decisions = [d for d in load_decisions() if not args.decision or any(fnmatchcase(d.id, pat) for pat in args.decision)]
     if nothing := sorted(pat for pat in set(args.decision or []) if not any(fnmatchcase(d.id, pat) for d in decisions)):
         ap.error(f"没有这些决策点：{nothing}")
+    if args.no_thinking and (always := [d.id for d in decisions if d.say and d.work]):
+        print(f"工作任务的决策点一直开着思考，--no-thinking 管不到（每条结果里记的是实际的）：{always}")
     if missing := sorted({d.case for d in decisions if d.case and not (TAPES_DIR / f"{d.case}.snapshots.json").exists()}):
         ap.error(f"这些用例还没有存检查点的录像，先 research --record --case …：{missing}")
     costs.open_ledger()  # 评测花的钱记进本机的库（配了的话），见 app.costs

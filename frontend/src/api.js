@@ -153,7 +153,7 @@ export async function listModels() {
 }
 
 // 开新对话。opts：model 是选的模型（listModels 里的 id，不给是 Auto；没有了返回 400），定下就不换；
-// thinking 是这句话的思考开关（不给按模型的默认）；work 是开的是不是工作任务（新页面上选着“工作”，不给是对话），定下就不变，只有这里带。
+// thinking 是这句话的思考开关（不给按模型的默认；工作任务不看，一直开）；work 是开的是不是工作任务（新页面上选着“工作”，不给是对话），定下就不变，只有这里带。
 // 下面几个的 opts.thinking 一样。opts.images：这句话带的图（见 message）；
 // opts.files：带的文件的编号（先 uploadFile、解析好了），不能发时 400，detail 是 {code: "files_not_sendable", reason}
 export async function createResearchThread(text, opts, onEvent, signal) {

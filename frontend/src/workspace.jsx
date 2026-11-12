@@ -86,7 +86,8 @@ export default function Workspace() {
   // 新对话选的模型：null 是 Auto；开新对话时还是上次选的，刷新页面回到 Auto。开始的对话以它定下的为准（st.model）
   const [pick, setPick] = useState(null);
   // 深度思考开关：每句话发的时候带上（选的模型能开关才带）。新对话（包括刷新）按设置里的默认（存本机，默认开）；
-  // 在一段对话里手动切了只管这段对话，记在 thinkSet 里（这次打开的页面里），回到这段对话还是切过的，开新对话又回到默认（2026-11-07 Sean 定）
+  // 在一段对话里手动切了只管这段对话，记在 thinkSet 里（这次打开的页面里），回到这段对话还是切过的，开新对话又回到默认（2026-11-07 Sean 定）。
+  // 开关只管对话：工作任务一直开着、关不了（2026-11-12 Sean 定，后端也不看，见 agent.py 的 _plan），输入框旁边的开关显示成开、点不动，发的时候不带。
   const [thinkOn, setThinkOn] = useState(thinkDefault); // 设置里的默认
   const thinkOnRef = useRef(thinkOn);
   thinkOnRef.current = thinkOn;
@@ -254,11 +255,11 @@ export default function Workspace() {
   const picked = models?.some((m) => m.id === pick && !m.locked) ? pick : models?.[0]?.id; // 选的不在列表里了（刚下架）、锁上了也按 Auto
   // 输入框旁边显示的模型：新对话是选的；开始的对话是它定下的（状态还没取回来时，刚发出去的按选的，打开的老对话先不显示）
   const current = !tid ? picked : st?.thread_id === tid && st.model ? st.model : live ? picked : null;
-  // 这句话带不带思考开关：按输入框旁边显示的那个模型（能开关才带，不带的按模型的默认）
-  const thinkOpts = () => (models?.find((m) => m.id === current)?.thinking === "toggle" ? { thinking } : {});
   // 这一页是对话还是工作：新页面按选着的；开始了的按对话自己的（状态里的 work），状态还没取回来先按列表里那一行、刚发起的按发的时候选的
   const work = !tid ? newWork : st?.thread_id === tid ? !!st.work
     : threads?.find((t) => t.thread_id === tid)?.work ?? (startedAs.current?.id === tid && startedAs.current.work);
+  // 这句话带不带思考开关：按输入框旁边显示的那个模型（能开关才带，不带的按模型的默认）；工作任务不带（一直开）
+  const thinkOpts = () => (!work && models?.find((m) => m.id === current)?.thinking === "toggle" ? { thinking } : {});
   // 新页面上换“对话 / 工作”：地址跟着换（不进浏览器历史），写着的字、选的模型都不动
   const pickWork = (v) => {
     setNewWork(v);
@@ -900,7 +901,7 @@ export default function Workspace() {
         ) : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
           who={auth.ready ? (auth.me ? auth.me.name || "" : null) : earlyWho}
           models={models} modelNames={modelNames} credits={credits} manage={manage}
-          picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, onLogin }}
+          picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, thinkAlways: !!work, onLogin }}
           work={{ on: work, onChange: pickWork }}
           files={{ open: openFile, current: file, toggle: toggleFiles }} />}
         {file && (file.list ? <FileList tid={tid} st={shown} live={live} title={live?.title || shown?.title || listedTitle} onNav={navFile} onClose={closeFile} focus={fileFocus} />
