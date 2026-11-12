@@ -11,6 +11,8 @@ gVisor 隔离的一次性容器里跑，不联网、装不了包，留得下来�
   用来转成 PDF / Word（沙箱里的 convert-doc，见 agent-tools 的 services/sandbox/README.md“出文档”）。文档里的来源 id 放进去时换成编号、
   文末列出来源（sources.export_markdown，和页面上下载的一样）：沙箱里不知道这段对话有哪些来源，原样转出来就是一串 [s1a2b3c]。
 - 一轮里同一个路径只留最后一版：命令又写了这一轮登记过的路径（比如图画得不对重画），前面那个作废删掉。和模型写文件一轮一版是一个道理。
+- 工作目录没了（服务 7 天没用就清掉、写满了删掉重来）不要紧：uploads/ 每次跑之前都对一遍；以前产出的文件也照文件表放回 outputs/
+  原来的路径（2026-11-12 Sean 定，见 restore_outputs），隔了很久再说“在上次那份 Excel 里加一列”时沙箱里还有它。命令自己写的脚本、草稿不登记，没了就没了。
 - 同一段对话的命令一条一条跑（服务那边一个工作区同时只跑一条，一条消息里并行调的在这里排队）。
 - 用户点了停止：这次执行被取消，顺手让服务把正在跑的命令停掉，不等它跑到时限。
 - 给模型看的输出再截一次（标准输出、报错各 OUTPUT_CHARS 字，开头结尾各一半）：服务各留 64 KB，全给模型太占上下文。页面上看的也是这一份。
@@ -36,8 +38,8 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from app import config
-from app.files.service import OTHER
-from app.files.store import READY, FileRow
+from app.files.service import OTHER, PATH
+from app.files.store import IMAGE, READY, FileRow
 from app.graph.research import prompts
 from app.graph.research.history import RUN_TOOL, last_human, owned_file_ids, written_files
 from app.graph.research.sources import collect_sources, export_markdown
@@ -60,11 +62,12 @@ MAX_OUTPUTS = 10  # 一条命令最多登记这么多个产出，再多的告诉
 UPLOADS, OUTPUTS = "uploads/", "outputs/"
 DOCUMENTS = UPLOADS + "documents/"  # 模型写的文件最新的一版放这里（在 uploads/ 下面：服务把 uploads/ 挂成只读）
 PLACED_WORKSPACES = 500  # 记着“沙箱里放的是哪一版”的对话最多这么多段，再多的忘掉最久没用的（忘了只是下次重放一遍）
+RESTORE_BYTES = 256 * 1024 * 1024  # 工作目录没了的时候，以前的产出一共最多放回这么多（新的先放）：工作区上限 1 GiB，别一放回去又写满
 WORKSPACE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")  # 服务认的工作区编号；对话编号是 uuid，都对得上
 NAME_BYTES = 200  # 沙箱里一级路径最长 255 字节，重名时还要加“ (2)”
 # 起不来（Docker、gVisor 不在）之外，这些都当“这会儿正忙”：工作区上一条命令还没停完、别的对话的命令占着
 BUSY = ("workspace_busy", "sandbox_busy")
-# 工作区坏了、写满了：删掉整个工作区重来（uploads/ 下次跑之前会重新放进去，命令自己写的草稿没了）
+# 工作区坏了、写满了：删掉整个工作区重来（uploads/、以前的产出下次跑之前会重新放进去，命令自己写的草稿没了）
 RESET = ("workspace_over_quota", "workspace_corrupted")
 UNPLACEABLE = ("invalid_path", "file_too_large")  # 服务不收这一个文件（名字不合它的规矩、太大）：换谁重试都一样
 
@@ -78,6 +81,7 @@ class Sandbox:
         self.gateway = gateway
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
         self._placed: OrderedDict[str, dict[str, str]] = OrderedDict()
+        self.unrestored: set[str] = set()  # 以前的产出放回到一半断了的对话（见 restore_outputs）：下一条命令之前接着放
 
     def lock(self, workspace: str) -> asyncio.Lock:
         """这段对话的锁：命令一条一条跑。没人用了自己回收。"""
@@ -100,6 +104,7 @@ class Sandbox:
     async def forget(self, workspace: str) -> None:
         """删对话时：工作区一起删。没成只记日志，服务 7 天没用自己清。"""
         self._placed.pop(workspace, None)
+        self.unrestored.discard(workspace)
         if WORKSPACE.fullmatch(workspace):
             await self.gateway.sandbox_delete(workspace)
 
@@ -234,6 +239,59 @@ async def sync_uploads(gateway: GatewayClient, files: Any, workspace: str, messa
     return renamed, too_big
 
 
+async def _stored(gateway: GatewayClient, files: Any, row: FileRow, workspace: str) -> bytes | None:
+    """文件表里一个产出的内容：图从 image-service 取，别的读数据卷上的原件。不在了、图这会儿取不到是 None。"""
+    if row.kind == IMAGE:
+        try:
+            got = await gateway.image(row.id)
+        except GatewayAuthError:
+            raise
+        except GatewayError as e:
+            log.warning("以前产出的图没取到，没放回沙箱：%s %s %s", workspace, row.id, e)
+            return None
+        return got[0] if got is not None else None
+    got = await files.original(row.id, workspace)
+    return await asyncio.to_thread(got[0].read_bytes) if got is not None else None
+
+
+async def restore_outputs(sandbox: Sandbox, files: Any, workspace: str, have: dict[str, int], gone: bool) -> None:
+    """沙箱的工作目录没了的时候，把以前跑命令产出的文件照文件表放回 outputs/ 原来的路径（每个路径放最后登记的那个，见 FileService.outputs）。
+    have 是这次跑之前工作区里现有的文件，gone 是那时服务说没有这个工作区。
+
+    - 只在工作区整个没了的时候放：服务清工作目录是整个删掉（7 天没用、写满了删掉重来，agent-tools 的 services/sandbox/app/workspaces.py
+      的 _remove），之后列文件回的是 workspace_not_found。工作区还在的时候不看缺了谁，哪怕里面是空的：模型自己删掉、改了名的产出不该
+      又冒出来（它 ls、打包 outputs/ 时会多出来）；已经在的也不覆盖（里面可能是没登记上的更新的内容）。
+    - 放回去的在这条命令跑之前就在了，服务拿跑之前、跑之后的目录对比着认“这次改了什么”，所以不会又登记一遍；模型之后改了它才算新的一版。
+    - 放到一半断了（服务这会儿不行、用户点了停止）：记在 Sandbox.unrestored 里，下一条命令之前把还缺的接着放，不然工作区又有了就再也不放。
+      所以要在往工作区放任何东西之前调（放用户发的文件也会让工作区又有了），而且先记下再动手。只记在内存里，正好这时进程重启的话缺的就缺着。
+    - 放不回去的跳过、记日志，别的照放：超过网关请求体上限的（SANDBOX_MAX_UPLOAD_BYTES）、原件不在了的、图取不到的、服务不收的。
+      一共最多放 RESTORE_BYTES，新的先放。"""
+    if gone:
+        sandbox.unrestored.add(workspace)
+    elif workspace not in sandbox.unrestored:
+        return
+    gateway, room = sandbox.gateway, RESTORE_BYTES
+    for row in reversed(await files.outputs(workspace)):
+        path = row.meta[PATH]
+        if path in have or not path.startswith(OUTPUTS):
+            continue
+        if row.size > min(SANDBOX_MAX_UPLOAD_BYTES, room):
+            log.warning("以前的产出太大，没放回沙箱：%s %s %d 字节", workspace, row.id, row.size)
+            continue
+        data = await _stored(gateway, files, row, workspace)
+        if data is None or len(data) > min(SANDBOX_MAX_UPLOAD_BYTES, room):
+            continue
+        try:
+            await gateway.sandbox_put(workspace, path, data)
+        except SandboxError as e:
+            if e.kind not in UNPLACEABLE:
+                raise
+            log.warning("以前的产出没放回沙箱：%s %s %s", workspace, row.id, e.kind)
+            continue
+        room -= len(data)
+    sandbox.unrestored.discard(workspace)
+
+
 def _image_ext(data: bytes) -> str | None:
     """看开头认是不是 image-service 收的图（PNG / JPEG / WebP），是的话回扩展名。"""
     if data.startswith(b"\x89PNG\r\n\x1a\n"):
@@ -341,7 +399,9 @@ def make_run_command_tool():
         gateway: GatewayClient = sandbox.gateway
         async with sandbox.lock(workspace):
             try:
-                have = await gateway.sandbox_files(workspace)
+                found = await gateway.sandbox_files(workspace)
+                have = found or {}
+                await restore_outputs(sandbox, files, workspace, have, gone=found is None)
                 renamed, too_big = await sync_uploads(gateway, files, workspace, messages, have)
                 documents = await sync_documents(sandbox, files, workspace, messages, have)
                 try:

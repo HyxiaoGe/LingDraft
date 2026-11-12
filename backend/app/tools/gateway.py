@@ -150,13 +150,14 @@ class GatewayClient:
         raise SandboxError(f"{what}失败：HTTP {resp.status_code} {code or ''}".rstrip(), status=resp.status_code,
                            kind=code if isinstance(code, str) and code else "unavailable")
 
-    async def sandbox_files(self, workspace: str) -> dict[str, int]:
-        """工作区里的文件：路径 → 字节数。工作区还没有（没放过文件、太久没用清掉了）是空的。"""
+    async def sandbox_files(self, workspace: str) -> dict[str, int] | None:
+        """工作区里的文件：路径 → 字节数。没有这个工作区是 None：还没放过文件，或者被服务整个删了（7 天没用、写满了删掉重来）。
+        工作区在、里面是空的是 {}，两样要分开：前一种要把以前的产出放回去（run_command.restore_outputs），后一种是命令自己删空的。"""
         try:
             resp = await self._sandbox("GET", workspace, "/files", what="列沙箱文件")
         except SandboxError as e:
             if e.kind == "workspace_not_found":
-                return {}
+                return None
             raise
         try:
             return {str(f["path"]): int(f["size"]) for f in resp.json()["files"]}
