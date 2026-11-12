@@ -406,6 +406,17 @@ class FileService:
         assert row is not None
         return row
 
+    async def outputs(self, workspace_id: str) -> list[FileRow]:
+        """这段对话里跑命令产出的文件（连图），每个沙箱路径只要最后登记的那个，按登记的先后。沙箱的工作目录没了的时候照它放回去
+        （见 run_command.restore_outputs）：同一个路径几轮里写过几次的，沙箱里本来也只有最后那一份。"""
+        latest: dict[str, FileRow] = {}
+        for r in await self.store.of_workspace(workspace_id):
+            path = r.meta.get(PATH)
+            if r.origin == GENERATED and isinstance(path, str) and path:
+                latest.pop(path, None)  # 后登记的排到后面
+                latest[path] = r
+        return list(latest.values())
+
     async def discard_outputs(self, workspace_id: str, turn_id: str, paths: set[str], keep: set[str]) -> list[str]:
         """同一轮里命令又写了同一个路径：前面登记的那个作废，行（连同文字、原件）删掉，keep 里的（刚登记的）留着。
         按文件表里记的路径认，不看对话里记了什么：一条消息里并行调的两条命令互相看不到对方的结果，进程崩掉时登记了、对话里没记下的也算。

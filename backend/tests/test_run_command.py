@@ -1,6 +1,7 @@
 """在沙箱里跑命令（run_command，2026-11-11 Sean 定，见 docs/沙箱方案.md）：只在工作任务里给、游客没有；跑之前把用户发的文件放进 uploads/，
 模型写的文件最新的一版放进 uploads/documents/（文档里的来源 id 换成编号）；跑完把 outputs/ 里的登记进文件表（图进 image-service）；
-一轮里同一个路径只留最后一版；没跑成的说原因；停止时把命令停掉；重新回答、删对话时产出跟着删。
+一轮里同一个路径只留最后一版；工作目录没了的时候以前的产出照文件表放回 outputs/；没跑成的说原因；停止时把命令停掉；
+重新回答、删对话时产出跟着删。
 只用假模型（“跑命令：…”）和假沙箱（见 FakeSandbox）。"""
 
 from __future__ import annotations
@@ -53,7 +54,7 @@ def test_gateway_maps_sandbox_errors():
     async def go():
         gw = GatewayClient("http://gw", "k", scene="research", transport=httpx.MockTransport(handle))
         replies[:] = [err(404, "workspace_not_found")]
-        assert await gw.sandbox_files("w") == {}
+        assert await gw.sandbox_files("w") is None  # 没有这个工作区，和“在、里面是空的”不一样
         replies[:] = [httpx.Response(200, json={"files": [{"path": "uploads/a.csv", "size": 3}]})]
         assert await gw.sandbox_files("w") == {"uploads/a.csv": 3}
         for reply, kind, status, retryable in ((err(503, "sandbox_busy"), "sandbox_busy", 503, True),
@@ -286,6 +287,126 @@ def test_uploads_follow_the_conversation(tmp_path, monkeypatch):
     run_async(go())
 
 
+def test_earlier_outputs_come_back_when_the_workspace_is_gone(tmp_path):
+    async def go():
+        env = Env(tmp_path)
+        put = lambda: [p for _, p in env.sb.puts]  # noqa: E731
+        await env.attach("销售.csv", b"a,b\n1,2\n")
+        chart, table, note = history.run_of(await env.call("chart outputs/图表.png\nwrite outputs/汇总.csv 第一版\nwrite outputs/附/说明.md # 一\n"
+                                                           "write gen.py print(1)")).files
+        env.msgs += [AIMessage("好了"), HumanMessage("改一下汇总", id="turn-2")]
+        (table2,) = history.run_of(await env.call("write outputs/汇总.csv 第二版，长一些")).files
+        rows_before = {r.id for r in await env.files.store.of_workspace(TID)}
+        assert {table.id, table2.id} <= rows_before  # 两轮各一版都在文件表里
+        # 工作目录还在：不看缺了谁。模型自己删掉的产出不会又冒出来，已经在的也不动
+        env.sb.puts.clear()
+        await env.call("rm outputs/附/说明.md")
+        env.sb.workspaces[TID]["outputs/汇总.csv"] = "没登记上的更新内容".encode()  # 比如超过大小上限、登记时出错的那种
+        out = await env.call("ls")
+        assert put() == [] and "outputs/附/说明.md" not in history.run_of(out).stdout
+        assert env.sb.workspaces[TID]["outputs/汇总.csv"] == "没登记上的更新内容".encode()
+        # 模型把工作目录删空了也一样：工作区还在，只有用户发的文件照旧对一遍
+        kept = dict(env.sb.workspaces[TID])
+        env.sb.workspaces[TID].clear()
+        assert history.run_of(await env.call("ls")).stdout.split() == ["uploads/销售.csv"] and put() == ["uploads/销售.csv"]
+        env.sb.workspaces[TID].update(kept)
+        env.sb.puts.clear()
+        # 服务把整个工作目录清了（7 天没用）：下一条命令之前，用户发的文件、以前的产出都放回去，每个路径是最后登记的那个；草稿没了
+        del env.sb.workspaces[TID]
+        env.msgs += [AIMessage("好了"), HumanMessage("在上次那份汇总里加一列", id="turn-3")]
+        out = await env.call("ls\ncat outputs/汇总.csv")
+        assert history.run_of(out).stdout.split() == ["outputs/图表.png", "outputs/汇总.csv", "outputs/附/说明.md", "uploads/销售.csv", "第二版，长一些"]
+        assert sorted(put()) == ["outputs/图表.png", "outputs/汇总.csv", "outputs/附/说明.md", "uploads/销售.csv"]
+        assert env.sb.workspaces[TID]["outputs/图表.png"] == env.images.made[chart.id][0]
+        # 放回去的不算这条命令的产出：没有再登记一遍，页面上也不会又出一张图
+        assert history.run_of(out).files == [] and {r.id for r in await env.files.store.of_workspace(TID)} == rows_before
+        assert "Now shown to the user" not in out.content and len(env.images.uploaded) == 1
+        # 模型接着改它：算这一轮新的一版；之后目录还在，不再放
+        (table3,) = history.run_of(await env.call("write outputs/汇总.csv 第三版")).files
+        assert (await env.files.store.get(table3.id)).turn_id == "turn-3" and len(put()) == 4
+        assert [r.id for r in await env.files.outputs(TID)] == [chart.id, note.id, table3.id]
+
+    run_async(go())
+
+
+def test_restoring_outputs_skips_what_cannot_be_put_back_and_resumes(tmp_path, monkeypatch):
+    async def go():
+        env = Env(tmp_path)
+        put = lambda: sorted(p for _, p in env.sb.puts)  # noqa: E731
+        ls = lambda out: history.run_of(out).stdout.split()  # noqa: E731
+        made = history.run_of(await env.call("chart outputs/a.png\nchart outputs/b.png\nbig outputs/big.bin 6000\nwrite outputs/c.csv 1,2\n"
+                                             "write outputs/d.csv 3,4\nwrite outputs/e.csv 5,6")).files
+        f = {x.name: x for x in made}
+        assert len(f) == 6
+
+        async def wipe() -> None:
+            del env.sb.workspaces[TID]
+            env.sb.puts.clear()
+
+        # 放不回去的跳过，别的照放：太大的、原件不在了的、图已经不在 image-service 里的、图这会儿取不到的
+        monkeypatch.setattr(rc, "SANDBOX_MAX_UPLOAD_BYTES", 5000)
+        c_path = (await env.files.original(f["c.csv"].id, TID))[0]
+        c_path.unlink()
+        a_png = env.images.made.pop(f["a.png"].id)
+        real_image = env.gateway.image
+
+        async def flaky(image_id: str):
+            if image_id == f["b.png"].id:
+                from app.tools.gateway import GatewayError
+                raise GatewayError("取图失败", kind="http_503", retryable=True)
+            return await real_image(image_id)
+        env.gateway.image = flaky
+        await wipe()
+        assert ls(await env.call("ls")) == ["outputs/d.csv", "outputs/e.csv"] and put() == ["outputs/d.csv", "outputs/e.csv"]
+        env.gateway.image = real_image
+        env.images.made[f["a.png"].id] = a_png
+        c_path.write_bytes(b"1,2")
+        # 一共最多放 RESTORE_BYTES，新的先放
+        monkeypatch.setattr(rc, "RESTORE_BYTES", 4)
+        await wipe()
+        assert ls(await env.call("ls")) == ["outputs/e.csv"]
+        monkeypatch.setattr(rc, "RESTORE_BYTES", 256 * 1024 * 1024)
+        # 服务不收的那一个跳过；放到一半服务不行了：这条命令没跑成，下一条之前把还缺的接着放（这时目录已经不是空的了）
+        real_put = env.gateway.sandbox_put
+        down = [True]
+
+        async def picky(workspace: str, path: str, data: bytes) -> None:
+            if path.endswith("e.csv"):
+                raise SandboxError("往沙箱放文件失败", kind="invalid_path", status=400)
+            if path.endswith("c.csv") and down[0]:
+                raise SandboxError("往沙箱放文件失败", kind="sandbox_unavailable", status=503)
+            await real_put(workspace, path, data)
+        env.gateway.sandbox_put = picky
+        await wipe()
+        out = await env.call("ls")
+        assert out.artifact == {"failure": "unavailable"} and put() == ["outputs/d.csv"] and TID in env.sandbox.unrestored
+        down[0] = False
+        assert ls(await env.call("ls")) == ["outputs/a.png", "outputs/b.png", "outputs/c.csv", "outputs/d.csv"]
+        assert put() == ["outputs/a.png", "outputs/b.png", "outputs/c.csv", "outputs/d.csv"] and TID not in env.sandbox.unrestored
+        # 工作区没了以后放用户发的文件时断了：以前的产出已经先放回去了，不会因为工作区又有了就不放
+        await env.attach("数据.csv", b"a,b\n1,2\n")
+        await env.attach("数据2.csv", b"a,b\n3,4\n")
+
+        async def second_upload_fails(workspace: str, path: str, data: bytes) -> None:
+            if path == "uploads/数据2.csv":
+                raise SandboxError("往沙箱放文件失败", kind="sandbox_unavailable", status=503)
+            await picky(workspace, path, data)
+        env.gateway.sandbox_put = second_upload_fails
+        await wipe()
+        assert (await env.call("ls")).artifact == {"failure": "unavailable"} and "uploads/数据.csv" in env.sb.workspaces[TID]
+        env.gateway.sandbox_put = picky
+        assert ls(await env.call("ls")) == ["outputs/a.png", "outputs/b.png", "outputs/c.csv", "outputs/d.csv", "uploads/数据.csv", "uploads/数据2.csv"]
+        # 放完了就不再看：之后模型删掉的不放回来
+        assert ls(await env.call("rm outputs/a.png\nls")) == ["outputs/b.png", "outputs/c.csv", "outputs/d.csv", "uploads/数据.csv", "uploads/数据2.csv"]
+        assert "outputs/a.png" not in ls(await env.call("ls"))
+        # 删对话时记的一起忘
+        env.sandbox.unrestored.add(TID)
+        await env.sandbox.forget(TID)
+        assert TID not in env.sandbox.unrestored
+
+    run_async(go())
+
+
 def test_written_files_are_put_in_the_sandbox(tmp_path):
     async def go():
         env = Env(tmp_path)
@@ -433,6 +554,7 @@ def test_commands_that_did_not_run(tmp_path):
         env.gateway.sandbox_run = full
         assert await failure() == ("error", "reset", "工作目录满了，已经清空，没跑成")
         assert env.sb.deleted == [TID] and TID not in env.sb.workspaces and "has been reset" in env.msgs[-1].content
+        assert "output files already shown to the user will be put back" in env.msgs[-1].content
         env.gateway.sandbox_run = real
         assert history.run_of(await env.call("echo 又能跑了")).ok
 
