@@ -10,6 +10,7 @@ import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
 from typing import Annotated, NamedTuple
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -20,6 +21,7 @@ from starlette.datastructures import UploadFile as FormFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import config, costs, tracing
+from app.api import export
 from app.api.favicon import Favicons
 from app.api.inspiration import InspirationError, Inspirations
 from app.api.research_runner import (AlreadyPending, BadAnswer, NothingToAnswer, NothingToRegenerate, NothingToRetry, NotIdle, ResearchRunner,
@@ -927,6 +929,32 @@ def research_file(thread_id: str, file_id: str, who: Who):
     mime = mimetypes.guess_type(row.name)[0] or "application/octet-stream"
     return FileResponse(path, media_type=mime, filename=row.name, content_disposition_type="attachment",
                         headers={"Cache-Control": "private, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
+
+# 没转成时给页面的话：页面按 detail.code 自己说（frontend/src/artifact.jsx 的 EXPORT_ERRORS），这里的是别的调用方看的
+EXPORT_MESSAGES = {
+    export.NOT_FOUND: "没有这份文档", export.LOGIN_REQUIRED: "登录后才能导出", export.NOT_READY: "这一轮答完才能导出",
+    export.DAILY_LIMIT: "今天导出的次数用完了", export.BUSY_NOW: "现在导出的人多，过一会儿再试", export.UNAVAILABLE: "现在导出不了，过一会儿再试",
+    export.TOO_BIG: "这份文档太大，没转成", export.FAILED: "没转成",
+}
+
+
+@app.post("/api/research/threads/{thread_id}/files/{file_id}/export")
+def research_file_export(thread_id: str, file_id: str, who: Who, format: str = ""):
+    """右栏“下载成 PDF / Word”：模型写的文档的这一版转一份回来（format 是 pdf / docx），不经过模型、不扣额度，见 app.api.export。
+    用 POST：点一次可能真去转一次（占沙箱、算这个人今天的次数），不该被预取、重放。没转成回 detail={code, message}。"""
+    r = research()
+    _mine(r, thread_id, who)
+    if format not in export.MIME:
+        raise HTTPException(422, "format 只能是 pdf 或 docx")
+    try:
+        data, name = r.export_file(thread_id, file_id, format, who)
+    except export.ExportFailed as e:
+        raise HTTPException(e.status, {"code": e.code, "message": EXPORT_MESSAGES[e.code]}) from None
+    quoted = quote(name)
+    disposition = f'attachment; filename="{name}"' if quoted == name else f"attachment; filename*=utf-8''{quoted}"
+    return Response(data, media_type=export.MIME[format],
+                    headers={"Content-Disposition": disposition, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @app.get("/api/research/threads/{thread_id}/files/{file_id}/parts")

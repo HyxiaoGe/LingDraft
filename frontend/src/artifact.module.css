@@ -39,6 +39,7 @@ button.cardInner { transition: background .15s var(--ease); }
 /* 换一版：第二行的按钮（像一行字，悬停有底色），点开是一列各版（和选模型的菜单一个样子：选着的那行淡靛青底、打勾） */
 .verBtn { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; height: 22px; margin-left: -6px; padding: 0 6px; border-radius: var(--r-sm);
   color: var(--ink2); font-size: 12px; transition: background .15s var(--ease), color .15s var(--ease); }
+.verBtn.brief { flex: none; } /* 旁边有话（没导出成）：按钮只写第几版，不让位 */
 .facts .verBtn:focus-visible { outline-offset: -2px; } /* 外面一圈会被这一行裁掉，焦点框画在里面 */
 .verBtn > svg { flex: none; color: var(--muted); transition: transform .15s var(--ease); }
 .verBtn[aria-expanded="true"] { background: var(--hover); color: var(--ink); }
@@ -58,6 +59,8 @@ button.cardInner { transition: background .15s var(--ease); }
 .verName { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 500; line-height: 20px; }
 .newest { padding: 0 6px; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 11px; font-weight: 400; line-height: 18px; }
 .verRow[aria-checked="true"] .newest { background: var(--paper); }
+.verRow.shut .verName { color: var(--muted); } /* 下载菜单里游客锁着的格式（点了去登录）：和选模型里锁着的一个样子 */
+.verRow.shut > svg { color: var(--faint); }
 .verNote { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; font-size: 12px; line-height: 1.45; color: var(--muted); }
 /* 手机：底部弹层（sheet.module.css）里，一行至少 56px、字大一号 */
 [data-sheet] .verRow { min-height: 56px; padding: 8px 12px; }

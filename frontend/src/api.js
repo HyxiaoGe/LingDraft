@@ -201,6 +201,14 @@ export async function downloadThreadFile(threadId, f) {
   saveBlob(await threadFileBlob(threadId, f.id), f.name);
 }
 
+// 模型写的文档存成 PDF / Word（右栏的下载菜单，format: "pdf" | "docx"）：后端现转一份（转过的直接给），不经过模型、不扣额度。
+// 没转成时 err.detail.code 是原因（见后端 app/api/export.py），页面按它说话
+export async function exportThreadFile(threadId, f, format) {
+  const resp = await authFetch(`/api/research/threads/${encodeURIComponent(threadId)}/files/${encodeURIComponent(f.id)}/export?format=${format}`, { method: "POST" });
+  if (!resp.ok) throw await httpError(resp);
+  saveBlob(await resp.blob(), `${f.name.replace(/\.md$/i, "")}.${format}`);
+}
+
 function saveBlob(blob, name) {
   const url = URL.createObjectURL(blob);
   const a = Object.assign(document.createElement("a"), { href: url, download: name });
