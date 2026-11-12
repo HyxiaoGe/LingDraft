@@ -201,12 +201,17 @@ export async function downloadThreadFile(threadId, f) {
   saveBlob(await threadFileBlob(threadId, f.id), f.name);
 }
 
-// 模型写的文档存成 PDF / Word（右栏的下载菜单，format: "pdf" | "docx"）：后端现转一份（转过的直接给），不经过模型、不扣额度。
-// 没转成时 err.detail.code 是原因（见后端 app/api/export.py），页面按它说话
-export async function exportThreadFile(threadId, f, format) {
-  const resp = await authFetch(`/api/research/threads/${encodeURIComponent(threadId)}/files/${encodeURIComponent(f.id)}/export?format=${format}`, { method: "POST" });
+// 模型写的文档转成 PDF / Word（format: "pdf" | "docx"），这段对话里的 PPT 排成 PDF（只有 "pdf"，一张一页）：
+// 后端现转一份（转过的直接给），不经过模型、不扣额度。没转成时 err.detail.code 是原因（见后端 app/api/export.py），页面按它说话
+export async function threadFileExport(threadId, id, format, signal) {
+  const resp = await authFetch(`/api/research/threads/${encodeURIComponent(threadId)}/files/${encodeURIComponent(id)}/export?format=${format}`, { method: "POST", signal });
   if (!resp.ok) throw await httpError(resp);
-  saveBlob(await resp.blob(), `${f.name.replace(/\.md$/i, "")}.${format}`);
+  return resp.blob();
+}
+
+// 右栏的下载菜单：转好了存下来
+export async function exportThreadFile(threadId, f, format) {
+  saveBlob(await threadFileExport(threadId, f.id, format), `${f.name.replace(/\.(md|pptx)$/i, "")}.${format}`);
 }
 
 function saveBlob(blob, name) {

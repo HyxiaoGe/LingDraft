@@ -4,15 +4,17 @@
 // - 用户发的文件在右栏看（SentPanel，2026-11-09 Sean 定）：PDF 在桌面上用浏览器自带的 PDF 查看器看原件；别的看抽出来的文字——
 //   Markdown、Word 和正文一样排，PPT、表格每段一个小标题（第几张、哪张表哪几行），代码带行号和高亮，纯文字照原样。
 //   手机上 PDF 点了直接下载（见 files.jsx 的 previewable）。太长的只显示前面一部分，底下能下载原件。选中一段能引用到输入框。
+// - 这段对话里的 PPT（发的、命令做出来的；2026-11-12 Sean 定）：登录了的在桌面上先看排出来的页面（后端在沙箱里排成 PDF，
+//   一张一页），顶上能切回文字；下载能选 PPT、PDF。游客、手机、资料库里的照旧看文字。
 // - 资料库里的文件也在这里看（kb，2026-11-09）：从资料库页点开，或者点回答里引用的资料库来源——那样会翻到引用的那一段并标出来，
 //   PDF 翻到那一页。
 import { useContext, useEffect, useRef, useState } from "react";
-import { downloadKnowledgeFile, downloadThreadFile, getKnowledgeFile, knowledgeFileBlob, knowledgeFileParts, threadFileBlob, threadFileParts } from "./api.js";
-import { CopyAll, FileCards, PanelShell, QuoteButton, fileVersions, turnCards, useSelected } from "./artifact.jsx";
+import { downloadKnowledgeFile, downloadThreadFile, getKnowledgeFile, knowledgeFileBlob, knowledgeFileParts, threadFileBlob, threadFileExport, threadFileParts } from "./api.js";
+import { CopyAll, FileCards, PanelShell, QuoteButton, SLIDE_FORMATS, SaveMenu, fileVersions, turnCards, useExport, useSelected } from "./artifact.jsx";
 import { CodeBlock } from "./code-block.jsx";
 import { outputsOf } from "./commands.jsx";
 import { Badge as FileBadge, SentFile, fileFacts, partUnit } from "./files.jsx";
-import { IconDownload, IconFolder, Spinner } from "./icons.jsx";
+import { IconDownload, IconFolder, IconWarn, Spinner } from "./icons.jsx";
 import { Viewer, drawn, imageAlt, imageFileName, imageUrl, imagesOf } from "./images.jsx";
 import { Markdown } from "./markdown.jsx";
 import { NavContext, typeNext } from "./nav.jsx";
@@ -175,7 +177,8 @@ function useParts(src, id) {
   return { data: id ? parts.get(id) ?? null : null, error, retry: () => setTries((n) => n + 1) };
 }
 
-// PDF 原件：要带登录信息，取成 blob 给 iframe（浏览器自带的 PDF 查看器）。关上右栏就放掉，再开时浏览器缓存里有，不用再下一遍
+// PDF 原件：要带登录信息，取成 blob 给 iframe（浏览器自带的 PDF 查看器）。关上右栏就放掉，再开时浏览器缓存里有，不用再下一遍。
+// PPT 排出来的页面也用它取（src 换成 pagesOf，后端转过的留着）。error：gone（不在了）、后端说的原因（见 NO_PAGES）、failed（别的）
 function usePdf(src, id) {
   const [url, setUrl] = useState(null);
   const [error, setError] = useState(null);
@@ -190,7 +193,7 @@ function usePdf(src, id) {
       if (ctl.signal.aborted) return;
       made = URL.createObjectURL(new Blob([b], { type: "application/pdf" }));
       setUrl(made);
-    }).catch((e) => { if (!ctl.signal.aborted) setError(e.status === 404 ? "gone" : "failed"); });
+    }).catch((e) => { if (!ctl.signal.aborted) setError(e.status === 404 ? "gone" : e.detail?.code || "failed"); });
     return () => {
       ctl.abort();
       if (made) URL.revokeObjectURL(made);
@@ -198,6 +201,21 @@ function usePdf(src, id) {
   }, [src.key, id, tries]); // eslint-disable-line react-hooks/exhaustive-deps -- 同上
   return { url, error, retry: () => setTries((n) => n + 1) };
 }
+
+// 这段对话里的 PPT 排成的 PDF（一张一页，看得到每一页排出来的样子；2026-11-12 Sean 定，见 docs/沙箱方案.md）：
+// 后端在沙箱里现排一份，不经过模型；只有登录了的能用（和文档导出 PDF 一样）
+const pagesOf = (tid) => ({ key: tid, blob: (id, sig) => threadFileExport(tid, id, "pdf", sig) });
+// 页面没排出来时“预览”里说的话，按后端给的原因（app/api/export.py）；没列的说 noPages 里那句。第二项：再试一次有没有用
+const NO_PAGES = {
+  gone: ["这个文件已经不在了。", false],
+  too_big: ["这份 PPT 太大，预览不了。", false],
+  failed: ["这份 PPT 预览不了。", false],
+  daily_limit: ["今天预览的次数用完了，明天再来。", false],
+  busy: ["现在预览的人多，过一会儿再试。", true],
+};
+const noPages = (code) => NO_PAGES[code] || ["预览没取到。", true];
+// 存成 PDF 没成时的说法（别的原因和文档的一样，见 artifact.jsx 的 EXPORT_ERRORS）
+const SLIDE_EXPORT_ERRORS = { not_found: "这个文件已经不在了", too_big: "这份 PPT 太大，没转成", failed: "这份 PPT 没转成" };
 
 const DOC_LIKE = new Set(["markdown", "docx"]); // 整篇当 Markdown 排（Word 抽出来的标题、表格已经是 Markdown）
 const LINES = new Set(["code", "text"]); // 按行切的：接回去就是原文
@@ -280,24 +298,34 @@ export function KnowledgePanel({ f, at, onClose, focus }) {
   );
 }
 
-// 右栏看用户发的一个文件（f：{id, name, type, size, pages}）。back：从文件列表点开的，左上角回列表。
-// kb：资料库里的（不归哪段对话），at：翻到第几段（见 KnowledgePanel）
-export function SentPanel({ tid, f, back, kb = false, at = null, onNav, onClose, focus }) {
+// 右栏看用户发的一个文件（f：{id, name, type, size, pages}），命令产出的文件也在这里看。back：从文件列表点开的，左上角回列表。
+// kb：资料库里的（不归哪段对话），at：翻到第几段（见 KnowledgePanel）。
+// canExport：登录了，这段对话里的 PPT 能看排出来的页面、存成 PDF；onLogin：游客开登录弹窗（没有就是登录不了，PDF 不列）
+export function SentPanel({ tid, f, back, kb = false, at = null, onNav, onClose, focus, canExport = false, onLogin }) {
   const mobile = !!useContext(NavContext)?.mobile;
   const pdf = f.type === "pdf" && !mobile;
+  const deck = f.type === "pptx" && !kb; // 这段对话里的 PPT：能排成 PDF
+  const slides = deck && !mobile && canExport; // 右栏里能看排出来的页面（手机上的浏览器不在页面里显示 PDF）
   const src = kb ? fromKnowledge : fromThread(tid);
-  const text = useParts(src, pdf ? null : f.id);
+  // PPT 怎么看：预览（排出来的页面）/ 文字。没点过的先看预览，排不出来就看文字；点过的照点的来。换了文件重新算
+  const [picked, setPicked] = useState(null); // {id, view}
+  const pages = usePdf(pagesOf(tid), slides ? f.id : null);
+  const view = slides ? (picked?.id === f.id ? picked.view : pages.error ? "text" : "preview") : null;
+  const paged = pdf || view === "preview"; // 用浏览器自带的 PDF 查看器看
+  const text = useParts(src, paged ? null : f.id);
   const original = usePdf(src, pdf ? f.id : null);
+  const sheet = pdf ? original : pages;
   const { data } = text;
-  const error = pdf ? original.error : text.error;
-  const retry = pdf ? original.retry : text.retry;
-  const ready = pdf ? !!original.url : !!data;
+  const error = paged ? sheet.error : text.error;
+  const retry = paged ? sheet.retry : text.retry;
+  const ready = paged ? !!sheet.url : !!data;
   const bodyRef = useRef(null);
-  const sel = useSelected(bodyRef, !pdf && !!data);
+  const sel = useSelected(bodyRef, !paged && !!data);
   const [saving, setSaving] = useState(null); // busy / failed
   useEffect(() => setSaving(null), [f.id]);
+  const { exporting, failed: exportFail, exportAs, clear: clearExportFail } = useExport(tid, SLIDE_EXPORT_ERRORS);
   // 换了文件回到顶上；要翻到某一段的，文字到了以后滚到那一段（PDF 的翻页在地址里）
-  const shown = !!data && !pdf;
+  const shown = !!data && !paged;
   useEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
@@ -305,7 +333,7 @@ export function SentPanel({ tid, f, back, kb = false, at = null, onNav, onClose,
     if (target) target.scrollIntoView({ block: "start" });
     else el.scrollTop = 0;
   }, [f.id, at, shown]);
-  const missing = at && data && !pdf && at > data.parts.length; // 引用的那段在只显示了前面一部分之后
+  const missing = at && data && !paged && at > data.parts.length; // 引用的那段在只显示了前面一部分之后
   const download = async () => {
     if (saving === "busy") return;
     setSaving("busy");
@@ -317,25 +345,42 @@ export function SentPanel({ tid, f, back, kb = false, at = null, onNav, onClose,
     }
   };
   const dlLabel = saving === "busy" ? "正在下载…" : saving === "failed" ? "没下载成，再点一次" : `下载 ${f.name}`;
+  const notMade = exportFail?.id === f.id ? exportFail.text : null;
   const acts = (
     <>
-      {!pdf && <CopyAll text={data ? fullText(data) : null} reset={f.id} />}
-      <button className="ws-icon-btn" aria-label={dlLabel} title={dlLabel} aria-busy={saving === "busy" || undefined} onClick={download}>
-        {saving === "busy" ? <Spinner size={15} /> : <IconDownload size={17} />}
-      </button>
+      {slides && (
+        <div className={pstyles.seg} role="group" aria-label="PPT 怎么看">
+          <button aria-pressed={view === "preview"} onClick={() => setPicked({ id: f.id, view: "preview" })}>预览</button>
+          <button aria-pressed={view === "text"} onClick={() => setPicked({ id: f.id, view: "text" })}>文字</button>
+        </div>
+      )}
+      {!paged && <CopyAll text={data ? fullText(data) : null} reset={f.id} />}
+      {deck && (canExport || onLogin) ? (
+        <SaveMenu file={f} formats={SLIDE_FORMATS} locked={!canExport}
+          busy={saving === "busy" ? "正在下载…" : exporting?.id === f.id ? `正在导出 ${exporting.name}…` : null}
+          onOpen={() => { clearExportFail(); setSaving(null); }} onSave={download} onExport={(to) => exportAs(f, to)} onLogin={onLogin} />
+      ) : (
+        <button className="ws-icon-btn" aria-label={dlLabel} title={dlLabel} aria-busy={saving === "busy" || undefined} onClick={download}>
+          {saving === "busy" ? <Spinner size={15} /> : <IconDownload size={17} />}
+        </button>
+      )}
     </>
   );
-  const facts = saving === "failed" ? <span className={pstyles.bad}>没下载成，再点一次</span> : <span>{kb ? `资料库 · ${fileFacts(f)}` : fileFacts(f)}</span>;
+  const facts = saving === "failed" ? <span className={pstyles.bad}>没下载成，再点一次</span>
+    : notMade ? <span className={pstyles.bad} role="status"><IconWarn size={12} />{notMade}</span>
+      : <span>{kb ? `资料库 · ${fileFacts(f)}` : fileFacts(f)}</span>;
 
   let body;
-  if (error) body = (
-    <div className={pstyles.note}>
-      {error === "gone" ? "这个文件已经不在了。" : "内容没取到。"}
-      {error !== "gone" && <button className="ws-btn sm" onClick={retry}>再试一次</button>}
-    </div>
-  );
-  else if (!ready) body = <div className={pstyles.loading} role="status" aria-label="正在打开"><Spinner size={16} /></div>;
-  else if (pdf) body = <iframe className={pstyles.frame} title={`${f.name}（PDF）`} src={at ? `${original.url}#page=${at}` : original.url} />;
+  if (error) {
+    const [words, again] = paged && !pdf ? noPages(error) : [error === "gone" ? "这个文件已经不在了。" : "内容没取到。", error !== "gone"];
+    body = (
+      <div className={pstyles.note}>
+        {words}
+        {again && <button className="ws-btn sm" onClick={retry}>再试一次</button>}
+      </div>
+    );
+  } else if (!ready) body = <div className={pstyles.loading} role="status" aria-label="正在打开"><Spinner size={16} /></div>;
+  else if (paged) body = <iframe className={pstyles.frame} title={`${f.name}（${pdf ? "PDF" : "预览"}）`} src={pdf && at ? `${sheet.url}#page=${at}` : sheet.url} />;
   else body = (
     <>
       {missing && (
@@ -353,11 +398,12 @@ export function SentPanel({ tid, f, back, kb = false, at = null, onNav, onClose,
       )}
     </>
   );
-  const padded = !(ready && !error && (pdf || data?.type === "code"));
+  const framed = paged && ready && !error;
+  const padded = !(ready && !error && (paged || data?.type === "code"));
   return (
     <PanelShell label={`文件：${f.name}`} title={f.name} badge={!mobile && <span className={styles.headBadge}><FileBadge name={f.name} /></span>} facts={facts} acts={acts}
       onBack={back ? () => onNav({ list: true }) : null} onClose={onClose} focus={focus}>
-      <div ref={bodyRef} className={pstyles.body + (padded ? " " + pstyles.padded : "") + (pdf && ready && !error ? " " + pstyles.framed : "")}>
+      <div ref={bodyRef} className={pstyles.body + (padded ? " " + pstyles.padded : "") + (framed ? " " + pstyles.framed : "")}>
         {body}
         <QuoteButton sel={sel} title={f.name} onDone={onClose} />
       </div>

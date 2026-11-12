@@ -942,7 +942,8 @@ EXPORT_MESSAGES = {
 @app.post("/api/research/threads/{thread_id}/files/{file_id}/export")
 def research_file_export(thread_id: str, file_id: str, who: Who, format: str = ""):
     """右栏“下载成 PDF / Word”：模型写的文档的这一版转一份回来（format 是 pdf / docx），不经过模型、不扣额度，见 app.api.export。
-    用 POST：点一次可能真去转一次（占沙箱、算这个人今天的次数），不该被预取、重放。没转成回 detail={code, message}。"""
+    这段对话里的 PPT 也能要 pdf：排成一张一页，右栏打开 PPT 时拿它看每一页的样子（下载菜单里的 PDF 也是它）。
+    用 POST：要一次可能真去转一次（占沙箱、算这个人今天的次数），不该被预取、重放。没转成回 detail={code, message}。"""
     r = research()
     _mine(r, thread_id, who)
     if format not in export.MIME:
