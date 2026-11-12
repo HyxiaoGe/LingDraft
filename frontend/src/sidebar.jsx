@@ -93,7 +93,8 @@ export function Sidebar({ threads, current, st, live, busy, work, now, href, new
       else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     }
   };
-  const rows = withCurrent(threads || [], current, st, live, busy, work);
+  // 列表还没取回来时一行都不放，只有下面的占位：当前这段对话的状态先到（列表要慢一两秒），单放它一行像是别的对话都没了
+  const rows = threads === null ? [] : withCurrent(threads, current, st, live, busy, work);
   const fresh = !current && !page; // 在新页面上：选着对话还是工作，哪一行就是选中的
   // 最上面的三个入口：一样的一行（图标、字和下面对话那几行对齐），按住 ⌘/Ctrl/Shift 点是浏览器自己开新标签页
   const entry = (key, to, icon, label, on, go, ref) => (
@@ -147,7 +148,8 @@ export function Sidebar({ threads, current, st, live, busy, work, now, href, new
           <span className={cx(styles.icon, styles[status])}>
             {status === "active" ? <Spinner size={15} /> : status === "failed" ? <CircleAlert size={15} strokeWidth={1.8} />
               : status === "asking" ? <MessageCircleQuestionMark size={15} strokeWidth={1.8} />
-                : t.work ? <BriefcaseBusiness size={15} strokeWidth={1.8} /> : <MessageSquare size={15} strokeWidth={1.8} />}
+                : t.scheduled ? <IconClock size={15} stroke={1.8} /> // 定时任务的对话（在里面建过、跑过定时任务的）：和上面“定时任务”入口一个图标
+                  : t.work ? <BriefcaseBusiness size={15} strokeWidth={1.8} /> : <MessageSquare size={15} strokeWidth={1.8} />}
           </span>
           <span className={styles.body}>
             <span className={styles.title} data-title title={REDUCE.matches ? t.title : undefined}>

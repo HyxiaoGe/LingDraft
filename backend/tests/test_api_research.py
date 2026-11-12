@@ -73,7 +73,7 @@ def test_list_threads_with_status(client):
     assert rows[0]["thread_id"] == done["thread_id"]  # 最近有动静的在前
     d = by_id[done["thread_id"]]
     assert d == {"thread_id": done["thread_id"], "title": done["title"], "status": "idle", "work": False, "updated_at": d["updated_at"],
-                 "running_since": None, "pinned_at": None, "unread": 0, "notice": None}
+                 "running_since": None, "pinned_at": None, "unread": 0, "notice": None, "scheduled": False}
     assert d["updated_at"]
 
 
