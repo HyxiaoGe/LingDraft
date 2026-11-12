@@ -14,6 +14,7 @@ import json
 import logging
 import math
 import re
+import shlex
 import threading
 import time
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
@@ -1051,6 +1052,8 @@ class FakeSandbox:
     不真的跑命令，按行认几个假指令，别的行当没输出的普通命令：
     - echo X：标准输出一行 X；ls：列出工作区里的文件（一行一个）；cat 路径：输出那个文件的文字；
     - chart 路径：在那里写一张 PNG（每次内容不一样）；write 路径 文字：写一个文本文件；big 路径 N：写 N 字节；rm 路径：删掉；
+    - convert-doc 源 目标 [--title 标题]：照真的转换程序的用法，写一个假的结果（开头是 %PDF 或 PK，后面跟着源文件的内容）；
+      源文件不在就报错、退出码 1，后面的不跑；
     - fail N：报错一行、退出码 N，后面的不跑；slow：等几秒（block 设了就等它，试停止）；
     - timeout / memory：算超时、内存不够被杀掉（退出码 137）。
     测试可以设 fail（(HTTP 状态, 错误码)：下一次起每个请求都这样回）、block（slow 等它）；runs、cancelled、deleted 记下调用。"""
@@ -1132,6 +1135,14 @@ class FakeSandbox:
                     path, _, size = rest.partition(" ")
                     files[path] = b"x" * int(size)
                     wrote.add(path)
+                elif word == "convert-doc":
+                    src, dst = shlex.split(rest)[:2]
+                    if src not in files:
+                        err, code = f"convert-doc: {src} does not exist\n", 1
+                        break
+                    files[dst] = (b"%PDF-1.7\n" if dst.endswith(".pdf") else b"PK\x03\x04") + files[src]
+                    wrote.add(dst)
+                    out.append(f"Wrote {dst} (1 page, 1 KB).")
                 elif word == "rm":
                     files.pop(rest.strip(), None)
                 elif word == "slow":

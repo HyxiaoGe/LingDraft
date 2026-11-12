@@ -34,12 +34,15 @@ from psycopg_pool import PoolTimeout
 from pydantic import ValidationError
 
 from app import aio, config, costs, free_used_up, quota
+from app.api import export
 from app.api.drafts import DraftTracker
+from app.api.export import Exporter, ExportFailed
 from app.api.run_store import ASKED, ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, Pending, PostgresRunStore, RunStore
 from app.api.runner import BaseRunner, RunConflict, _sse_text, jsonable, log
 from app.files.parse import Part
 from app.files.service import NOT_HERE, FileService, NotSendable
-from app.files.store import FileRow, FileStore, MemoryFileStore, PostgresFileStore
+from app.files.artifacts import MARKDOWN
+from app.files.store import GENERATED, FileRow, FileStore, MemoryFileStore, PostgresFileStore
 from app.knowledge import remote as kb_remote
 from app.knowledge.remote import HashEmbedder
 from app.knowledge.libraries import Library, LibraryStore, MemoryLibraryStore, PostgresLibraryStore
@@ -50,7 +53,7 @@ from app.graph.research.agent import TURN_END, ChatContext, fallback_title, now,
 from app.graph.research.graph import NO_POSTGRES, build_graph, make_serde, postgres_pool, thread_ids
 from app.graph.research.memory import MemoryBook, next_at
 from app.identity import Identity, is_guest_sub
-from app.graph.research.sources import collect_sources, subagent_messages
+from app.graph.research.sources import collect_sources, export_markdown, subagent_messages
 from app.graph.research.state import AttachedFile, AttachedImage, Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
 from app.model_guard import ContentBlocked, Interrupted, ModelUnavailable
@@ -394,6 +397,8 @@ class ResearchRunner(BaseRunner):
         self.images = self.planner.gateway  # 画好的图存在 image-service 里，按编号取、删（见 app.tools.gateway）
         # 沙箱：工作任务里跑命令（见 app.tools.run_command），经同一个网关；配置里关了就没有，模型拿不到这个工具
         self.sandbox = Sandbox(self.planner.gateway) if config.SANDBOX_ENABLED else None
+        # 右栏“下载成 PDF / Word”（见 app.api.export）：和跑命令用同一个沙箱服务，沙箱没开就没有
+        self.exporter = Exporter(self.planner.gateway) if config.SANDBOX_ENABLED else None
         # 用户发的文件：原件在数据卷上，文字和文件表在运行记录的库里；在这里起后台的解析、清理（见 app.files.service）
         self.files = files or FileService(open_files(self.run_store), config.FILES_DIR, isolated=config.FILE_PARSE_ISOLATED,
                                           timeout=config.FILE_PARSE_TIMEOUT_S)
@@ -499,6 +504,32 @@ class ResearchRunner(BaseRunner):
     def file_preview(self, thread_id: str, file_id: str) -> tuple[FileRow, list[Part], bool] | None:
         """这段对话里用户发的文件抽出来的文字（右栏预览，见 FileService.preview）。"""
         return aio.run(self.files.preview(file_id, thread_id))
+
+    def export_file(self, thread_id: str, file_id: str, fmt: str, who: Identity) -> tuple[bytes, str]:
+        """右栏“下载成 PDF / Word”：模型写的文档的这一版转成 fmt（export.PDF / DOCX），返回（内容, 文件名）。
+        不经过模型、不扣额度，内容和页面上下载的 Markdown 一样（来源 id 换成编号、文末附来源）。转不了的抛 ExportFailed。"""
+        return aio.run(self._aexport_file(thread_id, file_id, fmt, who))
+
+    async def _aexport_file(self, thread_id: str, file_id: str, fmt: str, who: Identity) -> tuple[bytes, str]:
+        got = await self.files.original(file_id, thread_id)
+        row = got[1] if got else None
+        if row is None or row.origin != GENERATED or row.type != MARKDOWN or not row.series_id:
+            raise ExportFailed(404, export.NOT_FOUND)  # 没有、不是这段对话的、不是模型写的文档（网页、代码、跑命令的产出不转）
+        if who.guest:
+            raise ExportFailed(403, export.LOGIN_REQUIRED)
+        if self.exporter is None:
+            raise ExportFailed(503, export.UNAVAILABLE)
+        # 来源从检查点里取，检查点一轮结束才写（见 DURABILITY）：写这一版的那一轮还没答完的话，这一轮查到的来源还不在里面，先不转
+        messages = (await self.graph.aget_state(self._cfg(thread_id))).values.get("messages", [])
+        written = next((w for m in messages if (w := history.written_of(m)) is not None and w.id == file_id), None)
+        if written is None:
+            raise ExportFailed(409, export.NOT_READY)
+        text = await self.files.text(file_id)
+        if text is None:
+            raise ExportFailed(404, export.NOT_FOUND)
+        doc = export_markdown(text, {s.id: s for s in collect_sources(messages)})
+        data = await self.exporter.convert(file_id, fmt, doc, written.title, who)
+        return data, f"{Path(row.name).stem}.{fmt}"
 
     # ---- 资料库（见 app.knowledge）----
 

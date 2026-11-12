@@ -96,6 +96,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - `GET /{id}/events?after=<事件 id>`：断线、刷新后接上事件流。
   - `GET /{id}/images/{image_id}`：对话里画的图、用户发的图，后端经网关从 image-service 取来转给页面。按文件表认是不是这段对话的（图发出去、画好时就登记了，不靠检查点）。页面用 `<img src>` 取、带不了令牌，所以这个接口不认人，对话 id 和图的编号都是随机的。不是这段对话的、编号格式不对、服务里已经没有的返回 404，网关、服务出问题返回 502。
   - `GET /{id}/files/{file_id}`：下载用户发的文件（原件）；`GET /{id}/files/{file_id}/parts`：右栏预览，抽出来的文字按段给（`{id, name, type, parts: [{title, text}], more}`，太长的只给前面一部分，`more` 为 true）。
+  - `POST /{id}/files/{file_id}/export?format=pdf|docx`：把模型写的文档（Markdown）转成 PDF / Word 给页面存（右栏的下载菜单）。不经过模型、不扣额度，登录了才能用（跑命令游客也没有）。和对话里说一句“导出成 PDF”是同一个转换程序、同一份内容，见下面“跑命令”。没转成回 `detail: {code, message}`，`code` 见 `app/api/export.py`（`login_required` 403、`not_ready` 409、`daily_limit` 429、`busy` / `unavailable` 503、`too_big` / `failed` 502），页面按 `code` 说话。
   - `GET /{id}/runs` 和 `GET /api/research/runs`：运行记录，见下面的“运行记录”。`/api/research/runs` 跨所有人的对话，只有管理员能看（别人 403）。
 
 SSE 事件：
@@ -207,6 +208,7 @@ SSE 事件：
 - 只在工作任务里给，游客没有（`agent.can_run`）；`LINGDRAFT_SANDBOX=0` 整个关掉。只给主 agent，不收钱，网关每天 500 次。
 - 文件表还是唯一的真相：每次跑之前把这段对话里用户发的文件的原件放进 `uploads/`（只读，超过 10 MB 的放不进去），跑完把 `outputs/` 里新增、改过的登记进文件表（一条命令最多 10 个）：PNG / JPEG / WebP（不超过 4 MB）传进 image-service，别的原件存数据卷、认得出类型的抽文字。工作目录里别的文件只是草稿，不登记。
 - 模型写的文件也放进去：每份最新的一版在 `uploads/documents/`（只读；名字是标题加扩展名，重名的后来的加“ (2)”，和标题对不上的在结果里告诉模型）。放过哪一版记在内存里（`Sandbox.placed`）：改了是新的一版、重放，光看大小认不出改没改；进程重启忘了，下一条命令之前全部重放一遍。文档（Markdown）放的是交出去的样子：来源 id 换成编号、文末列出来源（`sources.export_markdown`，和页面上下载的一样，两边要一起改）。转成 PDF / Word 用沙箱里的 `convert-doc`（排版固定，模型不写排版代码，见 agent-tools 的 `services/sandbox/README.md`“出文档”）。
+- 右栏的“下载成 PDF / Word”（`app/api/export.py`）不碰这段对话的工作区：每次用一个临时的工作区（`export-<文件编号>-<格式>`），放进去、跑 `convert-doc`、取回来、删掉，转出来的不登记进文件表。一版写好就不变，转过的留在内存里（32 MB 封顶，最久没用的先丢），同一版同时点两次只转一次。网关给沙箱的每日次数是所有人共用的，所以一个人一天真去转的最多 50 次（管理员不限，从内存里直接给的不算；在内存里数，重启清零）。来源从检查点里取，检查点一轮结束才写，所以写这一版的那一轮还没答完时不转（409）。命令的输出、文档的标题不进日志。
 - 一轮里同一个路径只留最后一版（图画得不对重画的，前面那张删掉）；重新回答删掉那一轮的产出；删对话连工作区一起删。
 - 用户点了停止：这次执行取消，顺手让服务把正在跑的命令停掉。同一段对话的命令一条一条跑。
 - 给模型看的标准输出、报错各留 1 万字（开头结尾各一半）。结果在 `turns` 的工具步骤里（`kind` 是 `command`，`run` 里是退出码、用时、输出、产出的文件）。
@@ -383,7 +385,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
     - `test_research_subagent.py`：子 agent。
     - `test_compaction.py`（含超长压了再发）、`test_memory.py`。
     - 工具：`test_images.py`（画图）、`test_weather.py`、`test_web_tools.py`（搜索、读页）、`test_maps.py`、`test_travel.py`（航班火车、行程）、`test_docs.py`（查文档）、`test_gateway_tools.py`（网关客户端）。
-    - `test_vision.py`：用户发的图怎么给模型、`view_image`。`test_files.py`：用户发的文件、`read_file`。`test_artifacts.py`：模型写的文件。`test_run_command.py`：跑命令。`test_knowledge.py`：资料库。
+    - `test_vision.py`：用户发的图怎么给模型、`view_image`。`test_files.py`：用户发的文件、`read_file`。`test_artifacts.py`：模型写的文件。`test_run_command.py`：跑命令。`test_export.py`：右栏的下载成 PDF / Word。`test_knowledge.py`：资料库。
     - `test_model_options.py`：选模型、思考开关。`test_auto_routing.py`：Auto、免费额度、换备用。
     - `test_costs.py`：成本记账。`test_quota.py`：额度。`test_identity.py`：身份、对话和记忆按人分、游客并进账号。
     - `test_run_records.py`：运行记录、没配库启动报错。
