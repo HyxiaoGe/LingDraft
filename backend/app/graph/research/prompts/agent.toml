@@ -89,13 +89,14 @@ citations = """[Citations]
 
 # 模型写文件（app.tools.write_file，2026-11-08 Sean 定，见 docs/工作区和Artifact方案.md）：什么时候写交给模型判断（Fusion 先用分类器定、后来整套推翻）。
 # 正文和文件二选一不重复、只是追问不出新版、代码默认放正文，照 10-30 定的交付物约定（docs/调研交互约定.md）。灵稿自己写的
+# 2026-11-12：文档里不自己写参考来源（回答正文早就是这个规矩）。右栏、下载、导出都会在文末附一份；没写这句时，同一句“导出成 PDF”真实模型两次里有一次自己又列了一份，PDF 里成了两段“参考来源”
 files = """[Files you write]
 You can write a file for the user with create_file and revise it with edit_file. The file opens in a panel beside the conversation, where the user reads it, switches between its versions, and downloads it; your reply shows a card for it.
 - Write a file when the user wants a finished piece to keep, download, or keep revising: a report, plan, proposal, guide, itinerary, checklist, or article; a web page; or a program they asked for as a file. Answer questions, explanations, comparisons, and short recommendations in your reply instead. Put code in a code block in your reply unless the user asks for a file or it is a long program they will keep revising.
 - If the user did not ask for a file but the content would be worth keeping as one, answer in your reply and offer at the end to turn it into a document.
 - The file is the deliverable, so do not repeat its content in your reply. After writing it, say in two or three sentences what you wrote or changed and anything the user should check or decide.
 - When the user asks to change a file, revise that file with edit_file rather than creating a new one: use edits for local changes, and rewrite the whole content only when most of it changes. A follow-up question that does not ask for changes needs no new version.
-- Write files in the language of the user's request unless they ask otherwise. In documents, cite sources exactly as in your replies, with source ids in square brackets after the facts they support.
+- Write files in the language of the user's request unless they ask otherwise. In documents, cite sources exactly as in your replies, with source ids in square brackets after the facts they support, and do not write a reference list at the end: the sources a document cites are listed there for the user automatically, also in what they download or export.
 - A web page (type html) is one self-contained HTML file: put CSS and JavaScript inline, and load nothing except libraries from well-known CDNs. It is shown in a sandboxed frame that cannot reach the user's data."""
 
 # Work 模式（用户在输入框旁边选了 Work 的那一轮才拼这一段，问用户的工具 ask_user 也只在这种轮里给；说明见 tools_ask.toml 的 [tools.ask_user]）。灵稿自己写的。

@@ -22,6 +22,8 @@ from app.files.service import FileService
 from app.files.store import MemoryFileStore
 from app.graph.research import compaction, history, prompts
 from app.graph.research.agent import ChatContext
+from app.graph.research.sources import export_markdown
+from app.graph.research.state import Source
 from app.tools.files import make_read_file_tool
 from app.tools.write_file import make_write_tools
 from tests.auth_helpers import USER
@@ -60,6 +62,19 @@ def test_file_names_and_languages():
     assert artifacts.file_name("落地页", "html") == "落地页.html"
     assert [artifacts.file_name(n, "code") for n in ("fetch.py", "Makefile", "README")] == ["fetch.py", "Makefile", "README.txt"]
     assert [artifacts.lang_of(n) for n in ("a.py", "b.ts", "Makefile", "c")] == ["python", "typescript", "makefile", ""]
+
+
+def test_exported_documents_number_their_sources():
+    """交出去的文档（放进沙箱转 PDF / Word 的那份）：和页面上下载的一样（frontend/src/artifact.jsx 的 fileExport）。"""
+    known = {s.id: s for s in (Source(id="saaaaaa", url="https://www.a.example/x", title="甲 [官网]"),
+                               Source(id="sbbbbbb1234", url="https://b.example/y"),
+                               Source(id="scccccc", url="kb://file-1/3", title="内部手册.pdf", excerpt_kind="knowledge"))}
+    text = "# 报告\n\n先说乙 [sbbbbbb1234]，再说甲 [saaaaaa][scccccc]。没查到的 [sdddddd]。又是乙 [sbbbbbb1234]。\n\n"
+    assert export_markdown(text, known) == (
+        "# 报告\n\n先说乙 [1]，再说甲 [2][3]。没查到的 。又是乙 [1]。\n\n## 参考来源\n\n"
+        "1. [b.example](https://b.example/y)\n2. [甲 官网](https://www.a.example/x)\n3. 内部手册.pdf（资料库）\n")
+    # 没引用来源的：只把结尾收拾成一个换行，不加“参考来源”
+    assert export_markdown("# 报告\n\n正文 [1]。\n\n\n", {}) == "# 报告\n\n正文 [1]。\n"
 
 
 def test_partial_args_decode_any_chunking():
