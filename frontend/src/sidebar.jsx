@@ -2,7 +2,8 @@
 // 最下面额度和账号。手机上是左边滑出的抽屉（遮罩也在这里）。简单的排版写在元素上（Tailwind），悬停、选中、伪元素、动画和手机抽屉在 sidebar.module.css。
 // 照 Fusion 的样子（2026-11-07 Sean 嫌单调）：每行前面一个图标（正在回答换成转圈、没跑完换成感叹号、停下来等用户回答换成带问号的），选中的那行是白底浮起来的一块。
 // 2026-11-11 照豆包：“新对话”“新工作任务”是两个入口（对话还是工作新建时定，见 workspace.jsx），和“定时任务”（11-13 加的）“资料库”排成一样的几行，在哪一页哪一行就是选中的样子；
-// 列表里工作任务前面是公文包、对话前面是气泡。右边的时间在鼠标移上去、选中时让给“⋯”，标题多出一截地方
+// 列表里工作任务前面是公文包、对话前面是气泡。右边的时间在鼠标移上去、选中时让给“⋯”，标题多出一截地方。
+// 有未读的那一行（定时任务跑完的一轮还没看，11-13）时间那一格换成红底的数字，照豆包；看了就变回时间
 import { BriefcaseBusiness, CircleAlert, LibraryBig, MessageCircleQuestionMark, MessageSquare, MessagesSquare, SquarePen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { IconClock, IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconSearch, IconTrash, Logo, Spinner } from "./icons.jsx";
@@ -154,7 +155,9 @@ export function Sidebar({ threads, current, st, live, busy, work, now, href, new
             </span>
             {sub && <span className={styles.sub}>{sub}</span>}
           </span>
-          <span className={styles.time}>{when(t.updated_at, now, group)}</span>
+          {t.unread > 0 ? (
+            <span className={styles.badge}><span aria-hidden="true">{t.unread > 99 ? "99+" : t.unread}</span><span className="sr-only">，{t.unread} 条未读</span></span>
+          ) : <span className={styles.time}>{when(t.updated_at, now, group)}</span>}
         </a>
         <button className={styles.more} aria-label={`${t.work ? "工作任务" : "对话"}“${t.title}”的更多操作`} aria-haspopup={nav.mobile ? "dialog" : "menu"} aria-expanded={open}
           onClick={(e) => setMenu(open ? null : { id: t.thread_id, anchor: e.currentTarget })}>

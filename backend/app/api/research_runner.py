@@ -59,6 +59,7 @@ from app.graph.research.state import AttachedFile, AttachedImage, Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
 from app.scheduled import rule
 from app.scheduled import service as scheduled
+from app.scheduled.notice import opening
 from app.scheduled.service import ScheduledTasks
 from app.scheduled.store import MemoryTaskStore, PostgresTaskStore, Task, TaskStore
 from app.model_guard import ContentBlocked, Interrupted, ModelUnavailable
@@ -103,6 +104,7 @@ ASKING_FIRST = "先回答或跳过上面的问题"
 # 这一轮没跑完的原因分几类给页面（状态里的 error_kind，事件流 error 事件的 kind），页面按类别说下一步能做什么（见 _failure）：
 # model：模型服务不可用；blocked：内容审核没通过；cut_short：半路停了、没有错误记录（进程重启）；tool：工具服务（网关）出错；internal：别的
 FAILURE_MODEL, FAILURE_BLOCKED, FAILURE_CUT, FAILURE_TOOL, FAILURE_INTERNAL = "model", "blocked", "cut_short", "tool", "internal"
+NO_UNREAD = {"unread": 0, "notice": None}  # 线程列表里一行没有未读时的那两项（见 _asummary_view）
 _SHOWN = {ModelUnavailable.__name__: FAILURE_MODEL, Interrupted.__name__: FAILURE_MODEL, ContentBlocked.__name__: FAILURE_BLOCKED}  # 提示原样给的
 FAILURE_TEXT = {FAILURE_TOOL: "查资料、地图或画图用的服务出了问题", FAILURE_INTERNAL: "处理这一轮时出了意外的错误"}
 # 检查点只在一次运行开头（用户的话写进去，见 accept）和结束时各存一份，中间每一步不存：每份都带着整段对话，每步都存的话按平方增长。
@@ -702,6 +704,14 @@ class ResearchRunner(BaseRunner):
         await self.run_store.pin(thread_id, pinned)
         return await self._asummary_view(thread_id)
 
+    def mark_read(self, thread_id: str) -> dict | None:
+        """用户看了这段对话：未读清零（运行中也行：不碰检查点），返回列表里的这一行。"""
+        return aio.run(self._amark_read(thread_id))
+
+    async def _amark_read(self, thread_id: str) -> dict | None:
+        await self.run_store.mark_read(thread_id)
+        return await self._asummary_view(thread_id)
+
     def owner_of(self, thread_id: str) -> str | None:
         return aio.run(self.run_store.owner_of(thread_id))
 
@@ -823,7 +833,7 @@ class ResearchRunner(BaseRunner):
                     out({"event": "error", "data": _error_event(e)})
                 finally:
                     await self._afinish(run, status, error)
-                    await self._ascheduled_done(run, status)
+                    await self._ascheduled_done(thread_id, run, status)
                     await self._aended(thread_id, status)
                 try:
                     out({"event": "state", "data": await self._astate_view(thread_id)})
@@ -1447,14 +1457,33 @@ class ResearchRunner(BaseRunner):
         await self._aaccept(thread_id, task.prompt, option=option, owner=task.owner if new else None, work=task.work, scheduled_by=mark,
                             title=task.title)
 
-    async def _ascheduled_done(self, run: str, status: str) -> None:
-        """定时任务发起的那次执行结束了：结果记到任务上。记不上只打日志，不耽误这次执行收尾（退占位）。"""
+    async def _ascheduled_done(self, thread_id: str, run: str, status: str) -> None:
+        """定时任务发起的那次执行结束了：结果记到任务上，那段对话多一条未读（用户点了停止的不算：人就在场）。
+        记不上只打日志，不耽误这次执行收尾（退占位）。"""
         if (task_id := self._scheduled.pop(run, None)) is None:
             return
+        result = {ERROR: scheduled.FAILED, STOPPED: scheduled.STOPPED}.get(status, scheduled.OK)
         try:
-            await self.tasks.finished(task_id, {ERROR: scheduled.FAILED, STOPPED: scheduled.STOPPED}.get(status, scheduled.OK))
+            await self.tasks.finished(task_id, result)
         except Exception:  # noqa: BLE001
             log.warning("定时任务这一次的结果没记上：%s", task_id, exc_info=True)
+        if result == scheduled.STOPPED:
+            return
+        try:
+            await self._anotify(thread_id, result == scheduled.OK)
+        except Exception:  # noqa: BLE001
+            log.warning("定时任务这一次的未读没记上：%s", task_id, exc_info=True)
+
+    async def _anotify(self, thread_id: str, ok: bool) -> None:
+        """这段对话多一条未读，带一条通知（页面在左栏标数字、右上角弹出来，见 run_store 的 notify）：
+        任务名用触发这一轮的那句话上记的（就是对话里这一轮上面显示的）；跑成了的带回答的开头，没跑成、被内容审核拦下的不带（页面说没跑成）。"""
+        msgs = ((await self.graph.aget_state(self._cfg(thread_id))).values or {}).get("messages", [])
+        i = history.last_human(msgs)
+        mark = (history.scheduled_of(msgs[i]) if i >= 0 else None) or {}
+        last = next((m for m in reversed(msgs[i + 1:]) if isinstance(m, AIMessage)), None)
+        ok = ok and last is not None and not history.blocked_reason(last)
+        await self.run_store.notify(thread_id, {"title": mark.get("title", ""), "ok": ok,
+                                                "text": opening(history.final_text(msgs[i + 1:])) if ok else ""})
 
     async def _arecover_scheduled(self) -> None:
         """服务启动时：任务上还记着“在跑”、其实上个进程已经没了的，记成被打断（LOST），马上补一次（见 ScheduledTasks.finished）。"""
@@ -1610,11 +1639,12 @@ class ResearchRunner(BaseRunner):
         都没有用这段对话的第一句，和起标题时用原话一样整理（见 agent.fallback_title：纯数字、纯符号的叫“新对话”）。"""
         return v.get("title") or self._titles.get(thread_id) or fallback_title(history.requests(v["messages"])[0])
 
-    async def _asummary_view(self, thread_id: str, pins: dict[str, str] | None = None) -> dict | None:
-        """线程列表里的一行：标题、状态、是不是工作任务、置顶的时间（没置顶是 None）。不存在返回 None。
-        pins 是这个人置顶的那几段（列表一次取齐）；没给就按这段对话归谁去查。"""
+    async def _asummary_view(self, thread_id: str, pins: dict[str, str] | None = None, unread: dict[str, dict] | None = None) -> dict | None:
+        """线程列表里的一行：标题、状态、是不是工作任务、置顶的时间（没置顶是 None）、几条未读和最近那条通知（没有是 0、None）。不存在返回 None。
+        pins、unread 是这个人置顶的、有未读的那几段（列表一次取齐）；没给就按这段对话归谁去查。
+        未读要在状态之后取（见 _alist_threads）：这里没给的也是看完状态再查。"""
+        owner = await self.run_store.owner_of(thread_id) if pins is None or unread is None else None
         if pins is None:
-            owner = await self.run_store.owner_of(thread_id)
             pins = await self.run_store.pins_of(owner) if owner else {}
         run = self.runs.get(self._run_key(thread_id))
         snap = await self.graph.aget_state(self._cfg(thread_id))
@@ -1622,6 +1652,8 @@ class ResearchRunner(BaseRunner):
         if not v:
             return None
         status, _ = self._status(snap, run)
+        if unread is None:
+            unread = await self.run_store.unread_of(owner) if owner else {}
         return {
             "thread_id": thread_id,
             "title": self._title_of(thread_id, v),
@@ -1630,12 +1662,18 @@ class ResearchRunner(BaseRunner):
             "updated_at": snap.created_at,
             "running_since": run.get("since") if run else None,
             "pinned_at": pins.get(thread_id),
+            **(unread.get(thread_id) or NO_UNREAD),
         }
 
     async def _alist_threads(self, who: Identity) -> list[dict]:
         """who 的对话，最近有动静的在前。"""
         pins = await self.run_store.pins_of(who.sub)
-        rows = [x for t in await self.run_store.threads_of(who.sub) if (x := await self._asummary_view(t, pins))]
+        rows = [x for t in await self.run_store.threads_of(who.sub) if (x := await self._asummary_view(t, pins, {}))]
+        # 未读在各行的状态都看完以后取：定时任务那一轮是先记未读、再退占位（见 _work），这样哪一行看到它跑完了，这次列表里就一定带着它的未读。
+        # 反过来先取的话，取完未读到看状态之间跑完的那一轮会是“跑完了、没有未读”，页面要等下一次取列表（空闲时 20 秒）才弹通知
+        unread = await self.run_store.unread_of(who.sub)
+        for x in rows:
+            x.update(unread.get(x["thread_id"]) or NO_UNREAD)
         return sorted(rows, key=lambda x: x["updated_at"] or "", reverse=True)
 
     @staticmethod

@@ -381,6 +381,13 @@ export async function pinResearchThread(threadId, pinned) {
   return resp.json();
 }
 
+// 看过了：这段对话的未读清零（定时任务跑完的一轮记在列表那一行的 unread、notice 上），返回列表里的这一行
+export async function markThreadRead(threadId) {
+  const resp = await authFetch(`/api/research/threads/${threadId}/read`, { method: "POST" });
+  if (!resp.ok) throw await httpError(resp);
+  return resp.json();
+}
+
 // 失败的线程从断开的那一步接着跑；没失败的返回 409
 export async function retryResearchThread(threadId, onEvent, signal) {
   return sse(`/api/research/threads/${threadId}/retry`, { method: "POST" }, onEvent, signal);

@@ -1,0 +1,25 @@
+/* 右上角的通知（notice.jsx）：顶栏下面靠右，一张浮起来的卡片——左边圆底的钟，右边任务名和回答开头两行，右上角一个 ×。手机上横着铺满 */
+.host { position: fixed; z-index: 80; top: 70px; right: 16px; display: flex; flex-direction: column; gap: 8px; width: 344px; max-width: calc(100vw - 32px); pointer-events: none; }
+.notice { position: relative; pointer-events: auto; background: var(--paper); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--lift);
+  animation: drop .22s var(--ease); }
+.main { display: flex; align-items: flex-start; gap: 12px; padding: 12px 40px 12px 12px; border-radius: var(--r-lg); color: var(--ink); text-decoration: none; }
+.main:hover { text-decoration: none; }
+@media (hover: hover) { .main:hover .title { color: var(--accent); } }
+.main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.icon { flex: none; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); }
+.failed .icon { background: var(--danger-soft); color: var(--danger); }
+.body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; line-height: 20px; transition: color .15s var(--ease); }
+.text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 13px; line-height: 20px; color: var(--muted); overflow-wrap: anywhere; }
+.close { position: absolute; top: 8px; right: 8px; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: var(--r-sm);
+  color: var(--faint); transition: background .15s var(--ease), color .15s var(--ease); }
+@media (hover: hover) { .close:hover { background: var(--hover); color: var(--ink); } }
+.close:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@keyframes drop { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .notice { animation: none; } }
+@media (max-width: 720px) {
+  .host { top: calc(56px + env(safe-area-inset-top)); left: 12px; right: 12px; width: auto; max-width: none; }
+  .main { padding-right: 48px; }
+  .close { top: 4px; right: 4px; width: 44px; height: 44px; }
+}
+@media print { .host { display: none; } }

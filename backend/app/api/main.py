@@ -992,6 +992,15 @@ def research_unpin(thread_id: str, who: Who):
     return r.pin(thread_id, False)
 
 
+# 未读（2026-11-13 定时任务第 3 步）：用户不在场时跑完的一轮记在列表那一行的 unread、notice 上；页面打开这段对话（人在看）就调这个清零。
+# 返回列表里的这一行
+@app.post("/api/research/threads/{thread_id}/read")
+def research_read(thread_id: str, who: Who):
+    r = research()
+    _mine(r, thread_id, who)
+    return r.mark_read(thread_id)
+
+
 @app.delete("/api/research/threads/{thread_id}")
 def research_delete(thread_id: str, who: Who):
     """删掉这段对话，找不回来。运行中返回 409。"""

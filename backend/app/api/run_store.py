@@ -12,6 +12,8 @@
 还有一张 thread_owners：每段对话归谁（见 app.identity，登录用户的 id 或游客的 guest:…），开对话时记下，列表和所有对话接口按它查。
 登录以前的老对话没有这一行（没归谁）：页面上谁都看不到，相当于归档了，库里还在（2026-11-06 Sean 定，都是测试数据）。游客登录后把 TA 的对话整批改归账号（transfer）。
 这张表还记着置顶（pinned_at，2026-11-07 批次 D Sean 定存后端，换设备也在）：置顶跟着对话走，并进账号后还在，删对话一起删。
+还记着未读（unread、notice，2026-11-13 定时任务第 3 步）：用户不在场时跑完的一轮（现在只有定时任务触发的）每次加一，
+notice 是最近那一次的通知 {"title", "text", "ok", "at"}（任务名、回答的开头、跑成没有、什么时候）；用户看了这段对话就清零。同样跟着对话走。
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, NamedTuple, Protocol
 
+from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 QUEUED, RUNNING, SUCCESS, STOPPED, ERROR, LOST, ASKED = "queued", "running", "success", "stopped", "error", "lost", "asked"
@@ -59,6 +62,9 @@ class RunStore(Protocol):
     async def transfer(self, source: str, target: str) -> int: ...  # source 的对话全改归 target，返回改了几段
     async def pin(self, thread_id: str, pinned: bool) -> str | None: ...  # 置顶（记下时间，置顶过的不改）或取消，返回置顶的时间；没归谁的不动、返回 None
     async def pins_of(self, owner: str) -> dict[str, str]: ...  # 这个人置顶的对话：线程 id → 置顶的时间
+    async def notify(self, thread_id: str, notice: dict) -> None: ...  # 未读加一，记下这一次的通知（时间存储自己记）；没归谁的不动
+    async def mark_read(self, thread_id: str) -> None: ...  # 看过了：未读清零，通知一起清掉
+    async def unread_of(self, owner: str) -> dict[str, dict]: ...  # 这个人有未读的对话：线程 id → {"unread", "notice"}
 
     # 排着的话：{"text", "created_at", "updated_at"}
     # 接在排着的那句后面（front：放到前面，是取出来又放回去的，比排着的那句早），没有就新建
@@ -87,6 +93,7 @@ class MemoryRunStore:
         self._pending: dict[tuple[str, str], dict] = {}
         self._owners: dict[str, str] = {}  # 线程 id → 归谁
         self._pins: dict[str, str] = {}  # 线程 id → 置顶的时间
+        self._unread: dict[str, dict] = {}  # 线程 id → {"unread": 几条没看, "notice": 最近那一条}
 
     async def create(self, run_id: str, thread_id: str, kind: str, turn_id: str | None, version: str | None) -> None:
         self._rows[run_id] = dict.fromkeys(FIELDS) | {"id": run_id, "thread_id": thread_id, "kind": kind, "turn_id": turn_id,
@@ -121,6 +128,7 @@ class MemoryRunStore:
         self._pending = {k: r for k, r in self._pending.items() if k[0] != thread_id}
         self._owners.pop(thread_id, None)
         self._pins.pop(thread_id, None)
+        self._unread.pop(thread_id, None)
 
     async def claim(self, thread_id: str, owner: str) -> None:
         self._owners.setdefault(thread_id, owner)
@@ -145,6 +153,17 @@ class MemoryRunStore:
 
     async def pins_of(self, owner: str) -> dict[str, str]:
         return {t: at for t, at in self._pins.items() if self._owners.get(t) == owner}
+
+    async def notify(self, thread_id: str, notice: dict) -> None:
+        if thread_id in self._owners:
+            n = self._unread.get(thread_id, {}).get("unread", 0)
+            self._unread[thread_id] = {"unread": n + 1, "notice": notice | {"at": _iso(_now())}}
+
+    async def mark_read(self, thread_id: str) -> None:
+        self._unread.pop(thread_id, None)
+
+    async def unread_of(self, owner: str) -> dict[str, dict]:
+        return {t: dict(r) for t, r in self._unread.items() if self._owners.get(t) == owner}
 
     async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict:
         now = _iso(_now())
@@ -183,6 +202,8 @@ _POSTGRES_DDL = (
     "CREATE TABLE IF NOT EXISTS thread_owners (thread_id text PRIMARY KEY, owner text NOT NULL, created_at timestamptz NOT NULL)",
     "CREATE INDEX IF NOT EXISTS thread_owners_owner_idx ON thread_owners (owner)",
     "ALTER TABLE thread_owners ADD COLUMN IF NOT EXISTS pinned_at timestamptz",  # 2026-11-07 加的置顶，之前建好的表补上
+    "ALTER TABLE thread_owners ADD COLUMN IF NOT EXISTS unread integer NOT NULL DEFAULT 0",  # 2026-11-13 加的未读，同上
+    "ALTER TABLE thread_owners ADD COLUMN IF NOT EXISTS notice jsonb",
 )
 
 
@@ -261,6 +282,17 @@ class PostgresRunStore:
     async def pins_of(self, owner: str) -> dict[str, str]:
         rows = await self._rows("SELECT thread_id, pinned_at FROM thread_owners WHERE owner = %s AND pinned_at IS NOT NULL", (owner,))
         return {r["thread_id"]: r["pinned_at"] for r in rows}
+
+    async def notify(self, thread_id: str, notice: dict) -> None:
+        await self._exec("UPDATE thread_owners SET unread = unread + 1, notice = %s WHERE thread_id = %s",
+                         (Jsonb(notice | {"at": _iso(_now())}), thread_id))
+
+    async def mark_read(self, thread_id: str) -> None:
+        await self._exec("UPDATE thread_owners SET unread = 0, notice = NULL WHERE thread_id = %s AND unread > 0", (thread_id,))
+
+    async def unread_of(self, owner: str) -> dict[str, dict]:
+        rows = await self._exec("SELECT thread_id, unread, notice FROM thread_owners WHERE owner = %s AND unread > 0", (owner,))
+        return {r["thread_id"]: {"unread": r["unread"], "notice": r["notice"]} for r in rows}
 
     async def put_pending(self, thread_id: str, mode: str, text: str, front: bool = False, thinking: bool | None = None) -> dict:
         # 思考开关按后发的那句：放到前面的（取出来又放回去的）比排着的早

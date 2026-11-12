@@ -90,9 +90,10 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - `POST /{id}/stop`：停下正在跑或排队的这一轮。点了马上取消，在等的模型、搜索、画图一起断开；已经写出来的思考和正文留着。没在跑的返回 409。
   - `PATCH /{id}`（json `{"title"}`）：改标题，最多 40 个字，空白并成一个空格。返回列表里的这一行。
   - `POST /{id}/pin`、`DELETE /{id}/pin`：置顶、取消，运行中也行。返回列表里的这一行（`pinned_at` 是置顶的时间，没置顶是 null）。
+  - `POST /{id}/read`：用户看了这段对话，未读清零（见“定时任务”的未读）。运行中也行，返回列表里的这一行。
   - `DELETE /{id}`：删掉整段对话，找不回来。检查点、运行记录、画的图、用户发的图、用户发的文件和模型写的文件、整理记忆的记录一起删，从这段对话记下的记忆不删。
 - 查看：
-  - `GET`（前缀本身）：这个人的对话列表，每行是 `thread_id`、`title`、`status`、`updated_at`、`running_since`、`pinned_at`，最近有动静的在前。登录以前没归谁的老对话谁都看不到。
+  - `GET`（前缀本身）：这个人的对话列表，每行是 `thread_id`、`title`、`status`、`updated_at`、`running_since`、`pinned_at`、`unread`（几条没看，没有是 0）、`notice`（最近那条通知，没有是 null），最近有动静的在前。登录以前没归谁的老对话谁都看不到。
   - `GET /{id}/state`：当前状态。
   - `GET /{id}/events?after=<事件 id>`：断线、刷新后接上事件流。
   - `GET /{id}/images/{image_id}`：对话里画的图、用户发的图，后端经网关从 image-service 取来转给页面。按文件表认是不是这段对话的（图发出去、画好时就登记了，不靠检查点）。页面用 `<img src>` 取、带不了令牌，所以这个接口不认人，对话 id 和图的编号都是随机的。不是这段对话的、编号格式不对、服务里已经没有的返回 404，网关、服务出问题返回 502。
@@ -257,6 +258,8 @@ SSE 事件：
   - 上一轮就是这个任务触发的、没跑完（上一次出错了，或者被服务重启打断）：那一轮重来，不另起一轮。
   - 连着 3 次没跑成：自己停下（`paused_by` 是 `failures`），等用户恢复。服务重启时任务上还记着在跑的，记成 `lost`，起来以后马上再来一次。
 - 运行记录里 `kind` 是 `scheduled`（到点发起的、点“立即执行”的都是）。
+- 未读：定时任务触发的一轮结束时，那段对话的 `unread` 加一，`notice` 记下这一次的 `{title, text, ok, at}`——任务名、回答的开头（去掉 Markdown 记号和引用编号，最多 120 字，`app/scheduled/notice.py`）、跑成没有、什么时候。没跑成的也算（`ok` 是 false，`text` 空着），用户点了停止的、被服务重启打断的不算。页面打开这段对话且人在看时调 `POST /api/research/threads/{id}/read` 清零；页面靠隔几秒取一次的对话列表知道有新的，右上角弹通知、左栏那一行标数字。
+  - 未读先记、占位后退；列表先看各行的状态、最后取未读。所以列表里哪一行看到这一轮跑完了，同一次里一定带着它的未读。
 
 接口（游客：`GET` 的 `available` 是 false，其余 403 `login_required`；别人的、没有的 404）：
 
@@ -311,7 +314,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 对话用的都存在 Postgres 里（`LINGDRAFT_DATABASE_URL`），共用一个连接池（成本账另用一个连接写，见下面的“成本”）。这个变量必须配：没配、连不上，服务启动时就报错退出。表都在启动时建（`CREATE TABLE IF NOT EXISTS`）：
 
 - 检查点、长期记忆：LangGraph 的 `AsyncPostgresSaver`、`AsyncPostgresStore` 自己建的表。
-- `runs`、`pending_messages`、`thread_owners`（`app/api/run_store.py`）：运行记录、排着的话、每段对话归谁和置顶时间（`pinned_at`）。
+- `runs`、`pending_messages`、`thread_owners`（`app/api/run_store.py`）：运行记录、排着的话、每段对话归谁、置顶时间（`pinned_at`）、未读（`unread`、`notice`）。
 - `files`、`file_parts`（`app/files/store.py`）：用户发的文件、模型写的文件（一版一行）、图片的登记，一行一个；`workspace_id` 是对话 id 或 `kb:<资料库编号>`。`file_parts` 是抽出来的文字，按段。
 - `kb_libraries`、`kb_chunks`（`app/knowledge/`）：资料库的名字和说明；块的内容、1024 维向量（pgvector）、tsvector，跟着文件删。库里要有 pgvector 扩展：建表时跑 `CREATE EXTENSION IF NOT EXISTS vector`，扩展已经装好的，连库的账号不是超级用户也不报错。
 - `scheduled_tasks`（`app/scheduled/store.py`）：定时任务，一行一个。
@@ -389,7 +392,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 - `app/identity.py` 身份；`app/quota.py` 额度；`app/costs.py` 成本记账；`app/tracing.py` LangSmith；`app/clock.py` 模型看得到的当前时间（评测回放时挪到录像的那时）。
 - `app/files/`：文件表（`store.py`）、上传和解析（`service.py`、`parse.py`、子进程 `child.py`）、模型写的文件用到的切段和按片段改（`artifacts.py`）、补登记图片（`backfill_images.py`）。
 - `app/knowledge/`：资料库（`libraries.py`）、切块和分词（`text.py`）、块和查询（`store.py`）、向量和重排（`remote.py`）、建索引和查（`service.py`）。
-- `app/scheduled/`：定时任务。什么时候跑（`rule.py`：cron 和一次性的时间、下一次什么时候、给人看的说法）、表（`store.py`）、建改删列和每次跑完怎么记（`service.py`）。
+- `app/scheduled/`：定时任务。什么时候跑（`rule.py`：cron 和一次性的时间、下一次什么时候、给人看的说法）、表（`store.py`）、建改删列和每次跑完怎么记（`service.py`）、跑完以后通知里那两行（`notice.py`）。
 - `app/tools/`：
   - `gateway.py`：agent-tools 网关客户端（传图、按编号取图、删图，沙箱的放文件、取文件、跑命令），和网关出错时的几种异常。
   - `run_command.py`：在沙箱里跑命令，`run_command`。

@@ -62,14 +62,17 @@ export const isSearchKey = (e) => (MAC ? e.metaKey : e.ctrlKey) && !e.shiftKey &
 // mark：标题前面的小标记（工作任务的那个图标），没有标题时不放
 export function HeadBar({ title, end, edit, mark }) {
   const nav = useContext(NavContext);
+  // 左栏没露着（手机上、桌面收起了）而里面有对话带着未读（定时任务跑完的）：打开左栏的那个钮右上角带一个红点
+  const unread = nav?.unread > 0 ? `（${nav.unread} 条未读）` : "";
+  const dot = unread && <i className="absolute top-1.5 right-1.5 size-2 rounded-full bg-danger ring-2 ring-paper phone:top-3 phone:right-3" aria-hidden="true" />;
   const side = nav?.mobile ? (
-    <button className="ws-icon-btn" data-nav="drawer" aria-label="打开对话列表" aria-controls="ws-side" aria-expanded={nav.drawer} onClick={nav.openDrawer}>
-      <IconMenu size={18} />
+    <button className="ws-icon-btn relative" data-nav="drawer" aria-label={"打开对话列表" + unread} aria-controls="ws-side" aria-expanded={nav.drawer} onClick={nav.openDrawer}>
+      <IconMenu size={18} />{dot}
     </button>
   ) : nav?.collapsed ? (
     <>
-      <button className="ws-icon-btn" data-nav="expand" aria-label="展开侧栏" title={`展开侧栏（${SIDE_KEY}）`} aria-keyshortcuts={SIDE_ARIA_KEY} onClick={nav.toggleSide}>
-        <IconPanel size={18} />
+      <button className="ws-icon-btn relative" data-nav="expand" aria-label={"展开侧栏" + unread} title={`展开侧栏（${SIDE_KEY}）`} aria-keyshortcuts={SIDE_ARIA_KEY} onClick={nav.toggleSide}>
+        <IconPanel size={18} />{dot}
       </button>
       <button className="ws-icon-btn" aria-label="搜索对话" title={`搜索对话（${SEARCH_KEY}）`} aria-keyshortcuts={SEARCH_ARIA_KEY} aria-haspopup="dialog" onClick={nav.search}>
         <IconSearch size={18} />
