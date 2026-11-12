@@ -24,6 +24,9 @@ PROMPT_MAX = 4000
 # TaskError 的 code（rule 的四种照原样用）
 BAD_TITLE, BAD_PROMPT, NO_SCHEDULE, IN_THE_PAST, TOO_MANY, NOT_FOUND, BAD_STATUS = (
     "bad_title", "bad_prompt", "no_schedule", "in_the_past", "too_many", "not_found", "bad_status")
+UNCLEAR_TIME = "unclear_time"  # 一句话说的时间没看懂（见 research_runner.read_schedule）
+# 点“立即执行”没跑起来（见 research_runner.run_task）：那段对话正在回答；那段对话卡着（上一轮没跑完、在等回答）；点的工夫任务刚被改了
+THREAD_BUSY, THREAD_STUCK, CHANGED = "thread_busy", "thread_stuck", "changed"
 
 
 class TaskError(Exception):
@@ -34,6 +37,10 @@ class TaskError(Exception):
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _iso(d: datetime | None) -> str | None:
+    return d.astimezone(UTC).isoformat(timespec="seconds") if d else None
 
 
 class ScheduledTasks:
@@ -63,6 +70,11 @@ class ScheduledTasks:
         if at <= now:
             raise TaskError(IN_THE_PAST, at.isoformat())
         return None, at, at
+
+    def schedule_of(self, cron: str | None, once_at: str | datetime | None) -> dict[str, Any]:
+        """只校验什么时候跑、不存（表单里“自定义”的时间转出来以后用，见 research_runner.read_schedule）：返回页面要的那几样。"""
+        cron, at, next_at = self._when(cron, once_at)
+        return {"cron": cron, "once_at": _iso(at), "schedule": rule.describe(cron, at), "next_at": _iso(next_at)}
 
     @staticmethod
     def _title(title: str) -> str:
@@ -184,8 +196,7 @@ class ScheduledTasks:
 
     @staticmethod
     def view(t: Task) -> dict[str, Any]:
-        def iso(d: datetime | None) -> str | None:
-            return d.astimezone(UTC).isoformat(timespec="seconds") if d else None
+        iso = _iso
         return {"id": t.id, "title": t.title, "prompt": t.prompt, "cron": t.cron, "once_at": iso(t.once_at),
                 "schedule": rule.describe(t.cron, t.once_at), "status": t.status, "paused_by": t.paused_by, "thread_id": t.thread_id,
                 "work": t.work, "model": t.option, "next_at": iso(t.next_at), "last_at": iso(t.last_at), "last_status": t.last_status,

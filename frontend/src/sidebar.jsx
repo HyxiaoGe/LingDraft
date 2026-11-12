@@ -1,11 +1,11 @@
-// 左栏：对话列表。最上面品牌、搜对话、收起（手机上是关闭抽屉），下面三个入口“新对话”“新工作任务”“资料库”，再下面按时间分组的对话和工作任务，
+// 左栏：对话列表。最上面品牌、搜对话、收起（手机上是关闭抽屉），下面四个入口“新对话”“新工作任务”“定时任务”“资料库”，再下面按时间分组的对话和工作任务，
 // 最下面额度和账号。手机上是左边滑出的抽屉（遮罩也在这里）。简单的排版写在元素上（Tailwind），悬停、选中、伪元素、动画和手机抽屉在 sidebar.module.css。
 // 照 Fusion 的样子（2026-11-07 Sean 嫌单调）：每行前面一个图标（正在回答换成转圈、没跑完换成感叹号、停下来等用户回答换成带问号的），选中的那行是白底浮起来的一块。
-// 2026-11-11 照豆包：“新对话”“新工作任务”是两个入口（对话还是工作新建时定，见 workspace.jsx），和“资料库”排成一样的三行，在哪一页哪一行就是选中的样子；
+// 2026-11-11 照豆包：“新对话”“新工作任务”是两个入口（对话还是工作新建时定，见 workspace.jsx），和“定时任务”（11-13 加的）“资料库”排成一样的几行，在哪一页哪一行就是选中的样子；
 // 列表里工作任务前面是公文包、对话前面是气泡。右边的时间在鼠标移上去、选中时让给“⋯”，标题多出一截地方
 import { BriefcaseBusiness, CircleAlert, LibraryBig, MessageCircleQuestionMark, MessageSquare, MessagesSquare, SquarePen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconSearch, IconTrash, Logo, Spinner } from "./icons.jsx";
+import { IconClock, IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconSearch, IconTrash, Logo, Spinner } from "./icons.jsx";
 import { useLayer } from "./layers.js";
 import { CreditsFoot, UserFoot } from "./login.jsx";
 import { ActionMenu, TitleInput } from "./menu.jsx";
@@ -71,8 +71,9 @@ const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabind
 
 // href：对话 id → 地址；newHref：新页面的地址（true 是新工作任务）；onSelect(id)：打开对话，onSelect(null, "push", true) 是新工作任务；
 // work：现在这一页是不是工作任务（在新页面上决定“新对话”“新工作任务”哪一行是选中的）；
-// onLibrary：去资料库页（没有登录功能的部署没有资料库，是 null，不放这一行）；library：现在在资料库页（那一行是选中的，别的都不是）
-export function Sidebar({ threads, current, st, live, busy, work, now, href, newHref, onSelect, manage, onSettings, onLibrary, library, onSearch, auth, onLogin, credits, onCredits, nav }) {
+// onPage(name)：去定时任务页（"scheduled"）、资料库页（"library"）；没有登录功能的部署没有这两样，是 null，不放这两行。
+// page：现在在哪一页（那一行是选中的，别的都不是），在对话里是 null
+export function Sidebar({ threads, current, st, live, busy, work, now, href, newHref, onSelect, manage, onSettings, onPage, page, onSearch, auth, onLogin, credits, onCredits, nav }) {
   const [menu, setMenu] = useState(null); // 打开菜单的那一行：{id, anchor: 那一行的“⋯”}
   const [renaming, setRenaming] = useState(null); // 正在改名的线程 id
   const box = useRef(null);
@@ -92,7 +93,7 @@ export function Sidebar({ threads, current, st, live, busy, work, now, href, new
     }
   };
   const rows = withCurrent(threads || [], current, st, live, busy, work);
-  const fresh = !current && !library; // 在新页面上：选着对话还是工作，哪一行就是选中的
+  const fresh = !current && !page; // 在新页面上：选着对话还是工作，哪一行就是选中的
   // 最上面的三个入口：一样的一行（图标、字和下面对话那几行对齐），按住 ⌘/Ctrl/Shift 点是浏览器自己开新标签页
   const entry = (key, to, icon, label, on, go, ref) => (
     <a key={key} ref={ref} href={to} className={styles.entry} aria-current={on ? "page" : undefined}
@@ -133,7 +134,7 @@ export function Sidebar({ threads, current, st, live, busy, work, now, href, new
         </div>
       );
     }
-    const sel = !library && t.thread_id === current;
+    const sel = !page && t.thread_id === current;
     const open = menu?.id === t.thread_id;
     const status = ACTIVE.has(t.status) ? "active" : t.status === "failed" ? "failed" : t.status === ASKING ? "asking" : "idle";
     const twin = seen[twinKey(t)] > 1 && stamp(t.updated_at, now);
@@ -182,8 +183,9 @@ export function Sidebar({ threads, current, st, live, busy, work, now, href, new
         <div className="flex flex-col gap-0.5">
           {entry("chat", newHref(false), <SquarePen size={15} strokeWidth={1.8} />, "新对话", fresh && !work, () => onSelect(null), newBtn)}
           {entry("work", newHref(true), <BriefcaseBusiness size={15} strokeWidth={1.8} />, "新工作任务", fresh && !!work, () => onSelect(null, "push", true))}
-          {/* 资料库（11-10 从设置里搬出来，同一天改成自己一页、叫资料库） */}
-          {onLibrary && entry("library", "/library", <LibraryBig size={15} strokeWidth={1.8} />, "资料库", library, onLibrary)}
+          {/* 定时任务（11-13）；资料库（11-10 从设置里搬出来，同一天改成自己一页、叫资料库） */}
+          {onPage && entry("scheduled", "/scheduled", <IconClock size={15} stroke={1.8} />, "定时任务", page === "scheduled", () => onPage("scheduled"))}
+          {onPage && entry("library", "/library", <LibraryBig size={15} strokeWidth={1.8} />, "资料库", page === "library", () => onPage("library"))}
         </div>
         <nav ref={list} className={cx(styles.list, "-mx-1 flex flex-1 flex-col gap-4 overflow-y-auto px-1")} aria-label="对话列表">
           {threads === null && (

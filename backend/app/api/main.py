@@ -677,6 +677,10 @@ _TASK_REJECTED = {
     scheduled.BAD_STATUS: (422, "只能暂停或者恢复"),
     scheduled.IN_THE_PAST: (422, "这个时间已经过了，选一个以后的时间"),
     scheduled.NOT_FOUND: (404, "没有这个定时任务"),
+    scheduled.UNCLEAR_TIME: (422, "没看懂这个时间，换个说法试试"),
+    scheduled.THREAD_BUSY: (409, "这段对话正在回答，等它答完再运行"),
+    scheduled.THREAD_STUCK: (409, "这段对话上一轮没跑完，先去对话里看看"),
+    scheduled.CHANGED: (409, "任务刚有改动，再点一次"),
     rule.BAD_CRON: (422, "运行时间的写法不对"),
     rule.BAD_TIME: (422, "运行时间的写法不对"),
     rule.TOO_OFTEN: (422, "最密每小时运行一次"),
@@ -737,6 +741,26 @@ def task_create(body: TaskBody, who: Who):
         raise HTTPException(400, str(e)) from None
 
 
+class ScheduleText(BaseModel):
+    text: str = Field(min_length=1, max_length=200)
+
+
+@app.post("/api/scheduled-tasks/schedule")
+def task_schedule(body: ScheduleText, who: Who):
+    """表单里“自定义”的时间：一句话说什么时候跑（“每个月的第 1、15 号早上 9 点半”），转成 {cron | once_at, schedule, next_at}，不存。
+    没看懂 422（unclear_time），太密、时间过了的同建任务；模型这会儿不行 503。"""
+    _task_user(who)
+    if not body.text.strip():
+        raise _task_rejected(scheduled.TaskError(scheduled.UNCLEAR_TIME))
+    try:
+        return research().read_schedule(who, body.text)
+    except scheduled.TaskError as e:
+        raise _task_rejected(e) from None
+    except Exception:  # noqa: BLE001  模型出错、超时：不是用户写得不对
+        logger.warning("定时任务的时间没转成", exc_info=True)
+        raise HTTPException(503, {"code": "task_rejected", "reason": "busy", "message": "这会儿没认出来，再试一次"}) from None
+
+
 @app.patch("/api/scheduled-tasks/{task_id}")
 def task_update(task_id: str, body: TaskBody, who: Who):
     """改名称、交代、什么时候跑，或者暂停、恢复（status）；没给的不改。返回改完的任务。不收的同上；不是这个人的、没有的 404。"""
@@ -761,7 +785,7 @@ def task_delete(task_id: str, who: Who):
 @app.post("/api/scheduled-tasks/{task_id}/run")
 def task_run(task_id: str, who: Who):
     """立即执行一次，不动原来定的下一次（停着的、跑完了的也能执行）。返回任务（thread_id 是跑在哪段对话里，页面可以跳过去看）。
-    额度用完了 429；那段对话正在回答、上一轮没跑完返回 409。"""
+    额度用完了 429；那段对话正在回答（thread_busy）、上一轮没跑完或在等回答（thread_stuck）、点的工夫任务刚被改了（changed）返回 409。"""
     _task_user(who)
     r = research()
     _admit(r, who)
@@ -769,8 +793,6 @@ def task_run(task_id: str, who: Who):
         return r.run_task(who, task_id)
     except scheduled.TaskError as e:
         raise _task_rejected(e) from None
-    except (RunConflict, NotIdle) as e:
-        raise HTTPException(409, str(e)) from None
 
 
 @app.get("/api/research/threads")

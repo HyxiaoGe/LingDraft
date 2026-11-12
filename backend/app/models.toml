@@ -308,6 +308,8 @@ route = { model = "deepseek:deepseek-flash" }
 # 看图工具（view_image）：看不见图的模型（V4 Pro、GLM-5.3/5.2、混元 Hy3）要知道用户的图里有什么时调它，由它看图、用文字回答
 # （2026-11-08 Sean 定：非必要不换模型，看不见的用工具补）。开思考：图表、公式、密密麻麻的字要看仔细
 vision = { model = "deepseek:deepseek-flash", thinking = true }
+# 定时任务表单里“自定义”的时间：用户用一句话说什么时候跑，转成 cron 或一个时间点（见 app.scheduled、prompts/tools_schedule.toml 的 scheduled.when）。不开思考，小活
+schedule = { model = "deepseek:deepseek-flash" }
 
 # ---- 价格：成本记账用（见 app/costs.py），每次调模型按调用开始那一刻的价算好记下 ----
 # 2026-11-06 照各家官网填的（来源见 docs/credits/价格表-2026-11-06.md），国内站按量付费，元 / 百万 token。各家调价了改这里（Sean 和 Claude 手动维护），

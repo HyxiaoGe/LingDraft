@@ -49,6 +49,17 @@ def at(day: int, hour: int, minute: int = 0, month: int = 11) -> datetime:
     ("0 9 1,15 * *", at(15, 9), "每月 1、15 号 · 09:00"),
     ("5 * * * *", at(13, 6, 5), "每小时 · 第 5 分"),
     ("0 5 * * *", at(14, 5), "每天 · 05:00"),  # 今天的已经过了
+    # 少见的写法（模型、表单里“自定义”建的）也说成中文，不把表达式给人看
+    ("0 */2 * * *", at(13, 8), "每 2 小时 · 00:00 起"),
+    ("30 9-18 * * 1-5", at(13, 9, 30), "工作日 · 09:30–18:30 每小时"),
+    ("0 8-20/4 * * *", at(13, 8), "每天 · 08:00–20:00 每 4 小时"),
+    ("0 8,9,13,20 * * 6,0", at(14, 8), "周末 · 08:00、09:00、13:00、20:00"),
+    ("15 * * * 1", at(16, 0, 15), "每周一每小时 · 第 15 分"),
+    ("0 9 1 1,7 *", datetime(2027, 1, 1, 9, tzinfo=CHINA_TZ), "每年 1、7 月 1 号 · 09:00"),
+    ("0 9 * 6 1-5", datetime(2027, 6, 1, 9, tzinfo=CHINA_TZ), "每年 6 月的工作日 · 09:00"),
+    ("0 9 * 12 *", at(1, 9, month=12), "每年 12 月每天 · 09:00"),
+    ("0 9 15 * 5", at(13, 9), "每月 15 号或每周五 · 09:00"),
+    ("0 9 1-31 * 5", at(13, 9), "每天 · 09:00"),  # 日和周都写了、日那一段是全的：对上一个就算，就是每天
 ])
 def test_cron_next_run_and_description(expr, nxt, says):
     assert rule.next_run(expr, T0) == nxt
@@ -438,7 +449,7 @@ def test_blocked_conversation_skips_until_next_time(clock):
     assert (got["last_status"], got["next_at"], got["status"]) == (sv.BLOCKED, "2026-11-13T23:22:00+00:00", "active")
     assert len(state(client, tid)["turns"]) == 2 and state(client, tid)["status"] == "failed"  # 什么都没动
     stuck = client.post(f"/api/scheduled-tasks/{t['id']}/run")  # 手动跑也一样，而且不记到任务上
-    assert stuck.status_code == 409 and stuck.json()["detail"] == "这段对话上一轮没跑完，先去对话里看看"
+    assert stuck.status_code == 409 and stuck.json()["detail"] == {"code": "task_rejected", "reason": "thread_stuck", "message": "这段对话上一轮没跑完，先去对话里看看"}
     assert _task(client, t["id"])["last_at"] == got["last_at"] and rr.runs.get(rr._run_key(tid)) is None
     assert last(events(client.post(f"/api/research/threads/{tid}/retry")), "state")["status"] == "idle"
     clock[0] = at(14, 7, 22)
@@ -749,7 +760,7 @@ def test_running_conversation_makes_the_task_wait(clock):
     try:
         first = client.post(f"/api/scheduled-tasks/{t['id']}/run").json()
         busy = client.post(f"/api/scheduled-tasks/{t['id']}/run")
-        assert busy.status_code == 409 and busy.json()["detail"] == "这段对话正在回答，等它答完再运行"
+        assert busy.status_code == 409 and busy.json()["detail"] == {"code": "task_rejected", "reason": "thread_busy", "message": "这段对话正在回答，等它答完再运行"}
         clock[0] = at(13, 7, 22)
         assert rr.fire_due() == [(t["id"], BUSY)]  # 到点了那段对话还在跑：下一拍再试，什么都不记
         assert _task(client, t["id"])["next_at"] == t["next_at"]
@@ -758,3 +769,32 @@ def test_running_conversation_makes_the_task_wait(clock):
     _settled(client, t["id"])
     _fire(rr, client, t["id"])  # 下一拍：跑了
     assert len(state(client, first["thread_id"])["turns"]) == 2
+
+
+# ---- 表单里“自定义”的时间：一句话转成什么时候跑 ----
+
+
+def test_api_reads_a_sentence_into_a_schedule(clock):
+    """模型转出来的照样过校验，返回页面要的那几样；不存任务。"""
+    rr, client = _api(clock)
+    r = client.post("/api/scheduled-tasks/schedule", json={"text": " 每个月 1 号和 15 号早上 9 点半 "})
+    assert r.status_code == 200 and r.json() == {"cron": "30 9 1,15 * *", "once_at": None, "schedule": "每月 1、15 号 · 09:30",
+                                                 "next_at": "2026-11-15T01:30:00+00:00"}
+    once = client.post("/api/scheduled-tasks/schedule", json={"text": "2099 年元旦早上九点"}).json()
+    assert (once["cron"], once["once_at"], once["next_at"]) == (None, "2099-01-01T01:00:00+00:00", "2099-01-01T01:00:00+00:00")
+    assert [c for c in rr.planner.calls if c[0] == "when"] == [("when", "每个月 1 号和 15 号早上 9 点半"), ("when", "2099 年元旦早上九点")]
+    assert client.get("/api/scheduled-tasks").json()["tasks"] == []
+
+
+def test_api_says_so_when_the_sentence_is_not_a_time(clock):
+    rr, client = _api(clock)
+    for text, reason, message in (("随便什么时候", "unclear_time", "没看懂这个时间，换个说法试试"), ("每 5 分钟", "too_often", "最密每小时运行一次"),
+                                  ("   ", "unclear_time", "没看懂这个时间，换个说法试试")):
+        r = client.post("/api/scheduled-tasks/schedule", json={"text": text})
+        assert r.status_code == 422 and r.json()["detail"] == {"code": "task_rejected", "reason": reason, "message": message}, text
+    rr.planner.fail_when = True  # 模型这会儿不行：不说用户写得不对
+    r = client.post("/api/scheduled-tasks/schedule", json={"text": "每个月 1 号和 15 号早上 9 点半"})
+    assert r.status_code == 503 and r.json()["detail"]["message"] == "这会儿没认出来，再试一次"
+    guest = TestClient(api_main.app, headers=bearer(guest_token()))
+    assert guest.post("/api/scheduled-tasks/schedule", json={"text": "每天九点"}).status_code == 403
+    assert client.post("/api/scheduled-tasks/schedule", json={"text": "长" * 201}).status_code == 422

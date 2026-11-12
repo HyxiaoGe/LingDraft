@@ -12,6 +12,7 @@ import { localWho } from "./auth.js";
 import { setDraft } from "./drafts.js";
 import { AFTER_RUN_ERROR, errorText, quotaText } from "./errors.js";
 import { LibraryPage } from "./knowledge.jsx";
+import { ScheduledPage } from "./scheduled.jsx";
 import { LoginDialog, useAuth } from "./login.jsx";
 import { saveThinkDefault, thinkDefault, useTheme } from "./prefs.js";
 import { SearchDialog } from "./search.jsx";
@@ -38,9 +39,11 @@ const chatPath = (id) => (id ? `/chat/${id}` : NEW_PATH);
 const routeWork = () => /^\/work(\/new)?\/?$/.test(location.pathname);
 // 以前的设置页、记忆页地址（/settings、/memory，11-07 改成窗口之前）：打开的话弹出设置窗口的那一页，地址换成对话的
 const oldPage = () => location.pathname.match(/^\/(settings|memory)\/?$/)?.[1] || null;
-// 资料库页（2026-11-10，见 knowledge.jsx）：占对话那一栏，左栏照旧。去资料库时开着的对话不断开（在跑的接着跑），点回来马上接上
-const LIBRARY_PATH = "/library";
-const atLibrary = () => /^\/library\/?$/.test(location.pathname);
+// 占对话那一栏的页面，左栏照旧：资料库（2026-11-10，见 knowledge.jsx）、定时任务（2026-11-13，见 scheduled.jsx）。
+// 去这些页时开着的对话不断开（在跑的接着跑），点回来马上接上
+const PAGES = { library: "/library", scheduled: "/scheduled" };
+const PAGE_TITLES = { library: "资料库", scheduled: "定时任务" };
+const routePage = () => Object.keys(PAGES).find((k) => location.pathname.replace(/\/$/, "") === PAGES[k]) || null;
 const routeId = () => {
   const m = location.pathname.match(/^\/chat\/([^/]+)\/?$/);
   return m && m[1] !== "new" ? m[1] : null;
@@ -68,7 +71,7 @@ export default function Workspace() {
   const [tid, setTid] = useState(routeId);
   const [search, setSearch] = useState(false); // 搜对话的窗口开着没有（见 search.jsx）
   const [settings, setSettings] = useState(oldPage); // 设置窗口开着时是窗口里的哪一类（见 settings.jsx，"settings" 是刚打开）；关着是 null
-  const [page, setPageState] = useState(() => (atLibrary() ? "library" : null)); // 对话那一栏放的是什么：null 是对话，"library" 是资料库页
+  const [page, setPageState] = useState(routePage); // 对话那一栏放的是什么：null 是对话，"library" 是资料库页，"scheduled" 是定时任务页
   const [theme, setTheme, dark] = useTheme(); // 主题（设置窗口里选，存本机）：跟随系统、浅色、深色
   const [st, setSt] = useState(null);
   // 这个页面发起或接上的那次执行：{said, images, sentAt, turnsAtStart, items, stage, phase, title, stopping, hidden, edit}
@@ -178,7 +181,7 @@ export default function Workspace() {
 
   useEffect(() => {
     refreshList();
-    navigate(pageRef.current === "library" ? LIBRARY_PATH : pathOf(tid), false);
+    navigate(pageRef.current ? PAGES[pageRef.current] : pathOf(tid), false);
     if (tid) restore(tid, gen.current);
     // 浏览器前进后退、手动改了地址：地址栏已经是了，只换页面（去海报页时这个页面会被换掉，不用管）
     const onPop = () => {
@@ -188,7 +191,8 @@ export default function Workspace() {
         setSettings(p);
         return navigate(pathOf(tidRef.current), false);
       }
-      if (atLibrary()) return openLibrary(null);
+      const at = routePage();
+      if (at) return openPage(at, null);
       const id = routeId();
       if (pageRef.current || id !== tidRef.current) select(id, "none", routeWork());
       else if (!id) setNewWork(routeWork()); // 在新页面上前进后退：只是“对话 / 工作”换了
@@ -210,7 +214,7 @@ export default function Workspace() {
   const title = live?.title || st?.title; // 执行中起好的标题跟着事件来，库里一轮跑完才有（之前是用户的原话）
   const done = useDoneAlert(tid, busy || ACTIVE.has(st?.status), st, title); // 用户没在看时答完了（或停下来等回答）：标题前加“（答完了）”，见 alert.jsx
   useEffect(() => {
-    const base = page === "library" ? "资料库 · 灵稿" : title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : newWork ? "灵稿 · 新工作任务" : "灵稿 · 新对话";
+    const base = page ? `${PAGE_TITLES[page]} · 灵稿` : title ? `${title} · 灵稿` : tid ? "灵稿 · 对话" : newWork ? "灵稿 · 新工作任务" : "灵稿 · 新对话";
     document.title = (done ? `（${done}）` : "") + base;
   }, [title, tid, done, page, newWork]);
 
@@ -270,16 +274,17 @@ export default function Workspace() {
 
   // how：push 记进浏览器历史（点左栏的对话、新对话）；replace 换掉当前这条（当前对话删了、打不开）；none 地址栏已经是了。
   // asWork：开的是新工作任务（id 是 null 时才看；左栏的“新工作任务”、地址是 /work/new），不然是新对话。
-  // 在资料库页时：回到对话那一栏（右栏看的资料库文件关上）；点的就是刚才开着的那个对话（包括还没发的新对话），原样放回来
-  const select = (id, how = "push", asWork = false) => {
+  // 在资料库、定时任务页时：回到对话那一栏（右栏看的资料库文件关上）；点的就是刚才开着的那个对话（包括还没发的新对话），原样放回来。
+  // fresh：就算是刚才开着的那个也整个重新来（定时任务页点了运行，那段对话多了一轮在跑；那一页底下说了一句话，要开一段新的）
+  const select = (id, how = "push", asWork = false, fresh = false) => {
     if (!id) setNewWork(asWork);
     const path = id ? chatPath(id) : newPath(asWork);
     if (pageRef.current) {
       setPage(null);
       setFile(null);
-      if (id === tidRef.current) return how !== "none" && navigate(path, how === "push");
+      if (id === tidRef.current && !fresh) return how !== "none" && navigate(path, how === "push");
     }
-    if (id === tidRef.current && id) return;
+    if (id === tidRef.current && id && !fresh) return;
     if (!id) thinkSet.current.delete("new"); // 新对话：深度思考回到默认
     setThinkingState(thinkSet.current.get(id ?? "new") ?? thinkOnRef.current);
     ctl.current.abort();
@@ -839,13 +844,25 @@ export default function Workspace() {
     setDrawer(false);
   };
   const openSearch = () => { setDrawer(false); setSearch(true); };
-  // 去资料库页（左栏那一行、前进后退）：对话那一栏换成资料库，右栏开着的这段对话的文件关上。push 是 null 时地址栏已经是了
-  const openLibrary = (push = true) => {
-    if (pageRef.current === "library") return;
-    setPage("library");
+  // 去资料库、定时任务页（左栏那一行、前进后退）：对话那一栏换成它，右栏开着的这段对话的文件关上。push 是 null 时地址栏已经是了
+  const openPage = (name, push = true) => {
+    if (pageRef.current === name) return;
+    setPage(name);
     setFile(null);
-    if (push !== null) navigate(LIBRARY_PATH, push);
+    if (push !== null) navigate(PAGES[name], push);
   };
+  // 定时任务页底下说的那一句话：开一段新对话发出去（由模型建任务）。等页面换成新对话的那一拍再发：那时手上才是新对话的状态
+  const [asked, setAsked] = useState(null);
+  const askNew = (text) => {
+    select(null, "push", false, true);
+    setAsked({ text });
+  };
+  useEffect(() => {
+    if (!asked) return;
+    setAsked(null);
+    act.start(asked.text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked]);
   // openKnowledge(f, at)：在右栏看资料库里的文件（f：{id, name?, type?…}），at 是翻到第几段（点回答里引用的资料库来源）
   const nav = { mobile, collapsed: sideOff, drawer, toggleSide, openDrawer: () => setDrawer(true), closeDrawer, newChat: () => select(null), search: openSearch,
     openKnowledge: (f, at = null) => openFile({ kb: f, at }) };
@@ -883,7 +900,7 @@ export default function Workspace() {
     addEventListener("keydown", key);
     return () => removeEventListener("keydown", key);
   }, []);
-  // 在抽屉里点了一条对话、新对话、资料库、设置、登录：换过去（弹窗打开），抽屉收起
+  // 在抽屉里点了一条对话、新对话、定时任务、资料库、设置、登录：换过去（弹窗打开），抽屉收起
   const fromSide = (fn) => (...args) => {
     setDrawer(false);
     return fn(...args);
@@ -895,9 +912,11 @@ export default function Workspace() {
     <NavContext.Provider value={nav}>
       <div className={"ws" + (sideOff ? " side-off" : "") + (mobile && drawer ? " drawer" : "") + (file && !mobile ? " with-file" : "")} data-theme={dark ? "dark" : "light"}>
         <Sidebar threads={shownThreads} current={tid} st={st} live={live} busy={busy} work={work} now={now} href={chatPath} newHref={newPath} onSelect={fromSide(select)} manage={manage}
-          onSettings={fromSide(() => setSettings("settings"))} onLibrary={auth.login || auth.me ? fromSide(() => openLibrary()) : null} library={page === "library"} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
+          onSettings={fromSide(() => setSettings("settings"))} onPage={auth.login || auth.me ? fromSide(openPage) : null} page={page} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
         {page === "library" ? (
           <LibraryPage auth={auth} onLogin={onLogin} undo={undo} onOpenFile={(f) => openFile({ kb: f })} openFileId={file?.kb?.id} />
+        ) : page === "scheduled" ? (
+          <ScheduledPage auth={auth} onLogin={onLogin} undo={undo} models={models} onOpen={(id, fresh) => select(id, "push", false, fresh)} onAsk={askNew} />
         ) : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
           who={auth.ready ? (auth.me ? auth.me.name || "" : null) : earlyWho}
           models={models} modelNames={modelNames} credits={credits} manage={manage}
