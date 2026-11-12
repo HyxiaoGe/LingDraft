@@ -905,7 +905,8 @@ export default function Workspace() {
           work={{ on: work, onChange: pickWork }}
           files={{ open: openFile, current: file, toggle: toggleFiles }} />}
         {file && (file.list ? <FileList tid={tid} st={shown} live={live} title={live?.title || shown?.title || listedTitle} onNav={navFile} onClose={closeFile} focus={fileFocus} />
-          : file.sent ? <SentPanel tid={tid} f={file.sent} back={file.back} onNav={navFile} onClose={closeFile} focus={fileFocus} />
+          : file.sent ? <SentPanel tid={tid} f={file.sent} back={file.back} onNav={navFile} onClose={closeFile} focus={fileFocus}
+              canExport={!!auth.me} onLogin={onLogin} />
             : file.kb ? <KnowledgePanel f={file.kb} at={file.at} onClose={closeFile} focus={fileFocus} />
             : <FilePanel tid={tid} st={shown} live={live} target={file} onTarget={setFile} onNav={navFile} onClose={closeFile} focus={fileFocus}
               canExport={!!auth.me} onLogin={onLogin} />)}

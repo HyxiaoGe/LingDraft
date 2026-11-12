@@ -1,5 +1,6 @@
 """右栏“下载成 PDF / Word”（app.api.export，2026-11-12 Sean 定，见 docs/沙箱方案.md）：模型写的文档原样转一份，不经过模型、不扣额度。
 转的内容和页面上下载的 Markdown 一样；用临时的工作区，不碰对话自己的；转过的再点直接给；一个人一天有上限；游客不能用。
+对话里的 PPT 也从这里要 PDF（一张一页，右栏拿它看每一页的样子）。
 只用假模型和假沙箱（见 FakeSandbox 的 convert-doc）。"""
 
 from __future__ import annotations
@@ -19,9 +20,10 @@ from app.api.export import DOCX, PDF, Exporter, ExportFailed
 from app.api.research_runner import ResearchRunner
 from app.graph.research import history
 from app.identity import ADMIN, USER as USER_TIER, Identity
-from app.tools.gateway import GatewayAuthError, GatewayLimitError, SandboxError
+from app.tools.gateway import SANDBOX_MAX_UPLOAD_BYTES, GatewayAuthError, GatewayLimitError, SandboxError
 from tests.auth_helpers import USER, bearer, guest_token, user_token
 from tests.research_helpers import SIMPLE, after_tool, events, gated_runner, last, new, run_async, say, state, wait_until
+from tests.test_files import make_pptx
 
 ME = Identity("u1", USER_TIER)
 
@@ -49,7 +51,8 @@ class Gateway:
         if isinstance(self.run, Exception):
             raise self.run
         if self.run["exit_code"] == 0 and not self.run["killed"]:
-            self.files[workspace][command.split()[2]] = b"converted:" + self.files[workspace][export.SOURCE]
+            _, source, output = command.split()[:3]
+            self.files[workspace][output] = b"converted:" + self.files[workspace][source]
         return self.run
 
     async def sandbox_get(self, workspace: str, path: str) -> bytes:
@@ -74,6 +77,30 @@ def test_converts_in_a_temporary_workspace_and_keeps_the_result():
         assert await ex.convert("file-0123456789abcdef", PDF, "# 报告\n", "季度 报告's", ME) == data and len(gw.runs) == 1
         await ex.convert("file-0123456789abcdef", DOCX, "# 报告\n", "季度 报告's", ME)
         assert gw.runs[1][0] == "export-0123456789abcdef-docx" and gw.runs[1][1].startswith("convert-doc uploads/document.md outputs/document.docx ")
+
+    run_async(go())
+
+
+def test_slides_are_laid_out_from_the_original_file(monkeypatch):
+    async def go():
+        gw = Gateway()
+        ex = Exporter(gw)
+        deck = b"PK\x03\x04 slides"
+        assert await ex.slides("file-0123456789abcdef", deck, ME) == b"converted:" + deck
+        ws = "export-0123456789abcdef-pdf"
+        # 原件原样放进去，没有标题这个参数
+        assert gw.runs == [(ws, "convert-doc uploads/slides.pptx outputs/slides.pdf", 120)]
+        assert gw.deleted == [ws] and gw.files == {}
+        assert await ex.slides("file-0123456789abcdef", deck, ME) == b"converted:" + deck and len(gw.runs) == 1
+        # 放不进沙箱的：不去试，不算这个人今天的次数
+        monkeypatch.setattr(export, "DAILY", 2)
+        with pytest.raises(ExportFailed) as e:
+            await ex.slides("file-big", b"x" * (SANDBOX_MAX_UPLOAD_BYTES + 1), ME)
+        assert (e.value.status, e.value.code) == (413, export.TOO_BIG) and len(gw.runs) == 1
+        await ex.slides("file-b", deck, ME)  # 今天的第 2 次：还能转
+        with pytest.raises(ExportFailed) as e:
+            await ex.slides("file-c", deck, ME)
+        assert e.value.code == export.DAILY_LIMIT
 
     run_async(go())
 
@@ -244,6 +271,39 @@ def test_export_only_for_written_documents_and_their_owner(rr, client):
     g = new(guest, "写文档《调研报告》")
     assert _refused(_export(guest, g["thread_id"], _written(g)["id"])) == (403, export.LOGIN_REQUIRED)
     assert len(sb.runs) == runs
+
+
+def test_slides_of_the_conversation_come_back_as_pdf(rr, client, monkeypatch):
+    """对话里的 PPT（用户发的、跑命令产出的）要 PDF：原件排成一张一页。别的格式没有；游客、别人的对话不给。"""
+    sb = rr.planner.sandbox
+    deck = make_pptx([("季度目标", "营收增长 30%", ""), ("路线图", "Q1 上线", "")])
+    up = client.post("/api/files", files={"file": ("季度 汇报.pptx", deck, "application/octet-stream")}).json()
+    aio.run(rr.files.settle())
+    tid = new(client, "文件里写了什么", files=[up["id"]])["thread_id"]
+    r = _export(client, tid, up["id"])
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf" and r.content == b"%PDF-1.7\n" + deck
+    assert r.headers["content-disposition"] == "attachment; filename*=utf-8''" + quote("季度 汇报.pdf")
+    ws = f"export-{up['id'].removeprefix('file-')}-pdf"
+    assert sb.runs == [(ws, "convert-doc uploads/slides.pptx outputs/slides.pdf", 120)] and sb.deleted == [ws]
+    # 再要直接给；PPT 转不成 Word
+    assert _export(client, tid, up["id"]).content == r.content and len(sb.runs) == 1
+    assert _refused(_export(client, tid, up["id"], DOCX)) == (404, export.NOT_FOUND)
+    # 跑命令产出的也一样
+    made = aio.run(rr.files.add_output(owner="u1", workspace_id=tid, turn_id="t1", path="outputs/结果.pptx", name="结果.pptx", data=deck))
+    out = _export(client, tid, made.id)
+    assert out.status_code == 200 and out.headers["content-disposition"].endswith(quote("结果.pdf")) and len(sb.runs) == 2
+    # 别人的对话 404
+    assert _export(TestClient(api_main.app, headers=bearer(user_token("u2"))), tid, made.id).status_code == 404
+    # 游客发的 PPT：不排
+    guest = TestClient(api_main.app, headers=bearer(guest_token()))
+    theirs = guest.post("/api/files", files={"file": ("a.pptx", deck, "application/octet-stream")}).json()
+    aio.run(rr.files.settle())
+    g = new(guest, "文件里写了什么", files=[theirs["id"]])
+    assert _refused(_export(guest, g["thread_id"], theirs["id"])) == (403, export.LOGIN_REQUIRED) and len(sb.runs) == 2
+    # 放不进沙箱的（比网关收的上限大）：不去试
+    big = aio.run(rr.files.add_output(owner="u1", workspace_id=tid, turn_id="t1", path="outputs/大.pptx", name="大.pptx", data=deck))
+    monkeypatch.setattr("app.api.research_runner.SANDBOX_MAX_UPLOAD_BYTES", len(deck) - 1)
+    assert _refused(_export(client, tid, big.id)) == (413, export.TOO_BIG) and len(sb.runs) == 2
 
 
 def test_export_says_why_it_could_not(rr, client, monkeypatch):

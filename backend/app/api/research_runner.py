@@ -39,7 +39,7 @@ from app.api.drafts import DraftTracker
 from app.api.export import Exporter, ExportFailed
 from app.api.run_store import ASKED, ERROR, GUIDE, QUEUE, STOPPED, SUCCESS, MemoryRunStore, Pending, PostgresRunStore, RunStore
 from app.api.runner import BaseRunner, RunConflict, _sse_text, jsonable, log
-from app.files.parse import Part
+from app.files.parse import PPTX, Part
 from app.files.service import NOT_HERE, FileService, NotSendable
 from app.files.artifacts import MARKDOWN
 from app.files.store import GENERATED, FileRow, FileStore, MemoryFileStore, PostgresFileStore
@@ -59,7 +59,7 @@ from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlann
 from app.model_guard import ContentBlocked, Interrupted, ModelUnavailable
 from app.tools.ask_user import ASK, MAX_ANSWER, AskAnswer
 from app.tools.location import DECLINED, PROVIDED, SAID, UNAVAILABLE, Device, PlaceAnswer, Places, holder
-from app.tools.gateway import IMAGE_ID, GatewayError
+from app.tools.gateway import IMAGE_ID, SANDBOX_MAX_UPLOAD_BYTES, GatewayError
 from app.tools.run_command import Sandbox
 
 
@@ -507,18 +507,28 @@ class ResearchRunner(BaseRunner):
 
     def export_file(self, thread_id: str, file_id: str, fmt: str, who: Identity) -> tuple[bytes, str]:
         """右栏“下载成 PDF / Word”：模型写的文档的这一版转成 fmt（export.PDF / DOCX），返回（内容, 文件名）。
-        不经过模型、不扣额度，内容和页面上下载的 Markdown 一样（来源 id 换成编号、文末附来源）。转不了的抛 ExportFailed。"""
+        不经过模型、不扣额度，内容和页面上下载的 Markdown 一样（来源 id 换成编号、文末附来源）。转不了的抛 ExportFailed。
+        这段对话里的 PPT（用户发的、跑命令产出的）也能要 PDF：排成一张一页，右栏拿它看每一页的样子。"""
         return aio.run(self._aexport_file(thread_id, file_id, fmt, who))
 
     async def _aexport_file(self, thread_id: str, file_id: str, fmt: str, who: Identity) -> tuple[bytes, str]:
         got = await self.files.original(file_id, thread_id)
         row = got[1] if got else None
-        if row is None or row.origin != GENERATED or row.type != MARKDOWN or not row.series_id:
-            raise ExportFailed(404, export.NOT_FOUND)  # 没有、不是这段对话的、不是模型写的文档（网页、代码、跑命令的产出不转）
+        slides = row is not None and row.type == PPTX and fmt == export.PDF
+        if row is None or not (slides or (row.origin == GENERATED and row.type == MARKDOWN and row.series_id)):
+            raise ExportFailed(404, export.NOT_FOUND)  # 没有、不是这段对话的、不是模型写的文档也不是 PPT（网页、代码、表格不转）
         if who.guest:
             raise ExportFailed(403, export.LOGIN_REQUIRED)
         if self.exporter is None:
             raise ExportFailed(503, export.UNAVAILABLE)
+        if slides:
+            if row.size > SANDBOX_MAX_UPLOAD_BYTES:  # 放不进沙箱，不用把它读进来
+                raise ExportFailed(413, export.TOO_BIG)
+            try:
+                data = await asyncio.to_thread(got[0].read_bytes)
+            except OSError:  # 刚好被删了
+                raise ExportFailed(404, export.NOT_FOUND) from None
+            return await self.exporter.slides(file_id, data, who), f"{Path(row.name).stem}.pdf"
         # 来源从检查点里取，检查点一轮结束才写（见 DURABILITY）：写这一版的那一轮还没答完的话，这一轮查到的来源还不在里面，先不转
         messages = (await self.graph.aget_state(self._cfg(thread_id))).values.get("messages", [])
         written = next((w for m in messages if (w := history.written_of(m)) is not None and w.id == file_id), None)

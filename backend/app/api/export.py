@@ -1,10 +1,12 @@
 """右栏的“下载成 PDF / Word”（2026-11-12 Sean 定，见 docs/沙箱方案.md）：模型写的文档原样转一份，不经过模型、不扣额度。
+右栏看 PPT 每一页排出来的样子也走这里（同一天定）：PPT 排成 PDF，一张一页，页面拿去给浏览器自己的 PDF 查看器看，也能存下来。
 
 和对话里说一句“导出成 PDF”用的是同一个转换程序（沙箱镜像里的 convert-doc，见 agent-tools 的 services/sandbox/README.md），
 交出去的内容也一样（来源 id 换成编号、文末附来源，见 sources.export_markdown）。不同的是不碰这段对话的工作区：
 每次转换用一个临时的工作区（export-<文件编号>-<格式>），放进去、转、取回来、删掉；转出来的不登记进文件表。
 
-- 文件的一版写好就不变，转过的留在内存里（按字节数封顶，最久没用的先丢），再点直接给；同一版同一种格式同时点两次只转一次。
+- 文件的一版写好就不变（PPT 是一个文件一行，也不变），转过的留在内存里（按字节数封顶，最久没用的先丢），再要直接给；
+  同一个文件同一种格式同时要两次只转一次。
 - 网关给沙箱的每日次数是所有人共用的，所以一个人一天真去转的次数有上限（DAILY，管理员不限；从内存里直接给的不算）。在内存里数，重启清零。
 - 命令的输出、文档的标题是用户的内容，不进日志：没转成只记文件编号和退出码。
 """
@@ -21,7 +23,7 @@ from weakref import WeakValueDictionary
 
 from app import quota
 from app.identity import ADMIN, Identity
-from app.tools.gateway import GatewayClient, GatewayError, GatewayLimitError, SandboxError
+from app.tools.gateway import SANDBOX_MAX_UPLOAD_BYTES, GatewayClient, GatewayError, GatewayLimitError, SandboxError
 from app.tools.run_command import BUSY, MAX_TIMEOUT_S
 
 log = logging.getLogger(__name__)
@@ -29,8 +31,10 @@ log = logging.getLogger(__name__)
 PDF, DOCX = "pdf", "docx"
 MIME = {PDF: "application/pdf", DOCX: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
 DAILY = 50  # 一个人一天最多真去转这么多次
-CACHE_BYTES = 32 * 1024 * 1024  # 转好的最多留这么多（一份带表格的报告 PDF 约 300 KB，Word 十几 KB）
+# 转好的最多留这么多（一份带表格的报告 PDF 约 300 KB，Word 十几 KB；8 页带图表的 PPT 排出来约 300 KB，40 页的 1.2 MB）
+CACHE_BYTES = 32 * 1024 * 1024
 SOURCE = "uploads/document.md"
+SLIDES = "uploads/slides.pptx"
 TOO_BIG_KINDS = ("file_too_large", "workspace_over_quota")
 
 # 没转成的类别（接口回的 detail.code；页面按它说人话，见 frontend/src/artifact.jsx 的 EXPORT_ERRORS）
@@ -40,7 +44,7 @@ NOT_READY = "not_ready"  # 写它的那一轮还没答完（来源还没进检�
 DAILY_LIMIT = "daily_limit"  # 这个人今天的次数用完了，或者网关今天的次数到了
 BUSY_NOW = "busy"  # 沙箱正忙
 UNAVAILABLE = "unavailable"  # 沙箱没开、连不上
-TOO_BIG = "too_big"  # 太大：转的时候超时、内存不够，或者放不进去
+TOO_BIG = "too_big"  # 太大：转的时候超时、内存不够，或者放不进去（沙箱一个文件最多收 SANDBOX_MAX_UPLOAD_BYTES）
 FAILED = "failed"  # 转换程序报错
 
 
@@ -61,18 +65,28 @@ class Exporter:
 
     async def convert(self, file_id: str, fmt: str, text: str, title: str, who: Identity) -> bytes:
         """把一版文档（已经是交出去的样子）转成 fmt。text、title 是这一版的，file_id 只用来认是哪一版。"""
+        # --title=…：标题以 - 开头又没有空格的（“--draft”）分开写会被 argparse 当成另一个选项
+        return await self._once(file_id, fmt, SOURCE, text.encode(), who, f" --title={shlex.quote(title)}")
+
+    async def slides(self, file_id: str, data: bytes, who: Identity) -> bytes:
+        """把一份 PPT（原件）排成 PDF，一张一页。file_id 只用来认是哪个文件。"""
+        return await self._once(file_id, PDF, SLIDES, data, who)
+
+    async def _once(self, file_id: str, fmt: str, source: str, data: bytes, who: Identity, options: str = "") -> bytes:
         key = (file_id, fmt)
         lock = self._locks.get(key)
         if lock is None:
             lock = self._locks[key] = asyncio.Lock()
         async with lock:
-            if (data := self._kept.get(key)) is not None:
+            if (kept := self._kept.get(key)) is not None:
                 self._kept.move_to_end(key)
-                return data
+                return kept
+            if len(data) > SANDBOX_MAX_UPLOAD_BYTES:  # 放不进沙箱：不用去试，也不算次数
+                raise ExportFailed(413, TOO_BIG)
             self._admit(who)
-            data = await self._run(file_id, fmt, text, title)
-            self._keep(key, data)
-            return data
+            made = await self._run(file_id, fmt, source, data, options)
+            self._keep(key, made)
+            return made
 
     def _admit(self, who: Identity) -> None:
         if who.tier == ADMIN:
@@ -92,13 +106,12 @@ class Exporter:
         while total > CACHE_BYTES:
             total -= len(self._kept.popitem(last=False)[1])
 
-    async def _run(self, file_id: str, fmt: str, text: str, title: str) -> bytes:
+    async def _run(self, file_id: str, fmt: str, source: str, data: bytes, options: str) -> bytes:
         workspace = f"export-{file_id.removeprefix('file-')}-{fmt}"
-        output = f"outputs/document.{fmt}"
+        output = f"outputs/{source.rsplit('/', 1)[-1].rsplit('.', 1)[0]}.{fmt}"
         try:
-            await self.gateway.sandbox_put(workspace, SOURCE, text.encode())
-            # --title=…：标题以 - 开头又没有空格的（“--draft”）分开写会被 argparse 当成另一个选项
-            run = await self.gateway.sandbox_run(workspace, f"convert-doc {SOURCE} {output} --title={shlex.quote(title)}", MAX_TIMEOUT_S)
+            await self.gateway.sandbox_put(workspace, source, data)
+            run = await self.gateway.sandbox_run(workspace, f"convert-doc {source} {output}{options}", MAX_TIMEOUT_S)
             if run.get("killed"):
                 log.warning("导出没转完：%s %s %s", file_id, fmt, run["killed"])
                 raise ExportFailed(502, TOO_BIG)

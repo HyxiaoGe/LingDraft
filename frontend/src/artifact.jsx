@@ -319,9 +319,11 @@ function VersionPick({ list, current, onPick, brief }) {
   );
 }
 
-// 下载成什么：文档能存成 Markdown（页面自己拼，和复制的一样）、PDF、Word（后端现转，见 api.js 的 exportThreadFile）
+// 下载成什么：文档能存成 Markdown（页面自己拼，和复制的一样）、PDF、Word（后端现转，见 api.js 的 exportThreadFile）；
+// PPT 能存原件、PDF（排出来的页面，一张一页）。头一种是本来的样子，不用转
 const FORMATS = [{ id: "md", name: "Markdown" }, { id: "pdf", name: "PDF" }, { id: "docx", name: "Word" }];
-// 没转成时说的话，按后端给的原因（app/api/export.py）；没列的、网络断了的说最后一句
+export const SLIDE_FORMATS = [{ id: "pptx", name: "PPT" }, { id: "pdf", name: "PDF" }];
+// 没转成时说的话，按后端给的原因（app/api/export.py）；没列的、网络断了的说最后一句。own：这种文件自己的说法（PPT 的见 workspace-files.jsx）
 const EXPORT_ERRORS = {
   not_ready: "这一轮答完才能导出",
   not_found: "这一版已经不在了",
@@ -332,11 +334,30 @@ const EXPORT_ERRORS = {
   unavailable: "现在导出不了，过一会儿再点",
   login_required: "登录后才能导出",
 };
-const exportError = (e) => EXPORT_ERRORS[e?.detail?.code] || "没导出成，再点一次";
+const exportError = (e, own) => own?.[e?.detail?.code] || EXPORT_ERRORS[e?.detail?.code] || "没导出成，再点一次";
 
-// 文档的下载按钮：点开是三种格式。桌面是按钮下面的小浮层，手机是底部弹层（和换一版一样）。
-// busy：正在转的那种格式的名字（按钮转圈、点不开）；locked：游客，PDF、Word 锁着，点了去登录（onLogin）；onOpen：点开时（上次没转成的话收掉）
-function SaveMenu({ file, busy, locked, onOpen, onSave, onExport, onLogin }) {
+// 存成别的格式：记着是哪个文件（哪一版）在转、哪个没转成，换到别的不跟着显示；转好了浏览器自己存，换没换都存。
+// exporting：{id, name}，failed：{id, text}；own：见 exportError
+export function useExport(tid, own) {
+  const [exporting, setExporting] = useState(null);
+  const [failed, setFailed] = useState(null);
+  const exportAs = async (file, f) => {
+    const mine = { id: file.id, name: f.name };
+    setExporting(mine);
+    setFailed(null);
+    try {
+      await exportThreadFile(tid, file, f.id);
+    } catch (e) {
+      setFailed({ id: mine.id, text: exportError(e, own) });
+    }
+    setExporting((cur) => (cur === mine ? null : cur));
+  };
+  return { exporting, failed, exportAs, clear: () => setFailed(null) };
+}
+
+// 下载按钮：点开是几种格式（formats，头一种是本来的样子）。桌面是按钮下面的小浮层，手机是底部弹层（和换一版一样）。
+// busy：正在做什么（“正在导出 PDF…”，按钮转圈、点不开）；locked：游客，要转的几种锁着，点了去登录（onLogin）；onOpen：点开时（上次没转成的话收掉）
+export function SaveMenu({ file, formats = FORMATS, busy, locked, onOpen, onSave, onExport, onLogin }) {
   const mobile = !!useContext(NavContext)?.mobile;
   const [open, setOpen] = useState(false);
   const btn = useRef(null);
@@ -346,14 +367,14 @@ function SaveMenu({ file, busy, locked, onOpen, onSave, onExport, onLogin }) {
   };
   const pick = (f) => {
     close(!mobile); // 手机上弹层收起时自己把焦点还给按钮
-    if (f.id === "md") onSave();
+    if (f.id === formats[0].id) onSave();
     else if (locked) onLogin();
     else onExport(f);
   };
   const rows = (
     <div className={styles.verList} role="menu" aria-label="下载成哪种格式" onKeyDown={arrows}>
-      {FORMATS.map((f) => {
-        const shut = locked && f.id !== "md";
+      {formats.map((f) => {
+        const shut = locked && f.id !== formats[0].id;
         return (
           <button key={f.id} role="menuitem" className={styles.verRow + (shut ? " " + styles.shut : "")} aria-label={shut ? `${f.name}（登录后可用）` : undefined}
             onClick={() => pick(f)}>
@@ -364,7 +385,7 @@ function SaveMenu({ file, busy, locked, onOpen, onSave, onExport, onLogin }) {
       })}
     </div>
   );
-  const label = busy ? `正在导出 ${busy}…` : `下载 ${file.name}`;
+  const label = busy || `下载 ${file.name}`;
   return (
     <>
       <button ref={btn} className="ws-icon-btn" aria-label={label} title={open ? undefined : label} aria-haspopup={mobile ? "dialog" : "menu"} aria-expanded={open}
@@ -465,20 +486,8 @@ export function FilePanel({ tid, st, live, target, onTarget, onNav, onClose, foc
   const done = r.mode === "file" && fetched != null;
   const out = done ? fileExport(r.file, fetched, sources) : null;
 
-  // 存成 PDF / Word：记着是哪一版在转、哪一版没转成，换到别的版不跟着显示；转好了浏览器自己存，换没换版都存
-  const [exporting, setExporting] = useState(null); // {id, name}
-  const [exportFail, setExportFail] = useState(null); // {id, text}
-  const exportAs = async (f) => {
-    const mine = { id: r.file.id, name: f.name };
-    setExporting(mine);
-    setExportFail(null);
-    try {
-      await exportThreadFile(tid, r.file, f.id);
-    } catch (e) {
-      setExportFail({ id: mine.id, text: exportError(e) });
-    }
-    setExporting((cur) => (cur === mine ? null : cur));
-  };
+  // 存成 PDF / Word（见 useExport）
+  const { exporting, failed: exportFail, exportAs, clear: clearExportFail } = useExport(tid);
   const failed = done && exportFail?.id === r.file.id && <span className={styles.bad} role="status"><IconWarn size={12} />{exportFail.text}</span>;
 
   // 顶上第二行：第几版、这版改了什么（几版的能换着看）；正在写的说在写；没导出成的说没成（换一版的按钮留着，只写第几版）
@@ -525,8 +534,8 @@ export function FilePanel({ tid, st, live, target, onTarget, onNav, onClose, foc
       )}
       <CopyAll text={out} reset={shownId} />
       {done && type === "markdown" && (canExport || onLogin) ? (
-        <SaveMenu file={r.file} busy={exporting?.id === r.file.id ? exporting.name : null} locked={!canExport}
-          onOpen={() => setExportFail(null)} onSave={() => save(r.file, out)} onExport={exportAs} onLogin={onLogin} />
+        <SaveMenu file={r.file} busy={exporting?.id === r.file.id ? `正在导出 ${exporting.name}…` : null} locked={!canExport}
+          onOpen={clearExportFail} onSave={() => save(r.file, out)} onExport={(f) => exportAs(r.file, f)} onLogin={onLogin} />
       ) : (
         <button className="ws-icon-btn" aria-label={`下载 ${r.file?.name || ""}`} title={r.file ? `下载 ${r.file.name}` : "写完后可以下载"} disabled={!out}
           onClick={() => save(r.file, out)}><IconDownload size={17} /></button>
