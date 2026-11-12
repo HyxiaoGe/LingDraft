@@ -18,7 +18,9 @@ import styles from "./markdown.module.css";
 // 代码块、行内代码、$$ 公式块里面不动。
 // - \( … \) 换成 $ … $，单独一行的 \[ 和 \] 换成 $$（DeepSeek 常这么写）；
 // - 单个 $ 照 Pandoc 的规矩才算公式：开头的 $ 后面紧跟非空白，收尾的 $ 前面紧跟非空白、后面不是数字。
-//   别的 $ 转义成字面的 $，“从 $5 涨到 $10”不会被当成公式；
+//   别的 $ 转义成字面的 $，“从 $5 涨到 $10”不会被当成公式。
+//   导出 PDF / Word 的 convert-doc 照这里又写了一份（agent-tools 的 services/sandbox/runtime/convert_doc.py，_dollars），
+//   改一边要改另一边：两边不一样的话，页面上是钱数，导出来成了公式；
 // - 表格那一行里，行内代码中的 | 转义：不然 `a|b` 会被劈成两格（GFM 的规矩如此，模型常不转义）
 
 function prepLine(s, out) {
