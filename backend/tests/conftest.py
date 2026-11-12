@@ -14,6 +14,7 @@ from app.api.run_store import MemoryRunStore
 from app.files.store import MemoryFileStore
 from app.knowledge.libraries import MemoryLibraryStore
 from app.knowledge.store import MemoryChunkStore
+from app.scheduled.store import MemoryTaskStore
 from app.graph.poster.graph import build_graph, memory_checkpointer
 from app.graph.research import graph as research_graph
 from app.llm import FakePlanner
@@ -25,6 +26,7 @@ REQUEST = "某品牌蓝牙耳机黑五预热，5 折，11.20 到 11.27"
 # 设了 LINGDRAFT_TEST_DATABASE_URL 时存这个库，整套测试在 Postgres 上跑（每个测试前清空；别指向有用的库）
 config.DATABASE_URL = os.environ.get("LINGDRAFT_TEST_DATABASE_URL", "")
 config.DREAM_ENABLED = False  # 不开整理记忆的定时任务（它会建真实模型的运行器）
+config.SCHEDULED_ENABLED = False  # 不开用户的定时任务到点发起的循环：测试自己调 fire_due
 config.FILE_PARSE_ISOLATED = False  # 用户发的文件在测试进程里解析（起子进程每次一秒多）；子进程的那条路单独测（tests/test_files.py）
 config.AUTH_CLIENT_ID = ""  # 本机 .env 里配的登录测试不用：认人的在 _auth 里换成假 auth 的
 # 本机 .env 里配了的新几家的 key 测试不用（和 CI 一样只有 DeepSeek、豆包的设置），要哪家的测试自己设
@@ -56,7 +58,7 @@ def _storage(monkeypatch):
     设了：开真的 Postgres，每个测试前清空，测试完关掉每个运行器的连接池，免得连接数攒满。"""
     if not config.DATABASE_URL:
         shared = (research_graph.memory_checkpointer(), InMemoryStore(), MemoryRunStore())
-        files, chunks, libraries = MemoryFileStore(), MemoryChunkStore(), MemoryLibraryStore()
+        files, chunks, libraries, tasks = MemoryFileStore(), MemoryChunkStore(), MemoryLibraryStore(), MemoryTaskStore()
 
         async def in_memory(url):
             return shared
@@ -64,11 +66,13 @@ def _storage(monkeypatch):
         monkeypatch.setattr(research_runner, "open_files", lambda runs: files if runs is shared[2] else MemoryFileStore())
         monkeypatch.setattr(research_runner, "open_chunks", lambda runs: chunks if runs is shared[2] else MemoryChunkStore())
         monkeypatch.setattr(research_runner, "open_libraries", lambda runs: libraries if runs is shared[2] else MemoryLibraryStore())
+        monkeypatch.setattr(research_runner, "open_tasks", lambda runs: tasks if runs is shared[2] else MemoryTaskStore())
         yield
         return
     with psycopg.connect(config.DATABASE_URL, autocommit=True) as c:
         for sql in ("TRUNCATE checkpoints, checkpoint_blobs, checkpoint_writes", "TRUNCATE runs", "TRUNCATE pending_messages", "TRUNCATE store",
-                    "TRUNCATE model_costs", "TRUNCATE quota_resets", "TRUNCATE files, file_parts CASCADE", "TRUNCATE free_used_up", "TRUNCATE kb_libraries"):
+                    "TRUNCATE model_costs", "TRUNCATE quota_resets", "TRUNCATE files, file_parts CASCADE", "TRUNCATE free_used_up", "TRUNCATE kb_libraries",
+                    "TRUNCATE scheduled_tasks", "TRUNCATE thread_owners"):
             try:
                 c.execute(sql)
             except psycopg.errors.UndefinedTable:  # 还没有哪个测试建过表

@@ -116,12 +116,13 @@ def _chunks(messages: list[BaseMessage]) -> list[list[BaseMessage]]:
 
 def conversation_of(thread_id: str, values: dict, seen: dict[str, str]) -> Conversation | None:
     """这段对话里没整理过的几轮（seen 里没有，或者内容变了：重新回答过、改过话）；没有新的返回 None。
-    还没结束的一轮、被内容审核拦下的一轮不算。"""
+    还没结束的一轮、被内容审核拦下的一轮不算。定时任务触发的一轮也不算（见 history.SCHEDULED）：那句话是任务里的交代，不是这个人说的，
+    每天跑一次的任务也不该每晚都拿去整理一遍。"""
     turns: dict[str, Turn] = {t.id: t for t in values.get("turns", [])}
     conv = Conversation(thread_id, values.get("title") or "")
     for chunk in _chunks(values.get("messages", [])):
         rec = turns.get(chunk[0].id or "")
-        if rec is None or rec.outcome == "blocked" or any(history.blocked_reason(m) for m in chunk):
+        if rec is None or rec.outcome == "blocked" or any(history.blocked_reason(m) for m in chunk) or history.scheduled_of(chunk[0]):
             continue
         ended = _time(rec.ended_at)
         if ended is None:

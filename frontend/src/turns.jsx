@@ -17,7 +17,8 @@ const MIN_TURNS = 3;
 // 正在发、服务器还没存下来的那句话也算一轮（和 Turns 里一样）；running：正在回答的最后一轮
 export function turnEntries(st, live, running = false) {
   const turns = st?.turns || [];
-  const said = turns.map((t) => ({ user: t.user, at: t.sent_at, turn: t }));
+  // 定时任务触发的一轮没有人说话：写是哪个任务（那份交代是模型写给自己看的，不列）
+  const said = turns.map((t) => ({ user: t.scheduled ? `定时任务「${t.scheduled.title}」` : t.user, at: t.sent_at, turn: t }));
   if (live?.said && turns.length <= (live.turnsAtStart ?? 0)) said.push({ user: live.said, at: live.sentAt, turn: null });
   if (said.length < MIN_TURNS) return [];
   return said.map((s, i) => ({ i, text: (s.user || "").split("\n")[0].trim() || "（图片）", ask: (s.user || "").trim() || "（图片）", at: s.at, turn: s.turn,

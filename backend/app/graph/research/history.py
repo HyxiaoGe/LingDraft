@@ -56,13 +56,18 @@ RUN_TOOL = "run_command"  # 在沙箱里跑命令（工作任务里才给，见 
 ASK_TOOL = "ask_user"  # 模型做到一半停下来问用户，等回答了接着做（见 app.tools.ask_user）
 MAX_ASKS = 2  # 一轮最多问几次（2026-11-10 Sean 定）：再问的不问，让模型按自己的判断做
 MAX_ASK_OPTIONS = 4  # 一个问题最多给几个选项
+# 定时任务的四个工具（见 app.tools.schedule）：建、改、删各是过程里的一步，列出来的不显示
+CREATE_TASK_TOOL, UPDATE_TASK_TOOL, DELETE_TASK_TOOL, LIST_TASKS_TOOL = (
+    "create_scheduled_task", "update_scheduled_task", "delete_scheduled_task", "list_scheduled_tasks")
+TASK_TOOLS = (CREATE_TASK_TOOL, UPDATE_TASK_TOOL, DELETE_TASK_TOOL, LIST_TASKS_TOOL)
+TASK_ACTIONS = {CREATE_TASK_TOOL: "create", UPDATE_TASK_TOOL: "update", DELETE_TASK_TOOL: "delete"}
 PLACE_TOOL, ROUTE_TOOL = "place_search", "route_compare"  # 地图的两个工具（见 app.tools.maps_mcp）
 FLIGHT_TOOL, TRAIN_TOOL = "search_flights", "search_trains"  # flyai 的两个工具（见 app.tools.flyai_mcp）
 ITINERARY_TOOL = "present_itinerary"  # 灵稿自己的排行程（见 app.tools.flyai_mcp）
 TRAVEL_KINDS = {FLIGHT_TOOL: "flight", TRAIN_TOOL: "train"}
 STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", PLACE_TOOL: "place", ROUTE_TOOL: "route",
               **TRAVEL_KINDS, ITINERARY_TOOL: "itinerary", IMAGE_TOOL: "image", VIEW_TOOL: "view", FILE_TOOL: "file", CREATE_TOOL: "write", EDIT_TOOL: "write", SUBAGENT_TOOL: "task",
-              LIBRARY_TOOL: "library", DOCS_TOOL: "docs", KB_TOOL: "knowledge", RUN_TOOL: "command"}
+              LIBRARY_TOOL: "library", DOCS_TOOL: "docs", KB_TOOL: "knowledge", RUN_TOOL: "command", **dict.fromkeys(TASK_ACTIONS, "schedule")}
 BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
 # 没画成的原因在页面上的说法（照 Fusion 的图片卡片），没列的都说“图片生成失败”
 IMAGE_FAILURES = {
@@ -161,6 +166,24 @@ def work_mode(state: Mapping[str, Any]) -> bool:
 # 这段对话用户说了“别再问了”（问题卡上点的，2026-11-11 Sean 定）：记在 state 的这一项里。之后 Work 的轮也不给问用户的工具，
 # 系统提示词的 work 一段换成 work_quiet（见 agent.asking、prompt_keys）；页面上能恢复（见 research_runner._aset_asks）。按对话记，不按每句话
 ASKS_OFF = "asks_off"
+
+
+# 定时任务到点触发的一轮（见 app.scheduled）：这一轮的“用户的话”是任务里存的那份交代，这条用户消息的 additional_kwargs 里记着是哪个任务
+# （{"task_id", "title"}，标题是触发那时的）。页面上不显示成用户说的话，只写一行“由定时任务 … 触发”；发给模型时交代前面加一段说明
+# （见 app.tools.schedule.with_run_notes）。没人在场：这一轮不出问题卡（见 unattended），不跟浏览器要位置（见 research_runner）
+SCHEDULED = "lingdraft_scheduled"
+
+
+def scheduled_of(m: BaseMessage) -> dict | None:
+    v = m.additional_kwargs.get(SCHEDULED) if isinstance(m, HumanMessage) else None
+    return v if isinstance(v, dict) and v.get("task_id") else None
+
+
+def unattended(state: Mapping[str, Any]) -> bool:
+    """正在跑的这一轮是不是定时任务触发的（没人在场，停下来问也没人答）。"""
+    msgs = state.get("messages") or []
+    i = last_human(msgs)
+    return i >= 0 and scheduled_of(msgs[i]) is not None
 
 
 def thinking_of(m: BaseMessage) -> str:
@@ -296,6 +319,11 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         extra = {"limits": [q] if q else [], "parts": "" if q else _text(args.get("parts"))}
     elif kind == "command":
         text, extra = _text(args.get("command")), {}
+    elif kind == "schedule":  # 标题在参数里（建），做成了用结果里的（改、删只给了编号）；limits 是什么时候跑（“每天 · 07:22”）
+        task = result.artifact.get("task") if result is not None and isinstance(result.artifact, dict) else None
+        task = task if isinstance(task, dict) else {}
+        text = _text(task.get("title")) or _text(args.get("title"))
+        extra = {"action": TASK_ACTIONS[name], "limits": [task["schedule"]] if name != DELETE_TASK_TOOL and task.get("schedule") else []}
     elif kind == "read":
         text, extra = str(args.get("url", "")), {}
     else:  # 天气：选了当前位置的，地名那一项是 current_location
@@ -332,6 +360,8 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         ok = result.status != "error"
         art = result.artifact if isinstance(result.artifact, dict) else {}
         return ToolStep(id=cid, kind=kind, text=text, ok=ok, hits=int(art.get("found") or 0), message="" if ok else "没读成", **extra)
+    if kind == "schedule":
+        return ToolStep(id=cid, kind=kind, text=text, ok=result.status != "error", message="" if result.status != "error" else "没办成", **extra)
     if kind == "command":  # 跑了的带着结果（命令自己失败、被杀掉的也是跑了，页面按退出码和原因说）；没跑成的说原因
         if run := run_of(result):
             return ToolStep(id=cid, kind=kind, text=text, ok=run.ok, run=run)

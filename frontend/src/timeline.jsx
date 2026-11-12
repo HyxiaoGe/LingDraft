@@ -18,7 +18,7 @@ import { Composer, CreditsNote, Dock, DropHint, JumpButton, ModelIcon, ModelTool
 import { failureText } from "./errors.js";
 import { SentFiles, fileIndex, partUnit } from "./files.jsx";
 import { FilesButton, workspaceFiles } from "./workspace-files.jsx";
-import { IconBook, IconCheck, IconChevron, IconClip, IconCloudSun, IconCopy, IconDownload, IconEdit, IconEye, IconFolder, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, IconWrite, Spinner } from "./icons.jsx";
+import { IconBook, IconCheck, IconChevron, IconClip, IconClock, IconCloudSun, IconCopy, IconDownload, IconEdit, IconEye, IconFolder, IconFork, IconImage, IconLoop, IconMore, IconPage, IconPin, IconPlane, IconPrint, IconRetry, IconRoute, IconSearch, IconTicket, IconTrain, IconTrash, IconWarn, IconWrite, Spinner } from "./icons.jsx";
 import { ChartCards, ImageCards, Viewer, drawn, imageUrl, imagesOf } from "./images.jsx";
 import { MODES, MapCard, mapsOf } from "./maps.jsx";
 import { ItineraryCard, TravelCard, itinerariesOf, travelOf } from "./travel.jsx";
@@ -618,8 +618,9 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
   const who = ref && models?.length > 0 ? named?.name || modelName(models, ref) : null;
   return (
     <>
-      {t.user && <UserMsg text={live?.edit ?? t.user} images={userImages(t, live, st?.thread_id)} files={t.localFiles || t.files || []} tid={t.localFiles ? null : st?.thread_id}
-        panel={files} at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && (idle || !!ask)} onEdit={act.edit} />}
+      {t.scheduled ? <ScheduledMark task={t.scheduled} at={t.sent_at} now={now} />
+        : t.user && <UserMsg text={live?.edit ?? t.user} images={userImages(t, live, st?.thread_id)} files={t.localFiles || t.files || []} tid={t.localFiles ? null : st?.thread_id}
+          panel={files} at={live?.sentAt ?? t.sent_at} pinned={last} now={now} editable={last && (idle || !!ask)} onEdit={act.edit} />}
       <div className={styles.ai}>
         {who && <div className={styles.aiHead}><ModelIcon m={{ model: ref, name: who, icon: named?.icon }} size={22} />{who}</div>}
         {(running || rec) && <Process k={k} items={process} st={st} nums={procNums} rec={rec} running={running} answering={replied} failed={failed} asking={ask ? (ask.kind === LOCATION ? LOCATION : true) : false} now={now} versions={versions} />}
@@ -689,6 +690,18 @@ function UserImage({ img, src, n, square }) {
         </button>
       )}
       {viewing && <Viewer img={{ alt: "发的图" }} src={src} onClose={() => { typeNext(viewing); setViewing(null); }} />}
+    </div>
+  );
+}
+
+// 定时任务触发的一轮（见后端 app.scheduled）：没有人说话，不出气泡，只写一行由哪个任务触发、什么时候（照豆包）。
+// 任务里那份交代不显示：是模型写给自己看的
+function ScheduledMark({ task, at, now }) {
+  return (
+    <div className={styles.scheduled}>
+      <IconClock size={14} />
+      <span className={styles.scheduledName}>由定时任务「{task.title}」触发</span>
+      <Stamp iso={at} now={now} />
     </div>
   );
 }
@@ -1073,7 +1086,7 @@ function Thinking({ it, thinking }) {
 function ToolRow({ s, running, files, versions }) {
   if (s.kind === "command") return <CommandRow s={s} running={running} />; // 跑命令：能点开看命令和输出，见 commands.jsx
   const Icon = { read: IconPage, weather: IconCloudSun, place: IconPin, route: IconRoute, flight: IconPlane, train: IconTrain, itinerary: IconTicket,
-    image: IconImage, docs: IconBook, view: IconEye, file: IconClip, write: IconWrite, knowledge: IconFolder }[s.kind] || IconSearch;
+    image: IconImage, docs: IconBook, view: IconEye, file: IconClip, write: IconWrite, knowledge: IconFolder, schedule: IconClock }[s.kind] || IconSearch;
   const busy = running && s.pending;
   let main, sub;
   let bad = !s.ok;
@@ -1121,6 +1134,10 @@ function ToolRow({ s, running, files, versions }) {
     const name = s.text || versions?.get(s.target)?.at(-1)?.title;
     main = <>{s.edit ? "改文件" : "写文件"}{name && <>「{name}」</>}</>;
     sub = s.pending ? "保存中…" : s.file ? `第 ${s.file.version} 版` : s.message || "没写成";
+  } else if (s.kind === "schedule") { // 模型建、改、删定时任务：任务的名字，灰色小标是什么时候跑
+    const [verb, done, failed] = { update: ["改定时任务", "改好了", "没改成"], delete: ["删定时任务", "删掉了", "没删成"] }[s.action] || ["建定时任务", "建好了", "没建成"];
+    main = <>{verb}{s.text && <>「{s.text}」</>}{s.limits.map((l) => <span key={l} className={proc.lim}>{l}</span>)}</>;
+    sub = s.pending ? "保存中…" : s.ok ? done : failed;
   } else if (s.kind === "image") {
     main = <>{s.edit ? "改图" : "画图"}「{s.text}」</>;
     sub = s.pending ? "生成中…" : s.image ? "已生成" : `没画成：${s.message || "出错了"}`;

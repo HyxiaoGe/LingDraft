@@ -6,6 +6,7 @@
 模型做到一半可以停下来问用户（ask_user 工具里的 interrupt，见 app.tools.ask_user）：这次执行结束（ASKED），线程的状态是 asking，一直等；
 用户回答或跳过（见 answer）另起一次执行，同一轮从停下的地方接着跑。等的时候不能往检查点里写东西（写一次，等着的问题就丢了）：
 接着说、改名都先拒掉，点停止、重新回答是把这一轮以停止收尾。
+定时任务（见 app.scheduled）到点了在任务挂着的那段对话里多跑一轮：没有请求进来，运行器自己发起（见“定时任务”一节）。
 """
 
 from __future__ import annotations
@@ -56,6 +57,9 @@ from app.identity import Identity, is_guest_sub
 from app.graph.research.sources import collect_sources, export_markdown, subagent_messages
 from app.graph.research.state import AttachedFile, AttachedImage, Turn
 from app.research_llm import THINKING_MS, FakeResearchPlanner, LiveResearchPlanner, ResearchPlanner, ThinkingClock
+from app.scheduled import service as scheduled
+from app.scheduled.service import ScheduledTasks
+from app.scheduled.store import MemoryTaskStore, PostgresTaskStore, Task, TaskStore
 from app.model_guard import ContentBlocked, Interrupted, ModelUnavailable
 from app.tools.ask_user import ASK, MAX_ANSWER, AskAnswer
 from app.tools.location import DECLINED, PROVIDED, SAID, UNAVAILABLE, Device, PlaceAnswer, Places, holder
@@ -111,15 +115,21 @@ SETTLE_S = 30  # 点停止以后，等这一轮在事件循环里起的任务（
 _TURN: contextvars.ContextVar[object | None] = contextvars.ContextVar("research_turn", default=None)  # 这一轮起的任务上下文里都带着它
 DELTA_S = 0.08  # 逐字片段攒这么久发一次
 SENT_AT = "sent_at"  # 用户那句话的发送时间，记在消息的 additional_kwargs 里（不会发给模型）
+SCHEDULED = "scheduled"  # 运行记录的 kind：定时任务到点发起的（用户点“立即执行”的也是）
+# 定时任务这一次没交出去时 _afire 说的原因（交出去了是 scheduled.RUNNING）：那段对话正在跑；任务刚被删了、停了、改了
+BUSY, GONE = "busy", "gone"
 
 
 def _said(text: str, thinking: bool | None = None, images: Sequence[AttachedImage] = (), files: Sequence[AttachedFile] = (),
-          work: bool | None = None, **kw: Any) -> HumanMessage:
+          work: bool | None = None, scheduled_by: dict | None = None, **kw: Any) -> HumanMessage:
     """用户的话。thinking 是发的时候输入框旁边的思考开关（没给按选项的默认，见 model_catalog.Catalog.plan）；images 是这句话带的图，files 是带的文件；
-    work 是这句话是不是 Work（按这段对话是不是工作任务写上，没给算 Chat，见 history.WORK）。"""
+    work 是这句话是不是 Work（按这段对话是不是工作任务写上，没给算 Chat，见 history.WORK）。
+    scheduled_by：这句话是定时任务到点触发的（{"task_id", "title"}，见 history.SCHEDULED），text 是任务里那份交代。"""
     extra: dict[str, Any] = {history.THINK: thinking} if thinking is not None else {}
     if work is not None:
         extra[history.WORK] = work
+    if scheduled_by:
+        extra[history.SCHEDULED] = scheduled_by
     if images:
         extra[history.ATTACHED] = [i.model_dump() for i in images]
     if files:
@@ -205,7 +215,7 @@ class StreamBuffer:
 
 
 def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
-    """对话按轮：用户的话，然后这一轮里模型的思考、正文、工具步骤按先后排，被内容审核拦下时最后是一条 blocked；
+    """对话按轮：用户的话（定时任务触发的是任务里那份交代，带着 scheduled），然后这一轮里模型的思考、正文、工具步骤按先后排，被内容审核拦下时最后是一条 blocked；
     用户插进这一轮的话是一条 guide，排在它放进对话的地方；模型问用户的是一条 ask（问题、选项、回答，见 history.ask_of）。
     每轮带这一轮的记录（推荐问题、用量、结果）。子任务那一步带着它的子 agent 的条目（items），排法一样。"""
     by_id = {t.id: t for t in turns}
@@ -219,6 +229,8 @@ def conversation(messages: list[BaseMessage], turns: list[Turn]) -> list[dict]:
         elif isinstance(m, HumanMessage):
             t = by_id.get(m.id)
             cur = {"id": m.id, "user": history.text_of(m), "sent_at": m.additional_kwargs.get(SENT_AT, ""), "items": [],
+                   # 定时任务触发的一轮（{"task_id", "title"}，见 history.SCHEDULED）：页面不显示成用户说的话，只写一行由哪个任务触发
+                   "scheduled": history.scheduled_of(m),
                    "images": [i.model_dump() for i in history.attached_images(m)],
                    "files": [f.model_dump() for f in history.attached_files(m)],
                    "record": {**t.model_dump(exclude={"id"}), "credits": costs.credits(t)} if t else None}
@@ -363,6 +375,11 @@ def open_libraries(runs: RunStore) -> LibraryStore:
     return PostgresLibraryStore(runs.pool) if isinstance(runs, PostgresRunStore) else MemoryLibraryStore()
 
 
+def open_tasks(runs: RunStore) -> TaskStore:
+    """定时任务的表：和文件表一样，跟着运行记录放。"""
+    return PostgresTaskStore(runs.pool) if isinstance(runs, PostgresRunStore) else MemoryTaskStore()
+
+
 def _memory_row(m: dict) -> dict:
     """记忆页上的一条：thread_id 是记下（或最后改它）的那段对话，页面拿它点回去；对话删了、整理时没记（很早的几条）就点不了。"""
     return {k: m.get(k) for k in ("id", "text", "created_at", "updated_at", "thread_id")}
@@ -409,6 +426,11 @@ class ResearchRunner(BaseRunner):
         self.kb = KnowledgeBase(self.files, open_chunks(self.run_store), embedder, reranker, open_libraries(self.run_store))
         aio.run(self.files.start())
         aio.run(self.kb.start())
+        # 定时任务（见 app.scheduled）：表跟着运行记录放；到点发起的循环由服务启动时开（见 start_schedule），测试、命令行不开
+        self.tasks = ScheduledTasks(open_tasks(self.run_store))
+        aio.run(self.tasks.store.setup())
+        self._schedule_job = None
+        self._scheduled: dict[str, str] = {}  # 定时任务发起、还没结束的执行（运行的 id → 任务的编号）：结束时把结果记到任务上
         self.workers = workers or config.RESEARCH_WORKERS
         self._slots = asyncio.BoundedSemaphore(self.workers)  # 同时跑的执行
         self._inflight = 0  # 交出去、还没结束的执行（排队的也算）：据此告诉页面这次要不要排队
@@ -749,7 +771,8 @@ class ResearchRunner(BaseRunner):
             raise
 
     async def _alaunch(self, thread_id: str, kind: str, inp: Any = None) -> str:
-        """开一段新的事件日志、记一行运行记录，交出执行。执行结束才退掉占位：浏览器断开、没人读都照常跑完。"""
+        """开一段新的事件日志、记一行运行记录，交出执行。执行结束才退掉占位：浏览器断开、没人读都照常跑完。
+        定时任务发起的（kind 是 SCHEDULED）没有页面可以要用户的位置，别的都有。"""
         key = self._run_key(thread_id)
         turn = await self._aturn_of(thread_id)
         run = self.events.open(key)
@@ -760,7 +783,7 @@ class ResearchRunner(BaseRunner):
         try:
             await self._arecord(lambda s: s.create(run, thread_id, kind, turn, config.VERSION or None))
             self.events.append(run, {"event": "thread", "data": {"thread_id": thread_id, "queued": queued}})  # 排队时也先把 id 给页面
-            self._spawn(self._work(thread_id, run, inp))
+            self._spawn(self._work(thread_id, run, inp, locate=kind != SCHEDULED))
         except BaseException as e:
             self._inflight -= 1
             self.events.close(run)
@@ -778,7 +801,7 @@ class ResearchRunner(BaseRunner):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _work(self, thread_id: str, run: str, inp: Any = None) -> None:
+    async def _work(self, thread_id: str, run: str, inp: Any = None, locate: bool = True) -> None:
         key = self._run_key(thread_id)
 
         def out(ev: dict) -> None:
@@ -791,13 +814,14 @@ class ResearchRunner(BaseRunner):
                 out({"event": "started", "data": {}})
                 status, error = ERROR, None  # 被 Exception 以外的打断（进程要退出）也记成出错
                 try:
-                    status = await self._run_turn(thread_id, inp, out, locate=True) or SUCCESS
+                    status = await self._run_turn(thread_id, inp, out, locate=locate) or SUCCESS
                 except Exception as e:  # noqa: BLE001
                     error = e
                     log.exception("执行出错：%s 运行 %s", key, run)
                     out({"event": "error", "data": _error_event(e)})
                 finally:
                     await self._afinish(run, status, error)
+                    await self._ascheduled_done(run, status)
                     await self._aended(thread_id, status)
                 try:
                     out({"event": "state", "data": await self._astate_view(thread_id)})
@@ -889,9 +913,10 @@ class ResearchRunner(BaseRunner):
         模型停下来问用户（ask_user 里的 interrupt）时流照常结束，updates 里有一条 __interrupt__：返回 True（见 _run_turn）。
         别的中断（现在没有，比如 MCP 的 elicitation）不认，和以前一样这一轮算没跑完。"""
         asked = False
+        owner = await self.run_store.owner_of(thread_id)
         ctx = ChatContext(take_guide=lambda: self._take_guide(thread_id), title=self._titles.get(thread_id),
-                          owner=await self.run_store.owner_of(thread_id), files=self.files, thread_id=thread_id, kb=self.kb, places=self.places if locate else None,
-                          sandbox=self.sandbox)
+                          owner=owner, files=self.files, thread_id=thread_id, kb=self.kb, places=self.places if locate else None,
+                          sandbox=self.sandbox, tasks=self.tasks, tier=self.quota.tiers.get(owner or ""))
         async for ns, mode, chunk in self.graph.astream(inp, self._cfg(thread_id), context=ctx, stream_mode=["messages", "updates", "custom"],
                                                         subgraphs=True, durability=self.durability):
             task = tasks.get(ns[0]) if ns else None
@@ -1075,7 +1100,8 @@ class ResearchRunner(BaseRunner):
     # ---- 一轮的输入 ----
 
     async def _aaccept(self, thread_id: str, text: str, thinking: bool | None = None, option: str | None = None, owner: str | None = None,
-                       images: Sequence[AttachedImage] = (), files: Sequence[str] = (), work: bool | None = None) -> None:
+                       images: Sequence[AttachedImage] = (), files: Sequence[str] = (), work: bool | None = None,
+                       scheduled_by: dict | None = None, title: str | None = None) -> None:
         """把用户的话写进检查点，agent 从这里接着跑（输入为 None）。
 
         先落盘再交出执行：排队时服务重启也查得到这句话，算没跑完，可以重试。
@@ -1084,6 +1110,7 @@ class ResearchRunner(BaseRunner):
         work 是新对话是不是工作任务，和第一句话一起定下（记进 state）；已经开始的对话不看它，按定下的来，每句话都按它写上
         （工作任务不能变回对话；对话以后能不能转成工作任务还没定，现在也不行）。
         files 是带的文件的编号：校验都过了才绑到这段对话（绑不上抛 NotSendable，什么都没写）。
+        scheduled_by：这句话是定时任务到点触发的（见 _said）；title 是新对话直接定下的标题（定时任务新开的那段用任务的名字，不让模型按那份交代再起）。
         """
         await self._adrop_suggestions(thread_id)
         cfg = self._cfg(thread_id)
@@ -1109,7 +1136,9 @@ class ResearchRunner(BaseRunner):
         started = bool((snap.values or {}).get("messages"))
         mode = history.work_mode(snap.values) if started else bool(work)
         update[history.WORK] = mode
-        update["messages"] = [_said(text, thinking, images, attached, work=mode or None)]
+        update["messages"] = [_said(text, thinking, images, attached, work=mode or None, scheduled_by=scheduled_by)]
+        if title and not started:
+            update["title"] = title
         if owner is not None:
             await self.run_store.claim(thread_id, owner)
         await self.graph.aupdate_state(cfg, update, as_node=START)
@@ -1163,12 +1192,14 @@ class ResearchRunner(BaseRunner):
         no_place = PlaceAnswer(status=DECLINED, **times).model_dump()
         return Command(resume={a["id"]: got.model_dump() if a["id"] == ask_id else no_place if a in wheres else skipped for a in waiting})
 
-    async def _aregenerate_input(self, thread_id: str, text: str | None = None, thinking: bool | None = None) -> None:
+    async def _aregenerate_input(self, thread_id: str, text: str | None = None, thinking: bool | None = None,
+                                 scheduled_by: dict | None = None) -> None:
         """最后一轮重新回答：去掉用户最后那句话之后的消息和这一轮的记录，从那句话接着跑。
         带 text 是用户改了最后那句话：先换成 text（消息 id 不变，还是同一轮，发送时间记成改的时候），再重新回答。标题不重起。
         thinking 是这次的思考开关：给了就按它（只改开关，发送时间不变），没给按那句话原来的；模型照对话定下的（Auto 的重新选）。
         是不是 Work 按这段对话定下的（见 history.work_mode）：11-11 以前的对话里那句话和对话对不上的，这时改成对话的。
-        停在问用户那里的也可以（不回答了，改了那句话重来）：先把这一轮以停止收尾，再照常重新回答。"""
+        停在问用户那里的也可以（不回答了，改了那句话重来）：先把这一轮以停止收尾，再照常重新回答。
+        scheduled_by：换上的 text 是定时任务的交代（见 _ascheduled_input）。用户自己改了定时任务触发的那句话，改完就是 TA 说的话，不再带这个标记。"""
         await self._adrop_suggestions(thread_id)
         cfg = self._cfg(thread_id)
         snap = await self.graph.aget_state(cfg)
@@ -1189,7 +1220,8 @@ class ResearchRunner(BaseRunner):
         turns = [t for t in v.get("turns", []) if t.id != human.id]
         if text is not None:  # 带的图、文件留着：只改了字
             edited = [_said(text, history.thinking_switch(human) if thinking is None else thinking, history.attached_images(human),
-                            history.attached_files(human), work=history.work_switch(human) if work is None else work, id=human.id)]
+                            history.attached_files(human), work=history.work_switch(human) if work is None else work, scheduled_by=scheduled_by,
+                            id=human.id)]
         elif thinking is not None or work is not None:
             switches = {k: v for k, v in ((history.THINK, thinking), (history.WORK, work)) if v is not None}
             edited = [human.model_copy(update={"additional_kwargs": {**human.additional_kwargs, **switches}})]
@@ -1236,7 +1268,7 @@ class ResearchRunner(BaseRunner):
                 await self.graph.aupdate_state(cfg, {history.ASKS_OFF: off}, as_node=TURN_END)
 
     async def _adelete(self, thread_id: str) -> None:
-        """删掉整段对话（这个线程的所有检查点、运行记录、画的图、用户发的图和文件、沙箱里的工作区、整理记忆的记录），找不回来；记下的记忆不删。
+        """删掉整段对话（这个线程的所有检查点、运行记录、画的图、用户发的图和文件、沙箱里的工作区、整理记忆的记录），找不回来；记下的记忆、定时任务不删。
         运行记录先删：删不掉就整个报错，对话还在，可以再删一次；反过来对话先没了，剩下的记录就再也删不到了。
         图在对话删掉以后再删（编号先记下）：删图没成功只记日志，留下的图没人指着，只占服务的磁盘。"""
         async with self._ahold(thread_id):
@@ -1249,6 +1281,7 @@ class ResearchRunner(BaseRunner):
             self._titles.pop(thread_id, None)
             self.places.end_turn(thread_id)
             await self.run_store.delete_thread(thread_id)
+            await self.tasks.store.detach(thread_id)  # 挂在这段对话上的定时任务还在：下次跑时新开一段（见 app.scheduled）
             await self.memory.aforget_thread(thread_id)  # 只删整理过哪几轮的记录；从这段对话记下的记忆不动（记的是人）
             await self.graph.checkpointer.adelete_thread(thread_id)
             await self.images.delete_images(images)
@@ -1306,12 +1339,168 @@ class ResearchRunner(BaseRunner):
         i = history.last_human(msgs)
         return msgs[i].id if i >= 0 else None
 
+    # ---- 定时任务（见 app.scheduled） ----
+    # 到点了没有请求进来，运行器自己发起：占位 → 把任务里那份交代写成新的一轮 → 交出执行，和排着的话接着发是一条路（_aaccept + _alaunch）。
+    # 一个任务同一时间只欠一次：到点了（next_at 过了）就发起，交出去以后 next_at 挪到现在之后的下一次，
+    # 服务停着、那段对话正忙时错过的几次并成这一次。
+
+    def start_schedule(self) -> None:
+        """服务启动时调：开到点发起的循环（在对话的事件循环里），每 config.SCHEDULED_TICK_S 秒看一次。"""
+        if self._schedule_job is None:
+            self._schedule_job = asyncio.run_coroutine_threadsafe(self._aschedule_loop(), aio.loop())
+
+    def stop_schedule(self) -> None:
+        if self._schedule_job is not None:
+            self._schedule_job.cancel()
+            self._schedule_job = None
+
+    async def _aschedule_loop(self) -> None:
+        while True:
+            try:
+                await self._afire_due()
+            except Exception:  # noqa: BLE001  库一时连不上之类：下一拍再看
+                log.exception("定时任务这一拍没看成")
+            await asyncio.sleep(config.SCHEDULED_TICK_S)
+
+    def fire_due(self) -> list[tuple[str, str]]:
+        """看一遍到点了的任务，能发起的都发起（测试、手动用；服务里是循环在调）。返回每个到点的任务这一次怎么样（见 _afire）。"""
+        return aio.run(self._afire_due())
+
+    async def _afire_due(self) -> list[tuple[str, str]]:
+        out = []
+        for t in await self.tasks.store.due(self.tasks.now()):
+            try:
+                out.append((t.id, await self._afire(t)))
+            except Exception:  # noqa: BLE001  这一个没发起（比如存检查点出错）：记一次没跑成、等下一次，别的任务照常
+                log.exception("定时任务没发起：%s", t.id)
+                await self.tasks.skipped(t, scheduled.FAILED)
+                await self.tasks.finished(t.id, scheduled.FAILED)
+                out.append((t.id, scheduled.FAILED))
+        return out
+
+    async def _afire(self, task: Task, *, manual: bool = False) -> str:
+        """发起任务的这一次，返回怎么样了：
+        RUNNING 交出去了；BUSY 那段对话正在跑，什么都没动（到点的下一拍再试）；
+        GONE 占位的工夫任务被删了、停了、改了时间，或者它挂着的那段对话刚删了，没动（还到点的下一拍照新的来）；
+        NO_CREDITS 这个人额度用完了、BLOCKED 那段对话卡着（上一轮出错了没重试、在等用户回答）：这一次不跑了，记一笔等下一次。
+        manual 是用户点的“立即执行”：额度在接口那层查过了；不动原来定的下一次；BLOCKED 时不记。"""
+        if not manual:
+            try:
+                await self.quota.check(Identity(task.owner, task.tier))
+            except quota.Exhausted:
+                await self.tasks.skipped(task, scheduled.NO_CREDITS)
+                return scheduled.NO_CREDITS
+        thread_id = task.thread_id or str(uuid.uuid4())
+        key = self._run_key(thread_id)
+        if not await self._aadmit(key):
+            return BUSY
+        skip = run = None
+        try:
+            now_ = await self.tasks.store.get(task.id)  # 查额度、占位的工夫，用户可能刚删了、停了、改了它，或者删了它挂着的那段对话
+            if now_ is None or now_.thread_id != task.thread_id or (
+                    not manual and (now_.status != scheduled.ACTIVE or now_.next_at != task.next_at)):
+                skip = GONE
+            else:
+                try:
+                    await self._ascheduled_input(now_, thread_id)
+                except NotIdle:
+                    skip = scheduled.BLOCKED
+            if skip is None:
+                await self.tasks.launched(now_, thread_id, manual=manual)
+                try:
+                    run = await self._alaunch(thread_id, SCHEDULED)
+                except BaseException:
+                    await self.tasks.store.patch(task.id, last_status=scheduled.FAILED)  # 不留着“在跑”
+                    raise
+        except BaseException:
+            self.runs.release(key)
+            raise
+        if run is not None:
+            self._scheduled[run] = task.id  # 交出去的执行这时还没开始跑（_alaunch 返回以后没让出过事件循环）
+            return scheduled.RUNNING
+        self.runs.release(key)
+        if skip == scheduled.BLOCKED and not manual:
+            await self.tasks.skipped(now_, scheduled.BLOCKED)
+        return skip
+
+    async def _ascheduled_input(self, task: Task, thread_id: str) -> None:
+        """把任务这一次要跑的写进检查点（占着位调）：一般是任务里那份交代写成新的一轮；还没有这段对话就新开，归任务的主人，标题用任务的名字。
+        这段对话上一轮没跑完、而且就是这个任务触发的那一轮（上一次出错了，或者被服务重启打断）：不另起一轮，那一轮重来——
+        先以停止收尾，再和“重新回答”一样去掉那句话后面的（当时查到的到这次已经旧了），那句话换成任务现在的交代，触发时间记成现在。
+        别的没跑完（用户自己的一轮出错了没重试、停在问用户那里）抛 NotIdle：不替用户收尾。"""
+        snap = await self.graph.aget_state(self._cfg(thread_id))
+        v = snap.values or {}
+        msgs = v.get("messages", [])
+        mark = {"task_id": task.id, "title": task.title}
+        if v and snap.next:
+            i = history.last_human(msgs)
+            mine = i >= 0 and (history.scheduled_of(msgs[i]) or {}).get("task_id") == task.id
+            if not mine or self._status(snap, None)[0] == ASKING:
+                raise NotIdle("这段对话上一轮没跑完")
+            await self._write_stop(thread_id)
+            await self._aregenerate_input(thread_id, task.prompt, scheduled_by=mark)
+            return
+        new = not msgs
+        option = task.option if new and task.option in {o.id for o in self.planner.catalog.offered(self.planner.usable)} else None
+        await self._aaccept(thread_id, task.prompt, option=option, owner=task.owner if new else None, work=task.work, scheduled_by=mark,
+                            title=task.title)
+
+    async def _ascheduled_done(self, run: str, status: str) -> None:
+        """定时任务发起的那次执行结束了：结果记到任务上。记不上只打日志，不耽误这次执行收尾（退占位）。"""
+        if (task_id := self._scheduled.pop(run, None)) is None:
+            return
+        try:
+            await self.tasks.finished(task_id, {ERROR: scheduled.FAILED, STOPPED: scheduled.STOPPED}.get(status, scheduled.OK))
+        except Exception:  # noqa: BLE001
+            log.warning("定时任务这一次的结果没记上：%s", task_id, exc_info=True)
+
+    async def _arecover_scheduled(self) -> None:
+        """服务启动时：任务上还记着“在跑”、其实上个进程已经没了的，记成被打断（LOST），马上补一次（见 ScheduledTasks.finished）。"""
+        for t in await self.tasks.store.running():
+            if t.id not in self._scheduled.values():
+                await self.tasks.finished(t.id, scheduled.LOST)
+
+    def scheduled_tasks(self, who: Identity) -> list[dict]:
+        """这个人的定时任务，先建的在前。"""
+        return [self.tasks.view(t) for t in aio.run(self.tasks.of_owner(who.sub))]
+
+    def create_task(self, who: Identity, **fields: Any) -> dict:
+        """接口建的任务：第一次跑时新开一段对话。校验不过抛 scheduled.TaskError；选的模型没有抛 UnknownModel。"""
+        if (option := fields.get("option")) is not None and option not in {o.id for o in self.planner.catalog.offered(self.planner.usable)}:
+            raise UnknownModel(f"没有这个模型可选：{option}")
+        return self.tasks.view(aio.run(self.tasks.create(who.sub, who.tier, **fields)))
+
+    def update_task(self, who: Identity, task_id: str, **fields: Any) -> dict:
+        return self.tasks.view(aio.run(self.tasks.update(who.sub, task_id, tier=who.tier, **fields)))
+
+    def delete_task(self, who: Identity, task_id: str) -> None:
+        aio.run(self.tasks.delete(who.sub, task_id))
+
+    def run_task(self, who: Identity, task_id: str) -> dict:
+        """立即执行一次（不动原来定的下一次；停着的、跑完了的也能执行），返回任务现在的样子（thread_id 是跑在哪段对话里）。
+        那段对话正在跑抛 RunConflict，卡着（上一轮没跑完、在等回答）抛 NotIdle；没有这个任务抛 scheduled.TaskError。"""
+        return aio.run(self._arun_task(who, task_id))
+
+    async def _arun_task(self, who: Identity, task_id: str) -> dict:
+        t = await self.tasks.get(who.sub, task_id)
+        if t.tier != who.tier:
+            t = await self.tasks.store.patch(t.id, tier=who.tier) or t
+        got = await self._afire(t, manual=True)
+        if got in (BUSY, GONE):  # GONE：点的工夫任务被删了（下面取任务时报没有），或者它挂着的那段对话刚删了
+            await self.tasks.get(who.sub, task_id)
+            raise RunConflict("这段对话正在回答，等它答完再运行" if got == BUSY else "任务刚有改动，再点一次")
+        if got == scheduled.BLOCKED:
+            raise NotIdle("这段对话上一轮没跑完，先去对话里看看")
+        return self.tasks.view(await self.tasks.get(who.sub, task_id))
+
     # ---- 运行记录 ----
 
     def recover(self) -> None:
-        """服务启动时调一次：上次进程退出时还在排队、在跑的运行，记成没跑完（lost）。单进程部署，这时它们都已经停了。"""
+        """服务启动时调一次：上次进程退出时还在排队、在跑的运行，记成没跑完（lost）。单进程部署，这时它们都已经停了。
+        其中定时任务发起的，任务上也记一笔，马上再补一次（见 _arecover_scheduled）。"""
         if n := aio.run(self.run_store.sweep()):
             log.warning("上次进程退出时有 %d 次运行没跑完，已记成 lost", n)
+        aio.run(self._arecover_scheduled())
 
     def thread_runs(self, thread_id: str) -> list[dict]:
         """这段对话的每次运行，新的在前。堆栈不给：网站没有登录，堆栈只留在库和日志里。"""

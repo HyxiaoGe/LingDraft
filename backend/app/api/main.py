@@ -9,7 +9,7 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePosixPath
-from typing import Annotated, NamedTuple
+from typing import Annotated, Literal, NamedTuple
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -31,6 +31,8 @@ from app.api.runner import BaseRunner, GraphRunner, RunConflict, valid_thread_id
 from app.api.runner import busy as runner_busy
 from app.files.service import NotSendable, UploadRejected, view as file_view
 from app.graph.research.memory import TEXT_MAX as MEMORY_TEXT_MAX
+from app.scheduled import rule
+from app.scheduled import service as scheduled
 from app.graph.research.memory import DreamSchedule
 from app.identity import ADMIN, Authenticator, AuthUnavailable, BadToken, Identity, make_authenticator
 from app.knowledge.service import LibraryRejected, library_view
@@ -46,7 +48,8 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """服务起来时先打开对话的存储：没配库、连不上就报错，服务起不来（见 research_runner.open_storage）。
-    再开整理记忆的定时任务（见 graph.research.memory.DreamSchedule），关掉时停。配了 LangSmith 就传对话的过程（见 app.tracing）。
+    再开整理记忆的定时任务（见 graph.research.memory.DreamSchedule）、用户的定时任务到点发起的循环（见 app.scheduled），关掉时停。
+    配了 LangSmith 就传对话的过程（见 app.tracing）。
     每次调模型记一行成本（见 app.costs），关掉时把还没写的写完。"""
     traced = tracing.start()
     costs.open_ledger()
@@ -55,7 +58,11 @@ async def lifespan(_app: FastAPI):
     if config.DREAM_ENABLED:
         schedule = DreamSchedule(lambda: research().dream(), lambda: research().memory.last_dream(), config.DREAM_HOUR)
         schedule.start()
+    if config.SCHEDULED_ENABLED:
+        research().start_schedule()
     yield
+    if config.SCHEDULED_ENABLED:
+        research().stop_schedule()
     if schedule:
         schedule.stop()
     costs.LEDGER.stop()
@@ -658,6 +665,112 @@ def memory_delete(item_id: str, who: Who):
     if not research().forget_memory(who, item_id):
         raise HTTPException(404, "没有这条记忆")
     return {"ok": True}
+
+
+# ---- 定时任务（见 app.scheduled，2026-11-12 Sean 定）：游客没有。页面在 /scheduled ----
+
+# 不收的原因（ScheduledTasks 的 TaskError.code）→ 状态码、给人看的话
+_TASK_REJECTED = {
+    scheduled.BAD_TITLE: (422, f"任务名称不能为空，最多 {scheduled.TITLE_MAX} 个字"),
+    scheduled.BAD_PROMPT: (422, f"要做的事不能为空，最多 {scheduled.PROMPT_MAX} 个字"),
+    scheduled.NO_SCHEDULE: (422, "还没选什么时候运行"),
+    scheduled.BAD_STATUS: (422, "只能暂停或者恢复"),
+    scheduled.IN_THE_PAST: (422, "这个时间已经过了，选一个以后的时间"),
+    scheduled.NOT_FOUND: (404, "没有这个定时任务"),
+    rule.BAD_CRON: (422, "运行时间的写法不对"),
+    rule.BAD_TIME: (422, "运行时间的写法不对"),
+    rule.TOO_OFTEN: (422, "最密每小时运行一次"),
+    rule.NEVER: (422, "这个时间永远到不了，换一个"),
+}
+
+
+class TaskBody(BaseModel):
+    title: str | None = Field(default=None, max_length=200)  # 建的时候 title、prompt 都要有；改的时候没给的不改
+    prompt: str | None = Field(default=None, max_length=20000)
+    cron: str | None = Field(default=None, max_length=100)  # 重复的：5 段的 cron，北京时间；和 once_at 只能给一样
+    once_at: str | None = Field(default=None, max_length=40)  # 只跑一次的：时间点（没带时区的按北京时间）
+    status: Literal["active", "paused"] | None = None  # 改的时候：恢复、暂停
+    work: bool | None = None  # 建的时候：新开的那段对话是不是工作任务
+    model: str | None = Field(default=None, max_length=100)  # 建的时候：新开的那段对话用哪个模型选项，没给是 Auto
+
+
+def _task_rejected(e: scheduled.TaskError) -> HTTPException:
+    if e.code == scheduled.TOO_MANY:
+        limit = research().tasks.max_tasks
+        return HTTPException(409, {"code": "task_rejected", "reason": e.code, "message": f"最多 {limit} 个定时任务，先删掉一个", "limit": limit})
+    status, message = _TASK_REJECTED.get(e.code, (422, "定时任务没存上"))
+    return HTTPException(status, {"code": "task_rejected", "reason": e.code, "message": message})
+
+
+def _task_user(who: Identity) -> None:
+    if who.guest:
+        raise HTTPException(403, {"code": "task_rejected", "reason": "login_required", "message": "登录后才能用定时任务"})
+
+
+@app.get("/api/scheduled-tasks")
+def tasks_view(who: Who):
+    """这个人的定时任务（tasks，先建的在前）和最多几个（limit，跑完了的一次性任务不算）。游客的 available 是 false、没有任务。
+    每个任务：id、title、prompt（每次跑时交给模型的那份交代）、cron 或 once_at、schedule（页面上那一行“每天 · 07:22”）、
+    status（active / paused / done）、paused_by（user：自己停的；failures：连着几次没跑成停下的）、thread_id（跑在哪段对话里，还没跑过的是 null）、
+    next_at、last_at、last_status（running / ok / failed / stopped / no_credits / blocked / lost）。"""
+    r = research()
+    if who.guest:
+        return {"available": False, "tasks": [], "limit": 0}
+    return {"available": True, "tasks": r.scheduled_tasks(who), "limit": r.tasks.max_tasks}
+
+
+@app.post("/api/scheduled-tasks")
+def task_create(body: TaskBody, who: Who):
+    """建一个定时任务：第一次跑时新开一段对话（work、model 定那段对话是不是工作任务、用哪个模型）。
+    不收的 detail 是 {code: "task_rejected", reason, message, …}：游客 403（login_required）、写得不对 422、满了 409（too_many，带 limit）；
+    这一档选不了的模型 403，没有这个模型 400。"""
+    _task_user(who)
+    r = research()
+    if body.model and r.locked(body.model, who.tier):
+        raise HTTPException(403, "登录后才能用这个模型")
+    try:
+        return r.create_task(who, title=body.title or "", prompt=body.prompt or "", cron=body.cron, once_at=body.once_at,
+                             work=bool(body.work), option=body.model or None)
+    except scheduled.TaskError as e:
+        raise _task_rejected(e) from None
+    except UnknownModel as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.patch("/api/scheduled-tasks/{task_id}")
+def task_update(task_id: str, body: TaskBody, who: Who):
+    """改名称、交代、什么时候跑，或者暂停、恢复（status）；没给的不改。返回改完的任务。不收的同上；不是这个人的、没有的 404。"""
+    _task_user(who)
+    try:
+        return research().update_task(who, task_id, title=body.title, prompt=body.prompt, cron=body.cron, once_at=body.once_at, status=body.status)
+    except scheduled.TaskError as e:
+        raise _task_rejected(e) from None
+
+
+@app.delete("/api/scheduled-tasks/{task_id}")
+def task_delete(task_id: str, who: Who):
+    """删掉，以后不再跑。跑出来的对话留着。不是这个人的、没有的 404。"""
+    _task_user(who)
+    try:
+        research().delete_task(who, task_id)
+    except scheduled.TaskError as e:
+        raise _task_rejected(e) from None
+    return {"ok": True}
+
+
+@app.post("/api/scheduled-tasks/{task_id}/run")
+def task_run(task_id: str, who: Who):
+    """立即执行一次，不动原来定的下一次（停着的、跑完了的也能执行）。返回任务（thread_id 是跑在哪段对话里，页面可以跳过去看）。
+    额度用完了 429；那段对话正在回答、上一轮没跑完返回 409。"""
+    _task_user(who)
+    r = research()
+    _admit(r, who)
+    try:
+        return r.run_task(who, task_id)
+    except scheduled.TaskError as e:
+        raise _task_rejected(e) from None
+    except (RunConflict, NotIdle) as e:
+        raise HTTPException(409, str(e)) from None
 
 
 @app.get("/api/research/threads")

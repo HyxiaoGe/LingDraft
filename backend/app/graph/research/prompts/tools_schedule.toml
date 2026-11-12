@@ -1,0 +1,55 @@
+# 定时任务（app.scheduled、app.tools.schedule，2026-11-12 Sean 定）：在对话里说一句话，模型用这几个工具建、改、删、列；到点了在这段对话里多跑一轮。
+# 都是灵稿自己写的。只给登录用户的主 agent（游客、子 agent 没有，见 agent.can_schedule）。
+
+[tools.create_scheduled_task]
+# 时间和要做的事清楚就直接建，不拿用户说过的回去确认（Sean 定：问题卡只在需要人介入时出现）；没说什么时候才问。
+# 交代要写成不看这段对话也能照做的一份：到点时没人在场，问不了（豆包存的也是模型重写过的完整交代，不是用户原话）
+description = """Create a scheduled task: at the times you set, LingDraft starts a new turn in this conversation by itself, carries out the instructions you write here, and leaves the result in the conversation for the user to read later. Use it when the user asks for something to be done regularly or at a later time, such as a daily news digest, a weekly summary, or a reminder at a given time.
+Create the task directly once you know what to do and when; do not ask the user to confirm what they already said. If they did not say when or how often, ask before creating it.
+Each run starts without the user present and cannot ask them anything, so settle now whatever the task needs. After creating it, tell the user in a sentence or two what was set up: the task's name, when it runs, and when the first run will be. Take the first run from next_run in the result, and whether that is today or tomorrow from next_run_is; do not work it out yourself.
+A user can keep at most {{ max_tasks }} scheduled tasks, and a task can run at most once an hour."""
+title = "A short name for the task in the user's language, at most {{ title_max }} characters, such as 'Daily chip industry news'. It is shown in the user's task list and above each run."
+prompt = """The complete instructions for each run, in the user's language, addressed to yourself at run time. Write them so they can be carried out without rereading this conversation: what to find or produce, the scope and sources to cover, how to filter and how much to include, what to do when there is little or nothing new, and the format of the result. Describe time ranges relative to the run, such as 'the past 24 hours', never as fixed dates. Do not put the schedule itself in here."""
+cron = """For a repeating task: a 5-field cron expression in Asia/Shanghai time, 'minute hour day-of-month month day-of-week'. The minute must be a single number. Examples: '22 7 * * *' is every day at 07:22; '0 9 * * 1-5' is weekdays at 09:00; '30 18 * * 5' is Fridays at 18:30; '0 9 1,15 * *' is the 1st and 15th of each month at 09:00; '5 * * * *' is every hour at minute 5. Numbers, *, lists, ranges and steps are supported; day-of-week is 0-7, where 0 and 7 are Sunday. Give either this or run_at, not both."""
+run_at = """For a task that runs once: the date and time in Asia/Shanghai as 'YYYY-MM-DD HH:MM'. It must be in the future. When the user gives a relative time such as 'in two hours' or 'tomorrow morning', call get_current_time first and work it out from that. Give either this or cron, not both."""
+
+[tools.update_scheduled_task]
+description = """Change one of the user's scheduled tasks: its name, its instructions, or its schedule, or pause and resume it. Give only what should change. Take the task_id from the result of creating the task or from list_scheduled_tasks."""
+task_id = "The id of the task, such as 'task-1a2b3c4d5e6f'."
+title = "A new name for the task, at most {{ title_max }} characters. Leave out to keep the current one."
+prompt = "New complete instructions for each run, replacing the current ones, written the same way as when creating a task. Leave out to keep the current ones."
+cron = "A new 5-field cron expression in Asia/Shanghai time (the minute must be a single number), making this a repeating task. Leave out to keep the current schedule."
+run_at = "A new date and time in Asia/Shanghai as 'YYYY-MM-DD HH:MM', in the future, making this a task that runs once. Leave out to keep the current schedule."
+paused = "true to pause the task so that it stops running until resumed; false to resume it. Leave out to keep it as it is."
+
+[tools.delete_scheduled_task]
+description = """Delete one of the user's scheduled tasks so that it never runs again. The conversation and the results of earlier runs stay. Take the task_id from the result of creating the task or from list_scheduled_tasks."""
+task_id = "The id of the task, such as 'task-1a2b3c4d5e6f'."
+
+[tools.list_scheduled_tasks]
+description = """List the user's scheduled tasks: id, name, schedule, whether each is active, paused or done, when it runs next, and how the last run went. Use it when the user asks what tasks they have, or when you need a task_id you do not have."""
+
+# 工具结果里给模型看的话：没办成时的原因（键是 app.scheduled.service.TaskError 的 code）
+[tools.scheduled_task]
+unavailable = "Scheduled tasks are not available in this conversation, so nothing was done. Tell the user that scheduled tasks need a signed-in account."
+bad_title = "Not saved: the title is empty or longer than {{ title_max }} characters. Give a shorter title."
+bad_prompt = "Not saved: the instructions are empty or longer than {{ prompt_max }} characters. Give shorter instructions."
+no_schedule = "Not saved: give exactly one of cron (a repeating task) or run_at (a task that runs once)."
+bad_cron = "Not saved: the cron expression is not valid. Use 5 fields, 'minute hour day-of-month month day-of-week', with numbers, *, lists such as 1,15, ranges such as 1-5, and steps such as */2. Names such as MON or JAN, and L, W and #, are not supported."
+too_often = "Not saved: a task can run at most once an hour, so the minute field must be a single number, for example '5 * * * *' for every hour at minute 5."
+never_runs = "Not saved: this cron expression never matches a real date."
+bad_time = "Not saved: run_at is not a valid date and time. Use 'YYYY-MM-DD HH:MM' in Asia/Shanghai."
+in_the_past = "Not saved: the time is not in the future. Call get_current_time and give a later run_at."
+too_many = "Not saved: the user already has {{ max_tasks }} scheduled tasks, which is the limit. Tell the user, and offer to delete or change one of the existing tasks (see list_scheduled_tasks)."
+not_found = "There is no scheduled task with this id. Call list_scheduled_tasks to see the user's tasks."
+bad_status = "Not saved: paused must be true or false."
+
+[scheduled]
+# 定时任务触发的一轮：发给模型时接在任务里存的那份交代前面（app.tools.schedule.with_run_notes），存下来的消息里没有，页面上也不显示。
+# 没人在场：不问、不等确认，自己定并说明；没有新东西就照实说，不凑数。at 是触发的时间（北京时间，带星期），模型不用再去取
+run = """[Scheduled run]
+This turn was started automatically by the scheduled task "{{ title }}" at {{ at }} (Asia/Shanghai), not by a message the user just typed. The user set this task up earlier and is not here now; they will read the result later.
+Carry out the instructions below in full and give the finished result in your reply. Do not ask questions or wait for confirmation: where something is unclear, use your best judgment and say briefly what you assumed. If there is genuinely nothing new to report this time, say so in a sentence or two instead of padding the result.
+
+Instructions:
+"""

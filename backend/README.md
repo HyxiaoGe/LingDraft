@@ -45,6 +45,7 @@ cd ../frontend && npm install && npm run dev                    # http://localho
   - `LINGDRAFT_RESEARCH_WORKERS`：同时跑几段对话，默认 4，多出来的排队。
   - `COMPACT_TRIGGER_TOKENS`、`COMPACT_TARGET_TOKENS`：上下文压缩的触发线和压到多少，默认 20 万、10 万。
   - `LINGDRAFT_DREAM=0` 关掉每天按时整理记忆；`LINGDRAFT_DREAM_HOUR` 是北京时间几点整理，默认 3 点。
+  - `LINGDRAFT_SCHEDULED=0` 关掉定时任务的到点发起（任务照样能建）；`LINGDRAFT_SCHEDULED_TICK_S` 隔多少秒看一次，默认 30；`LINGDRAFT_SCHEDULED_TASKS_MAX` 每人最多几个，默认 5；`LINGDRAFT_SCHEDULED_MAX_FAILURES` 连着几次没跑成就停下，默认 3。
   - `LINGDRAFT_FILES_DIR`：用户传的文件原件放哪，默认数据目录下的 `files/`；`FILE_PARSE_TIMEOUT_S`：解析一个文件最多多少秒，默认 60。
   - `LANGSMITH_TRACING=true` 加上 `LANGSMITH_API_KEY`：对话的过程传到 LangSmith（`app/tracing.py`），`LANGSMITH_PROJECT` 是传到哪个项目。每轮对话一条 trace，带着 thread_id；中间件那几层只留名字和用时。本机的 `.env` 只放 key、不开 tracing，给评测传实验用（见 `evals/README.md`）。
 - 外部服务：
@@ -240,6 +241,29 @@ SSE 事件：
 - `GET /api/knowledge/files/{id}`：状态，同 `/api/files/{id}`，`failed` 的原因还有 `kb_chars`（字数到上限）、`index_failed`（索引没建成）、`no_text`（没有文字）。`DELETE` 删，删了马上搜不到，正在处理的也能删。
 - `GET /api/knowledge/files/{id}/parts`：右栏预览；`GET /api/knowledge/files/{id}/original`：下载原件。
 
+## 定时任务
+
+到点了，在任务挂着的那段对话里多跑一轮：把任务里存的那份完整交代当成这一轮的话，模型照常搜、读、写，结果留在对话里等用户回来看（`app/scheduled/`、`app/tools/schedule.py`，运行器里的“定时任务”一节）。游客没有。
+
+- 任务：名字（最多 40 字）、交代（最多 4000 字）、什么时候跑、跑在哪段对话。每人最多 5 个，跑完了的一次性任务不算。
+- 什么时候跑：重复的是 5 段的 cron，只跑一次的是一个时间点，都按北京时间。cron 只收数字、`*`、列表、区间、步长；分钟段必须是单个数，所以最密每小时一次。
+- 两种建法：对话里说一句话，模型用 `create_scheduled_task` 建，任务挂在这段对话上（另有 `update_` / `delete_` / `list_scheduled_tasks`，任务认人不认对话）；接口建的第一次跑时新开一段对话，标题用任务的名字。对话删了任务还在，下次跑时再新开一段。
+- 模型只知道今天几号、不知道现在几点：工具结果里除了下一次的时间（`next_run`），还写明现在几点（`now`）、下一次是今天还是明天（`next_run_is`），不让它自己算（真实模型在 00:18 建每天 8 点的任务，说过“首次运行是明天”）。
+- 触发的那条用户消息存的就是任务的交代，`additional_kwargs` 里的 `lingdraft_scheduled` 记着 `{task_id, title}`；发给模型时前面加一段说明（哪个任务、什么时候触发、没人在场，`prompts/tools_schedule.toml` 的 `scheduled.run`），存下来的消息里没有。页面不把它显示成用户说的话，只写一行由哪个任务触发。
+- 没人在场：这一轮不给 `ask_user`、不跟浏览器要位置；整理记忆时跳过（那句话不是这个人说的）。照常扣这个人的额度。
+- 到点发起：对话的事件循环里一个协程每 30 秒看一次到点了的任务。交出去以后下一次从现在往后算，服务停着时错过的几次并成一次。
+  - 额度用完了：这一次不跑（`no_credits`），等下一次。
+  - 那段对话正在跑：下一拍再试。上一轮是用户自己的、没跑完（出错了没重试、停在问用户那里）：这一次不跑（`blocked`），不替用户收尾。
+  - 上一轮就是这个任务触发的、没跑完（上一次出错了，或者被服务重启打断）：那一轮重来，不另起一轮。
+  - 连着 3 次没跑成：自己停下（`paused_by` 是 `failures`），等用户恢复。服务重启时任务上还记着在跑的，记成 `lost`，起来以后马上再来一次。
+- 运行记录里 `kind` 是 `scheduled`（到点发起的、点“立即执行”的都是）。
+
+接口（游客：`GET` 的 `available` 是 false，其余 403 `login_required`；别人的、没有的 404）：
+
+- `GET /api/scheduled-tasks`：`{available, tasks, limit}`。每个任务有 `id`、`title`、`prompt`、`cron` 或 `once_at`、`schedule`（给人看的一行，像“每天 · 07:22”）、`status`（`active` / `paused` / `done`）、`paused_by`、`thread_id`、`work`、`model`、`next_at`、`last_at`、`last_status`（`running` / `ok` / `failed` / `stopped` / `no_credits` / `blocked` / `lost`）。
+- `POST /api/scheduled-tasks`（json `{title, prompt, cron | once_at, work?, model?}`）建；`PATCH /api/scheduled-tasks/{id}` 改，没给的不改，`status` 给 `paused` / `active` 是暂停、恢复；`DELETE` 删，跑出来的对话留着。不收的 `detail` 是 `{code: "task_rejected", reason, message, …}`：写得不对 422（`bad_title` / `bad_prompt` / `no_schedule` / `bad_cron` / `too_often` / `never_runs` / `bad_time` / `in_the_past`），满了 409（`too_many`，带 `limit`）。
+- `POST /api/scheduled-tasks/{id}/run`：立即执行一次，不动原来定的下一次，停着的也能跑。额度用完 429；那段对话正在回答、上一轮没跑完 409。
+
 ## 身份和其他接口
 
 - 身份（`app/identity.py`）：每个请求带 `Authorization: Bearer`，是灵稿自己签的游客令牌（`sub` 带 `guest:` 前缀），或 auth 服务的 access token（按 JWKS 验签，锁定签发者、audience 和 `type=access`；验过再查 auth 的 Redis 里的吊销标记，Redis 不通就放行）。三档：游客、登录用户、管理员。auth 服务的公钥取不到返回 503。
@@ -289,6 +313,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 - `runs`、`pending_messages`、`thread_owners`（`app/api/run_store.py`）：运行记录、排着的话、每段对话归谁和置顶时间（`pinned_at`）。
 - `files`、`file_parts`（`app/files/store.py`）：用户发的文件、模型写的文件（一版一行）、图片的登记，一行一个；`workspace_id` 是对话 id 或 `kb:<资料库编号>`。`file_parts` 是抽出来的文字，按段。
 - `kb_libraries`、`kb_chunks`（`app/knowledge/`）：资料库的名字和说明；块的内容、1024 维向量（pgvector）、tsvector，跟着文件删。库里要有 pgvector 扩展：建表时跑 `CREATE EXTENSION IF NOT EXISTS vector`，扩展已经装好的，连库的账号不是超级用户也不报错。
+- `scheduled_tasks`（`app/scheduled/store.py`）：定时任务，一行一个。
 - `model_costs`、`quota_resets`、`free_used_up`：成本账、管理员重置额度的时间、用完的免费额度（按模型和到期日）。
 
 库在别的机器上、端口不对外时，可以用 SSH 隧道转到本机（见 `.env.example`）。隧道断着的时候，请求会等 10 秒报错；接回来以后不用重启后端。
@@ -363,9 +388,11 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 - `app/identity.py` 身份；`app/quota.py` 额度；`app/costs.py` 成本记账；`app/tracing.py` LangSmith；`app/clock.py` 模型看得到的当前时间（评测回放时挪到录像的那时）。
 - `app/files/`：文件表（`store.py`）、上传和解析（`service.py`、`parse.py`、子进程 `child.py`）、模型写的文件用到的切段和按片段改（`artifacts.py`）、补登记图片（`backfill_images.py`）。
 - `app/knowledge/`：资料库（`libraries.py`）、切块和分词（`text.py`）、块和查询（`store.py`）、向量和重排（`remote.py`）、建索引和查（`service.py`）。
+- `app/scheduled/`：定时任务。什么时候跑（`rule.py`：cron 和一次性的时间、下一次什么时候、给人看的说法）、表（`store.py`）、建改删列和每次跑完怎么记（`service.py`）。
 - `app/tools/`：
   - `gateway.py`：agent-tools 网关客户端（传图、按编号取图、删图，沙箱的放文件、取文件、跑命令），和网关出错时的几种异常。
   - `run_command.py`：在沙箱里跑命令，`run_command`。
+  - `schedule.py`：定时任务的四个工具，和定时任务触发的一轮发给模型时前面加的说明。
   - `files.py`：用户发的文件怎么给模型，`read_file`。`write_file.py`：`create_file`、`edit_file`。`vision.py`：用户发的图怎么给模型，`view_image`。`knowledge.py`：`search_knowledge`。
   - `research_tools.py`：agent 自己的工具（`get_current_time`），描述在 `prompts/tools_web.toml`。
   - `mcp.py`：MCP 工具共用的部分：经网关连、取工具、认出网关的 401/403（让这一轮失败）和 429（今天的上限到了）；`request_meta` 让一次调用带上 MCP 请求的 `_meta`（不经过模型的东西，比如用户的位置）。
@@ -390,7 +417,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
     - `test_research_subagent.py`：子 agent。
     - `test_compaction.py`（含超长压了再发）、`test_memory.py`。
     - 工具：`test_images.py`（画图）、`test_weather.py`、`test_web_tools.py`（搜索、读页）、`test_maps.py`、`test_travel.py`（航班火车、行程）、`test_docs.py`（查文档）、`test_gateway_tools.py`（网关客户端）。
-    - `test_vision.py`：用户发的图怎么给模型、`view_image`。`test_files.py`：用户发的文件、`read_file`。`test_artifacts.py`：模型写的文件。`test_run_command.py`：跑命令。`test_export.py`：右栏的下载成 PDF / Word、PPT 排成 PDF。`test_knowledge.py`：资料库。
+    - `test_vision.py`：用户发的图怎么给模型、`view_image`。`test_files.py`：用户发的文件、`read_file`。`test_artifacts.py`：模型写的文件。`test_run_command.py`：跑命令。`test_export.py`：右栏的下载成 PDF / Word、PPT 排成 PDF。`test_knowledge.py`：资料库。`test_scheduled.py`：定时任务。
     - `test_model_options.py`：选模型、思考开关。`test_auto_routing.py`：Auto、免费额度、换备用。
     - `test_costs.py`：成本记账。`test_quota.py`：额度。`test_identity.py`：身份、对话和记忆按人分、游客并进账号。
     - `test_run_records.py`：运行记录、没配库启动报错。
