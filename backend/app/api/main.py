@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal, NamedTuple
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -796,9 +796,10 @@ def task_run(task_id: str, who: Who):
 
 
 @app.get("/api/research/threads")
-def research_list(who: Who):
-    """线程列表：这个人的对话的标题和状态。登录以前没归谁的老对话谁都看不到。"""
-    return {"threads": research().list_threads(who)}
+def research_list(who: Who, limit: Annotated[int | None, Query(ge=1)] = None, current: str | None = None):
+    """线程列表：这个人的对话的标题和状态。登录以前没归谁的老对话谁都看不到。
+    limit：只要最近有动静的这么多段（置顶的、有未读的、在跑的、current 那段不管排在哪都带上），不给是全部；more 是还有没给的。"""
+    return research().list_page(who, limit, current)
 
 
 @app.get("/api/models")

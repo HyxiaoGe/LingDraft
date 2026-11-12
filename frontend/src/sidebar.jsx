@@ -55,10 +55,12 @@ function rowSub(t, now) {
 }
 
 // 列表每隔几秒取一次；当前这个线程以页面手上的状态为准，刚新建、列表里还没有的先补一行（左栏和搜对话的窗口都用）。
-// work：当前这一页是不是工作任务（补的那一行用）
-export function withCurrent(threads, current, st, live, busy, work) {
+// work：当前这一页是不是工作任务（补的那一行用）；started：这段对话是这个页面刚发起的——不是的话列表里没有就不补：
+// 那是更早的、左栏还没取到的对话，列表马上会带着它回来（带着它自己的时间，排在该在的地方）
+export function withCurrent(threads, current, st, live, busy, work, started) {
   if (!current) return threads;
   const mine = threads.find((t) => t.thread_id === current);
+  if (!mine && !started) return threads;
   const title = live?.title || st?.title;
   const patch = { ...(busy ? { status: "running", running_since: st?.running_since || mine?.running_since } : st ? { status: st.status } : {}),
     ...(title ? { title } : {}) };
@@ -73,8 +75,9 @@ const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabind
 // href：对话 id → 地址；newHref：新页面的地址（true 是新工作任务）；onSelect(id)：打开对话，onSelect(null, "push", true) 是新工作任务；
 // work：现在这一页是不是工作任务（在新页面上决定“新对话”“新工作任务”哪一行是选中的）；
 // onPage(name)：去定时任务页（"scheduled"）、资料库页（"library"）；没有登录功能的部署没有这两样，是 null，不放这两行。
-// page：现在在哪一页（那一行是选中的，别的都不是），在对话里是 null
-export function Sidebar({ threads, current, st, live, busy, work, now, href, newHref, onSelect, manage, onSettings, onPage, page, onSearch, auth, onLogin, credits, onCredits, nav }) {
+// page：现在在哪一页（那一行是选中的，别的都不是），在对话里是 null；
+// more：列表下面还有没取的（先取最近的一部分），滚到底时 onMore() 多取一页；started：开着的这段是这个页面刚发起的（见 withCurrent）
+export function Sidebar({ threads, more, onMore, current, started, st, live, busy, work, now, href, newHref, onSelect, manage, onSettings, onPage, page, onSearch, auth, onLogin, credits, onCredits, nav }) {
   const [menu, setMenu] = useState(null); // 打开菜单的那一行：{id, anchor: 那一行的“⋯”}
   const [renaming, setRenaming] = useState(null); // 正在改名的线程 id
   const box = useRef(null);
@@ -94,7 +97,17 @@ export function Sidebar({ threads, current, st, live, busy, work, now, href, new
     }
   };
   // 列表还没取回来时一行都不放，只有下面的占位：当前这段对话的状态先到（列表要慢一两秒），单放它一行像是别的对话都没了
-  const rows = threads === null ? [] : withCurrent(threads, current, st, live, busy, work);
+  const rows = threads === null ? [] : withCurrent(threads, current, st, live, busy, work, started);
+  // 还有没取的：列表最下面放几行占位，它快滚进来时（差 240px）多取一页。取回来行数变了重新看一次：屏幕很高、一页没填满时接着取
+  const tail = useRef(null);
+  const moreFn = useRef(onMore);
+  moreFn.current = onMore;
+  useEffect(() => {
+    if (!more || !tail.current) return undefined;
+    const io = new IntersectionObserver(([e]) => { if (e.isIntersecting) moreFn.current(); }, { root: list.current, rootMargin: "240px 0px" });
+    io.observe(tail.current);
+    return () => io.disconnect();
+  }, [more, rows.length]);
   const fresh = !current && !page; // 在新页面上：选着对话还是工作，哪一行就是选中的
   // 最上面的三个入口：一样的一行（图标、字和下面对话那几行对齐），按住 ⌘/Ctrl/Shift 点是浏览器自己开新标签页
   const entry = (key, to, icon, label, on, go, ref) => (
@@ -211,6 +224,13 @@ export function Sidebar({ threads, current, st, live, busy, work, now, href, new
               {items.map((t) => row(t, key))}
             </div>
           ))}
+          {threads !== null && more && (
+            <div ref={tail} data-more className="flex flex-col gap-4 px-2.5 pt-1 pb-3" aria-hidden="true">
+              {[66, 52, 74].map((w) => (
+                <span key={w} className="flex items-center gap-[9px]"><span className="block size-[15px] flex-none rounded-sm bg-hover" /><span className="block h-4 rounded-sm bg-hover" style={{ width: `${w}%` }} /></span>
+              ))}
+            </div>
+          )}
         </nav>
         {/* 最下面一行：左边额度，右边账号（游客是“游客”头像，没有登录功能的部署只有“设置”） */}
         <div className="flex items-center gap-3 border-t border-line px-2 pt-2 pb-0.5 phone:min-h-11 phone:px-1 phone:pt-1 phone:pb-0">

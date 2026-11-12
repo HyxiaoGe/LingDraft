@@ -15,8 +15,8 @@ from app.graph.research.graph import latest_checkpoints, memory_checkpointer
 from app.identity import Identity
 from app.research_llm import FakeResearchPlanner
 from app.tools.gateway import GatewayAuthError
-from tests.auth_helpers import USER
-from tests.research_helpers import events, hold, last, new, say, state, wait_until
+from tests.auth_helpers import USER, bearer, user_token
+from tests.research_helpers import events, hold, hold_model, last, new, say, state, wait_until
 
 ME = Identity("u1", "user")
 
@@ -238,3 +238,48 @@ def test_list_while_a_turn_is_running(held, monkeypatch):
     rows = _rows(http)
     assert rows[tid]["status"] == "idle" and rows[tid]["running_since"] is None
     _same_as_state(http, rows)
+
+
+def test_list_page():
+    """页面先取最近的几段、往下滚再多取：limit 是最近有动静的多少段；置顶的、有未读的、在跑的、current 那段不管排在哪都带上；
+    more 是还有没给的。不给 limit 是全部。"""
+    rr = ResearchRunner(fake=True)
+    http = _client(rr)
+    ids = [new(http, f"直接答：{x}")["thread_id"] for x in "甲乙丙丁戊己"]  # 越后面的越新
+    newest = ids[::-1]
+
+    def page(**q) -> tuple[list[str], bool]:
+        got = http.get("/api/research/threads", params=q).json()
+        return [r["thread_id"] for r in got["threads"]], got["more"]
+
+    assert page() == (newest, False)
+    assert page(limit=2) == (newest[:2], True)
+    assert page(limit=6) == (newest, False) and page(limit=50) == (newest, False)
+    assert page(limit=5) == (newest[:5], True)
+    assert http.get("/api/research/threads", params={"limit": 0}).status_code == 422
+    # 开着的那段：排在后面也带上；别人的、没有的不带
+    assert page(limit=2, current=ids[0]) == (newest[:2] + [ids[0]], True)
+    assert page(limit=2, current=ids[5]) == (newest[:2], True) and page(limit=2, current="nope") == (newest[:2], True)
+    # 置顶的、有未读的
+    assert http.post(f"/api/research/threads/{ids[1]}/pin").status_code == 200
+    aio.run(rr.run_store.notify(ids[2], {"title": "早报", "text": "", "ok": True}))
+    assert page(limit=2) == (newest[:2] + [ids[2], ids[1]], True)
+    assert page(limit=2, current=ids[0]) == (newest[:2] + [ids[2], ids[1], ids[0]], True)
+    assert page(limit=3) == (newest[:3] + [ids[2], ids[1]], True) and page(limit=4) == (newest[:4] + [ids[1]], True)
+    http.post(f"/api/research/threads/{ids[2]}/read")
+    assert page(limit=2) == (newest[:2] + [ids[1]], True)
+    # 在跑的：它开跑以后别的对话又有了动静，排到后面了也带上
+    gate = hold_model(rr.planner)
+    try:
+        with http.stream("POST", f"/api/research/threads/{ids[0]}/messages", json={"text": "直接答：再来"}) as resp:
+            assert wait_until(lambda: _rows(http)[ids[0]]["status"] == "running")
+            assert http.patch(f"/api/research/threads/{ids[5]}", json={"title": "改个名"}).status_code == 200  # 这段排到最前
+            assert page(limit=1) == ([ids[5], ids[0], ids[1]], True)
+            gate.set()
+            assert [line for line in resp.iter_lines()]
+    finally:
+        gate.set()
+    assert wait_until(lambda: not state(http, ids[0])["suggesting"])
+    assert page(limit=1) == ([ids[0], ids[1]], True)  # 答完了：它是最新的那段，另带上置顶的
+    http2 = TestClient(api_main.app, headers=bearer(user_token("u2")))  # 别人：一段都没有；拿别人的 id 当 current 也拿不到
+    assert http2.get("/api/research/threads", params={"limit": 2, "current": ids[0]}).json() == {"threads": [], "more": False}

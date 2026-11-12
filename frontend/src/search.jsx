@@ -16,8 +16,9 @@ function Hit({ text, q }) {
   return <>{text.slice(0, i)}<mark>{text.slice(i, i + q.length)}</mark>{text.slice(i + q.length)}</>;
 }
 
-// threads：对话列表（null 是还在取）；href(id)：那段对话的地址（按住 ⌘、Ctrl 点在新标签页打开）；onOpen(id)：关窗口、打开那段对话
-export function SearchDialog({ threads, now, href, onOpen, onClose }) {
+// threads：对话列表（null 是还在取）；partial：还不是全部（整份还在取，先给的是左栏已经有的那些最近的）——这时搜不到先不说没有；
+// href(id)：那段对话的地址（按住 ⌘、Ctrl 点在新标签页打开）；onOpen(id)：关窗口、打开那段对话
+export function SearchDialog({ threads, partial, now, href, onOpen, onClose }) {
   const [query, setQuery] = useState("");
   const [at, setAt] = useState(0); // 挑中的是第几条
   const box = useRef(null);
@@ -39,7 +40,8 @@ export function SearchDialog({ threads, now, href, onOpen, onClose }) {
 
   const q = query.trim().toLowerCase();
   const time = (t) => Date.parse(t.updated_at || "") || now; // 刚新建、还没有时间的按现在
-  const rows = threads && threads.filter((t) => !q || (t.title || "").toLowerCase().includes(q)).sort((a, b) => time(b) - time(a));
+  const found = threads && threads.filter((t) => !q || (t.title || "").toLowerCase().includes(q)).sort((a, b) => time(b) - time(a));
+  const rows = found && partial && q && !found.length ? null : found; // 手上的还不全、里面又没有：等全的来了再说
   const pick = rows?.length ? Math.min(at, rows.length - 1) : -1;
   useEffect(() => setAt(0), [q]);
   useEffect(() => { list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" }); }, [pick, q]);
