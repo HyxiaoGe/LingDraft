@@ -13,6 +13,7 @@ import { IconBack, IconCheck, IconChevron, IconClose, IconCopy, IconDownload, Ic
 import { useLayer } from "./layers.js";
 import { Markdown } from "./markdown.jsx";
 import { NavContext } from "./nav.jsx";
+import { previewDoc } from "./preview.js";
 import { CITE, citeNumbers, copyText, itemKey, num, sourceLine, tidyTyping } from "./research.js";
 import { Sheet } from "./sheet.jsx";
 import { AnswerSources, Mark } from "./sources.jsx";
@@ -467,7 +468,9 @@ export function FilePanel({ tid, st, live, target, onTarget, onNav, onClose, foc
   const [view, setView] = useState("preview"); // 网页：预览 / 源码
   const bodyRef = useRef(null);
   const stick = useRef(true); // 正在写：贴着底的跟着往下走，往上翻着看的不动
-  const sel = useSelected(bodyRef, !(type === "html" && view === "preview" && !streaming) && text != null);
+  const framed = type === "html" && view === "preview" && !streaming; // 网页当页面看（写着的时候看源码）
+  const sel = useSelected(bodyRef, !framed && text != null);
+  const page = useMemo(() => (framed && text != null ? previewDoc(text) : null), [framed, text]); // 预览用的那份：带上内存里的 localStorage（见 preview.js）
 
   // 换了文件、换了一版：回到顶上；正在写的从底下跟着
   const shownKey = target.call || `${r.series}:${target.id || ""}`;
@@ -521,7 +524,7 @@ export function FilePanel({ tid, st, live, target, onTarget, onNav, onClose, foc
   else if (text == null) body = r.mode === "draft" && !draft?.text && draft?.name !== "edit_file"
     ? <p className={styles.note}>正在写…</p> : <div className={styles.loading} role="status" aria-label="正在打开"><Spinner size={16} /></div>;
   else if (type === "markdown") body = <Doc text={text} sources={sources} done={!streaming} />;
-  else if (type === "html" && view === "preview" && !streaming) body = <iframe className={styles.frame} title={`${title}（网页预览）`} sandbox="allow-scripts allow-popups" referrerPolicy="no-referrer" srcDoc={text} />;
+  else if (framed) body = <iframe className={styles.frame} title={`${title}（网页预览）`} sandbox="allow-scripts allow-popups" referrerPolicy="no-referrer" srcDoc={page} />;
   else body = <CodeBlock lang={type === "html" ? "html" : base?.lang || ""} text={text} bare still={streaming} />;
 
   const pad = type === "markdown" || r.mode === "gone" || (r.mode === "failed" && !r.base) || error || text == null;
@@ -546,7 +549,7 @@ export function FilePanel({ tid, st, live, target, onTarget, onNav, onClose, foc
   return (
     <PanelShell label={`文件：${title}`} title={title} badge={!mobile && <Badge type={type} name={base?.name} />} facts={facts} acts={acts}
       onBack={target.back ? () => onNav({ list: true }) : null} onClose={onClose} focus={focus}>
-      <div ref={bodyRef} className={styles.body + (pad ? " " + styles.padded : "") + (type === "html" && view === "preview" && !streaming && text != null ? " " + styles.framed : "")}
+      <div ref={bodyRef} className={styles.body + (pad ? " " + styles.padded : "") + (framed && text != null ? " " + styles.framed : "")}
         onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60; }}>
         {body}
         <QuoteButton sel={sel} title={title} onDone={onClose} />
