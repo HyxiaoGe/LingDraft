@@ -44,7 +44,7 @@ from langgraph.config import get_stream_writer
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
-from app import costs
+from app import costs, skills
 from app.graph.research import history, prompts
 from app.graph.research.memory import MemoryBook
 from app.identity import is_guest_sub
@@ -72,9 +72,11 @@ WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", 
 # 系统提示词按这个顺序拼（见 prompts/agent.toml 的 [agent]）
 # model 是这一轮哪个模型在答（照实告诉它，2026-11-11 Sean 定；见 model_shown），没给名字时不拼；
 # memory 是长期记忆，没有记忆时不拼（见 memory.py）
-SYSTEM_SECTIONS = ("identity", "model", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "files", "memory", "language")
+SYSTEM_SECTIONS = ("identity", "model", "current_date", "tool_selection", "tool_failure", "tool_usage", "sources", "citations", "files", "skills", "memory",
+                   "language")
 MODEL_SECTION = "agent.model"
 MEMORY_SECTION = "agent.memory"
+SKILLS_SECTION = "agent.skills"  # 技能的目录：这段对话有技能可用时才拼（见 skills_offered），排在记忆前面
 AGENT_PROMPT = tuple(f"agent.{k}" for k in SYSTEM_SECTIONS)
 # Work 的一轮（这段对话是工作任务，见 history.WORK）：多一段 work（任务开始前先问用户），排在记忆前面；问用户的工具也只在这种轮里给
 # （见 ModelSelect._for）。2026-11-10 Sean 定：问不问不靠提示词里列举情形，看用户选没选 Work
@@ -153,6 +155,13 @@ def can_run(state: dict, runtime) -> bool:
     return working(state) and getattr(ctx, "sandbox", None) is not None and bool(owner) and not is_guest_sub(owner)
 
 
+def skills_offered(state: dict, runtime) -> list[skills.Skill]:
+    """这段对话能用的技能（见 app.skills、app.tools.skills）：要跑命令才用得上的，只在能跑命令的对话里给（见 can_run）。
+    目录拼在系统提示词里（system_prompt 的 skills）；能不能跑命令整段对话不变，所以那一段也不变。"""
+    run = can_run(state, runtime)
+    return [s for s in skills.catalog() if run or not s.needs_run]
+
+
 def can_schedule(runtime) -> bool:
     """这段对话里模型能不能动定时任务（见 app.tools.schedule）：要有任务服务，登录了的人才有（游客、没归谁的老对话没有）。
     一段对话归谁不变，所以整段对话里工具列表不变。"""
@@ -182,13 +191,14 @@ def _day(d: date) -> str:
     return f"{d.isoformat()} ({WEEKDAYS[d.weekday()]})"
 
 
-def system_prompt(at: datetime, keys: Sequence[str] = AGENT_PROMPT, memory: str = "", model_name: str = "", **extra: Any) -> str:
+def system_prompt(at: datetime, keys: Sequence[str] = AGENT_PROMPT, memory: str = "", model_name: str = "",
+                  skills: Sequence[skills.Skill] = (), **extra: Any) -> str:
     """照 Fusion：日期按北京时间，带星期和明天、这周末、下周末的日期，模型不用自己推星期几。keys 是按顺序拼的各段（子 agent 用另一套），
     memory 是长期记忆（MemoryBook.prompt_text，空的就没有这一段），model_name 是这一轮哪个模型在答（见 model_shown，空的就没有这一段），
-    extra 是这些段里另外要填的变量。"""
+    skills 是这段对话能用的技能（见 skills_offered，没有就没有这一段），extra 是这些段里另外要填的变量。"""
     dates = date_anchors(at.astimezone(CHINA_TZ).date())
-    skip = {k for k, given in ((MEMORY_SECTION, memory), (MODEL_SECTION, model_name)) if not given}
-    return "\n\n".join(prompts.render(k, **dates, memory=memory, model_name=model_name, max_asks=history.MAX_ASKS, **extra)
+    skip = {k for k, given in ((MEMORY_SECTION, memory), (MODEL_SECTION, model_name), (SKILLS_SECTION, skills)) if not given}
+    return "\n\n".join(prompts.render(k, **dates, memory=memory, model_name=model_name, skills=skills, max_asks=history.MAX_ASKS, **extra)
                          for k in keys if k not in skip)
 
 
@@ -317,7 +327,8 @@ class TurnMiddleware(AgentMiddleware[ResearchState]):
         try:
             emit({"type": "phase", "phase": "retry" if _retrying(request.messages) else "model"})
             prompt = system_prompt(turn_started(request), prompt_keys(request.state), memory=await memory_text(self.memory, request.runtime),
-                                   model_name=model_shown(request.state, self.planner.catalog))
+                                   model_name=model_shown(request.state, self.planner.catalog),
+                                   skills=skills_offered(request.state, request.runtime))
             # 之前几轮点停止时只想了没写的半截不发（见 history.is_stopped_thought）
             resp = await handler(request.override(system_message=SystemMessage(prompt), messages=history.without_stopped_thoughts(request.messages)))
             if job is None:
@@ -752,6 +763,7 @@ class ModelSelect(AgentMiddleware):
         用户发的图看得见的直接给、看不见的给说明，看图工具只给看不见的（见 app.tools.vision）。一轮里换了备用，按换上的重新组织。
         问用户的工具只在 Work 模式的轮里给，用户说了别再问的对话也不给（见 asking）。跑命令的工具只在工作任务里给，游客没有（见 can_run）。
         定时任务的工具游客没有（见 can_schedule）；定时任务触发的那几轮，交代前面加一段说明（见 app.tools.schedule.with_run_notes）。
+        读技能的工具只在这段对话有技能可用时给（见 skills_offered；目录在系统提示词里）。
         系统提示词里写着这一轮是哪个模型在答：这次调用里换了备用的，换成备用的名字（见 _renamed）。"""
         catalog = self.planner.catalog
         system = _renamed(request.system_message, model_shown(request.state, catalog), catalog.shown_name(use.ref))
@@ -767,6 +779,8 @@ class ModelSelect(AgentMiddleware):
             tools = [t for t in tools if getattr(t, "name", None) not in history.TASK_TOOLS]
         libs = request.state.get("kb_libraries") or []  # 资料库：第一轮时有文件才给，说明里列着那时的资料库和文件（见 app.tools.knowledge）
         tools = [for_libraries(t, libs) if getattr(t, "name", None) == KB_TOOL else t for t in tools if libs or getattr(t, "name", None) != KB_TOOL]
+        if not skills_offered(request.state, request.runtime):
+            tools = [t for t in tools if getattr(t, "name", None) != history.SKILL_TOOL]
         return request.override(model=self.planner.chat_model(use), messages=msgs, tools=tools, system_message=system)
 
     async def _sub_call(self, request: ModelRequest, handler):
@@ -872,6 +886,7 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     from app.tools.maps_mcp import MapsMiddleware
     from app.tools.run_command import make_run_command_tool
     from app.tools.schedule import make_schedule_tools
+    from app.tools.skills import make_load_skill_tool
     from app.tools.vision import make_view_image_tool
     from app.tools.weather_mcp import WeatherMiddleware
     from app.tools.web_mcp import WebToolsMiddleware
@@ -883,8 +898,9 @@ def build_agent(planner, checkpointer: BaseCheckpointSaver, memory: MemoryBook |
     # 问用户（ask_user）只给主 agent：子 agent 的工具另外列（见 subagent），它不能问人
     # 跑命令（run_command）也一直在、只给主 agent，不是工作任务、游客的调模型时去掉（见 can_run）
     # 定时任务的四个（见 app.tools.schedule）排在最后（前面的顺序不动，前缀缓存接得上），只给主 agent，游客的调模型时去掉（见 can_schedule）
+    # 读技能（load_skill，见 app.tools.skills）排在定时任务后面，也是为了前面的顺序不动；只给主 agent，没有技能可用的对话调模型时去掉（见 skills_offered）
     tools = [*planner.tools(), make_task_tool(planner), make_recall_tool(), itinerary_tool(), make_view_image_tool(planner), make_read_file_tool(),
-             make_search_knowledge_tool(), *make_write_tools(), make_ask_tool(), make_run_command_tool(), *make_schedule_tools()]
+             make_search_knowledge_tool(), *make_write_tools(), make_ask_tool(), make_run_command_tool(), *make_schedule_tools(), make_load_skill_tool()]
     return create_agent(
         model=planner.chat_model(planner.catalog.plan(None, None, planner.usable).agent),  # 只是占位：每次调模型由 ModelSelect 换上这一轮的
         tools=tools,

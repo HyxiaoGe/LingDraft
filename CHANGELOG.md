@@ -4,6 +4,12 @@
 
 从 2026-11-13 这一批开始记；更早的改动见[合并过的 PR](https://github.com/HyxiaoGe/LingDraft/pulls?q=is%3Apr+is%3Amerged)。
 
+## 2026.11.14
+
+### 新增
+
+- **技能。** 工作任务里，模型碰到对口的活会先读一份写好的做法再动手，过程里多一步“使用技能「数据可视化」”。第一批三个，都是分析数据用的：数据可视化（什么关系用什么图、怎么画得清楚不误导）、统计分析（描述统计、趋势、异常值、检验，哪些结论不能下）、分析核查（交出去之前查一遍算得对不对、结论站不站得住）。格式照 [Agent Skills](https://agentskills.io) 开放标准，三份说明来自 Anthropic 的 [knowledge-work-plugins](https://github.com/anthropics/knowledge-work-plugins)（Apache 2.0），按灵稿的沙箱改过。用不用由模型自己判断；要能跑命令才用得上，所以只在登录后的工作任务里有。（[#165](https://github.com/HyxiaoGe/LingDraft/pull/165)）
+
 ## 2026.11.13
 
 ### 新增

@@ -2,7 +2,7 @@
 
 发给模型的对话估算超过 config.COMPACT_TRIGGER_TOKENS 时（一轮里每次调模型之前看一次），从最早的一轮起往后压，压到 COMPACT_TARGET_TOKENS 以下：
 - 第一层：之前几轮的搜索、读页、取回的结果换成一行说明（来源 id、标题、网址，要原文用 recall 取回），模型的思考不带；
-  用户发的文件只给目录和开头、读文件的结果换成一句说明（要原文用 read_file 再读）；
+  用户发的文件只给目录和开头、读文件的结果换成一句说明（要原文用 read_file 再读）；读技能的结果换成一句说明（要用再读一次）；
   模型写文件的调用里整篇的内容、改的片段换成一句说明（结果里有文件编号，要看用 read_file 读最新一版）。
   模型的工具调用本身、子任务的报告、天气、画图的结果都留着。
 - 第一层压完还超，第二层：再从最早的一轮起，模型那边（思考、正文、工具调用和结果）整个换成快模型写的短版，用户的话照原样留着；
@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 from langchain.agents.middleware.types import AgentMiddleware, ExtendedModelResponse, ModelRequest
@@ -38,7 +39,7 @@ from pydantic import BaseModel, Field
 
 from app import config
 from app.graph.research import history, prompts
-from app.graph.research.agent import emit, memory_text, model_shown, prompt_keys, system_prompt, turn_start
+from app.graph.research.agent import emit, memory_text, model_shown, prompt_keys, skills_offered, system_prompt, turn_start
 from app.graph.research.sources import DOCS_TOOL, SUBAGENT_TOOL, doc_snippets, flatten, hit_text, parse, search_hits
 from app.graph.research.state import Compaction, ResearchState
 from app.model_guard import is_context_overflow
@@ -47,7 +48,7 @@ from app.tools.files import extra_chars
 log = logging.getLogger(__name__)
 
 RECALL_TOOL = "recall"
-CLEARED_TOOLS = ("search_web", "read_page", DOCS_TOOL, RECALL_TOOL, history.FILE_TOOL)  # 第一层换成说明的工具结果
+CLEARED_TOOLS = ("search_web", "read_page", DOCS_TOOL, RECALL_TOOL, history.FILE_TOOL, history.SKILL_TOOL)  # 第一层换成说明的工具结果
 FILE_TOKENS_PER_CHAR = 0.6  # 用户发的文件拼进去的字（消息里只有字数）按中文估，宁可早压
 PER_MESSAGE = 4  # 每条消息另算的 token（角色、分隔）
 SUMMARY_GUESS = 600  # 还没写出来时，一份短版按这么多 token 估
@@ -122,7 +123,7 @@ def without_write_bodies(m: AIMessage) -> AIMessage:
 
 
 def _cleared(m: BaseMessage) -> BaseMessage:
-    """第一层：搜索、读页、查文档、取回、读文件的结果换成一行说明；模型消息不带思考（豆包的加密原文也去掉）、写文件的调用不带整篇内容；
+    """第一层：搜索、读页、查文档、取回、读文件、读技能的结果换成一行说明；模型消息不带思考（豆包的加密原文也去掉）、写文件的调用不带整篇内容；
     用户发的文件只给目录和开头（见 app.tools.files）。没做成的结果本来就短，留着。"""
     if isinstance(m, AIMessage):
         return without_write_bodies(history.without_thinking(m))  # type: ignore[arg-type]
@@ -135,6 +136,8 @@ def _cleared(m: BaseMessage) -> BaseMessage:
         note = prompts.render("compact.recall_cleared")
     elif m.name == history.FILE_TOOL:
         note = prompts.render("compact.file_cleared")
+    elif m.name == history.SKILL_TOOL:  # 只回了一句“已经在了”的也换：它指的那份说明这时也压掉了
+        note = prompts.render("compact.skill_cleared")
     elif m.name == "search_web" and (hits := search_hits(data)) is not None:
         found = [{"id": h.get("id"), "title": h.get("title") or "", "url": h.get("url") or ""} for h in hits if h.get("id")]
         note = prompts.render("compact.search_cleared", sources=json.dumps(found, ensure_ascii=False))
@@ -176,6 +179,17 @@ def _form(turn: list[BaseMessage], order: dict[str, int], c: Compaction) -> list
     if k <= order.get(c.cleared_through, -1):
         return [_cleared(m) for m in turn]
     return turn
+
+
+def uncompacted(state: Mapping[str, Any]) -> list[BaseMessage]:
+    """发给模型的那份里还原样留着的消息：到了压缩边界的轮、被内容审核停下的轮里的不算。
+    读技能的工具据此看一个技能的说明还在不在（app.tools.skills）：在就不再给一遍，压掉了的可以再读。"""
+    msgs = state.get("messages") or []
+    c = state.get("compaction") or Compaction()
+    order = turn_order(msgs)
+    edge = max(order.get(c.cleared_through, -1), order.get(c.summarized_through, -1))
+    return [m for t in turns_of(history.without_blocked_turns(msgs))
+            if not (history.is_request(t[0]) and 0 <= order.get(t[0].id or "", -1) <= edge) for m in t]
 
 
 def compact(messages: list[BaseMessage], c: Compaction | None, order: dict[str, int]) -> list[BaseMessage]:
@@ -242,7 +256,7 @@ class CompactionMiddleware(AgentMiddleware[ResearchState]):
         c = state.get("compaction") or Compaction()
         turns = turns_of(msgs)
         system = system_prompt(turn_start(all_msgs, state), prompt_keys(state), memory=await memory_text(self.memory, runtime),
-                               model_name=model_shown(state, self.planner.catalog))
+                               model_name=model_shown(state, self.planner.catalog), skills=skills_offered(state, runtime))
         base = tokens(system) + self.tools_tokens
         costs = [size_of(_form(t, order, c)) for t in turns]
         size = base + sum(costs)

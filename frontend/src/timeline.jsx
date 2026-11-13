@@ -8,7 +8,7 @@
 // 问着的时候不想答也有出口：输入框空着时右边是停止（这一轮到此为止），那句话下面能编辑，问题卡下面能重新回答。
 // 模型选了“当前位置”时停下来要的是位置（st.ask.kind 是 location）：出位置卡（LocateCard），浏览器里已经允许过定位的不出卡、直接取。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
-import { BriefcaseBusiness, MapPin, MessageCircleQuestionMark, MessageSquare } from "lucide-react";
+import { BriefcaseBusiness, MapPin, MessageCircleQuestionMark, MessageSquare, Puzzle } from "lucide-react";
 import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
 import shell from "./card.module.css";
@@ -855,19 +855,22 @@ function Process({ k, items, st, nums, rec, running, answering, failed, asking, 
   );
 }
 
-// 收起来那一行带上做了什么：搜了几次、读了几页（子任务里的也算），开了几个子任务；做成了的才算
+// 收起来那一行带上做了什么：搜了几次、读了几页（子任务里的也算），开了几个子任务，用了几个技能；做成了的才算
 function didText(items) {
   let search = 0, read = 0, tasks = 0, kb = 0, ran = 0;
+  const skills = new Set(); // 同一个技能读了两次的只说一次
   const count = (xs) => xs.forEach((i) => {
     if (i.type !== "step" || i.pending) return;
     if (i.kind === "task") { tasks++; count(i.items || []); }
     else if (i.kind === "search" && i.ok) search++;
     else if (i.kind === "knowledge" && i.ok) kb++;
     else if (i.kind === "command" && i.run) ran++; // 跑了的都算（命令自己出错的也是跑了）
+    else if (i.kind === "skill" && i.ok) skills.add(i.text);
     else if (i.kind === "read" && i.body) read++; // 和 ToolRow 一样：读到原文的才算
   });
   count(items);
-  return [kb && `查了 ${kb} 次资料库`, search && `搜了 ${search} 次`, read && `读了 ${read} 页`, ran && `运行了 ${ran} 条命令`, tasks && `${tasks} 个子任务`].filter(Boolean).join(" · ");
+  return [skills.size && `用了 ${skills.size} 个技能`, kb && `查了 ${kb} 次资料库`, search && `搜了 ${search} 次`, read && `读了 ${read} 页`,
+    ran && `运行了 ${ran} 条命令`, tasks && `${tasks} 个子任务`].filter(Boolean).join(" · ");
 }
 
 // 过程里的一条条：思考、中途说的话、工具步骤、问用户的问题和回答，子任务是一张卡片。子任务卡里是它的子 agent 的这些，排法一样。
@@ -1099,7 +1102,7 @@ function Thinking({ it, thinking }) {
 function ToolRow({ s, running, files, versions }) {
   if (s.kind === "command") return <CommandRow s={s} running={running} />; // 跑命令：能点开看命令和输出，见 commands.jsx
   const Icon = { read: IconPage, weather: IconCloudSun, place: IconPin, route: IconRoute, flight: IconPlane, train: IconTrain, itinerary: IconTicket,
-    image: IconImage, docs: IconBook, view: IconEye, file: IconClip, write: IconWrite, knowledge: IconFolder, schedule: IconClock }[s.kind] || IconSearch;
+    image: IconImage, docs: IconBook, view: IconEye, file: IconClip, write: IconWrite, knowledge: IconFolder, schedule: IconClock, skill: Puzzle }[s.kind] || IconSearch;
   const busy = running && s.pending;
   let main, sub;
   let bad = !s.ok;
@@ -1151,6 +1154,9 @@ function ToolRow({ s, running, files, versions }) {
     const [verb, done, failed] = { update: ["改定时任务", "改好了", "没改成"], delete: ["删定时任务", "删掉了", "没删成"] }[s.action] || ["建定时任务", "建好了", "没建成"];
     main = <>{verb}{s.text && <>「{s.text}」</>}{s.limits.map((l) => <span key={l} className={proc.lim}>{l}</span>)}</>;
     sub = s.pending ? "保存中…" : s.ok ? done : failed;
+  } else if (s.kind === "skill") { // 模型读了一个技能的说明（load_skill）：技能的中文名
+    main = <>使用技能「{s.text}」</>;
+    sub = s.pending ? "加载中…" : s.ok ? "已加载" : s.message || "没加载成";
   } else if (s.kind === "image") {
     main = <>{s.edit ? "改图" : "画图"}「{s.text}」</>;
     sub = s.pending ? "生成中…" : s.image ? "已生成" : `没画成：${s.message || "出错了"}`;
@@ -1186,6 +1192,7 @@ const WAITING = [
   ["view", () => "正在看图"],
   ["file", () => "正在读文件"],
   ["knowledge", () => "正在查资料库"],
+  ["skill", () => "正在加载技能"],
   ["write", () => "正在保存文件"],
   ["command", () => "正在运行命令"],
   ["read", (n) => (n > 1 ? `正在读 ${n} 个网页` : "正在读网页")],

@@ -53,7 +53,7 @@ from app.tools.maps_mcp import PLACE_TOOL, ROUTE_TOOL, MapsTool
 from app.tools.research_tools import TIME_TOOL, make_research_tools
 from app.tools.vision import ImageUris, view_prompt
 from app.graph.research.history import (ASK_TOOL, CREATE_TASK_TOOL, CREATE_TOOL, DELETE_TASK_TOOL, EDIT_TOOL, FILE_TOOL, LIST_TASKS_TOOL, RUN_TOOL,
-                                        TASK_TOOLS, UPDATE_TASK_TOOL, VIEW_TOOL, WRITE_TOOLS)
+                                        SKILL_TOOL, TASK_TOOLS, UPDATE_TASK_TOOL, VIEW_TOOL, WRITE_TOOLS)
 from app.tools.weather_mcp import WEATHER_TOOL, WeatherTool
 from app.tools.web_mcp import READ_TOOL, SEARCH_TOOL, WebTool
 
@@ -1222,6 +1222,7 @@ class FakeToolModel(BaseChatModel):
     - “跑命令：X”：在沙箱里跑 X（run_command，“；”换成换行；假沙箱认的指令见 FakeSandbox），跑完照结果回复；“跑两次：X”：跑完再跑一遍；
       “一起跑：X”：同一条消息里跑两遍。没有这个工具就说没有。
     - “知识库里”：查知识库，查的是“知识库里”后面那段，引用查到的第一个来源；没有这个工具就说没有。
+    - “用技能：X”：读名字是 X 的技能（load_skill），读完回复读到的开头；没有这个工具就说没有。
     - “问我”：先问用户一个问题（ask_user，带两个选项），拿到回答（或跳过）后回复，回复里说收到了什么；“边搜边问”：同一条消息里搜一次、问一次；
       “问两个”：同一条消息里问两个；“一直问”：每拿到一个回答就接着问下一个，直到工具说不能再问了。
     - “建定时任务：X”：建一个每天 07:22 的定时任务，交代是 X（“一次性”的只跑一次，“太密”的每 5 分钟一次，会被工具拒掉），建完照结果回复；
@@ -1292,6 +1293,8 @@ class FakeToolModel(BaseChatModel):
             return self._look(text, messages, turn, call)
         if "知识库里" in text or "资料库" in text:
             return self._knowledge(text, turn, call, KB_TOOL in self.bound)
+        if m := re.search(r"用技能[：:]\s*([\w-]+)", text):
+            return self._skill(m.group(1), turn, call, SKILL_TOOL in self.bound)
         if m := re.search(r"(跑命令|跑两次|一起跑)[：:](.+)", text, re.S):
             return self._run(m.group(1), m.group(2).replace("；", "\n"), turn, n, RUN_TOOL in self.bound)
         if "文件里" in text:
@@ -1475,6 +1478,18 @@ class FakeToolModel(BaseChatModel):
         m = re.search(r"(?:知识库|资料库(?:「(.+?)」)?)里(.*)", text, re.S)
         lib, q = (m.group(1), m.group(2).strip()) if m else (None, "")
         return call(KB_TOOL, query=q or text, **({"library": lib} if lib else {}))
+
+    @staticmethod
+    def _skill(name: str, turn: list[BaseMessage], call, offered: bool) -> tuple[str, list[dict]]:
+        """用技能：读完回复读到的开头（测试据此看给模型的是什么）；没读成、没有这个工具的照说。"""
+        if not offered:
+            return "没有技能可用。", []
+        done = next((m for m in reversed(turn) if isinstance(m, ToolMessage) and m.name == SKILL_TOOL), None)
+        if done is None:
+            return call(SKILL_TOOL, name=name)
+        if done.status == "error":
+            return f"技能没读成：{str(done.content)[:80]}", []
+        return f"技能读到了：{str(done.content)[:60]}", []
 
     @staticmethod
     def _run(how: str, command: str, turn: list[BaseMessage], n: str, usable: bool) -> tuple[str, list[dict]]:

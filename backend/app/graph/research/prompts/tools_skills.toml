@@ -1,0 +1,18 @@
+# 技能（app.tools.skills 的 load_skill，2026-11-14 起，方案见 docs/Skills方案.md）。灵稿自己写的；技能本身在 app/skills/ 里。
+# description 是工具说明，和参数同名的键是参数说明，其余是工具结果里给模型看的话。
+
+[tools.load_skill]
+# 技能的目录（名字 + 什么时候用）在系统提示词的 [Skills] 一段里（agent.toml 的 skills），这里只说这个工具做什么。
+# 没有技能可用的对话（普通对话、游客）那一段不拼、这个工具调模型时去掉。
+description = """Load one of the skills listed under [Skills] in your instructions. Returns that skill's instructions for you to follow with your other tools. Loading a skill runs nothing and shows the user nothing."""
+name = "The name of the skill to load, exactly as listed."
+
+# 工具结果：读到的说明用标签围起来，和模型自己的话、别的工具结果分得开
+loaded = """<skill name="{{ name }}">
+{{ body }}
+</skill>"""
+# 说明还原样在发给模型的那份里：不再给一遍
+already = "The instructions of the {{ name }} skill are already in this conversation, in the result of an earlier load_skill call. Follow those; there is no need to load it again."
+# 没做成：名字不在目录里；这段对话没有技能可用（工具没给，模型硬调的）
+unknown = "There is no skill named {{ name }}. Available skills: {{ names }}."
+unavailable = "No skills are available in this conversation."

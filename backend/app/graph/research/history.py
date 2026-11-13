@@ -12,6 +12,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from pydantic import ValidationError
 
+from app import skills
 from app.costs import COST
 from app.graph.research import prompts
 from app.graph.research.sources import (DOCS_TOOL, KB_TOOL, LIBRARY_TOOL, SUBAGENT_TOOL, collect_sources, doc_snippets, kb_hits, parse, search_hits,
@@ -53,6 +54,7 @@ FILE_TOOL = "read_file"  # 读用户发的文件、模型写的文件：按段�
 CREATE_TOOL, EDIT_TOOL = "create_file", "edit_file"  # 模型写文件：新建、出新一版（见 app.tools.write_file）
 WRITE_TOOLS = (CREATE_TOOL, EDIT_TOOL)
 RUN_TOOL = "run_command"  # 在沙箱里跑命令（工作任务里才给，见 app.tools.run_command）
+SKILL_TOOL = "load_skill"  # 读一个技能的说明（见 app.tools.skills、app.skills）
 ASK_TOOL = "ask_user"  # 模型做到一半停下来问用户，等回答了接着做（见 app.tools.ask_user）
 MAX_ASKS = 2  # 一轮最多问几次（2026-11-10 Sean 定）：再问的不问，让模型按自己的判断做
 MAX_ASK_OPTIONS = 4  # 一个问题最多给几个选项
@@ -67,7 +69,7 @@ ITINERARY_TOOL = "present_itinerary"  # 灵稿自己的排行程（见 app.tools
 TRAVEL_KINDS = {FLIGHT_TOOL: "flight", TRAIN_TOOL: "train"}
 STEP_TOOLS = {"search_web": "search", "read_page": "read", "get_weather": "weather", PLACE_TOOL: "place", ROUTE_TOOL: "route",
               **TRAVEL_KINDS, ITINERARY_TOOL: "itinerary", IMAGE_TOOL: "image", VIEW_TOOL: "view", FILE_TOOL: "file", CREATE_TOOL: "write", EDIT_TOOL: "write", SUBAGENT_TOOL: "task",
-              LIBRARY_TOOL: "library", DOCS_TOOL: "docs", KB_TOOL: "knowledge", RUN_TOOL: "command", **dict.fromkeys(TASK_ACTIONS, "schedule")}
+              LIBRARY_TOOL: "library", DOCS_TOOL: "docs", KB_TOOL: "knowledge", RUN_TOOL: "command", SKILL_TOOL: "skill", **dict.fromkeys(TASK_ACTIONS, "schedule")}
 BLOCKED_NOTE = "没通过模型服务的内容审核，内容已去掉"  # 内容审核去掉的搜索、读页结果在页面上的说明
 # 没画成的原因在页面上的说法（照 Fusion 的图片卡片），没列的都说“图片生成失败”
 IMAGE_FAILURES = {
@@ -327,6 +329,9 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         extra = {"limits": [q] if q else [], "parts": "" if q else _text(args.get("parts"))}
     elif kind == "command":
         text, extra = _text(args.get("command")), {}
+    elif kind == "skill":  # 页面上显示的中文名：读成了用结果里记的，还没结果、没读成的按现在的目录对，对不上的就是模型写的那个名字
+        art = result.artifact if result is not None and isinstance(result.artifact, dict) else {}
+        text, extra = _text(art.get("title")) or skills.title_of(_text(args.get("name"))), {}
     elif kind == "schedule":  # 标题在参数里（建），做成了用结果里的（改、删只给了编号）；limits 是什么时候跑（“每天 · 07:22”）
         task = result.artifact.get("task") if result is not None and isinstance(result.artifact, dict) else None
         task = task if isinstance(task, dict) else {}
@@ -370,6 +375,8 @@ def step_of(call: dict, result: ToolMessage | None) -> ToolStep | None:
         return ToolStep(id=cid, kind=kind, text=text, ok=ok, hits=int(art.get("found") or 0), message="" if ok else "没读成", **extra)
     if kind == "schedule":
         return ToolStep(id=cid, kind=kind, text=text, ok=result.status != "error", message="" if result.status != "error" else "没办成", **extra)
+    if kind == "skill":
+        return ToolStep(id=cid, kind=kind, text=text, ok=result.status != "error", message="" if result.status != "error" else "没有这个技能")
     if kind == "command":  # 跑了的带着结果（命令自己失败、被杀掉的也是跑了，页面按退出码和原因说）；没跑成的说原因
         if run := run_of(result):
             return ToolStep(id=cid, kind=kind, text=text, ok=run.ok, run=run)
@@ -813,6 +820,12 @@ def run_of(m: BaseMessage | None) -> CommandRun | None:
         return CommandRun.model_validate(art["run"])
     except ValidationError:
         return None
+
+
+def skill_loaded(m: BaseMessage | None) -> str | None:
+    """一条读技能的结果里给了说明正文的是哪个技能；没读成、只回了一句“已经在了”的是 None。"""
+    art = m.artifact if isinstance(m, ToolMessage) and m.name == SKILL_TOOL and m.status != "error" else None
+    return art.get("skill") if isinstance(art, dict) and not art.get("repeat") else None
 
 
 def broken_write(call: dict) -> ToolStep | None:
