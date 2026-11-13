@@ -5,7 +5,7 @@
 // 列表里工作任务前面是公文包、对话前面是气泡。右边的时间在鼠标移上去、选中时让给“⋯”，标题多出一截地方。
 // 有未读的那一行（定时任务跑完的一轮还没看，11-13）时间那一格换成红底的数字，照豆包；看了就变回时间
 import { BriefcaseBusiness, CircleAlert, LibraryBig, MessageCircleQuestionMark, MessageSquare, MessagesSquare, SquarePen } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { IconClock, IconClose, IconDownload, IconEdit, IconMore, IconPanel, IconPinTop, IconSearch, IconTrash, Logo, Spinner } from "./icons.jsx";
 import { useLayer } from "./layers.js";
 import { CreditsFoot, UserFoot } from "./login.jsx";
@@ -55,17 +55,17 @@ function rowSub(t, now) {
 }
 
 // 列表每隔几秒取一次；当前这个线程以页面手上的状态为准，刚新建、列表里还没有的先补一行（左栏和搜对话的窗口都用）。
+// cur：这段对话页面手上的样子 {title, status, running_since, said（刚发出去的那句）, busy}（见 workspace.jsx；状态还没取回来时 status 是空的）；
 // work：当前这一页是不是工作任务（补的那一行用）；started：这段对话是这个页面刚发起的——不是的话列表里没有就不补：
 // 那是更早的、左栏还没取到的对话，列表马上会带着它回来（带着它自己的时间，排在该在的地方）
-export function withCurrent(threads, current, st, live, busy, work, started) {
+export function withCurrent(threads, current, cur, work, started) {
   if (!current) return threads;
   const mine = threads.find((t) => t.thread_id === current);
   if (!mine && !started) return threads;
-  const title = live?.title || st?.title;
-  const patch = { ...(busy ? { status: "running", running_since: st?.running_since || mine?.running_since } : st ? { status: st.status } : {}),
-    ...(title ? { title } : {}) };
+  const patch = { ...(cur.busy ? { status: "running", running_since: cur.running_since || mine?.running_since } : cur.status ? { status: cur.status } : {}),
+    ...(cur.title ? { title: cur.title } : {}) };
   return mine ? threads.map((t) => (t.thread_id === current ? { ...t, ...patch } : t))
-    : [{ thread_id: current, title: live?.said || (work ? "新工作任务" : "新对话"), status: "running", work: !!work, ...patch }, ...threads];
+    : [{ thread_id: current, title: cur.said || (work ? "新工作任务" : "新对话"), status: "running", work: !!work, ...patch }, ...threads];
 }
 
 // 窄屏时这一栏是抽屉（nav.drawer 开着）：打开时焦点进来，Tab 在里面转，Esc、点外面、右上角的关闭都能关上。
@@ -77,7 +77,8 @@ const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), [tabind
 // onPage(name)：去定时任务页（"scheduled"）、资料库页（"library"）；没有登录功能的部署没有这两样，是 null，不放这两行。
 // page：现在在哪一页（那一行是选中的，别的都不是），在对话里是 null；
 // more：列表下面还有没取的（先取最近的一部分），滚到底时 onMore() 多取一页；started：开着的这段是这个页面刚发起的（见 withCurrent）
-export function Sidebar({ threads, more, onMore, current, started, st, live, busy, work, now, href, newHref, onSelect, manage, onSettings, onPage, page, onSearch, auth, onLogin, credits, onCredits, nav }) {
+// 记着渲染结果（memo）：给它的东西没变就不重新渲染。回答出字时对话页每秒渲染十来次，左栏不用跟着；在跑的那一行的用时每秒走一次（now）
+export const Sidebar = memo(function Sidebar({ threads, more, onMore, current, started, cur, work, now, href, newHref, onSelect, manage, onSettings, onPage, page, onSearch, auth, onLogin, credits, onCredits, nav }) {
   const [menu, setMenu] = useState(null); // 打开菜单的那一行：{id, anchor: 那一行的“⋯”}
   const [renaming, setRenaming] = useState(null); // 正在改名的线程 id
   const box = useRef(null);
@@ -97,7 +98,7 @@ export function Sidebar({ threads, more, onMore, current, started, st, live, bus
     }
   };
   // 列表还没取回来时一行都不放，只有下面的占位：当前这段对话的状态先到（列表要慢一两秒），单放它一行像是别的对话都没了
-  const rows = threads === null ? [] : withCurrent(threads, current, st, live, busy, work, started);
+  const rows = threads === null ? [] : withCurrent(threads, current, cur, work, started);
   // 还有没取的：列表最下面放几行占位，它快滚进来时（差 240px）多取一页。取回来行数变了重新看一次：屏幕很高、一页没填满时接着取
   const tail = useRef(null);
   const moreFn = useRef(onMore);
@@ -252,7 +253,7 @@ export function Sidebar({ threads, more, onMore, current, started, st, live, bus
       </aside>
     </>
   );
-}
+});
 
 // 一行对话的菜单：置顶、重命名、导出、删除。删除不再先确认，删了 5 秒内能撤销（第 44 条）；正在回答的不能改名、删除，没跑完的、停下来等回答的不能改名
 function RowMenu({ t, anchor, mobile, size, onClose, onPin, onRename, onExport, onDelete }) {

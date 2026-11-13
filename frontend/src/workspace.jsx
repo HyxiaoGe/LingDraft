@@ -5,18 +5,14 @@
 // 这一轮出错时排着的话不发，取回输入框。排着的话也能插进这一轮：放进对话时事件流里来一条 guide，页面把它挪进过程里。
 // 模型也会停下来问用户（状态 asking，问题在 state.ask）：这时没有执行在跑，回答或跳过以后同一轮接着跑（见 act.answer）；排着的话留在服务器上，等这一轮答完再发。
 // 问着的时候点停止走 dismiss：没有事件流，服务器收尾以后取一次状态；重新回答、改那句话和空闲时一样（服务器先把这一轮收尾）。
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { answerResearchThread, createResearchThread, deleteResearchThread, editResearchThread, followResearchThread, getCredits, getResearchState, guideResearch, listModels, listResearchThreads,
   markThreadRead, pinResearchThread, queueResearch, regenerateResearchThread, renameResearchThread, retryResearchThread, sayResearch, setResearchAsks, stopResearchThread, unguideResearch, unqueueResearch } from "./api.js";
 import { localWho } from "./auth.js";
 import { setDraft } from "./drafts.js";
 import { AFTER_RUN_ERROR, errorText, quotaText } from "./errors.js";
-import { LibraryPage } from "./knowledge.jsx";
-import { ScheduledPage } from "./scheduled.jsx";
 import { LoginDialog, useAuth } from "./login.jsx";
 import { saveThinkDefault, thinkDefault, useTheme } from "./prefs.js";
-import { SearchDialog } from "./search.jsx";
-import { SettingsDialog } from "./settings.jsx";
 import { Sidebar, withCurrent } from "./sidebar.jsx";
 import { MOBILE, NavContext, SPLIT, focusInput, isSearchKey, isSideKey, typeNext, useMedia } from "./nav.jsx";
 import { ACTIVE, ASKING, LOCATION, QUEUED, addLive, itemKey, saveFile, threadMarkdown, useNow } from "./research.js";
@@ -25,10 +21,15 @@ import { FileList, KnowledgePanel, SentPanel } from "./workspace-files.jsx";
 import { opener } from "./layers.js";
 import { away, useDoneAlert, useTaskAlert } from "./alert.jsx";
 import { NOTICES_MAX, Notices, noticeLine } from "./notice.jsx";
+import { LibraryPage, ScheduledPage, SearchDialog, SettingsDialog, warm } from "./parts.jsx";
+import { useEvent, useLatest } from "./stable.js";
 import { Conversation, forgetReading } from "./timeline.jsx";
 import { UndoToast, useUndo } from "./undo.jsx";
 import { notSendableText, uploadErrorText } from "./upload.js";
 // 样式：对话页的变量、基础样式和共用的小件在 tailwind.css，各块的在各自的 *.module.css
+
+// 取回来的列表和手上的是不是一样（一样就不换，左栏不用跟着重新渲染）：空闲时每 20 秒取一次，绝大多数时候什么都没变
+const sameList = (a, b) => a.length === b.length && JSON.stringify(a) === JSON.stringify(b);
 
 // 地址：/chat/new 是新对话，/work/new 是新工作任务（同一个新页面，上面的“对话 / 工作”选着工作），/chat/<线程 id> 是某个对话或工作任务；
 // 别的地址（/、/chat）都当新对话，进来时改成 /chat/new。
@@ -217,7 +218,7 @@ export default function Workspace() {
 
   // 取回来的列表：除了显示，还看两件事——有没有新到的通知；开着的这段对话是不是在页面不知道的时候跑起来了
   function takeList({ threads: list, more: rest }, sent) {
-    setThreads(list);
+    setThreads((cur) => (cur && sameList(cur, list) ? cur : list));
     setMore(rest);
     listIds.current = new Set(list.map((t) => t.thread_id));
     const seen = noticeAt.current;
@@ -338,6 +339,11 @@ export default function Workspace() {
     return () => m.remove();
   }, [dark]);
   useEffect(() => { loadModels().catch(() => setModels([])); }, []);
+  // 资料库页、定时任务页、设置、搜对话是用到才取的（见 parts.jsx）：页面空下来先取好，点开时不用等
+  useEffect(() => {
+    const idle = window.requestIdleCallback ? requestIdleCallback(warm, { timeout: 4000 }) : setTimeout(warm, 2000); // Safari 没有 requestIdleCallback
+    return () => (window.cancelIdleCallback ? cancelIdleCallback(idle) : clearTimeout(idle));
+  }, []);
   // 身份定了取一次额度；每轮结束（busy 回到 false）再取：这一轮花的已经记上了
   useEffect(() => { if (auth.ready && !busy) refreshCredits(); }, [auth.ready, busy]);
   // 额度到点重置：最早的那个重置时间过了一两秒再取一次，左栏圆环和额度面板马上变成新的（原来要刷新页面才变）。
@@ -766,7 +772,8 @@ export default function Workspace() {
 
   // 这句话带的图（File）和文件（编号）；没带文件不写 files
   const attached = (images, docs) => ({ images: images.map((i) => i.file), ...(docs.length ? { files: docs.map((d) => d.id) } : {}) });
-  const act = {
+  // act、manage 交给每一轮、输入框、左栏，它们记着渲染结果（memo）：这里给的是不变的一份，调到的总是这一次渲染的（见 stable.js）
+  const act = useLatest({
     // 新对话带上选的模型（没取到列表就不带，按 Auto）、是不是工作任务（新页面上选着“工作”，定下就不变）；
     // 之后每句话带上深度思考开关（对话定下的模型能开关才带）。
     // images：这句话带的图（[{key, file, url}]，见 Composer）；docs：带的文件（解析好了的，见 composer.jsx 的 picked），发编号。排着的话都不带
@@ -861,7 +868,7 @@ export default function Workspace() {
         setError(errorText("没停下来", e, "再点一次停止"));
       }
     },
-  };
+  });
 
   // 左栏、顶栏菜单：置顶、改名、导出、删除。出错就在对话区提示
   const unhide = (id) => setGone((g) => {
@@ -869,7 +876,7 @@ export default function Workspace() {
     n.delete(id);
     return n;
   });
-  const manage = {
+  const manage = useLatest({
     rename: async (id, title) => {
       try {
         const row = await renameResearchThread(id, title);
@@ -942,10 +949,12 @@ export default function Workspace() {
         setError(errorText(on ? "没置顶成" : "没取消置顶", e));
       }
     },
-  };
+  });
 
   // 执行中这一轮的来源跟着事件来（库里一轮跑完才有），叠在已存的来源上：正文里的引用据此显示成编号
-  const shown = st && live?.sources ? { ...st, sources: { ...st.sources, ...live.sources } } : st;
+  // 来源没变就还是同一个对象：每来一批字都换一个的话，以前的每一轮都得跟着重新渲染
+  const liveSources = live?.sources;
+  const shown = useMemo(() => (st && liveSources ? { ...st, sources: { ...st.sources, ...liveSources } } : st), [st, liveSources]);
 
   // 回答开头要写名字的模型（每轮记下的、正在答的这一轮用的），能选的模型和名字表里都没有的：多半是页面打开以后才加的免费额度，
   // 重新取一次；每个只取一次，取回来还没有的就是真不再提供了，照写“已不再提供的模型”（见 research.js 的 modelName）
@@ -960,12 +969,13 @@ export default function Workspace() {
   }, [shownRefs, models, modelNames]);
 
   // 游客开登录弹窗（左栏、额度、设置窗口、报错里的登录，点“登录后可用”的模型）。点模型进来的带着那个模型；从按钮直接进来的参数是点击事件，不算
-  const onLogin = auth.login && !auth.me ? (want) => {
+  const askLogin = useEvent((want) => {
     const m = want?.id && want.locked ? want : null;
     setLoginWant(m);
     keepWant(m?.id);
     setLoginOpen(true);
-  } : null;
+  });
+  const onLogin = auth.login && !auth.me ? askLogin : null;
   const closeLogin = () => { // 没登录就关了：不用再记着要哪个模型
     setLoginOpen(false);
     keepWant(null);
@@ -1005,9 +1015,11 @@ export default function Workspace() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [asked]);
   // openKnowledge(f, at)：在右栏看资料库里的文件（f：{id, name?, type?…}），at 是翻到第几段（点回答里引用的资料库来源）
-  const nav = { mobile, collapsed: sideOff, drawer, toggleSide, openDrawer: () => setDrawer(true), closeDrawer, newChat: () => select(null), search: openSearch,
-    openKnowledge: (f, at = null) => openFile({ kb: f, at }),
-    unread: (threads || []).reduce((n, t) => n + (gone.has(t.thread_id) ? 0 : t.unread || 0), 0) }; // 左栏里一共几条未读（见 nav.jsx 的 HeadBar）
+  const navDo = useLatest({ toggleSide, openDrawer: () => setDrawer(true), closeDrawer, newChat: () => select(null), search: openSearch,
+    openKnowledge: (f, at = null) => openFile({ kb: f, at }) });
+  const unread = (threads || []).reduce((n, t) => n + (gone.has(t.thread_id) ? 0 : t.unread || 0), 0); // 左栏里一共几条未读（见 nav.jsx 的 HeadBar）
+  // 从 NavContext 取它的组件到处都是（顶栏、来源角标、弹层……）：这几样没变就是同一个对象，不然每次渲染它们都跟着来一遍
+  const nav = useMemo(() => ({ mobile, collapsed: sideOff, drawer, ...navDo, unread }), [mobile, sideOff, drawer, navDo, unread]);
   useEffect(() => {
     const to = navFocus.current;
     navFocus.current = null;
@@ -1047,9 +1059,25 @@ export default function Workspace() {
     setDrawer(false);
     return fn(...args);
   };
+  // 左栏的回调（左栏记着渲染结果，同 act）
+  const side = useLatest({ select: fromSide(select), settings: fromSide(() => setSettings("settings")), page: fromSide(openPage), login: fromSide(() => onLogin?.()),
+    more: loadMore, search: openSearch, credits: refreshCredits });
   const listedTitle = tid ? threads?.find((t) => t.thread_id === tid)?.title : null; // 打开中还没取回状态时，顶栏先用列表里的标题
-  const shownThreads = threads && (gone.size ? threads.filter((t) => !gone.has(t.thread_id)) : threads); // 等着撤销的不显示
+  const shownThreads = useMemo(() => threads && (gone.size ? threads.filter((t) => !gone.has(t.thread_id)) : threads), [threads, gone]); // 等着撤销的不显示
   const startedHere = !!tid && startedAs.current?.id === tid; // 开着的这段是这个页面刚发起的：列表里还没有它时左栏先补一行（见 withCurrent）
+  // 开着的这段对话页面手上的样子，左栏和搜对话的窗口拿它盖住列表里那一行（见 withCurrent）。只挑用到的几样：整个 st、live 给过去的话每来一批字左栏都要重新渲染
+  const status = st?.status;
+  const runningSince = st?.running_since;
+  const saidNow = live?.said;
+  const cur = useMemo(() => ({ title, status, running_since: runningSince, said: saidNow, busy }), [title, status, runningSince, saidNow, busy]);
+  // 交给对话那一栏的几样：同上，没变就是同一个对象（输入框、每一轮按它们记着渲染结果）
+  const fileDo = useLatest({ open: openFile, toggle: toggleFiles });
+  const files = useMemo(() => ({ open: fileDo.open, current: file, toggle: fileDo.toggle }), [fileDo, file]);
+  const pickDo = useLatest({ thinking: setThinking, work: pickWork });
+  const locked = !!(tid || live);
+  const picker = useMemo(() => ({ current, locked, onPick: setPick, thinking, onThinking: pickDo.thinking, thinkAlways: !!work, onLogin }),
+    [current, locked, thinking, pickDo, work, onLogin]);
+  const mode = useMemo(() => ({ on: work, onChange: pickDo.work }), [work, pickDo]);
   // 搜对话、记忆页要的整份列表。左栏那份一直在更新，两边都有的行按左栏的；整份还没取回来（all 是 null）时先只有左栏那些：
   // 搜对话的窗口一打开就有最近的，搜不到的先不说没有（partial）；记忆页的出处等取全了再对，免得把更早的对话说成删了
   const allThreads = shownThreads && wholeList(all || [], shownThreads, gone);
@@ -1057,18 +1085,20 @@ export default function Workspace() {
   return (
     <NavContext.Provider value={nav}>
       <div className={"ws" + (sideOff ? " side-off" : "") + (mobile && drawer ? " drawer" : "") + (file && !mobile ? " with-file" : "")} data-theme={dark ? "dark" : "light"}>
-        <Sidebar threads={shownThreads} more={more} onMore={loadMore} current={tid} started={startedHere} st={st} live={live} busy={busy} work={work} now={now} href={chatPath} newHref={newPath} onSelect={fromSide(select)} manage={manage}
-          onSettings={fromSide(() => setSettings("settings"))} onPage={auth.login || auth.me ? fromSide(openPage) : null} page={page} onSearch={openSearch} auth={auth} onLogin={fromSide(() => onLogin?.())} credits={credits} onCredits={refreshCredits} nav={nav} />
+        <Sidebar threads={shownThreads} more={more} onMore={side.more} current={tid} started={startedHere} cur={cur} work={work} now={now} href={chatPath} newHref={newPath} onSelect={side.select} manage={manage}
+          onSettings={side.settings} onPage={auth.login || auth.me ? side.page : null} page={page} onSearch={side.search} auth={auth} onLogin={side.login} credits={credits} onCredits={side.credits} nav={nav} />
         {page === "library" ? (
-          <LibraryPage auth={auth} onLogin={onLogin} undo={undo} onOpenFile={(f) => openFile({ kb: f })} openFileId={file?.kb?.id} />
+          <Suspense fallback={<section className="min-w-0" aria-busy="true" />}>
+            <LibraryPage auth={auth} onLogin={onLogin} undo={undo} onOpenFile={(f) => openFile({ kb: f })} openFileId={file?.kb?.id} />
+          </Suspense>
         ) : page === "scheduled" ? (
-          <ScheduledPage auth={auth} onLogin={onLogin} undo={undo} models={models} onOpen={(id, fresh) => select(id, "push", false, fresh)} onAsk={askNew} />
+          <Suspense fallback={<section className="min-w-0" aria-busy="true" />}>
+            <ScheduledPage auth={auth} onLogin={onLogin} undo={undo} models={models} onOpen={(id, fresh) => select(id, "push", false, fresh)} onAsk={askNew} />
+          </Suspense>
         ) : <Conversation st={shown} live={live} busy={busy} suggesting={suggesting} error={error} now={now} act={act} tid={tid} putBack={putBack} listedTitle={listedTitle}
           who={auth.ready ? (auth.me ? auth.me.name || "" : null) : earlyWho}
           models={models} modelNames={modelNames} credits={credits} manage={manage}
-          picker={{ current, locked: !!(tid || live), onPick: setPick, thinking, onThinking: setThinking, thinkAlways: !!work, onLogin }}
-          work={{ on: work, onChange: pickWork }}
-          files={{ open: openFile, current: file, toggle: toggleFiles }} />}
+          picker={picker} work={mode} files={files} />}
         {file && (file.list ? <FileList tid={tid} st={shown} live={live} title={live?.title || shown?.title || listedTitle} onNav={navFile} onClose={closeFile} focus={fileFocus} />
           : file.sent ? <SentPanel tid={tid} f={file.sent} back={file.back} onNav={navFile} onClose={closeFile} focus={fileFocus}
               canExport={!!auth.me} onLogin={onLogin} />
@@ -1076,14 +1106,18 @@ export default function Workspace() {
             : <FilePanel tid={tid} st={shown} live={live} target={file} onTarget={setFile} onNav={navFile} onClose={closeFile} focus={fileFocus}
               canExport={!!auth.me} onLogin={onLogin} />)}
         {search && (
-          <SearchDialog threads={allThreads && withCurrent(allThreads, tid, st, live, busy, work, startedHere)} partial={!all} now={now} href={chatPath}
-            onOpen={(id) => { setSearch(false); select(id); }} onClose={() => setSearch(false)} />
+          <Suspense fallback={null}>
+            <SearchDialog threads={allThreads && withCurrent(allThreads, tid, cur, work, startedHere)} partial={!all} now={now} href={chatPath}
+              onOpen={(id) => { setSearch(false); select(id); }} onClose={() => setSearch(false)} />
+          </Suspense>
         )}
         {settings && (
-          <SettingsDialog view={settings} onView={setSettings} onClose={() => setSettings(null)} mobile={mobile} auth={auth}
-            onLogin={onLogin && (() => { setSettings(null); onLogin(); })}
-            theme={theme} onTheme={setTheme} think={thinkOn} onThink={changeThinkDefault}
-            undo={undo} threads={all ? allThreads : null} onOpen={(id) => { setSettings(null); select(id); }} />
+          <Suspense fallback={null}>
+            <SettingsDialog view={settings} onView={setSettings} onClose={() => setSettings(null)} mobile={mobile} auth={auth}
+              onLogin={onLogin && (() => { setSettings(null); onLogin(); })}
+              theme={theme} onTheme={setTheme} think={thinkOn} onThink={changeThinkDefault}
+              undo={undo} threads={all ? allThreads : null} onOpen={(id) => { setSettings(null); select(id); }} />
+          </Suspense>
         )}
         <LoginDialog open={loginOpen} crowded={auth.crowded} want={loginWant} credits={credits} onClose={closeLogin} />
         <UndoToast undo={undo} />

@@ -5,7 +5,7 @@
 //   文档和正文一样渲染（来源角标能点），网页在隔离的 iframe 里预览、能切到源码，代码带行号和高亮；选中一段能引用到输入框，接着说怎么改。
 // 边写边出现：用户在桌面上看着这一轮生成时自动打开、跟着出字（见 workspace.jsx 的 onEvent，判断记在那里，不跟着组件切换丢掉）；
 // 翻历史、刷新以后不自动打开。只能看：不能直接改、不能恢复旧版、不做对比（2026-11-08 Sean 定第一批先不做）
-import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { exportThreadFile, threadFileText } from "./api.js";
 import { CodeBlock } from "./code-block.jsx";
@@ -460,8 +460,8 @@ export function FilePanel({ tid, st, live, target, onTarget, onNav, onClose, foc
   const streaming = r.mode === "draft" && !!draft?.text; // 新建、整篇重写：内容边收边显示
   // 刚写完、这一版还没取回来：先接着显示刚才写的那些，不闪一下转圈
   const written = target.call && r.mode === "file" ? live?.drafts?.[target.call]?.text : null;
-  const text = streaming ? draft.text : fetched ?? (written || null);
   const type = r.mode === "draft" ? draft?.type || base?.type || "markdown" : base?.type || "markdown";
+  const text = useSpaced(streaming ? draft.text : fetched ?? (written || null), streaming && type === "markdown");
   const title = (r.mode === "draft" ? draft?.title : "") || base?.title || r.step?.text || (r.mode === "draft" && draft?.name === "create_file" ? "新文件" : "文件");
   const sources = st?.sources;
   const [view, setView] = useState("preview"); // 网页：预览 / 源码
@@ -484,7 +484,8 @@ export function FilePanel({ tid, st, live, target, onTarget, onNav, onClose, foc
   }, [text, streaming]);
 
   const done = r.mode === "file" && fetched != null;
-  const out = done ? fileExport(r.file, fetched, sources) : null;
+  const doneFile = done ? r.file : null;
+  const out = useMemo(() => (doneFile ? fileExport(doneFile, fetched, sources) : null), [doneFile, fetched, sources]); // 整篇过一遍正则：对话那边出字时不用每次重算
 
   // 存成 PDF / Word（见 useExport）
   const { exporting, failed: exportFail, exportAs, clear: clearExportFail } = useExport(tid);
@@ -519,7 +520,7 @@ export function FilePanel({ tid, st, live, target, onTarget, onNav, onClose, foc
   );
   else if (text == null) body = r.mode === "draft" && !draft?.text && draft?.name !== "edit_file"
     ? <p className={styles.note}>正在写…</p> : <div className={styles.loading} role="status" aria-label="正在打开"><Spinner size={16} /></div>;
-  else if (type === "markdown") body = <Doc text={streaming ? tidyTyping(text) : text} sources={sources} done={!streaming} />;
+  else if (type === "markdown") body = <Doc text={text} sources={sources} done={!streaming} />;
   else if (type === "html" && view === "preview" && !streaming) body = <iframe className={styles.frame} title={`${title}（网页预览）`} sandbox="allow-scripts allow-popups" referrerPolicy="no-referrer" srcDoc={text} />;
   else body = <CodeBlock lang={type === "html" ? "html" : base?.lang || ""} text={text} bare still={streaming} />;
 
@@ -554,8 +555,34 @@ export function FilePanel({ tid, st, live, target, onTarget, onNav, onClose, foc
   );
 }
 
-// 文档：和正文一样渲染，来源角标能点（只认这段对话里真有的来源），文末是这份文档用到的来源
-function Doc({ text, sources, done }) {
+// 正在写的文档显示到哪。每显示一次都要把整篇重新解析、渲染、排版一遍，花的时间跟着篇幅涨（2026-11-13 本机开发版在右栏里量的：
+// 6 千字 7 ms、1 万字 10 ms、2 万字 17 ms、3 万字 25 ms），而内容每 80 ms 来一截（见后端 research_runner 的 DELTA_S）：
+// 每一截都显示的话，三万字的文档写着的时候三分之一的时间在重排。所以长了就隔一会儿才跟上一次：间隔按篇幅算（每 125 字 1 ms），
+// 重排占的时间在一成上下。1 万字以内间隔不到 80 ms，每一截都显示；5 万字往上最慢，0.4 秒一次。
+// on 是 false（没在写、写完了）就是给的那份，不等。
+// 不照搬正文的做法（timeline.jsx 的 useTyped，最慢一秒 15 次）：正文是每一帧都要显示，这里是每 80 ms 才来一截，一秒 15 次等于没限
+function useSpaced(text, on) {
+  const shown = useRef(text);
+  const at = useRef(0); // 上一次跟上是什么时候
+  const [, redraw] = useState(0);
+  const gap = on ? Math.min(400, (text?.length || 0) / 125) : 0;
+  const wait = on ? at.current + gap - performance.now() : 0;
+  if (wait <= 0 && shown.current !== text) {
+    shown.current = text;
+    at.current = performance.now();
+  }
+  useEffect(() => {
+    if (shown.current === text) return undefined;
+    const t = setTimeout(() => redraw((n) => n + 1), wait); // 之后没再来新的一截：到点把剩下的显示出来
+    return () => clearTimeout(t);
+  });
+  return shown.current;
+}
+
+// 文档：和正文一样渲染，来源角标能点（只认这段对话里真有的来源），文末是这份文档用到的来源。done：写完了（没写完的末尾半截记号先不显示，见 tidyTyping）
+// 记着渲染结果（memo）：内容没变就不重新解析。右栏开着时对话那边出字，这里不用跟着
+const Doc = memo(function Doc({ text: raw, sources, done }) {
+  const text = done ? raw : tidyTyping(raw);
   const nums = citeNumbers([text], sources);
   const cite = (sid) => <Mark n={nums[sid]} s={sources?.[sid]} nums={nums} sources={sources} />;
   return (
@@ -564,4 +591,4 @@ function Doc({ text, sources, done }) {
       {done && <AnswerSources nums={nums} sources={sources} />}
     </div>
   );
-}
+});

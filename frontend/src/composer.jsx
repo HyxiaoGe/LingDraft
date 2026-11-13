@@ -2,7 +2,7 @@
 // 输入框本身（写字、加图和文件、发送 / 停止、这一轮答完再发），右下角的深度思考和选模型，贴在上沿的“还没发出去的话”，
 // 上面的额度提醒和“回到底部”，还有拖图、拖文件进来时盖在对话区上的那层。
 import { Sparkles } from "lucide-react";
-import { useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { getFile, removeFile, uploadFile } from "./api.js";
 import { getDraft, setDraft } from "./drafts.js";
 import { FileCard, fileFacts } from "./files.jsx";
@@ -273,7 +273,8 @@ function dropFile(thread, key) {
 // 模型停下来问用户时（mode 是 asking）：这里写的就是回答，只发字（最多 MAX_ANSWER 个），选着的图和文件留着下一句用
 // work：这一页是工作任务（新页面上选着“工作”，或者开着的是工作任务）：只换占位的字
 // locating：问着的是位置（见 timeline.jsx 的 LocateCard）：也只换占位的字
-export function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSend, onStop, above, onTakeBack, work, locating, tools }) {
+// 记着渲染结果（memo）：给它的东西没变就不重新渲染，出字时不跟着对话页每秒渲染十来次（above、tools 是做好的元素，见 timeline.jsx 的 Conversation）
+export const Composer = memo(function Composer({ thread, carry, mode, queueing, held, stopping, putBack, onSend, onStop, above, onTakeBack, work, locating, tools }) {
   const [text, setText] = useState(() => getDraft(thread));
   const [images, setImages] = useState(() => attachments.get(thread) || []); // 见 attachments
   const [attachError, setAttachError] = useState(null); // 选图、选文件时说的一句（超过张数、图读不出来）
@@ -597,7 +598,7 @@ export function Composer({ thread, carry, mode, queueing, held, stopping, putBac
       <div className={styles.ai}>内容由 AI 生成，请仔细甄别</div>
     </div>
   );
-}
+});
 
 // 选好要发的图和文件：图是一排缩略图（点开看大图），大图还在本机压缩时那张先转圈；文件是小卡片（见 files.jsx），
 // 传着、解析中转圈，读不了的标出来（原因写在输入框下面）。每个右上角去掉
