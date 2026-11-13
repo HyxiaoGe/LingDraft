@@ -168,7 +168,7 @@ SSE 事件：
 上下文压缩（`app/graph/research/compaction.py`）：
 
 - 发给主 agent 的对话估算超过 20 万 token 时，从最早的一轮往后压，压到 10 万以下。
-- 先把之前几轮的搜索、读页、查文档、取回的结果换成一行说明；用户发的文件只留目录和开头，读文件的结果换成一句说明（要原文用 `read_file` 再读）；模型写文件的调用里整篇的内容、改的片段换成一句说明。还不够，再把整轮换成 Flash 写的短版。
+- 先把之前几轮的搜索、读页、查文档、取回的结果换成一行说明；用户发的文件只留目录和开头，读文件的结果换成一句说明（要原文用 `read_file` 再读）；读技能的结果换成一句说明（要用再调一次 `load_skill`）；模型写文件的调用里整篇的内容、改的片段换成一句说明。还不够，再把整轮换成 Flash 写的短版。
 - state 里的消息不改，页面照常显示原文。模型要细节时用 `recall` 工具取回。
 - 估算没到触发线、模型服务却说超过了它的上下文窗口（`model_guard.is_context_overflow`：langchain-openai 认出来的 `ContextOverflowError`，400/413/422 里各家的固定说法，TokenHub 的 400003、智谱的 1261）：把之前几轮压到这次估算的一半（最多压到 10 万），再发一次，只再发一次。之前几轮没有能再压的，照常失败。走的是免费额度的，先换直连再试，直连也说超长才压。
 - MiMo 直连超长不报错：把输入截到窗口那么长，一个字没生成就以 `length` 结束。模型守卫把这种换成 `InputTruncated`，也当超长压了再发；它不是服务出错，走免费额度的也不先换直连。
@@ -272,6 +272,19 @@ SSE 事件：
 - `POST /api/scheduled-tasks/{id}/run`：立即执行一次，不动原来定的下一次，停着的也能跑。额度用完 429；没跑起来 409，`reason` 是 `thread_busy`（那段对话正在回答）、`thread_stuck`（那段对话上一轮没跑完）、`changed`（点的工夫任务刚被改了）。
 - `POST /api/scheduled-tasks/schedule`（json `{text}`，最多 200 字）：表单里“自定义”的时间。用户用一句话说什么时候跑（“每个月 1 号和 15 号早上 9 点半”），轻量模型（`models.toml` 的 `schedule` 用途，提示词是 `prompts/tools_schedule.toml` 的 `scheduled.when`）转成 cron 或一个时间点，照样过上面的校验；只校验不存，返回 `{cron, once_at, schedule, next_at}`，页面拿去显示、存的时候再发回来。没看懂、表达不了的 422 `unclear_time`；比每小时一次还密的照用户说的转出来、拦在校验那里（`too_often`），页面才说得出为什么；模型没答上来 503 `busy`。
 
+## 技能
+
+写好的做法，模型碰到对口的活先读一份再动手（`app/skills/`、`app/tools/skills.py`）。格式照 [Agent Skills](https://agentskills.io/specification)。
+
+- 一个技能一个目录：`app/skills/<名字>/SKILL.md`，开头的 YAML 写 `name`（和目录同名）、`description`（做什么、什么时候用），后面是给模型看的说明（英文）。灵稿自己用的两项在 `metadata` 里：`title` 是页面上的中文名，`requires: run_command` 表示要能跑命令才用得上。后端启动时全部读一遍、记在内存里，格式不对启动就报错；加、改技能以后重启后端。现有技能的来源和改动见 `app/skills/README.md`。
+- 给模型分两层。目录（每个技能的 `name` 和 `description`）是系统提示词里的一段（`prompts/agent.toml` 的 `[agent].skills`，排在讲用户发的文件那一段后面），每次调模型都带着；正文等模型调 `load_skill(name)` 才给，作为工具结果留在对话里。读不读、读哪个由模型看目录判断，代码不按关键词、文件类型去配。
+- 哪些对话给（`agent.skills_offered`）：要跑命令的技能只在能跑命令的对话里给（`agent.can_run`：工作任务、配了沙箱、登录用户）。现在的三个都要跑命令，所以普通对话、游客的系统提示词里没有这一段，`load_skill` 也从请求里拿掉（`ModelSelect`）；模型硬调了也不给。
+- `load_skill`：名字对不上的回一句“没有这个技能”和能用的名字；正文还原样留在发给模型的那份里的，再读只回一句“已经在了”（`history.skill_loaded`、`compaction.uncompacted`）。不跑东西、不产生来源、不收钱，只给主 agent，排在工具列表最后（前面的工具定义不动）。
+- 上下文压缩第一层把之前几轮读技能的结果换成一句说明（`prompts/compaction.toml` 的 `skill_cleared`），换掉以后可以再读。
+- 页面：`turns` 的工具步骤里 `kind` 是 `skill`，`text` 是技能的中文名；没读成的 `ok` 是 false，`message` 是“没有这个技能”。
+- 目录只写在 `load_skill` 的工具说明里时真实模型不读（DeepSeek V4 Pro 的思考里没提过技能），所以放进了系统提示词。回放评测（`app.evals`）跑的对话不能跑命令，没有技能：评测测不到它，也不受它影响。
+- 现在一个技能只认 `SKILL.md` 这一份，目录里放脚本、参考文件模型读不到。
+
 ## 身份和其他接口
 
 - 身份（`app/identity.py`）：每个请求带 `Authorization: Bearer`，是灵稿自己签的游客令牌（`sub` 带 `guest:` 前缀），或 auth 服务的 access token（按 JWKS 验签，锁定签发者、audience 和 `type=access`；验过再查 auth 的 Redis 里的吊销标记，Redis 不通就放行）。三档：游客、登录用户、管理员。auth 服务的公钥取不到返回 503。
@@ -374,7 +387,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
   - `main.py`：接口；`favicon.py`：来源网站的图标；`inspiration.py`：今日灵感。
 - `app/graph/research/` 对话场景：
   - `agent.py`：`create_agent` 和它的中间件，从外到里：
-    - TurnMiddleware：起标题、定下这一轮的模型（Auto 第一句话判断难易）、记录每一轮、换系统提示词（带上长期记忆、这一轮是哪个模型在答）、取插进来的话；
+    - TurnMiddleware：起标题、定下这一轮的模型（Auto 第一句话判断难易）、记录每一轮、换系统提示词（带上长期记忆、这一轮是哪个模型在答、这段对话能用的技能的目录）、取插进来的话；
     - ContentGuard：内容审核；
     - CompactionMiddleware：上下文压缩，模型说超长时压了再发；
     - ToolChargeMiddleware：做成了的工具调用记账；
@@ -382,7 +395,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
     - WeatherMiddleware、TravelMiddleware、MapsMiddleware、WebToolsMiddleware、DocsMiddleware、ImageMiddleware：各个工具的结果整理（见下面的 `app/tools/`）；
     - InvalidToolCallRetryMiddleware：无效工具调用让模型重发；
     - ModelCallCapMiddleware：一轮最多调 20 次模型，最后一次不许调工具；
-    - ModelSelect：每次调模型换上这一轮的模型，拼进用户发的文件和图，去掉用不上的工具（`view_image`、`search_knowledge`、`ask_user`、`run_command`），出问题换备用；
+    - ModelSelect：每次调模型换上这一轮的模型，拼进用户发的文件和图，去掉用不上的工具（`view_image`、`search_knowledge`、`ask_user`、`run_command`、`load_skill`），出问题换备用；
     - InterruptedRetryMiddleware：生成到一半断了再调一次。
   - `subagent.py`：`task` 工具和子 agent。每轮最多派 5 个，同一个对话同时最多跑 3 个；每个最多调 12 次模型。
   - `compaction.py`：上下文压缩和 `recall` 工具。
@@ -398,10 +411,12 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 - `app/files/`：文件表（`store.py`）、上传和解析（`service.py`、`parse.py`、子进程 `child.py`）、模型写的文件用到的切段和按片段改（`artifacts.py`）、补登记图片（`backfill_images.py`）。
 - `app/knowledge/`：资料库（`libraries.py`）、切块和分词（`text.py`）、块和查询（`store.py`）、向量和重排（`remote.py`）、建索引和查（`service.py`）。
 - `app/scheduled/`：定时任务。什么时候跑（`rule.py`：cron 和一次性的时间、下一次什么时候、给人看的说法）、表（`store.py`）、建改删列和每次跑完怎么记（`service.py`）、跑完以后通知里那两行（`notice.py`）。
+- `app/skills/`：技能。一个子目录一份 `SKILL.md`；`__init__.py` 读目录、查格式（见上面的“技能”）。
 - `app/tools/`：
   - `gateway.py`：agent-tools 网关客户端（传图、按编号取图、删图，沙箱的放文件、取文件、跑命令），和网关出错时的几种异常。
   - `run_command.py`：在沙箱里跑命令，`run_command`。
   - `schedule.py`：定时任务的四个工具，和定时任务触发的一轮发给模型时前面加的说明。
+  - `skills.py`：读技能，`load_skill`。
   - `files.py`：用户发的文件怎么给模型，`read_file`。`write_file.py`：`create_file`、`edit_file`。`vision.py`：用户发的图怎么给模型，`view_image`。`knowledge.py`：`search_knowledge`。
   - `research_tools.py`：agent 自己的工具（`get_current_time`），描述在 `prompts/tools_web.toml`。
   - `mcp.py`：MCP 工具共用的部分：经网关连、取工具、认出网关的 401/403（让这一轮失败）和 429（今天的上限到了）；`request_meta` 让一次调用带上 MCP 请求的 `_meta`（不经过模型的东西，比如用户的位置）。
@@ -426,7 +441,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
     - `test_research_subagent.py`：子 agent。
     - `test_compaction.py`（含超长压了再发）、`test_memory.py`。
     - 工具：`test_images.py`（画图）、`test_weather.py`、`test_web_tools.py`（搜索、读页）、`test_maps.py`、`test_travel.py`（航班火车、行程）、`test_docs.py`（查文档）、`test_gateway_tools.py`（网关客户端）。
-    - `test_vision.py`：用户发的图怎么给模型、`view_image`。`test_files.py`：用户发的文件、`read_file`。`test_artifacts.py`：模型写的文件。`test_run_command.py`：跑命令。`test_export.py`：右栏的下载成 PDF / Word、PPT 排成 PDF。`test_knowledge.py`：资料库。`test_scheduled.py`：定时任务。
+    - `test_vision.py`：用户发的图怎么给模型、`view_image`。`test_files.py`：用户发的文件、`read_file`。`test_artifacts.py`：模型写的文件。`test_run_command.py`：跑命令。`test_skills.py`：技能。`test_export.py`：右栏的下载成 PDF / Word、PPT 排成 PDF。`test_knowledge.py`：资料库。`test_scheduled.py`：定时任务。
     - `test_model_options.py`：选模型、思考开关。`test_auto_routing.py`：Auto、免费额度、换备用。
     - `test_costs.py`：成本记账。`test_quota.py`：额度。`test_identity.py`：身份、对话和记忆按人分、游客并进账号。
     - `test_run_records.py`：运行记录、没配库启动报错。
