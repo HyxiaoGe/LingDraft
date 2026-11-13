@@ -28,3 +28,7 @@
 - 重试时工具已经做成、问题也重新问了出来，状态却一直是“没跑完”，问题卡答不了。（[#157](https://github.com/HyxiaoGe/LingDraft/pull/157)）
 - 删掉对话以后，里面出错的轮重新算进了额度。（[#159](https://github.com/HyxiaoGe/LingDraft/pull/159)）
 - 删对话删到一半出错，剩下的检查点和文件再也删不到；现在再删一次就能删干净。（[#159](https://github.com/HyxiaoGe/LingDraft/pull/159)）
+
+### 工程
+
+- 前端加了单元测试（Vitest，`npm test`）：出字时收拾半截 Markdown、给没加标记的整份 HTML 补围栏、引用编号、实时片段和存下来的对话怎么合、时间和额度的写法、报错的转写，72 条，CI 里跟检查、构建一起跑。页面上看不出变化。（[#163](https://github.com/HyxiaoGe/LingDraft/pull/163)）

@@ -162,7 +162,7 @@ flowchart TB
 
 - 后端：Python 3.12、FastAPI、LangGraph 1.2、LangChain 1.4、Postgres（pgvector、psycopg 连接池）、jieba、uv
 - 模型：默认 DeepSeek V4 Pro（主 agent、整理记忆）、Flash（子 agent、判断难易、起标题、写短版）；输入框旁边还能选豆包、Kimi、千问、MiMo、GLM、混元、MiniMax；资料库用千问 qwen3.7 的向量和重排
-- 前端：React 18、Vite、Tailwind CSS + CSS modules、react-markdown、ESLint
+- 前端：React 18、Vite、Tailwind CSS + CSS modules、react-markdown、ESLint、Vitest
 - 观测：LangSmith
 - 部署：Docker Compose；GitHub Actions 跑测试，合并后自动部署，等正在跑的回答跑完再换容器
 
@@ -180,6 +180,6 @@ npm install
 npm run dev             # http://localhost:5173
 ```
 
-测试：`cd backend && uv run pytest -q`
+测试：后端 `cd backend && uv run pytest -q`；前端 `cd frontend && npm test`（只测不碰页面的函数：出字时怎么收拾半截的 Markdown、引用编号、实时片段怎么和存下来的合在一起、报错怎么转写）。
 
 接口、事件、环境变量、存储等开发说明见 [backend/README.md](backend/README.md)。每次上线改了什么见 [CHANGELOG.md](CHANGELOG.md)。
