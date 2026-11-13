@@ -3,7 +3,7 @@
 // 再窄是顶栏右边一个“轮次”按钮，手机上点开是底部弹层，电脑上是下拉的浮层。每一轮最多显示两行。
 // 一栏和短横线：鼠标停在某一轮上（或 Tab 到它），旁边出一张卡片，写这一轮问的话、回答的开头和发的时间（2026-11-07 Sean 要的，照豆包）。
 // 跟着读到的位置高亮，点一行跳过去。跳的落点是 Turns 里每一轮的 section（data-turn 是第几轮，从 0 数）
-import { useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { IconClose, IconList } from "./icons.jsx";
 import { useLayer } from "./layers.js";
 import { NavContext } from "./nav.jsx";
@@ -131,7 +131,7 @@ function useInView(box, at, shape) {
 }
 
 // 宽屏：正文右边一栏，一直在。mini：只放得下一列短横线，一轮一条，点一条跳过去。两种都是停在某一轮上出卡片（Peek）
-export function TurnIndex({ entries, scroller, onJump, mini = false }) {
+export const TurnIndex = memo(function TurnIndex({ entries, scroller, onJump, mini = false }) {
   const at = useReading(scroller, entries.length);
   const box = useRef(null);
   useInView(box, at, mini);
@@ -156,7 +156,7 @@ export function TurnIndex({ entries, scroller, onJump, mini = false }) {
       {card}
     </nav>
   );
-}
+});
 
 // 窄的时候：顶栏右边的“轮次”按钮。手机上点开是底部弹层，电脑上是按钮下面的浮层；Esc、点外面、点关闭都收起，收起后光标回到按钮
 export function TurnIndexButton({ entries, scroller, onJump }) {

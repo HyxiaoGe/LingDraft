@@ -87,10 +87,12 @@ def test_health(client, monkeypatch):
 
 
 def test_pages_fall_back_to_index_but_not_for_api_or_assets(tmp_path):
-    """部署时后端出前端页面：/chat/<id> 这类地址给 index.html（不让直接用缓存）；/api 下没有的接口、缺了的资源文件都是 404。"""
+    """部署时后端出前端页面：/chat/<id> 这类地址给 index.html（不让直接用缓存）；/api 下没有的接口、缺了的资源文件都是 404。
+    /assets 下的文件名带内容哈希，让浏览器一直缓存；名字不带哈希的（图标）不写缓存多久。"""
     (tmp_path / "index.html").write_text("<p>页面</p>")
     (tmp_path / "assets").mkdir()
     (tmp_path / "assets" / "app-1a2b.js").write_text("js")
+    (tmp_path / "favicon.ico").write_text("图标")
     app = FastAPI()
     app.get("/api/health")(lambda: {"ok": True})
     app.mount("/", api_main.Pages(directory=tmp_path, html=True))
@@ -99,7 +101,11 @@ def test_pages_fall_back_to_index_but_not_for_api_or_assets(tmp_path):
         r = c.get(path)
         assert (r.status_code, r.text, r.headers["cache-control"]) == (200, "<p>页面</p>", "no-cache"), path
     r = c.get("/assets/app-1a2b.js")
-    assert r.text == "js" and "cache-control" not in r.headers
+    assert (r.text, r.headers["cache-control"]) == ("js", "public, max-age=31536000, immutable")
+    again = c.get("/assets/app-1a2b.js", headers={"If-None-Match": r.headers["etag"]})  # 没变（304）的回答也带着
+    assert (again.status_code, again.headers["cache-control"]) == (304, "public, max-age=31536000, immutable")
+    icon = c.get("/favicon.ico")
+    assert icon.text == "图标" and "cache-control" not in icon.headers
     assert c.get("/api/health").json() == {"ok": True}
     assert c.get("/api/nope").status_code == 404 and c.get("/api").status_code == 404
     assert c.get("/assets/app-old.js").status_code == 404

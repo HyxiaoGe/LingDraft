@@ -1171,10 +1171,14 @@ async def health():
     return {"ok": True, "version": config.VERSION or None, "busy": runner_busy()}
 
 
+ASSET_CACHE = "public, max-age=31536000, immutable"
+
+
 class Pages(StaticFiles):
     """部署时的前端页面。有这个文件就给文件；地址里没有扩展名的（/chat/new、/chat/<线程 id>）给 index.html，由前端按地址选页面，
     刷新也打得开。/api 下没有的接口、缺了的资源文件照常 404：发版后旧页面要旧资源，拿到的不能是 HTML。
-    index.html 不让浏览器直接用缓存：发了新版，刷新就拿到新的资源文件名；资源文件名带内容哈希，可以一直缓存。"""
+    index.html 不让浏览器直接用缓存：发了新版，刷新就拿到新的资源文件名。/assets 下是构建出来的文件，名字带内容哈希、内容变了名字就变，
+    让浏览器一直缓存着（一年，immutable：刷新也不来问有没有变）；别的（图标这些名字不带哈希的）不写，照浏览器自己的做法。"""
 
     async def get_response(self, path: str, scope) -> Response:
         if path.split("/")[0] == "api":
@@ -1187,6 +1191,8 @@ class Pages(StaticFiles):
             resp = await super().get_response("index.html", scope)
         if Path(getattr(resp, "path", "")).name == "index.html":
             resp.headers["Cache-Control"] = "no-cache"
+        elif path.split("/")[0] == "assets":
+            resp.headers["Cache-Control"] = ASSET_CACHE
         return resp
 
 

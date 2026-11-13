@@ -9,7 +9,7 @@
 // 模型选了“当前位置”时停下来要的是位置（st.ask.kind 是 location）：出位置卡（LocateCard），浏览器里已经允许过定位的不出卡、直接取。
 // 存下来的对话为准，正在跑的这一轮叠上实时片段。
 import { BriefcaseBusiness, MapPin, MessageCircleQuestionMark, MessageSquare } from "lucide-react";
-import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listInspirations } from "./api.js";
 import shell from "./card.module.css";
 import { FileCards, fileVersions, turnCards } from "./artifact.jsx";
@@ -29,6 +29,7 @@ import { HeadBar, NavContext, touch, typeHere, typeNext } from "./nav.jsx";
 import proc from "./process.module.css";
 import { ACTIVE, ASKING, LOCATION, answerText, citeNumbers, copyText, creditsText, cutPartialCite, domain, elapsed, mergeItems, modelName, splitTurn, stamp, tidyTyping, typingUnit } from "./research.js";
 import { AnswerSources, Fold, Mark, useFoldOpen } from "./sources.jsx";
+import { useEvent, useKept, useLatest } from "./stable.js";
 import task from "./task.module.css";
 import styles from "./timeline.module.css";
 import { TurnIndex, TurnIndexButton, turnEntries } from "./turns.jsx";
@@ -167,15 +168,14 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   }, []);
   // 用户自己做的（发一句话、重新回答、重试、改最后一句、点接着问）：跳到底跟着看这一轮。排着的话自动开跑、打开一个正在跑的对话都不拉人。
   // 光标不搬：按钮点完没了（接着问、重试、重新回答这一轮跑起来就不在了），焦点会掉到页面上，这时才放回输入框，好接着写；原来在哪就还在哪
-  const act = { ...rawAct };
-  for (const k of ["start", "say", "retry", "regenerate", "edit", "answer"]) {
-    act[k] = (...a) => {
-      toBottom();
-      const r = rawAct[k](...a);
-      requestAnimationFrame(() => { if (!document.activeElement || document.activeElement === document.body) focusInput(); });
-      return r;
-    };
-  }
+  // act 交给每一轮、输入框，它们记着渲染结果（memo）：给的是不变的一份（见 stable.js）
+  const follow = (k) => (...a) => {
+    toBottom();
+    const r = rawAct[k](...a);
+    requestAnimationFrame(() => { if (!document.activeElement || document.activeElement === document.body) focusInput(); });
+    return r;
+  };
+  const act = useLatest({ ...rawAct, start: follow("start"), say: follow("say"), retry: follow("retry"), regenerate: follow("regenerate"), edit: follow("edit"), answer: follow("answer") });
   // 新对话的今日灵感：桌面在输入框下面，窄屏输入框贴底、它们在输入框上面。按看到的顺序放，Tab 和读屏的先后和眼睛看的一致
   const starters = fresh && <Inspirations key={work?.on ? "work" : "chat"} work={!!work?.on} onPick={act.start} />;
 
@@ -186,13 +186,13 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   const dropping = useImageDrop(mainRef, mode !== "opening");
   // 回答时（包括还在排队、正在停止）发的话排着，这一轮答完就发；新对话刚发出去、还没拿到 id 时排不了
   const queueing = !!tid && (mode === "busy" || mode === "queued");
-  const onSend = (text, images, docs) => { // images：带的图（[{key, file, url}]），docs：带的文件（解析好了的，见 composer.jsx 的 picked），排着的话都不带
+  const onSend = useEvent((text, images, docs) => { // images：带的图（[{key, file, url}]），docs：带的文件（解析好了的，见 composer.jsx 的 picked），排着的话都不带
     if (mode === "new") return act.start(text, images, docs);
     if (mode === "idle") return act.say(text, images, docs);
     if (mode === ASKING) return act.answer({ text, typed: true }); // 问着的时候输入框里写的就是回答
     if (queueing) return act.queue(text);
     return undefined;
-  };
+  });
   const blank = work?.on ? "新工作任务" : "新对话";
   const title = live?.title || st?.title || live?.said || (opening ? listedTitle ?? null : blank); // null：打开中、列表里也还没有，顶栏先放占位
   const running = busy || ACTIVE.has(st?.status);
@@ -245,15 +245,23 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
   const pendingKinds = running || asking ? [st?.guided_message && "guided", st?.queued_message && "queued"].filter(Boolean) : [];
   const said = useAnnounce(st, running, stopping); // 读屏：只在开始、答完、停下、出错时说一句（见 useAnnounce）
   // 轮次目录：三轮起才有，只列轮次，见 turnEntries。正文右边放得下就放一栏，放不下顶栏右边一个按钮点开
-  const entries = !fresh && !opening ? turnEntries(st, live, running) : [];
+  // 目录只看存下来的各轮和刚发出去的那句：出字时这几样不变，目录不用跟着重新渲染
+  const { said: sentText, sentAt, turnsAtStart } = live || {};
+  const entries = useMemo(() => (!fresh && !opening ? turnEntries(st, sentText ? { said: sentText, sentAt, turnsAtStart } : null, running) : []),
+    [fresh, opening, st, sentText, sentAt, turnsAtStart, running]);
   const index = entries.length > 0;
-  const jumpTo = (id) => {
+  const jumpTo = useEvent((id) => {
     const el = scrollRef.current?.querySelector(`[data-turn="${CSS.escape(id)}"]`);
     if (!el) return;
     stick.current = false;
     el.scrollIntoView({ block: "start", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     el.focus({ preventScroll: true }); // 键盘、读屏接着从这一轮往下读
-  };
+  });
+  // 输入框上沿排着的话、输入框里选模型那一排：是当成元素交给输入框的，内容没变就还是同一个，输入框才不用跟着重新渲染
+  const waiting = running || asking;
+  const above = useMemo(() => waiting && <Pending st={st} act={act} asking={asking} />, [waiting, st, act, asking]);
+  const tools = useMemo(() => <ModelTools models={models} loading={models === null || opening} {...picker} />, [models, opening, picker]);
+  const takeBack = useEvent(() => act.withdraw(pendingKinds));
 
   return (
     <section ref={mainRef} className={styles.main} data-fresh={fresh || undefined} aria-label="对话">
@@ -295,9 +303,8 @@ export function Conversation({ st, live, busy, suggesting, error, now, act: rawA
         {!error?.quota && <CreditsNote credits={credits} onLogin={picker.onLogin} />}
         {away && <JumpButton more={more} onClick={toBottom} />}
         <Composer thread={tid || "new"} carry={!!live} mode={mode} queueing={queueing} held={pendingKinds.length > 0} stopping={stopping} putBack={putBack} onSend={onSend} onStop={act.stop}
-          above={(running || asking) && <Pending st={st} act={act} asking={asking} />} locating={asking && st?.ask?.kind === LOCATION} onTakeBack={pendingKinds.length ? () => act.withdraw(pendingKinds) : null}
-          work={!!work?.on}
-          tools={<ModelTools models={models} loading={models === null || opening} {...picker} />} />
+          above={above} locating={asking && st?.ask?.kind === LOCATION} onTakeBack={pendingKinds.length ? takeBack : null}
+          work={!!work?.on} tools={tools} />
       </Dock>
       {dropping && <DropHint />}
       {!mobile && starters}
@@ -566,9 +573,14 @@ function Inspirations({ work, onPick }) {
 
 // ---------------- 一轮一轮 ----------------
 
+// 每一轮记着渲染结果（见 Turn）：出字时只有正在答的那一轮跟着渲染。所以给以前各轮的东西要不变：
+// 各份文件的各版内容没变就还是同一个 Map；时间只给到哪一天（它们写的是发送、答完的钟点，今天、昨天还是日期只看现在是哪天，见 stamp），
+// 正在答的那一轮才每秒走（已用几秒）
 function Turns({ st, live, busy, suggesting, stopping, now, act, models, modelNames, title, files }) {
   const turns = st?.turns || [];
-  const versions = fileVersions(st, live); // 这段对话里写成了的各份文件、各版：卡片和过程里改文件那一步对上标题
+  const made = fileVersions(st, live); // 这段对话里写成了的各份文件、各版：卡片和过程里改文件那一步对上标题
+  const versions = useKept(made, JSON.stringify([...made]));
+  const today = new Date(now).setHours(0, 0, 0, 0);
   const running = busy || ACTIVE.has(st?.status);
   // 刚说的话还没出现在存下来的对话里：先按页面手上的显示
   const pending = live?.said && turns.length <= (live.turnsAtStart ?? 0)
@@ -585,8 +597,8 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models, modelNa
         shots += imagesOf(t.items).filter(drawn).length;
         return (
           <section key={t.id} className={styles.turn} data-turn={i} tabIndex={-1} aria-label={`第 ${i + 1} 轮`} aria-busy={last && running ? true : undefined}>
-            <Turn t={t} k={`${st?.thread_id}:${i}`} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={stopping} last={last} now={now} act={act} models={models} modelNames={modelNames} title={title} images={images}
-              versions={versions} files={files} />
+            <Turn t={t} k={`${st?.thread_id}:${i}`} st={st} live={last && running ? live : null} running={last && running} suggesting={last && suggesting} stopping={last && stopping} last={last} now={last && running ? now : today}
+              act={act} models={models} modelNames={modelNames} title={title} images={images} versions={versions} files={files} />
           </section>
         );
       })}
@@ -595,7 +607,8 @@ function Turns({ st, live, busy, suggesting, stopping, now, act, models, modelNa
 }
 
 // k：这一轮在页面上的记号（对话 id + 第几轮）。正在发的这一轮存下来以后 id 会变（见 Turns 的 pending），过程展开没展开按 k 记，不跟着重来
-function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, models, modelNames, title, images, versions, files }) {
+// 记着渲染结果（memo）：给它的东西没变就不重新渲染。一段长对话里出字时每秒十来次，以前的每一轮都跟着渲染的话，轮数越多越卡
+const Turn = memo(function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, models, modelNames, title, images, versions, files }) {
   const items = mergeItems(t.items, live);
   const cards = turnCards(items, live?.drafts, versions); // 这一轮写的文件，正文下面一份一张
   const outputs = outputsOf(items); // 这一轮跑命令产出的：图在正文上面，别的文件在正文下面
@@ -652,7 +665,7 @@ function Turn({ t, k, st, live, running, suggesting, stopping, last, now, act, m
       {last && idle && suggesting && !rec?.suggestions?.length && <SuggestWait />}
     </>
   );
-}
+});
 
 // 发出去的图在本机的地址（图的编号 → blob 地址）：存下来的对话回来以后接着用它显示，不用再从服务器取一遍
 const sentImages = new Map();
