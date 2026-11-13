@@ -82,5 +82,29 @@ async def latest_checkpoints(checkpointer: BaseCheckpointSaver, threads: list[st
     raise TypeError(f"不支持查最新检查点的检查点存储：{type(checkpointer).__name__}")
 
 
+async def keep_latest(checkpointer: BaseCheckpointSaver, thread_id: str) -> None:
+    """这段对话只留最新的检查点，以前的删掉（存储自带的 aprune，见 langgraph.checkpoint.postgres 的 prune）。
+    留下的：每个命名空间最新的那一个、挂在它上面还没并进去的写入、它用到的内容，也就是存储取最新状态时读的全部，接着说、回答问题卡、重试都只用这些。
+    删掉的：以前的检查点和只有它们用的内容，做完了的子 agent 那次调用的命名空间。产品里没有地方读以前的检查点（没有回到某一步、分叉）。
+    为什么要删：messages 每变一次就整份另存一条，一轮至少两次，不删的话一段对话占的空间随轮数平方涨（dev 上清之前 98% 是以前的）。
+    在一个事务里按当时的快照删，这段对话同时在跑也没事：它新存的看不到也不会删。
+    只管 Postgres：内存的不删（进程没了就没了；评测录像要每一步的检查点，见 app.evals.decisions）。"""
+    if isinstance(checkpointer, AsyncPostgresSaver):
+        await checkpointer.aprune([thread_id], strategy="keep_latest")
+
+
+STALE_SQL = "SELECT thread_id FROM checkpoints GROUP BY thread_id HAVING count(*) > 1"
+
+
+async def stale_threads(checkpointer: BaseCheckpointSaver) -> list[str]:
+    """检查点不止一个的线程（各命名空间都算）：有以前的没清。只数主键，不读内容。"""
+    if not isinstance(checkpointer, AsyncPostgresSaver):
+        return []
+    async with checkpointer._cursor() as cur:  # 同 thread_ids
+        await cur.execute(STALE_SQL)
+        rows = await cur.fetchall()
+    return [r["thread_id"] for r in rows]
+
+
 def build_graph(planner: ResearchPlanner, checkpointer: BaseCheckpointSaver, memory: MemoryBook | None = None):
     return build_agent(planner, checkpointer, memory)

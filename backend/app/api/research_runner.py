@@ -51,7 +51,16 @@ from app.knowledge.service import KnowledgeBase
 from app.knowledge.store import ChunkStore, MemoryChunkStore, PostgresChunkStore
 from app.graph.research import history
 from app.graph.research.agent import TURN_END, ChatContext, fallback_title, now, stop_turn
-from app.graph.research.graph import NO_POSTGRES, build_graph, latest_checkpoints, make_serde, postgres_pool, thread_ids
+from app.graph.research.graph import (
+    NO_POSTGRES,
+    build_graph,
+    keep_latest,
+    latest_checkpoints,
+    make_serde,
+    postgres_pool,
+    stale_threads,
+    thread_ids,
+)
 from app.graph.research.memory import MemoryBook, next_at
 from app.identity import Identity, is_guest_sub
 from app.graph.research.sources import collect_sources, export_markdown, subagent_messages
@@ -863,9 +872,37 @@ class ResearchRunner(BaseRunner):
                 except Exception as e:  # noqa: BLE001
                     log.exception("这一轮结束后出错：%s 运行 %s", key, run)
                     out({"event": "error", "data": _error_event(e)})
+            await self._akeep_latest(thread_id)  # 出了运行位再清：不占着位。这一轮的最后一次写（推荐问题）在上面
         finally:
             self._inflight -= 1
             self.events.close(run)
+
+    async def _akeep_latest(self, thread_id: str) -> bool:
+        """把这段对话以前的检查点清掉，只留最新的（见 graph.keep_latest）。每次执行结束时清一次，所以一段对话攒不下几个。
+        清不成只打日志：不影响这一轮，留下的下次再清。"""
+        try:
+            await keep_latest(self.graph.checkpointer, thread_id)
+            return True
+        except Exception:  # noqa: BLE001
+            log.warning("清以前的检查点没成：%s", thread_id, exc_info=True)
+            return False
+
+    def tidy_checkpoints(self) -> None:
+        """服务启动时调一次，不等它做完：把攒着以前的检查点的对话都清一遍（见 _atidy_checkpoints）。"""
+        asyncio.run_coroutine_threadsafe(self._atidy_checkpoints(), aio.loop())
+
+    async def _atidy_checkpoints(self) -> int:
+        """检查点不止一个的对话，一段一段清，返回清成了几段。平时每次执行结束都清，这里收的是：
+        加这一步以前攒下的、执行以外写出来的（改名、没在跑时的停止收尾各多一个）、上次没清成的。只数主键找出要清的，都清过了就什么都不做。"""
+        try:
+            threads = await stale_threads(self.graph.checkpointer)
+            done = [t for t in threads if await self._akeep_latest(t)]
+        except Exception:  # noqa: BLE001
+            log.warning("启动时清以前的检查点没成", exc_info=True)
+            return 0
+        if threads:
+            log.info("启动时清以前的检查点：%d 段对话有，清成 %d 段", len(threads), len(done))
+        return len(done)
 
     async def _arecord(self, write: Callable[[RunStore], Awaitable[None]]) -> None:
         """写运行记录。写不上只打日志，不影响执行本身。"""
