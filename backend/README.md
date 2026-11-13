@@ -22,7 +22,7 @@ LINGDRAFT_FAKE=1 uv run uvicorn app.api.main:app --port 8000   # 去掉 LINGDRAF
 cd ../frontend && npm install && npm run dev                    # http://localhost:5173，/api 代理到 8000
 ```
 
-部署：仓库根目录的 `Dockerfile` 先构建前端，再装后端，一个容器（`lingdraft`，单进程 uvicorn，内存上限 512 MB）同时出接口和页面（`LINGDRAFT_STATIC_DIR`，没有扩展名的地址给 `index.html`）。`docker-compose.yml` 接入 `middleware_default`（nginx-proxy 按容器名转过来）、`postgres_default`（用 `lingdraft` 库）和 `agent-tools-internal`；`.env` 放在部署机的仓库目录下，那里的 `data/` 挂成数据目录（用户传的文件原件、网站图标；画的图、用户发的图在 image-service 里）。PR 上 CI 只跑测试（内存和 Postgres 各跑一遍，Postgres 用带 pgvector 的镜像）；合进 master 后，部署机上的 self-hosted runner 拉代码、先只建镜像（旧容器照常服务），再等 `/api/health` 里的 `busy`（排着队、在跑的回答有几个）变成 0，最多等 10 分钟，然后 `docker compose up -d` 换容器，等 `/api/health` 变健康（返回里的 `version` 是部署的提交号）。不等的话，重启会把正在跑的回答记成 lost，用户得重问。
+部署：仓库根目录的 `Dockerfile` 先构建前端，再装后端，一个容器（`lingdraft`，单进程 uvicorn，内存上限 512 MB）同时出接口和页面（`LINGDRAFT_STATIC_DIR`，没有扩展名的地址给 `index.html`；`index.html` 回 `no-cache`，`/assets/` 下名字带内容哈希的文件回一年的 `immutable`、浏览器一直缓存着，缺了的资源文件照常 404）。`docker-compose.yml` 接入 `middleware_default`（nginx-proxy 按容器名转过来）、`postgres_default`（用 `lingdraft` 库）和 `agent-tools-internal`；`.env` 放在部署机的仓库目录下，那里的 `data/` 挂成数据目录（用户传的文件原件、网站图标；画的图、用户发的图在 image-service 里）。PR 上 CI 只跑测试（内存和 Postgres 各跑一遍，Postgres 用带 pgvector 的镜像）；合进 master 后，部署机上的 self-hosted runner 拉代码、先只建镜像（旧容器照常服务），再等 `/api/health` 里的 `busy`（排着队、在跑的回答有几个）变成 0，最多等 10 分钟，然后 `docker compose up -d` 换容器，等 `/api/health` 变健康（返回里的 `version` 是部署的提交号）。不等的话，重启会把正在跑的回答记成 lost，用户得重问。
 
 环境变量（开关型的认 1/0、true/false、yes/no、on/off，不分大小写，写成别的值启动时直接报错）：
 
