@@ -106,7 +106,7 @@ ASKING_FIRST = "先回答或跳过上面的问题"
 FAILURE_MODEL, FAILURE_BLOCKED, FAILURE_CUT, FAILURE_TOOL, FAILURE_INTERNAL = "model", "blocked", "cut_short", "tool", "internal"
 NO_UNREAD = {"unread": 0, "notice": None}  # 线程列表里一行没有未读时的那两项（见 _asummary_view）
 # 线程列表里一行从检查点算出来的那几项（见 _summary_of）记在库里时带的版本：哪一项的算法改了、多了一项，就加一，记着的全部作废、重算
-SUMMARY_V = 1
+SUMMARY_V = 2
 _SHOWN = {ModelUnavailable.__name__: FAILURE_MODEL, Interrupted.__name__: FAILURE_MODEL, ContentBlocked.__name__: FAILURE_BLOCKED}  # 提示原样给的
 FAILURE_TEXT = {FAILURE_TOOL: "查资料、地图或画图用的服务出了问题", FAILURE_INTERNAL: "处理这一轮时出了意外的错误"}
 # 检查点只在一次运行开头（用户的话写进去，见 accept）和结束时各存一份，中间每一步不存：每份都带着整段对话，每步都存的话按平方增长。
@@ -319,6 +319,12 @@ def _failure_of(errors: list[str]) -> tuple[str, str]:
     被取消的也可能记一条 CancelledError：看真正出错的那条。只有被取消的（进程退出时整轮被掐断），和没有错误记录一样是半路停了。"""
     real = _real_error(errors)
     return _failure(*_parse_error(real)) if real else (FAILURE_CUT, CUT_SHORT)
+
+
+def _errors(snap) -> list[str]:
+    """检查点上这一步里没做成的任务记的错误。一步没走完，它的记录就不清：出过错、重试时做成了的任务，那次的错误还留着
+    （见 langgraph.pregel._task_status）。做成了的有结果（result 不是 None），LangGraph 不会再跑它，它留着的错误不算。"""
+    return [str(t.error) for t in snap.tasks if t.error and t.result is None]
 
 
 def _real_error(errors: list[str]) -> str | None:
@@ -917,11 +923,13 @@ class ResearchRunner(BaseRunner):
                 raise
             await _settle(mark)
             _put(out, buf.flush())
-            if (await self.graph.aget_state(self._cfg(thread_id))).next:
+            # 检查点上这一步还有任务，就是没跑完。不能只看 next：它只列没做完的。停止正好落在一步做完、下一步还没开始的空档时，
+            # 这一步的任务都做完了、结果还挂着没并进检查点，next 是空的，这一轮其实停在半路（模型还没调、工具结果还没给模型看）
+            if (await self.graph.aget_state(self._cfg(thread_id))).tasks:
                 await self._write_stop(thread_id, buf, tasks, done)
                 out({"event": "node", "data": {"node": TURN_END}})
                 return STOPPED
-            # 点停止时这一轮刚好跑完了（检查点里已经是答完的样子）：算答完
+            # 点停止时这一轮刚好跑完了（最后一步已经并进检查点，没有任务了）：算答完
         finally:
             self._running.pop(thread_id, None)
             self._models.pop(thread_id, None)
@@ -1651,7 +1659,7 @@ class ResearchRunner(BaseRunner):
     def failure_detail(self, thread_id: str) -> str | None:
         """开发用（评测、命令行）：这一轮没跑完时检查点里记的异常原文（页面上只给转写过的，见 _failure）。没跑完以外的、没有错误记录的是 None。"""
         snap = aio.run(self.graph.aget_state(self._cfg(thread_id)))
-        return _real_error([str(t.error) for t in snap.tasks if t.error]) if snap.next else None
+        return _real_error(_errors(snap)) if snap.next else None
 
     def _title_of(self, thread_id: str, v: dict) -> str:
         """页面上的标题：起好写进 state 的、改过的；没写进去的先看这次进程里起好过的（见 _titles），
@@ -1758,13 +1766,13 @@ class ResearchRunner(BaseRunner):
         """queued / running：有执行占着位；idle：这一轮跑完了（或停下了），可以接着说；
         asking：没在跑，这一轮停下来问用户了（见 app.tools.ask_user），回答或跳过以后接着跑，不是失败；
         failed：没在跑、也没跑完——某一步抛了错（错误记在检查点里），或执行半路被掐断（进程重启，没有错误记录）。
-        和提问同一步的别的工具抛了错也算 failed：重试时出错的重做，问题会再问出来。
+        和提问同一步的别的工具抛了错也算 failed：重试时出错的重做，问题会再问出来；重做成了，就是 asking（见 _errors）。
         failed 时第二项是原因的（类别，说法）（见 _failure_of），别的状态是 None。"""
         if run is not None:
             return ("queued" if run["queued"] else "running"), None
         if not snap.next:
             return "idle", None
-        errors = [str(t.error) for t in snap.tasks if t.error]
+        errors = _errors(snap)
         if not errors and _asks(snap):
             return ASKING, None
         return "failed", _failure_of(errors)
