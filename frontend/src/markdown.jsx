@@ -1,6 +1,7 @@
 // 正文的 Markdown（2026-11-07 Sean 定：不再手写，用现成的库；样式照搬 Fusion，见 markdown.module.css）：react-markdown 解析，
 // remark-gfm 管表格、删除线、任务列表、裸链接，remark-breaks 让单个换行照样换行（中文回答靠它分行），remark-math + KaTeX 显示公式（有公式才去取 KaTeX，见 math.js）。
 // 直接出 React 元素，不插入 HTML；模型写的 HTML 照字面显示（<br> 例外，换行：表格格子里换行只能这么写）。
+// 没加围栏的整份 HTML（<!DOCTYPE html> 开头的）当成一个 html 代码块，不照 Markdown 排（见 research.fenceHtml）。
 // 代码块见 code-block.jsx、表格见 md-table.jsx（都照搬 Fusion）。自己加的：引用角标 [s3fa9c1]（连同前面一个字、后面的标点不断行）、
 // 标题比页面标题小几档、图片只给链接（模型写的图片地址多半打不开，也不替用户去别的网站取东西）
 import { createContext, useContext, useMemo } from "react";
@@ -11,7 +12,7 @@ import remarkMath from "remark-math";
 import { CodeBlock } from "./code-block.jsx";
 import { useLazy } from "./lazy.js";
 import { MdTable } from "./md-table.jsx";
-import { FENCE, closesFence } from "./research.js";
+import { FENCE, closesFence, fenceHtml } from "./research.js";
 import styles from "./markdown.module.css";
 
 // ---------- 交给解析之前：公式的几种写法、表格里代码的竖线 ----------
@@ -56,7 +57,7 @@ function prepLine(s, out) {
 
 function prep(text) {
   const out = { math: false };
-  const lines = text.split("\n");
+  const lines = fenceHtml(text).split("\n"); // 没加围栏的整份 HTML 先补上围栏（见 research.fenceHtml）
   let fence = null;
   let block = false; // 在 $$ 公式块里
   for (let n = 0; n < lines.length; n++) {

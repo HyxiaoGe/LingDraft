@@ -131,6 +131,36 @@ export const closesFence = (line, open) => {
   return !!m && m[2][0] === open[0] && m[2].length >= open.length && !m[3].trim();
 };
 
+// 没加围栏的整份 HTML：用户说“只要源码、不要代码块标记”，模型就直接从 <!DOCTYPE html> 写到 </html>。照 Markdown 排会乱：
+// 标签照字面显示、换行全并成空格，缩进四格的几段又成了一块块纯文本。所以从声明那一行到 </html> 收尾的那一行，前后补上围栏，
+// 当成一个 html 代码块（有行号、能折叠、能复制和下载）；还没写到 </html> 的算到末尾。复制整条回答拿到的还是模型写的原文。
+// 只认 <!DOCTYPE html 这个声明：它本身就写明了后面是一份 HTML；别的没加围栏的代码没有这样的标记，不猜。
+// 补过的再来一遍不变（声明已经在围栏里了）：正在写的那一行先经过 tidyTyping，再到 markdown.jsx 的 prep，两处都调。
+const HTML_DOC = /^ {0,3}<!doctype html[\s>]/i;
+const HTML_END = /<\/html\s*>\s*$/i; // </html> 收尾的一行（</body></html> 写在一行的也算）
+export function fenceHtml(text) {
+  if (!/<!doctype html/i.test(text)) return text;
+  const lines = text.split("\n");
+  const out = [];
+  let open = null;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (open) { if (closesFence(l, open)) open = null; out.push(l); continue; }
+    open = l.match(FENCE)?.[2] || null;
+    if (open || !HTML_DOC.test(l)) { out.push(l); continue; }
+    let end = lines.findIndex((x, k) => k >= i && HTML_END.test(x));
+    if (end < 0) end = lines.findIndex((x, k) => k >= i && /<\/html\s*>/i.test(x)); // </html> 后面同一行还跟着字
+    const body = lines.slice(i, end < 0 ? lines.length : end + 1);
+    let n = 3; // 围栏比里面任何一行开头的反引号都长：代码里单独一行的 ``` 不会把它收掉
+    for (const x of body) n = Math.max(n, (x.match(/^\s*(`+)/)?.[1].length || 0) + 1);
+    out.push("`".repeat(n) + "html");
+    for (const x of body) out.push(x);
+    if (end >= 0) out.push("`".repeat(n));
+    i += body.length - 1;
+  }
+  return out.join("\n");
+}
+
 // 这几行走完时还在代码块里（开了围栏还没收）
 function fenceOpen(lines) {
   let open = null;
@@ -187,7 +217,7 @@ function tableLinesAbove(text, b) {
 // 不然先露出一行竖线、等分隔行写完再突然变成表格。字出来时不先露出符号、等配上了再突然变样式。
 // 代码块里的、围栏那一行原样显示（代码里的 ` 和 ** 不是 Markdown）；只写了一两个 ` 的行先不显示（可能是围栏写到一半）
 export function tidyTyping(text) {
-  const lines = cutPartialCite(text).split("\n");
+  const lines = fenceHtml(cutPartialCite(text)).split("\n"); // 没加围栏的整份 HTML 也是代码：里面的 ` 和 ** 一样不收拾
   const end = lines.length - (lines.length > 1 && !lines.at(-1).trim() ? 1 : 0); // 刚换行、新的一行还没字
   if (end > 0 && (fenceOpen(lines.slice(0, end - 1)) || FENCE.test(lines[end - 1]))) return lines.join("\n");
   let j = end;
