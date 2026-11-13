@@ -6,7 +6,11 @@
 
 ## 2026.11.13
 
-审查第一版设计时找出来的一批问题。
+### 新增
+
+- **定时任务。** 让灵稿到点自己干活。在对话里说一句“每天早上 8 点给我一份 AI 新闻简报”就能建，也可以在新的定时任务页（左栏有入口）里填表单；每小时、每天、每周、只跑一次，或者用一句话说什么时候跑。每次的结果落在同一段对话里；到点跑的那一轮没人在场，不会停下来问。登录后可用，每人最多 5 个。（[#151](https://github.com/HyxiaoGe/LingDraft/pull/151)、[#152](https://github.com/HyxiaoGe/LingDraft/pull/152)）
+- **定时任务跑完的提醒。** 页面右上角弹一条通知，左栏那段对话标上没看的条数；人不在页面时标签页的标题会提示，设置里开了通知的还会收到系统通知。（[#153](https://github.com/HyxiaoGe/LingDraft/pull/153)）
+- 定时任务的对话在左栏用钟的图标。（[#154](https://github.com/HyxiaoGe/LingDraft/pull/154)）
 
 ### 性能
 
@@ -18,6 +22,7 @@
 
 ### 修复
 
+- 刷新页面时左栏一度只剩当前这段对话，看着像别的都没了；现在列表取回来之前只放占位。（[#154](https://github.com/HyxiaoGe/LingDraft/pull/154)）
 - 点停止正好落在两步之间时，这一轮被当成答完，做完的搜索结果在下一轮丢掉；现在照常按停止收尾。（[#157](https://github.com/HyxiaoGe/LingDraft/pull/157)）
 - 重试时工具已经做成、问题也重新问了出来，状态却一直是“没跑完”，问题卡答不了。（[#157](https://github.com/HyxiaoGe/LingDraft/pull/157)）
 - 删掉对话以后，里面出错的轮重新算进了额度。（[#159](https://github.com/HyxiaoGe/LingDraft/pull/159)）
