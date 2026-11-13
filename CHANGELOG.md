@@ -22,6 +22,7 @@
 
 ### 修复
 
+- 右栏预览的网页用不了 localStorage：预览是隔离开的，页面一读存储浏览器就报错，记分数、存进度的小游戏和小工具在预览里要么提示存储不可用，要么按钮全都没反应。现在预览时给页面一份只在内存里的 localStorage / sessionStorage，页面照常能用；只在这次预览里有，关掉右栏或换一版就没了。隔离没有放开，下载、复制拿到的还是原样。（[#164](https://github.com/HyxiaoGe/LingDraft/pull/164)）
 - 回答是一整份没加代码块标记的 HTML 时（比如要求“只输出源码、不要代码块标记”），页面把它当普通文字排，标签和代码挤成一大段、中间夹着几块“纯文本”；现在显示成一个 HTML 代码块，能折叠、复制、下载。（[#162](https://github.com/HyxiaoGe/LingDraft/pull/162)）
 - 刷新页面时左栏一度只剩当前这段对话，看着像别的都没了；现在列表取回来之前只放占位。（[#154](https://github.com/HyxiaoGe/LingDraft/pull/154)）
 - 点停止正好落在两步之间时，这一轮被当成答完，做完的搜索结果在下一轮丢掉；现在照常按停止收尾。（[#157](https://github.com/HyxiaoGe/LingDraft/pull/157)）

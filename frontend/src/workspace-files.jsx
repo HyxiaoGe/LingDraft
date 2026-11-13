@@ -19,6 +19,7 @@ import { IconDownload, IconFolder, IconWarn, Spinner } from "./icons.jsx";
 import { Viewer, drawn, imageAlt, imageFileName, imageUrl, imagesOf } from "./images.jsx";
 import { Markdown } from "./markdown.jsx";
 import { NavContext, typeNext } from "./nav.jsx";
+import { previewDoc } from "./preview.js";
 import { mergeItems } from "./research.js";
 import pstyles from "./artifact.module.css";
 import styles from "./workspace-files.module.css";
@@ -203,7 +204,8 @@ function usePdf(src, id) {
   return { url, error, retry: () => setTries((n) => n + 1) };
 }
 
-// 网页的原件，给预览用：抽出来的文字太长时只有前面一部分，不能拿来当页面。多半是 UTF-8；不是的按 GB18030 认（老的中文网页）
+// 网页的原件，给预览用：抽出来的文字太长时只有前面一部分，不能拿来当页面。多半是 UTF-8；不是的按 GB18030 认（老的中文网页）。
+// 只给预览的 iframe 用，所以取回来就带上内存里的 localStorage（见 preview.js）；下载、看源码走的是别的接口，拿到的还是原件
 function decodePage(bytes) {
   try {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -220,7 +222,7 @@ function usePage(src, id) {
     setError(null);
     if (!src.key || !id) return undefined;
     const ctl = new AbortController();
-    src.blob(id, ctl.signal).then((b) => b.arrayBuffer()).then((bytes) => { if (!ctl.signal.aborted) setGot({ id, html: decodePage(bytes) }); })
+    src.blob(id, ctl.signal).then((b) => b.arrayBuffer()).then((bytes) => { if (!ctl.signal.aborted) setGot({ id, html: previewDoc(decodePage(bytes)) }); })
       .catch((e) => { if (!ctl.signal.aborted) setError(e.status === 404 ? "gone" : "failed"); });
     return () => ctl.abort();
   }, [src.key, id, tries]); // eslint-disable-line react-hooks/exhaustive-deps -- 同上
