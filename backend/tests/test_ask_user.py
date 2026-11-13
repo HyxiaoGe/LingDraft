@@ -20,8 +20,9 @@ from app.api.research_runner import ResearchRunner
 from app.api.run_store import ASKED
 from app.api.runner import LocalEventLog, LocalRunRegistry
 from app.graph.research import history, prompts
-from app.research_llm import FakeToolModel
+from app.research_llm import FakeResearchPlanner, FakeToolModel
 from app.tools.ask_user import MAX_ANSWER, AskAnswer, make_ask_tool
+from app.tools.gateway import GatewayAuthError
 from tests.auth_helpers import USER
 from tests.research_helpers import events, last, new, say, state, wait_until
 from tests.test_research_queue import _gate, _guide, _queue, _Running
@@ -183,6 +184,33 @@ def test_search_sent_with_the_question_is_kept(client, rr):
     assert end["status"] == "idle" and [e for e, _ in ev if e == "step"] == [] and len(end["sources"]) == 3
 
 
+def test_question_asked_again_after_the_failed_search_beside_it_succeeds_can_be_answered():
+    """同一条消息里又搜又问，搜索出了致命的错（密钥不对）：这一轮没跑完。重试时搜索做成了，问题又问了出来：是在等回答，问题照常给。
+    搜索头一次的错误还留在检查点里（一步没走完，它的记录不清）。以前留着的也算出错：状态一直是没跑完，问题不给、答不了，再重试也一样。"""
+    p = FakeResearchPlanner()
+    aio.run(p.connect_tools())
+    search, calls = p._mcp.web[0].tool, []
+
+    async def down_once(**kw):
+        calls.append(kw)
+        if len(calls) == 1:
+            raise GatewayAuthError("调 /search/mcp 失败：HTTP 401", kind="http_401")
+        return await search.coroutine(**kw)
+    p._mcp.web[0].tool = search.model_copy(update={"coroutine": down_once})
+    rr = ResearchRunner(planner=p)
+    http = _client(rr)
+    st = new(http, "边搜边问", work=True)
+    tid = st["thread_id"]
+    assert st["status"] == "failed" and st["ask"] is None and len(calls) == 1
+    st = last(events(http.post(f"/api/research/threads/{tid}/retry")), "state")
+    assert st["status"] == "asking" and st["ask"]["question"] == QUESTION and len(calls) == 2
+    assert rr.failure_detail(tid) is None
+    assert [t["status"] for t in http.get("/api/research/threads").json()["threads"]] == ["asking"]  # 左栏那一行也是
+    end = last(events(_answer(http, tid, st["ask"]["id"], "选型")), "state")
+    assert end["status"] == "idle" and "选型" in _reply(end["turns"][0]) and len(calls) == 2  # 回答以后不重搜
+    assert _runs(http, tid) == [("new", "error"), ("retry", ASKED), ("answer", "success")]
+
+
 # ---- 等回答的时候 ----
 
 
@@ -303,9 +331,11 @@ def test_guided_message_goes_in_after_the_answer(client, rr):
 # ---- 状态怎么认、记录怎么算 ----
 
 
-def _snap(messages: list, interrupts: list, errors: tuple = ()) -> SimpleNamespace:
+def _snap(messages: list, interrupts: list, errors: tuple = (), redone: tuple = ()) -> SimpleNamespace:
+    """errors：这一步里出了错、没做成的任务；redone：出过错、后来重做成了的（那次的错误还留着，见 research_runner._errors）。"""
     return SimpleNamespace(values={"messages": messages}, next=("tools",), interrupts=interrupts,
-                           tasks=[SimpleNamespace(error=e) for e in errors])
+                           tasks=[*(SimpleNamespace(error=e, result=None) for e in errors),
+                                  *(SimpleNamespace(error=e, result={}) for e in redone)])
 
 
 def _interrupt(call_id: str, kind: str = "ask") -> SimpleNamespace:
@@ -326,6 +356,9 @@ def test_status_is_asking_only_for_an_unanswered_question(rr):
     assert [a["call_id"] for a in research_runner._asks(left)] == ["c2"]
     # 同一步里别的工具抛了错：算失败，重试时问题会再问出来
     assert rr._status(_snap([ai], [_interrupt("c1")], errors=("RuntimeError('x')",)), None)[0] == "failed"
+    # 那个工具重试时做成了，头一次的错误还留着：不算，是在等回答；另有一个没做成的，还是失败
+    assert rr._status(_snap([ai], [_interrupt("c1")], redone=("RuntimeError('x')",)), None)[0] == "asking"
+    assert rr._status(_snap([ai], [_interrupt("c1")], errors=("RuntimeError('y')",), redone=("RuntimeError('x')",)), None)[0] == "failed"
     # 不是在问用户的中断不认；在跑的还是在跑
     assert rr._status(_snap([ai], [_interrupt("c1", kind="other")]), None)[0] == "failed"
     assert rr._status(_snap([ai], [_interrupt("c1")]), {"queued": False})[0] == "running"

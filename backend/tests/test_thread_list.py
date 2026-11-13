@@ -172,9 +172,9 @@ def test_what_is_kept_for_a_row():
     tid = done["thread_id"]
     _rows(http)
     kept = aio.run(rr.run_store.rows_of("u1"))[0]["summary"]
-    assert kept == {"v": 1, "checkpoint": aio.run(latest_checkpoints(rr.graph.checkpointer, [tid]))[tid], "title": done["title"], "fallback": None,
+    assert kept == {"v": 2, "checkpoint": aio.run(latest_checkpoints(rr.graph.checkpointer, [tid]))[tid], "title": done["title"], "fallback": None,
                     "status": "idle", "work": False, "scheduled": False, "updated_at": state(http, tid)["updated_at"]}
-    assert SUMMARY_V == 1
+    assert SUMMARY_V == 2
 
 
 def test_claimed_thread_without_a_checkpoint_is_not_listed(monkeypatch):

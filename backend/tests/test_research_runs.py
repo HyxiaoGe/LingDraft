@@ -6,6 +6,7 @@ import asyncio
 import json
 import threading
 import time
+from contextlib import aclosing
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +19,7 @@ from app.api import runner as runner_mod
 from app.api import research_runner
 from app.api.research_runner import ResearchRunner
 from app.api.runner import LocalEventLog, LocalRunRegistry
+from app.graph.research.agent import TURN_END
 from tests.research_helpers import SIMPLE, after_tool, events, flaky_runner, gated_runner, hold, hold_model, last, new, run_async, say, state, wait_until
 from tests.auth_helpers import USER
 
@@ -508,6 +510,66 @@ def test_stop_before_the_model_answers(client, rr):
     end = last(events(first["resp"]), "state")
     (turn,) = end["turns"]
     assert turn["items"] == [] and turn["record"]["outcome"] == "stopped" and end["status"] == "idle"
+
+
+def _stop_when_done(rr: ResearchRunner, monkeypatch, node: str | None) -> None:
+    """让停止正好落在主 agent 的 node 做完、它那一步还没并进检查点的时候；node 是 None：整轮跑完、最后一步也并进去了以后。只点一次。
+    真的碰上是节点做完和停止传到落在同一刻，节点里要等库的时候才有（Postgres）；这里在它的更新刚流出来时点停止，留下的检查点一样：
+    这一步的任务做完了、结果挂着，next 是空的。"""
+    real, fired = rr.graph.astream, []
+
+    async def astream(inp, cfg, **kw):
+        tid = cfg["configurable"]["thread_id"]
+
+        async def stop() -> None:
+            if not fired:
+                fired.append(tid)
+                assert rr.runs.request_stop(rr._run_key(tid))
+                rr._cancel(tid)
+                await asyncio.sleep(0)  # 取消在这里送到
+
+        async with aclosing(real(inp, cfg, **kw)) as chunks:
+            async for ns, mode, chunk in chunks:
+                yield ns, mode, chunk
+                if node and not ns and mode == "updates" and node in chunk:
+                    await stop()
+        if node is None:
+            await stop()
+
+    monkeypatch.setattr(rr.graph, "astream", astream)
+
+
+def _runs(http: TestClient, tid: str) -> list[tuple[str, str]]:
+    return [(r["kind"], r["status"]) for r in reversed(http.get(f"/api/research/threads/{tid}/runs").json()["runs"])]
+
+
+@pytest.mark.parametrize(("node", "steps", "replied"), [
+    ("TurnMiddleware.before_agent", [], False),
+    ("TurnMiddleware.before_model", [], False),  # 2026-11-13 在 Postgres 上偶发的就是这一处
+    ("model", [("search", False, False)], False),  # 模型说要搜，还没搜：这次搜索算停了
+    ("tools", [("search", False, True)], False),  # 搜完了，还没给模型看：搜到的留着
+    (TURN_END, [("search", False, True), ("read", False, True)], True),  # 回答写完了，这一轮的收尾还没并进去：回答是全的，也算停了
+])
+def test_stop_between_two_steps_is_still_a_stop(client, rr, monkeypatch, node, steps, replied):
+    """停止正好落在一步做完、下一步还没开始的空档：以前只看 next（只列没做完的任务），当成刚好跑完了，这一轮记成答完、没有停止收尾，
+    做完的那一步挂着的结果到下一轮开跑时被丢掉（搜到的变回没搜完，模型的那条消息没了）。现在照常以停止收尾，做完的留着。"""
+    _stop_when_done(rr, monkeypatch, node)
+    st = new(client, SIMPLE)
+    tid, (turn,) = st["thread_id"], st["turns"]
+    assert st["status"] == "idle" and turn["record"]["outcome"] == "stopped" and _runs(client, tid) == [("new", "stopped")]
+    assert [(i["kind"], i["pending"], i["ok"]) for i in turn["items"] if i["type"] == "step"] == steps
+    assert any(i["type"] == "text" for i in turn["items"]) == replied
+    end = last(events(say(client, tid, "直接答：好")), "state")
+    assert end["status"] == "idle" and [t["record"]["outcome"] for t in end["turns"]] == ["stopped", "ok"]
+    assert end["turns"][0]["items"] == turn["items"]  # 下一轮开跑以后，停下的那一轮做完的还在
+
+
+def test_stop_right_after_the_turn_finished_counts_as_answered(client, rr, monkeypatch):
+    """点停止时这一轮已经跑完、最后一步也并进检查点了：算答完，不写停止。"""
+    _stop_when_done(rr, monkeypatch, None)
+    st = new(client, SIMPLE)
+    assert st["status"] == "idle" and st["turns"][0]["record"]["outcome"] == "ok"
+    assert _runs(client, st["thread_id"]) == [("new", "success")]
 
 
 def test_stop_queued_thread(tmp_path):
