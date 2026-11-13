@@ -116,6 +116,24 @@ def test_failed_turns_are_not_charged_and_reset_starts_over():
     aio.run(q.check(U1))
 
 
+def test_failed_turns_stay_uncharged_after_their_conversation_is_deleted():
+    """出错的轮不算给用户，是靠运行记录认的；删对话把运行记录一起删了。删之前先把账定下来（settle），那几轮删完也不算。
+    没定下来就删（t2），它出错的那一轮会重新算进额度：以前删对话就是这样。"""
+    runs = MemoryRunStore()
+    q, u, _ = make(runs)
+    for rid, thread, turn, status in (("r1", "t1", "turn1", ERROR), ("r2", "t1", "turn2", SUCCESS), ("r3", "t2", "turn3", ERROR)):
+        aio.run(runs.create(rid, thread, "say", turn, None))
+        aio.run(runs.finish(rid, status))
+    for thread, turn, yuan in (("t1", "turn1", 0.05), ("t1", "turn2", 0.07), ("t2", "turn3", 0.03)):
+        u.put({**row("u1", yuan, turn_id=turn), "thread_id": thread})
+    assert windows(q, U1)[0].used == 70
+    aio.run(u.settle("t1"))
+    aio.run(runs.delete_thread("t1"))
+    assert windows(q, U1)[0].used == 70  # 出错的 turn1 还是不算，成功的 turn2 照算
+    aio.run(runs.delete_thread("t2"))
+    assert windows(q, U1)[0].used == pytest.approx(100)
+
+
 # ---- 接口 ----
 
 
@@ -177,6 +195,28 @@ def test_asks_and_per_ask_follow_config(monkeypatch):
 
 
 # ---- Postgres ----
+
+
+def test_deleting_a_conversation_over_http_settles_its_failed_turn_first(monkeypatch):
+    """走接口删：一段对话里有一轮出错了（花了钱、不算给用户），删掉这段对话以后额度没有变多。内存和 Postgres 都看。"""
+    rr = ResearchRunner(fake=True)
+    api_main.set_research_runner(rr)
+    http = TestClient(api_main.app, headers=bearer(user_token("u1")))
+    tid = _new(http)
+    who, now = Identity("u1", USER), costs.now()
+    aio.run(rr.run_store.create("failed-run", tid, "say", "failed-turn", None))
+    aio.run(rr.run_store.finish("failed-run", ERROR))
+    spent = _full("u1", 0.05, "failed-turn", now) | {"thread_id": tid}
+    if isinstance(rr.quota.usage, MemoryUsage):
+        rr.quota.usage.put(spent)
+    else:
+        led = costs.PostgresLedger(config.DATABASE_URL)
+        led([spent])
+        led._close()
+    before = windows(rr.quota, who)[0].used
+    assert http.delete(f"/api/research/threads/{tid}").status_code == 200
+    assert aio.run(rr.run_store.for_thread(tid)) == []
+    assert windows(rr.quota, who)[0].used == before  # 以前这里多出 50（0.05 元）
 
 
 def _full(owner: str, yuan: float | None, turn_id: str, at: datetime, purpose: str = "agent") -> dict:

@@ -102,10 +102,20 @@ def test_store_sweep_marks_unfinished_runs_lost(store):
 
 
 def test_store_delete_thread(store):
+    """删对话分两步：运行记录、排着的话先删，归谁那一行最后删（ResearchRunner._adelete 在检查点删掉以后才调 disown）。
+    中间出错的话对话还归这个人，可以再删一次。"""
     store.create("a", "t1", "new", None, None)
     store.create("b", "t2", "new", None, None)
+    store.claim("t1", "u9")
+    store.claim("t2", "u9")
     store.delete_thread("t1")
     assert store.for_thread("t1") == [] and [r["id"] for r in store.for_thread("t2")] == ["b"]
+    assert store.owner_of("t1") == "u9"  # 归谁还在
+    store.disown("t1")
+    assert store.owner_of("t1") is None and store.owner_of("t2") == "u9"
+    store.disown("t1")  # 再删一次也没事
+    store.delete_thread("t2")
+    store.disown("t2")
 
 
 def test_store_summaries(store):
@@ -134,12 +144,12 @@ def test_store_summaries(store):
     store.mark_read("t1")
     store.pin("t1", False)
     assert {r["thread_id"]: (r["summary"], r["rev"]) for r in store.rows_of("u9")}["t1"] == (two, 1)
-    store.delete_thread("t1")
+    store.disown("t1")
     assert [r["thread_id"] for r in store.rows_of("u9")] == ["t2"]
     store.claim("t1", "u9")  # 同一个 id 再建：从头来
     assert {r["thread_id"]: (r["summary"], r["rev"]) for r in store.rows_of("u9")}["t1"] == (None, 0)
-    store.delete_thread("t1")
-    store.delete_thread("t2")
+    store.disown("t1")
+    store.disown("t2")
 
 
 def test_store_unread(store):
@@ -161,9 +171,9 @@ def test_store_unread(store):
     assert store.unread_of("u9") == {}
     store.notify("t1", {"title": "早报", "text": "又一次", "ok": True})
     assert store.unread_of("u9")["t1"]["unread"] == 1
-    store.delete_thread("t1")
+    store.disown("t1")
     assert store.unread_of("u9") == {}
-    store.delete_thread("t2")
+    store.disown("t2")
 
 
 def test_store_pending_messages(store):
@@ -274,6 +284,35 @@ def test_delete_thread_deletes_its_runs(client, rr):
     a, b = new(client, SIMPLE), new(client, SIMPLE)
     assert client.delete(f"/api/research/threads/{a['thread_id']}").status_code == 200
     assert aio.run(rr.run_store.for_thread(a["thread_id"])) == [] and len(_runs(client, b["thread_id"])) == 1
+
+
+@pytest.mark.parametrize("step", ["memory.aforget_thread", "files.delete_workspace", "graph.checkpointer.adelete_thread"])
+def test_delete_that_fails_halfway_can_be_done_again(client, rr, monkeypatch, step):
+    """删到一半出错（这一步的库断了）：对话还在、还归这个人，再删一次就删干净了。
+    以前归谁那一行在第一步就删了：出错以后对话接口一律 404，剩下的检查点、文件没人删得到。"""
+    tid = new(client, SIMPLE)["thread_id"]
+    holder = rr
+    *path, name = step.split(".")
+    for part in path:
+        holder = getattr(holder, part)
+    real, calls = getattr(holder, name), []
+
+    async def down_once(thread_id):
+        calls.append(thread_id)
+        if len(calls) == 1:
+            raise RuntimeError("库断了")
+        await real(thread_id)
+    monkeypatch.setattr(holder, name, down_once)
+    with pytest.raises(RuntimeError, match="库断了"):
+        client.delete(f"/api/research/threads/{tid}")
+    assert aio.run(rr.run_store.owner_of(tid)) is not None
+    assert client.get(f"/api/research/threads/{tid}/state").status_code == 200  # 还看得到，还能再删
+    assert [t["thread_id"] for t in client.get("/api/research/threads").json()["threads"]] == [tid]
+    assert client.delete(f"/api/research/threads/{tid}").status_code == 200 and calls == [tid, tid]
+    assert aio.run(rr.run_store.owner_of(tid)) is None
+    assert client.get(f"/api/research/threads/{tid}/state").status_code == 404
+    assert client.get("/api/research/threads").json()["threads"] == []
+    assert aio.run(rr.files.store.of_workspace(tid)) == []
 
 
 def test_runs_api_checks_its_input(client):
