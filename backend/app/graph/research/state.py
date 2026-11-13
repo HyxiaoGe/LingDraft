@@ -328,10 +328,10 @@ class ToolStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(description="工具调用 id；页面据此把实时进度和存下来的记录对上")
     kind: Literal["search", "read", "weather", "place", "route", "flight", "train", "itinerary", "image", "view", "file", "write", "task", "library",
-                  "docs", "knowledge", "command", "schedule"]
+                  "docs", "knowledge", "command", "schedule", "skill"]
     text: str = Field(description="搜索词 / 网址 / 地名 / 查地点的关键词 / 路线、航班、火车的起终点 / 行程方案的标题 / 画图的描述 / 子任务的标题"
                                   " / 找的库名 / 查文档的问题 / 读的文件名（还没读完、没读成的是文件编号）/ 写的文件标题（改文件没给新标题、还没结果的是空的）"
-                                  " / 查知识库的词 / 跑的命令 / 定时任务的标题")
+                                  " / 查知识库的词 / 跑的命令 / 定时任务的标题 / 读的技能的中文名（对不上目录的是模型写的名字）")
     limits: list[str] = Field(default_factory=list, description="搜索的时间、站点限制；查地点在哪查；比路线比哪几种方式；航班、火车的日期和条件；查的是哪个库；只查一个资料库时是哪个")
     ok: bool = True
     hits: int = 0  # 搜索返回的条数；找到的候选库、查到的文档段数；在文件里找到的段数；查知识库查到的块数

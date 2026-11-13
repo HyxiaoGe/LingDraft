@@ -99,6 +99,17 @@ You can write a file for the user with create_file and revise it with edit_file.
 - Write files in the language of the user's request unless they ask otherwise. In documents, cite sources exactly as in your replies, with source ids in square brackets after the facts they support, and do not write a reference list at the end: the sources a document cites are listed there for the user automatically, also in what they download or export.
 - A web page (type html) is one self-contained HTML file: put CSS and JavaScript inline, and load nothing except libraries from well-known CDNs. It is shown in a sandboxed frame that cannot reach the user's data."""
 
+# 技能的目录（见 app.skills、app.tools.skills，2026-11-14）：这段对话有技能可用时才拼这一段（现在是能跑命令的工作任务），列的是每个 SKILL.md 开头的
+# name 和 description 原样。灵稿自己写的。
+# 第一版目录只写在 load_skill 的工具说明里（和资料库、跑命令一样跟着工具走），真实模型上不管用：一份 425 行的销售表、一句“分析一下这份销售数据，
+# 看看最近的趋势怎么样，出几张图”，DeepSeek V4 Pro 一个技能没读，思考里也没提到——活不读技能也干得了，排在工具列表最后的那段说明没人看。
+# 10-29 那一版（提交 25a42ab）目录在系统提示词里，V4 Pro 会选对；deepagents 的 SkillsMiddleware 也是拼进系统提示词。挪到这里以后同一句话：
+# V4 Pro 读了 data-visualization、statistical-analysis，混元 Hy4 读了 data-visualization、validate-data；“写一份周会纪要模板”V4 Pro 没读（各一次）
+skills = """[Skills]
+A skill is a set of expert instructions for one kind of task, written in advance. The skills available in this conversation:
+{% for s in skills %}- {{ s.name }}: {{ s.description }}
+{% endfor %}Before you start a part of the task that a skill covers, load the skill with load_skill, then follow its instructions with your other tools while you do that part. Decide from what the task involves: the user does not need to mention a skill. A skill only gives you instructions; loading it runs nothing and shows the user nothing. Load a skill once: if its instructions are already in this conversation, use them. When no skill fits the task, work as usual without one."""
+
 # Work 模式（用户在输入框旁边选了 Work 的那一轮才拼这一段，问用户的工具 ask_user 也只在这种轮里给；说明见 tools_ask.toml 的 [tools.ask_user]）。灵稿自己写的。
 # 2026-11-10 的经过：先是不分模式，靠这一段写“什么时候该问”（只在写报告、不知道用途时问，#130），真实模型评测全对，但 Sean 上线后试了三段，
 # 只有“对比报告”那句出了卡，出行、调研都没出。Sean 定：提示词里列举不完该出卡的情形，改成看用户选没选 Work——

@@ -14,6 +14,7 @@ docs_cleared = """[Removed to save space] This documentation result was removed 
 read_cleared = """[Removed to save space] The page text of source {{ id }} ({{ title }}, {{ url }}) was removed from your context. To read it again, call recall with source_id {{ id }}."""
 recall_cleared = """[Removed to save space] This recalled content was removed from your context again. If you need it, call recall again with the same arguments."""
 file_cleared = """[Removed to save space] This text from a file the user attached was removed from your context. If you need it, call read_file again."""
+skill_cleared = """[Removed to save space] The skill instructions from this call were removed from your context. If you need them again, call load_skill with the same name."""
 # 之前几轮写文件的参数（整篇内容、改的片段）换成这句；结果里有 file_id，留着
 write_cleared = """[Omitted to save space. The result of this call gives the file_id; read the file with read_file if you need its content.]"""
 # 第二层：一轮里模型那边整个换成短版（作为这一轮的模型消息），特别长的用户消息换成短的
