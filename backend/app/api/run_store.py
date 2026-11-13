@@ -57,7 +57,9 @@ class RunStore(Protocol):
     async def for_thread(self, thread_id: str) -> list[dict]: ...
     async def recent(self, status: str | None, limit: int) -> list[dict]: ...
     async def sweep(self) -> int: ...  # 还在排队、在跑的记成 lost，返回条数。只在服务启动时调：单进程部署，这时它们都已经没在跑了
-    async def delete_thread(self, thread_id: str) -> None: ...  # 运行记录、排着的话、归谁一起删
+    async def delete_thread(self, thread_id: str) -> None: ...  # 运行记录、排着的话一起删。归谁不在这里删（见 disown）
+    # 删掉归谁那一行，置顶、未读、列表里记着的那几项都在它上面。删对话时最后做（见 ResearchRunner._adelete）：它还在，前面哪一步出错都能再删一次
+    async def disown(self, thread_id: str) -> None: ...
 
     # 对话归谁（见模块说明）
     async def claim(self, thread_id: str, owner: str) -> None: ...  # 记下归谁；已经记过的不改
@@ -135,6 +137,8 @@ class MemoryRunStore:
     async def delete_thread(self, thread_id: str) -> None:
         self._rows = {k: r for k, r in self._rows.items() if r["thread_id"] != thread_id}
         self._pending = {k: r for k, r in self._pending.items() if k[0] != thread_id}
+
+    async def disown(self, thread_id: str) -> None:
         self._owners.pop(thread_id, None)
         self._pins.pop(thread_id, None)
         self._unread.pop(thread_id, None)
@@ -281,6 +285,8 @@ class PostgresRunStore:
     async def delete_thread(self, thread_id: str) -> None:
         await self._exec("DELETE FROM runs WHERE thread_id = %s", (thread_id,))
         await self._exec("DELETE FROM pending_messages WHERE thread_id = %s", (thread_id,))
+
+    async def disown(self, thread_id: str) -> None:
         await self._exec("DELETE FROM thread_owners WHERE thread_id = %s", (thread_id,))
 
     async def claim(self, thread_id: str, owner: str) -> None:

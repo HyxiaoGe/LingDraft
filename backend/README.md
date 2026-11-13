@@ -338,6 +338,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 - 每次执行一行：新对话、接着说、重试、重新回答、改了原话都算一次。
 - 记着属于哪一轮、状态（queued / running / success / stopped / error / lost）、进来和开始和结束的时间、出错的类型和原因连同堆栈、跑它的版本（部署的提交号）。
 - 和检查点存在一处，是 Postgres 的 `runs` 表。服务启动时，上次还在排队、在跑的记成 lost。删掉对话时一起删。
+- 删对话时检查点和归谁那一行最后删，前面每一步（运行记录、排着的话、图、文件、工作区）都能再做一遍：哪一步出错，对话还在、还归这个人，再删一次就删干净了。对话接口都先看这两样，哪一样先没了，剩下的就没人删得到了。
 - 查看：`GET /api/research/threads/{id}/runs` 看一段对话的，`GET /api/research/runs?status=error&limit=50` 看所有对话里最近的。接口不给堆栈；堆栈在库里，出错时也打进日志（Loki 能搜到）。
 - 写记录失败只打日志，不影响执行。
 
@@ -349,7 +350,7 @@ uv run python -m app.cli --scenario research dream          # 马上整理一次
 
 额度（`app/quota.py`）：北京时间的自然日、自然周（周一起）。游客每天 1000 credits；登录用户每天 10000、每周 50000；管理员不限；所有游客合计每天 50000（约 50 元，防脚本批量领游客身份刷）。数字在 `LINGDRAFT_CREDITS_GUEST_DAILY` / `LINGDRAFT_CREDITS_USER_DAILY` / `LINGDRAFT_CREDITS_USER_WEEKLY` / `LINGDRAFT_CREDITS_GUESTS_DAILY`；`LINGDRAFT_CREDITS_PER_ASK`（默认 200）是页面上“约可问 N 次”按一次多少 credits 换算。
 
-- 怎么算：账上（`model_costs`）这个人在窗口里算给用户的几样（主 agent、子 agent 的模型调用，做成了的工具调用，资料库建索引）按 `billed` 加起来；出错、丢了的那一轮不算（用户没拿到回答）；点了停止的照算。游客期间花的记在游客身份上，登录并进账号后不跟过去。
+- 怎么算：账上（`model_costs`）这个人在窗口里算给用户的几样（主 agent、子 agent 的模型调用，做成了的工具调用，资料库建索引）按 `billed` 加起来；出错、丢了的那一轮不算（用户没拿到回答）；点了停止的照算。哪一轮出错是看运行记录，运行记录跟着对话删：删对话之前先把这几轮的 `billed` 记成 0，删完也不算。游客期间花的记在游客身份上，登录并进账号后不跟过去。
 - 只在开始前查：说话、排话、重新回答、改话、重试时用完了回 429（`detail` 是对象：`code` 是 `credits_exhausted`，带什么时候重置、是不是游客），正在跑的那一轮不管。
 - `GET /api/credits`：`{unlimited, warn_at, per_ask, windows: [{kind, limit, used, resets_at}]}`，`kind` 是 `day`、`week`（登录用户才有）、`guests`（所有游客今天合计，页面不显示）；游客多一个 `login: {day, week}`（登录后每天、每周多少）。页面在账号菜单里显示今天、这周还剩多少，用了八成（`warn_at`）在输入框上面提醒，用完了提示里带登录入口。
 - 管理员重置：`uv run python -m app.quota reset <owner>`（owner 是 `thread_owners` 里的，登录用户的 id 或 `guest:xxx`），从那一刻起重新数；`show <owner>` 看用了多少。

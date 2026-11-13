@@ -1345,8 +1345,10 @@ class ResearchRunner(BaseRunner):
 
     async def _adelete(self, thread_id: str) -> None:
         """删掉整段对话（这个线程的所有检查点、运行记录、画的图、用户发的图和文件、沙箱里的工作区、整理记忆的记录），找不回来；记下的记忆、定时任务不删。
-        运行记录先删：删不掉就整个报错，对话还在，可以再删一次；反过来对话先没了，剩下的记录就再也删不到了。
-        图在对话删掉以后再删（编号先记下）：删图没成功只记日志，留下的图没人指着，只占服务的磁盘。"""
+        检查点和归谁最后删，前面每一步都能再做一遍：哪一步出错就整个报错，对话还在、还归这个人，再删一次就删干净了。
+        对话接口都先看这两样（见 main 的 _mine）：哪一样先没了，后面出错剩下的东西就没人删得到了。出错以后留着的对话里，图和文件可能已经没了。
+        删运行记录之前先把账定下来（见 quota 的 Usage.settle）：出错的轮不算给用户是靠运行记录认的，运行记录一删，那几轮的花费会重新算进额度。
+        删图没成功只记日志：留下的图没人指着，只占服务的磁盘。"""
         async with self._ahold(thread_id):
             snap = await self.graph.aget_state(self._cfg(thread_id))
             msgs = (snap.values or {}).get("messages", [])
@@ -1356,14 +1358,16 @@ class ResearchRunner(BaseRunner):
             await self._adrop_suggestions(thread_id)
             self._titles.pop(thread_id, None)
             self.places.end_turn(thread_id)
+            await self.quota.usage.settle(thread_id)
             await self.run_store.delete_thread(thread_id)
             await self.tasks.store.detach(thread_id)  # 挂在这段对话上的定时任务还在：下次跑时新开一段（见 app.scheduled）
             await self.memory.aforget_thread(thread_id)  # 只删整理过哪几轮的记录；从这段对话记下的记忆不动（记的是人）
-            await self.graph.checkpointer.adelete_thread(thread_id)
             await self.images.delete_images(images)
             await self.files.delete_workspace(thread_id)  # 文件按工作区（现在就是这段对话）删，原件没删掉只记日志
             if ran and self.sandbox is not None:
                 await self.sandbox.forget(thread_id)  # 没删掉只记日志：服务 7 天没用自己清
+            await self.graph.checkpointer.adelete_thread(thread_id)
+            await self.run_store.disown(thread_id)
 
     # ---- 推荐问题：这一轮结束之后再起 ----
 

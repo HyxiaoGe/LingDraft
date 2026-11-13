@@ -116,6 +116,8 @@ class Usage(Protocol):
     async def setup(self) -> None: ...
     async def spent(self, owner: str, since: datetime) -> float: ...  # 这个人从 since 起算给用户的花费（出错、丢了的轮不算）
     async def spent_by_guests(self, since: datetime) -> float: ...  # 所有游客的
+    # 这段对话要删了：出错、丢了的轮在账上定成不算给用户。它们靠运行记录认，运行记录跟着对话删掉以后就认不出来了
+    async def settle(self, thread_id: str) -> None: ...
     async def last_reset(self, owner: str) -> datetime | None: ...
     async def reset(self, owner: str, by: str, at: datetime) -> None: ...
 
@@ -144,6 +146,11 @@ class MemoryUsage:
         return sum(r["yuan"] if r.get("billed") is None else r["billed"] for r in rows
                    if r["yuan"] is not None and r["purpose"] in PURPOSES and r["started_at"] >= since and not self._failed(r["turn_id"]))
 
+    async def settle(self, thread_id: str) -> None:
+        for r in self.rows:
+            if r.get("thread_id") == thread_id and self._failed(r["turn_id"]):
+                r["billed"] = 0.0
+
     async def spent(self, owner: str, since: datetime) -> float:
         return self._sum([r for r in self.rows if r.get("owner") == owner], since)
 
@@ -162,6 +169,12 @@ SELECT coalesce(sum(coalesce(c.billed, c.yuan)), 0) AS yuan FROM model_costs c
 WHERE {owner} AND c.started_at >= %s AND c.purpose = ANY(%s) AND c.yuan IS NOT NULL
   AND coalesce((SELECT r.status FROM runs r WHERE r.turn_id = c.turn_id ORDER BY r.seq DESC LIMIT 1), '') <> ALL(%s)
 """
+# 删对话之前跑（见 Usage.settle）：这段对话里最后一次执行出错、丢了的轮，算给用户的记成 0。成本（yuan）不动
+_SETTLE = """
+UPDATE model_costs c SET billed = 0
+WHERE c.thread_id = %s AND c.turn_id IS NOT NULL
+  AND (SELECT r.status FROM runs r WHERE r.turn_id = c.turn_id ORDER BY r.seq DESC LIMIT 1) = ANY(%s)
+"""
 _DDL = ("CREATE TABLE IF NOT EXISTS quota_resets (owner text NOT NULL, at timestamptz NOT NULL, by text NOT NULL)",
         "CREATE INDEX IF NOT EXISTS quota_resets_owner ON quota_resets (owner, at)")
 
@@ -179,6 +192,9 @@ class PostgresUsage:
     async def _spent(self, where: str, params: tuple, since: datetime) -> float:
         rows = await self._exec(_SPENT.format(owner=where), (*params, since, list(PURPOSES), list(FAILED)))
         return float(rows[0]["yuan"])
+
+    async def settle(self, thread_id: str) -> None:
+        await self._exec(_SETTLE, (thread_id, list(FAILED)))
 
     async def spent(self, owner: str, since: datetime) -> float:
         return await self._spent("c.owner = %s", (owner,), since)
