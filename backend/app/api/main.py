@@ -49,11 +49,12 @@ logger = logging.getLogger(__name__)
 async def lifespan(_app: FastAPI):
     """服务起来时先打开对话的存储：没配库、连不上就报错，服务起不来（见 research_runner.open_storage）。
     再开整理记忆的定时任务（见 graph.research.memory.DreamSchedule）、用户的定时任务到点发起的循环（见 app.scheduled），关掉时停。
+    攒着以前的检查点的对话在后台清一遍，不等它（见 ResearchRunner.tidy_checkpoints）。
     配了 LangSmith 就传对话的过程（见 app.tracing）。
     每次调模型记一行成本（见 app.costs），关掉时把还没写的写完。"""
     traced = tracing.start()
     costs.open_ledger()
-    research()
+    research().tidy_checkpoints()
     schedule = None
     if config.DREAM_ENABLED:
         schedule = DreamSchedule(lambda: research().dream(), lambda: research().memory.last_dream(), config.DREAM_HOUR)
