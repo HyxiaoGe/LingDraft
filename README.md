@@ -39,7 +39,7 @@ flowchart TB
 | 机制 | 用在哪 |
 |---|---|
 | `create_agent` + `AgentMiddleware` | 主 agent、子 agent 都由它搭；16 个自写中间件用到 `before_agent`、`abefore_model`、`awrap_model_call`、`awrap_tool_call`、`after_model`（`can_jump_to`）、`after_agent` |
-| `ModelRequest.override(model=…, tools=…)` | 每次调模型现挑模型：这一轮定下的、免费额度、直连、备用，出问题一路换下去；这段对话没有资料库时，把查资料库的工具从请求里拿掉 |
+| `ModelRequest.override(model=…, tools=…)` | 每次调模型现挑模型：这一轮定下的、免费额度、直连、备用，出问题一路换下去；这段对话没有资料库、没有技能可用时，把查资料库、读技能的工具从请求里拿掉 |
 | `ExtendedModelResponse` + `Command(update=…)` | 中间件在一次模型调用里顺手改 state：写上起好的标题、换掉没通过审核的工具结果、记下换上的备用模型、超长重发时记下压到了哪一轮 |
 | `context_schema` / `ToolRuntime` | 取插话、上次起好的标题这些运行时的东西从 context 传给中间件，不进 state；子任务、recall、读写文件、查资料库、看图的工具从 `ToolRuntime` 拿 state 和 context |
 | `aupdate_state(as_node=START)` + `astream(None)` | 用户的话先写进检查点再开跑，排队时服务重启也不丢；定时任务到点时，运行器把任务里的交代当成用户的话走同一条路 |
